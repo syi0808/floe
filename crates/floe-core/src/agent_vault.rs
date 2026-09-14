@@ -391,6 +391,10 @@ pub trait GovernedDependencyLiveness: Send + Sync {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub fn person_id(&self) -> PersonId {
+        self.person_id
+    }
+
     pub async fn create(
         root: &Path,
         person_id: PersonId,

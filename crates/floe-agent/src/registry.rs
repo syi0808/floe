@@ -796,6 +796,29 @@ impl AgentRegistry {
         Ok(card)
     }
 
+    pub fn builtin_expert_card(
+        &self,
+        person_id: PersonId,
+        assignment_id: Uuid,
+        expected_revision: u64,
+        view_handle: Uuid,
+        expert: BuiltinExpertKind,
+    ) -> Result<crate::AgentCard, AgentFailure> {
+        let resolved = self.resolve(
+            self.instance_id(),
+            person_id,
+            assignment_id,
+            expected_revision,
+            &[view_handle],
+        )?;
+        if resolved.package.reference.id != expert.package_id()
+            || resolved.package.implementation != (PackageImplementation::Builtin { expert })
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        self.expert_card(person_id, assignment_id, expected_revision, view_handle)
+    }
+
     pub(crate) fn resolve(
         &self,
         instance_id: Uuid,

@@ -716,6 +716,24 @@ impl Fixture {
         }
     }
 
+    fn endpoint_request(&self, invocation_id: Uuid) -> CalendarExpertEndpointRequest {
+        let request = self.request();
+        CalendarExpertEndpointRequest {
+            person_id: self.session.person_id,
+            usage: UsageLedger::default(),
+            context: request.context,
+            policy: request.policy,
+            grant: request.grant,
+            assignment_id: request.assignment_id,
+            invocation_id,
+            assignment: "Find a focus window using only the calendars I granted.".into(),
+            propose_focus: true,
+            max_output_bytes: request.budget.max_output_bytes,
+            deadline: Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: request.cancellation,
+        }
+    }
+
     async fn state(&self) -> RegistrySnapshot {
         self.vault.expert_registry().await.unwrap().unwrap()
     }
@@ -729,6 +747,149 @@ impl Fixture {
             *agent_id = self.expert_id.clone();
         }
     }
+}
+
+#[tokio::test]
+async fn direct_schedule_endpoint_returns_provenance_without_mutating_session() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let model = Model::default();
+    let invocation_id = Uuid::new_v4();
+    let before = fixture
+        .vault
+        .load(fixture.session.person_id, fixture.session.id)
+        .await
+        .unwrap();
+
+    let result = fixture
+        .core
+        .run_calendar_expert_endpoint(
+            &fixture.vault,
+            &Access::default(),
+            &model,
+            fixture.endpoint_request(invocation_id),
+            now,
+        )
+        .await
+        .unwrap();
+    let after = fixture
+        .vault
+        .load(fixture.session.person_id, fixture.session.id)
+        .await
+        .unwrap();
+
+    assert_eq!(result.report.invocation_id, invocation_id);
+    assert!(!result.report.action_proposals.is_empty());
+    assert!(!result.dependencies.is_empty());
+    assert_eq!(after, before);
+    let registry = fixture.state().await;
+    let assignment = registry
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == fixture.assignment)
+        .unwrap();
+    assert_eq!(registry.revision, fixture.revision + 1);
+    assert_eq!(
+        assignment.private_state.last_invocation_id,
+        Some(invocation_id)
+    );
+    assert!(matches!(
+        fixture
+            .core
+            .run_calendar_expert_endpoint(
+                &fixture.vault,
+                &Access::default(),
+                &model,
+                fixture.endpoint_request(invocation_id),
+                now,
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    ));
+}
+
+#[tokio::test]
+async fn direct_schedule_endpoint_rejects_a_foreign_principal() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let mut request = fixture.endpoint_request(Uuid::new_v4());
+    request.person_id = PersonId::new();
+
+    assert!(matches!(
+        fixture
+            .core
+            .run_calendar_expert_endpoint(
+                &fixture.vault,
+                &Access::default(),
+                &Model::default(),
+                request,
+                now,
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    ));
+}
+
+#[tokio::test]
+async fn direct_schedule_endpoint_authorizes_the_full_inference_policy() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let mut request = fixture.endpoint_request(Uuid::new_v4());
+    request.policy.purpose.clear();
+
+    assert!(matches!(
+        fixture
+            .core
+            .run_calendar_expert_endpoint(
+                &fixture.vault,
+                &Access::default(),
+                &Model::default(),
+                request,
+                now,
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    ));
+}
+
+#[tokio::test]
+async fn direct_schedule_endpoint_requires_the_registered_schedule_package() {
+    let fixture = Fixture::with_class(DataClass::Synthetic).await;
+
+    assert!(matches!(
+        fixture
+            .core
+            .run_calendar_expert_endpoint(
+                &fixture.vault,
+                &Access::default(),
+                &Model::default(),
+                fixture.endpoint_request(Uuid::new_v4()),
+                now,
+            )
+            .await,
+        Err(AgentFailure::CapabilityDenied)
+    ));
+}
+
+#[tokio::test]
+async fn direct_schedule_endpoint_revalidates_assignment_after_model_execution() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let model = PausingGrantModel {
+        vault: &fixture.vault,
+        model: Model::default(),
+    };
+    fixture.configure_model(&model.model);
+
+    assert!(
+        fixture
+            .core
+            .run_calendar_expert_endpoint(
+                &fixture.vault,
+                &Access::default(),
+                &model,
+                fixture.endpoint_request(Uuid::new_v4()),
+                now,
+            )
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

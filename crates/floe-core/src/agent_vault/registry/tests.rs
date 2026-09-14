@@ -823,6 +823,54 @@ async fn scoped_commit_rejects_a_competing_private_state_update() {
 }
 
 #[tokio::test]
+async fn completion_commit_only_advances_the_selected_assignment() {
+    let fixture = Fixture::new().await;
+    let baseline = fixture.prepare().await;
+    let invocation_id = Uuid::new_v4();
+    let (_, _, staged) = fixture.stage(invocation_id).await;
+    let assignment_id = staged
+        .assignments
+        .iter()
+        .find(|assignment| assignment.private_state.last_invocation_id == Some(invocation_id))
+        .unwrap()
+        .id;
+
+    assert_eq!(
+        fixture
+            .vault
+            .save_expert_completion_checked(baseline.revision, &staged, Uuid::new_v4(), || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let mut forged = staged.clone();
+    forged
+        .assignments
+        .iter_mut()
+        .find(|assignment| assignment.id != assignment_id)
+        .unwrap()
+        .enabled = false;
+    assert_eq!(
+        fixture
+            .vault
+            .save_expert_completion_checked(baseline.revision, &forged, assignment_id, || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    fixture
+        .vault
+        .save_expert_completion_checked(baseline.revision, &staged, assignment_id, || Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .save_expert_completion_checked(baseline.revision, &staged, assignment_id, || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+}
+
+#[tokio::test]
 async fn dropping_a_transaction_after_registry_write_cannot_leave_half_a_commit() {
     let fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;

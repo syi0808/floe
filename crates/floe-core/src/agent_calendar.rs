@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
@@ -8,11 +9,11 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use floe_agent::*;
-use floe_domain::{
-    CalendarProvider, ContextDependency, DependencyCoverage, GrantConsumer,
-    GrantOperation, GrantPurpose, PersonId, ProcessingRestriction,
-};
 use floe_context::CoverageAccumulator;
+use floe_domain::{
+    CalendarProvider, ContextDependency, DependencyCoverage, GrantConsumer, GrantOperation,
+    GrantPurpose, PersonId, ProcessingRestriction,
+};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -44,7 +45,240 @@ pub struct CalendarAgentTurnResult {
     pub proposals: Vec<CalendarAgentProposal>,
 }
 
+pub struct CalendarExpertEndpointRequest {
+    pub person_id: PersonId,
+    pub usage: UsageLedger,
+    pub context: AgentContext,
+    pub policy: InferencePolicyDecision,
+    pub grant: CalendarTimelineGrant,
+    pub assignment_id: Uuid,
+    pub invocation_id: Uuid,
+    pub assignment: String,
+    pub propose_focus: bool,
+    pub max_output_bytes: usize,
+    pub deadline: Instant,
+    pub cancellation: Cancellation,
+}
+
+pub struct CalendarExpertEndpointResult {
+    pub report: ExpertResult,
+    pub dependencies: Vec<ContextDependency>,
+}
+
 impl FloeCore {
+    pub async fn run_calendar_expert_endpoint<
+        Keys: VaultKeyProvider,
+        Access: CalendarReadAccess,
+        Model: ModelRunner + Sync,
+        Clock: Fn() -> DateTime<Utc> + Sync + Copy,
+    >(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        access: &Access,
+        model: &Model,
+        request: CalendarExpertEndpointRequest,
+        clock: Clock,
+    ) -> Result<CalendarExpertEndpointResult, AgentFailure> {
+        check_running(request.deadline, &request.cancellation)?;
+        if request.person_id != vault.person_id()
+            || request.person_id != request.grant.person_id
+            || request.assignment.trim().is_empty()
+            || request.assignment.len() > 2048
+            || request.max_output_bytes == 0
+            || request.max_output_bytes > AgentBudget::default().max_output_bytes
+            || !request
+                .policy
+                .allowed_placements
+                .contains(&model.placement())
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let guarded_access = GrantBoundCalendarAccess {
+            core: self,
+            vault,
+            access,
+            grant: request.grant.clone(),
+            grant_pin: Mutex::new(None),
+            remote_processing: model.placement() == ModelPlacement::Remote,
+        };
+        let views = CalendarTimelineViews::new(self, &guarded_access, request.grant, clock)?;
+        vault.check_access()?;
+        let snapshot = tokio::select! {
+            biased;
+            _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            _ = tokio::time::sleep_until(request.deadline) => return Err(AgentFailure::DeadlineExceeded),
+            result = vault.expert_registry() => result?.ok_or(AgentFailure::CapabilityDenied)?,
+        };
+        let registry = AgentRegistry::restore(snapshot, vault.registry_instance_id())?;
+        let revision = registry.revision();
+        validated_calendar_card(
+            &registry,
+            views.grant(),
+            request.assignment_id,
+            revision,
+            Some(BuiltinExpertKind::Schedule),
+        )?;
+        if registry
+            .private_state(request.person_id, request.assignment_id)?
+            .last_invocation_id
+            == Some(request.invocation_id)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        if !request
+            .policy
+            .data_classes
+            .contains(&views.grant().data_class())
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut expert_context = request.context;
+        if request.policy.data_classes.contains(&DataClass::Personal) {
+            expert_context.evidence.retain(|evidence| {
+                !evidence.source_handle.starts_with("floe.tasks:")
+                    && !evidence.source_handle.starts_with("floe.notes:")
+            });
+        }
+        authorize_endpoint_context(
+            &request.policy,
+            model.placement(),
+            vault.protection(),
+            &expert_context,
+            clock(),
+        )?;
+        if request.policy.data_classes.contains(&DataClass::Personal) {
+            let context_now = clock();
+            let task_view = run_endpoint_bounded(
+                request.deadline,
+                &request.cancellation,
+                floe_context::acquire_optional_source(
+                    floe_agent::ContextSource::Tasks,
+                    self.task_context_view(
+                        views.grant().person_id,
+                        Uuid::new_v5(&views.grant().person_id.0, b"floe.tasks"),
+                        context_now,
+                        16,
+                        8 * 1024,
+                    ),
+                ),
+            )
+            .await?;
+            let note_view = run_endpoint_bounded(
+                request.deadline,
+                &request.cancellation,
+                floe_context::acquire_optional_source(
+                    floe_agent::ContextSource::Notes,
+                    self.note_context_view(
+                        views.grant().person_id,
+                        Uuid::new_v5(&views.grant().person_id.0, b"floe.notes"),
+                        context_now,
+                        16,
+                        8 * 1024,
+                    ),
+                ),
+            )
+            .await?;
+            floe_context::record_source_issue(
+                &mut expert_context.optional_context_issues,
+                floe_agent::ContextSource::Tasks,
+                task_view.issue.map(|issue| issue.reason),
+            );
+            floe_context::record_source_issue(
+                &mut expert_context.optional_context_issues,
+                floe_agent::ContextSource::Notes,
+                note_view.issue.map(|issue| issue.reason),
+            );
+            if let Some(task_view) = task_view.value
+                && !task_view.items.is_empty()
+            {
+                expert_context
+                    .evidence
+                    .push(native_context_evidence(&task_view)?);
+            }
+            if let Some(note_view) = note_view.value
+                && !note_view.items.is_empty()
+            {
+                expert_context
+                    .evidence
+                    .push(native_context_evidence(&note_view)?);
+            }
+        }
+        authorize_endpoint_context(
+            &request.policy,
+            model.placement(),
+            vault.protection(),
+            &expert_context,
+            clock(),
+        )?;
+        let registry = Mutex::new(registry);
+        let invocation = ExpertInvocation {
+            usage: request.usage,
+            context: expert_context,
+            schema_version: AGENT_VERSION,
+            invocation_id: request.invocation_id,
+            instance_id: vault.registry_instance_id(),
+            person_id: request.person_id,
+            assignment_id: request.assignment_id,
+            expected_registry_revision: revision,
+            granted_view_handles: vec![views.grant().handle],
+            allowed_data_classes: vec![views.grant().data_class()],
+            current_time_unix_ms: u64::try_from(views.current_time().timestamp_millis())
+                .map_err(|_| AgentFailure::InvalidInput)?,
+            timezone_offset_seconds: views.grant().day.timezone_offset_seconds,
+            suggested_range_start_unix_ms: Some(
+                u64::try_from(views.grant().starts_at.timestamp_millis())
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+            ),
+            suggested_range_end_unix_ms: Some(
+                u64::try_from(views.grant().ends_at.timestamp_millis())
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+            ),
+            input: if request.propose_focus {
+                ExpertInput::ProposeFocus { focus_minutes: 60 }
+            } else {
+                ExpertInput::Analyze {
+                    request: request.assignment,
+                    focus_minutes: None,
+                }
+            },
+            budget: ExpertBudget {
+                max_output_bytes: request.max_output_bytes,
+                ..ExpertBudget::default()
+            },
+            deadline: request.deadline,
+            cancellation: request.cancellation.clone(),
+        };
+        let report = ExpertHost {
+            registry: &registry,
+            views: &views,
+        }
+        .invoke_with_model(invocation, model, &request.policy)
+        .await?;
+        check_running(request.deadline, &request.cancellation)?;
+        views
+            .revalidate(request.deadline, request.cancellation.clone())
+            .await?;
+        vault.check_access()?;
+        let dependencies = views.consumed_context_dependencies()?;
+        let staged = registry
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .snapshot();
+        vault
+            .save_expert_completion_checked(revision, &staged, request.assignment_id, || {
+                check_running(request.deadline, &request.cancellation)?;
+                for dependency in &dependencies {
+                    views.validate_dependency_liveness(dependency)?;
+                }
+                Ok(())
+            })
+            .await?;
+        Ok(CalendarExpertEndpointResult {
+            report,
+            dependencies,
+        })
+    }
+
     pub async fn run_calendar_agent_turn<
         Keys: VaultKeyProvider,
         Access: CalendarReadAccess,
@@ -112,23 +346,8 @@ impl FloeCore {
             };
             let registry = AgentRegistry::restore(snapshot, vault.registry_instance_id())?;
             let revision = registry.revision();
-            let binding = registry.calendar_view(views.grant().person_id, views.grant().handle)?;
-            let mut calendars = views.grant().calendar_ids.clone();
-            calendars.sort();
-            if binding.provider != views.grant().provider
-                || binding.device_id != views.grant().device_id
-                || calendars
-                    .iter()
-                    .any(|calendar_id| !binding.calendar_ids.contains(calendar_id))
-            {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let card = registry.expert_card(
-                views.grant().person_id,
-                request.assignment_id,
-                revision,
-                views.grant().handle,
-            )?;
+            let card =
+                validated_calendar_card(&registry, views.grant(), request.assignment_id, revision, None)?;
             if !request
                 .policy
                 .data_classes
@@ -299,6 +518,36 @@ impl FloeCore {
             _ = parent.cancelled() => operation.await,
             result = &mut operation => result,
         }
+    }
+}
+
+fn validated_calendar_card(
+    registry: &AgentRegistry,
+    grant: &CalendarTimelineGrant,
+    assignment_id: Uuid,
+    revision: u64,
+    required_builtin: Option<BuiltinExpertKind>,
+) -> Result<AgentCard, AgentFailure> {
+    let binding = registry.calendar_view(grant.person_id, grant.handle)?;
+    let mut calendars = grant.calendar_ids.clone();
+    calendars.sort();
+    if binding.provider != grant.provider
+        || binding.device_id != grant.device_id
+        || calendars
+            .iter()
+            .any(|calendar_id| !binding.calendar_ids.contains(calendar_id))
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    match required_builtin {
+        Some(expert) => registry.builtin_expert_card(
+            grant.person_id,
+            assignment_id,
+            revision,
+            grant.handle,
+            expert,
+        ),
+        None => registry.expert_card(grant.person_id, assignment_id, revision, grant.handle),
     }
 }
 
@@ -1172,6 +1421,35 @@ fn check_running(deadline: Instant, cancellation: &Cancellation) -> Result<(), A
         return Err(AgentFailure::DeadlineExceeded);
     }
     Ok(())
+}
+
+async fn run_endpoint_bounded<Value>(
+    deadline: Instant,
+    cancellation: &Cancellation,
+    future: impl Future<Output = Result<Value, AgentFailure>>,
+) -> Result<Value, AgentFailure> {
+    check_running(deadline, cancellation)?;
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
+        _ = tokio::time::sleep_until(deadline) => Err(AgentFailure::DeadlineExceeded),
+        result = future => result,
+    }
+}
+
+fn authorize_endpoint_context(
+    policy: &InferencePolicyDecision,
+    placement: ModelPlacement,
+    protection: SessionProtection,
+    context: &AgentContext,
+    now: DateTime<Utc>,
+) -> Result<(), AgentFailure> {
+    policy.authorize(
+        placement,
+        protection,
+        context,
+        u64::try_from(now.timestamp_millis()).map_err(|_| AgentFailure::StaleContext)?,
+    )
 }
 
 fn calendar_history_boundary(message: &AgentMessage) -> bool {

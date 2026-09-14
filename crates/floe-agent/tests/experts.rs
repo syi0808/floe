@@ -469,6 +469,56 @@ impl ExpertViews for Views {
     }
 }
 
+#[test]
+fn builtin_card_rejects_a_declarative_package_with_the_builtin_id() {
+    let fixture = Fixture::new();
+    let mut snapshot = fixture.registry.lock().unwrap().snapshot();
+    let installation_id = snapshot
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == fixture.declarative)
+        .unwrap()
+        .installation_id;
+    let installation = snapshot
+        .installations
+        .iter_mut()
+        .find(|installation| installation.id == installation_id)
+        .unwrap();
+    let previous_reference = installation.package.clone();
+    installation.package.id = BuiltinExpertKind::Schedule.package_id().into();
+    let package = snapshot
+        .packages
+        .iter_mut()
+        .find(|package| package.reference == previous_reference)
+        .unwrap();
+    package.reference = installation.package.clone();
+    let revision = snapshot.revision;
+    let registry = AgentRegistry::restore(snapshot, fixture.instance).unwrap();
+
+    assert_eq!(
+        registry
+            .expert_card(
+                fixture.person,
+                fixture.declarative,
+                revision,
+                fixture.view.handle,
+            )
+            .unwrap()
+            .id,
+        BuiltinExpertKind::Schedule.package_id()
+    );
+    assert_eq!(
+        registry.builtin_expert_card(
+            fixture.person,
+            fixture.declarative,
+            revision,
+            fixture.view.handle,
+            BuiltinExpertKind::Schedule,
+        ),
+        Err(AgentFailure::CapabilityDenied)
+    );
+}
+
 #[tokio::test]
 async fn historical_validation_preserves_provenance_without_restoring_execution_grants() {
     let fixture = Fixture::new();

@@ -169,6 +169,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         &registry.snapshot(),
                         None,
                         Some(setup.setup_id),
+                        None,
                         &check,
                     )
                     .await?
@@ -209,6 +210,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &registry.snapshot(),
                 None,
                 Some(setup.setup_id),
+                None,
                 || {
                     if cancellation.is_cancelled() {
                         Err(AgentFailure::Cancelled)
@@ -403,6 +405,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &registry.snapshot(),
                 Some(configuration.setup_id),
                 None,
+                None,
                 &check,
             )
             .await?;
@@ -550,8 +553,33 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         snapshot: &RegistrySnapshot,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
-        self.save_expert_registry_change_checked(expected_revision, snapshot, None, None, check)
-            .await
+        self.save_expert_registry_change_checked(
+            expected_revision,
+            snapshot,
+            None,
+            None,
+            None,
+            check,
+        )
+        .await
+    }
+
+    pub(crate) async fn save_expert_completion_checked(
+        &self,
+        expected_revision: u64,
+        snapshot: &RegistrySnapshot,
+        assignment_id: Uuid,
+        check: impl Fn() -> Result<(), AgentFailure> + Sync,
+    ) -> Result<(), AgentFailure> {
+        self.save_expert_registry_change_checked(
+            expected_revision,
+            snapshot,
+            None,
+            None,
+            Some(assignment_id),
+            check,
+        )
+        .await
     }
 
     pub(super) async fn save_expert_registry_change_checked(
@@ -560,6 +588,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         snapshot: &RegistrySnapshot,
         mutable_calendar_setup: Option<uuid::Uuid>,
         mutable_builtin_setup: Option<uuid::Uuid>,
+        mutable_assignment: Option<uuid::Uuid>,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
         check()?;
@@ -579,6 +608,46 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(AgentFailure::NotFound)?;
             if previous.revision != expected_revision {
                 return Err(AgentFailure::Conflict);
+            }
+            if let Some(assignment_id) = mutable_assignment {
+                let before = previous
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.id == assignment_id)
+                    .ok_or(AgentFailure::Conflict)?;
+                let after = snapshot
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.id == assignment_id)
+                    .ok_or(AgentFailure::Conflict)?;
+                if before.person_id != after.person_id
+                    || before.installation_id != after.installation_id
+                    || before.enabled != after.enabled
+                    || before.granted_tool_assignments != after.granted_tool_assignments
+                    || before.granted_view_handles != after.granted_view_handles
+                    || before.private_state.schema_version != after.private_state.schema_version
+                    || before.private_state.revision.checked_add(1)
+                        != Some(after.private_state.revision)
+                    || before.private_state.completed_invocations.checked_add(1)
+                        != Some(after.private_state.completed_invocations)
+                    || after.private_state.completed_invocations != after.private_state.revision
+                    || after.private_state.last_invocation_id.is_none()
+                    || after.private_state.last_invocation_id
+                        == before.private_state.last_invocation_id
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                let mut normalized = snapshot.clone();
+                normalized.revision = previous.revision;
+                normalized
+                    .assignments
+                    .iter_mut()
+                    .find(|assignment| assignment.id == assignment_id)
+                    .ok_or(AgentFailure::Conflict)?
+                    .private_state = before.private_state.clone();
+                if normalized != previous {
+                    return Err(AgentFailure::Conflict);
+                }
             }
             let mutable_calendar_view = mutable_calendar_setup.and_then(|setup_id| {
                 previous
@@ -767,6 +836,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         if entry.private_state == assignment.private_state
                             && entry.person_id == assignment.person_id
                             && entry.installation_id == assignment.installation_id => {}
+                    Some(entry)
+                        if mutable_assignment == Some(assignment.id)
+                            && entry.id == assignment.id
+                            && entry.person_id == assignment.person_id
+                            && entry.installation_id == assignment.installation_id
+                            && entry.enabled == assignment.enabled
+                            && entry.granted_tool_assignments
+                                == assignment.granted_tool_assignments
+                            && entry.granted_view_handles == assignment.granted_view_handles
+                            && entry.private_state.schema_version
+                                == assignment.private_state.schema_version
+                            && entry.private_state.revision.checked_add(1)
+                                == Some(assignment.private_state.revision)
+                            && entry.private_state.completed_invocations.checked_add(1)
+                                == Some(assignment.private_state.completed_invocations)
+                            && assignment.private_state.completed_invocations
+                                == assignment.private_state.revision
+                            && assignment.private_state.last_invocation_id.is_some()
+                            && assignment.private_state.last_invocation_id
+                                != entry.private_state.last_invocation_id => {}
                     None if assignment.private_state
                         == floe_agent::ExpertPrivateState::default() => {}
                     _ => return Err(AgentFailure::Conflict),
