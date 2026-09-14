@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Partial: current/history policy plus authorized bounded archive projection wired; generic acquisition and remaining cutover pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: root turns, recovery, continuation, finalization, Session management and archive use extracted owner services; Run query/cancel and host lifetime pending |
+| P12 | Partial: root turns, Run queries, recovery, continuation, finalization, Session management and archive use extracted owner services; cancel and host lifetime pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -3204,3 +3204,36 @@ the worker still owns the global active-job cancellation handle. The next
 executable P12 task is to add non-mutating command/Run query projection through
 Conversation and then use that contract to separate owner cancellation from UI
 Release during the P16/P19 lifetime cutover. P12 remains partial.
+
+### P12 Conversation-owned Run query checkpoint (2026-09-15)
+
+Code checkpoint `c65d57a` adds principal-bound `CommandQuery` and `RunQuery`
+operations to the Conversation facade. Both paths validate the durable
+`RunReceipt` before returning it and reject a known Run owned by another
+principal. They are read-only projections over the existing Conversation
+repository and do not acquire a Session claim, create continuation work or
+change terminal state.
+
+The production continuation caller now uses Conversation `GetCommand` for both
+its acknowledgement precheck and persisted continuation reconstruction. It no
+longer reads the Vault's Conversation Run table directly or compares a
+storage-layer model-placement enum; it verifies the owner receipt's execution
+profile and generation-bound continuation fields instead. The Vault table read
+remains private to the repository adapter.
+
+Implemented and wired: Conversation-owned command/Run query projection and the
+production continuation caller cutover. Direct validation completed and
+replayed an encrypted Run, read the same receipt by both CommandId and RunId,
+rejected a foreign-principal Run query, and completed the production persisted
+continuation flow without duplicating user text. Focused Conversation Clippy
+passed with warnings denied; both affected FFI tests, workspace all-target
+check, diff check and the migration boundary gate passed (20 nodes / 69 edges /
+no errors). No Apple UI, device-local model or live provider was exercised.
+
+Blocker/remove-by: CancelRun is still represented only by the worker-owned job
+token, so Conversation cannot yet validate RunId, principal and terminal state
+before cancellation. UI Release remains correctly non-cancelling, but the
+global worker active-job slot is still the lifetime owner. The next executable
+P12/P16 task is to introduce a Conversation-owned cancellation registry keyed
+by RunId and principal, register it only after durable admission, and route Stop
+through that owner without cancelling management reads. P12 remains partial.
