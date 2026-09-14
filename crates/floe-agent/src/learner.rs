@@ -71,6 +71,7 @@ impl<Model: ModelRunner + Sync> LearnerModel for StructuredLearnerModel<Model> {
                     projection_version: 1,
                     persona: None,
                     memories: request.input.current_memories,
+                    optional_context_issues: vec![],
                     evidence: vec![],
                 },
                 messages: vec![AgentMessage::User {

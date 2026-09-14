@@ -17,7 +17,7 @@ const WELLBEING_EXPERT_ROLE: &str = include_str!("../prompts/wellbeing_expert_ro
 const WORK_CONTEXT_EXPERT_ROLE: &str = include_str!("../prompts/work_context_expert_role.txt");
 const LIFE_LOGISTICS_EXPERT_ROLE: &str = include_str!("../prompts/life_logistics_expert_role.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
-const BEHAVIOR_KERNEL_REVISION: u64 = 2;
+const BEHAVIOR_KERNEL_REVISION: u64 = 3;
 const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
 const MANAGER_ROLE_REVISION: u64 = 4;
 const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 4;
@@ -388,6 +388,8 @@ mod tests {
                 .render()
                 .contains("user-visible work currently underway")
         );
+        assert!(manager.render().contains("optional context issue"));
+        assert!(manager.render().contains("empty result"));
         assert!(manager.render().contains("For results"));
         assert!(
             manager
@@ -407,6 +409,7 @@ mod tests {
         assert!(!expert.render().contains("find_free_windows"));
         assert_eq!(expert.components[0].revision, BEHAVIOR_KERNEL_REVISION);
         assert_eq!(expert.components[1].revision, SCHEDULE_EXPERT_ROLE_REVISION);
+        assert!(expert.render().contains("optional context issue"));
         assert!(expert.render().contains("Manager-ready summary"));
         assert!(expert.render().contains("add no useful meaning"));
 

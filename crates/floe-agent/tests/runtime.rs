@@ -1081,6 +1081,7 @@ fn context() -> AgentContext {
         projection_version: 1,
         persona: None,
         memories: vec![],
+        optional_context_issues: vec![],
         evidence: vec![],
     }
 }
@@ -1529,6 +1530,10 @@ async fn manager_receives_confirmed_memory_as_manifested_data_not_instructions()
         turn_id: Uuid::new_v4(),
     };
     let mut context = context();
+    context.optional_context_issues = vec![ContextIssue {
+        source: ContextSource::Tasks,
+        reason: ContextIssueReason::BudgetExceeded,
+    }];
     context.memories.push(ContextMemory {
         target_id,
         revision: 3,
@@ -1551,6 +1556,10 @@ async fn manager_receives_confirmed_memory_as_manifested_data_not_instructions()
     let envelope = requests[0].context_envelope().unwrap();
     assert_eq!(envelope.contextual_data.memories[0].target_id, target_id);
     assert_eq!(envelope.contextual_data.memories[0].revision, 3);
+    assert_eq!(
+        serde_json::to_value(&envelope.contextual_data).unwrap()["optional_context_issues"][0],
+        serde_json::json!({"source": "tasks", "reason": "budget_exceeded"})
+    );
     assert_eq!(envelope.manifest.memories[0].source_refs, [source]);
 }
 

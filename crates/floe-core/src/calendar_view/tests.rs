@@ -1065,6 +1065,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         context: AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         },

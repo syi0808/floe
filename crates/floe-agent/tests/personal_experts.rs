@@ -62,6 +62,7 @@ fn invocation() -> PersonalExpertInvocation {
             projection_version: 1,
             persona: None,
             memories: vec![],
+            optional_context_issues: vec![],
             evidence: vec![],
         },
         max_output_bytes: 8192,

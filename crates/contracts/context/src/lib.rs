@@ -538,6 +538,30 @@ pub const MAX_CONTEXT_DEPENDENCIES: usize = 64;
 pub const MAX_CONTEXT_DEPENDENCY_BYTES: usize = 64 * 1024;
 pub const MAX_QUERY_FINGERPRINT_BYTES: usize = 4 * 1024;
 pub const MAX_DEPENDENCY_LIFETIME: Duration = Duration::hours(1);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSource {
+    Memory,
+    Tasks,
+    Notes,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextIssueReason {
+    Unavailable,
+    Denied,
+    BudgetExceeded,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextIssue {
+    pub source: ContextSource,
+    pub reason: ContextIssueReason,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConsumerPolicyAuthority {

@@ -4,6 +4,7 @@ use crate::{AgentFailure, DataClass, ModelPlacement, SessionProtection, Transfer
 
 pub const MAX_CONTEXT_EVIDENCE: usize = 64;
 pub const MAX_CONTEXT_EVIDENCE_BYTES: usize = 32 * 1024;
+pub const MAX_CONTEXT_ISSUES: usize = 3;
 
 pub use floe_knowledge::{ContextMemory, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES};
 
@@ -36,7 +37,33 @@ pub struct AgentContext {
     pub persona: Option<crate::PersonaProfile>,
     #[serde(default)]
     pub memories: Vec<ContextMemory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_context_issues: Vec<crate::ContextIssue>,
     pub evidence: Vec<ContextEvidence>,
+}
+
+impl AgentContext {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.optional_context_issues.len() > MAX_CONTEXT_ISSUES
+            || self
+                .optional_context_issues
+                .iter()
+                .enumerate()
+                .any(|(index, issue)| {
+                    self.optional_context_issues[..index]
+                        .iter()
+                        .any(|previous| previous.source == issue.source)
+                })
+            || (self
+                .optional_context_issues
+                .iter()
+                .any(|issue| issue.source == crate::ContextSource::Memory)
+                && !self.memories.is_empty())
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(())
+    }
 }
 
 impl InferencePolicyDecision {
@@ -47,6 +74,7 @@ impl InferencePolicyDecision {
         context: &AgentContext,
         now_unix_ms: u64,
     ) -> Result<(), AgentFailure> {
+        context.validate()?;
         if self.purpose.trim().is_empty()
             || self.performance_class.trim().is_empty()
             || self.projection_version == 0

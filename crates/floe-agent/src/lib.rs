@@ -22,7 +22,8 @@ mod registry;
 mod runtime;
 
 pub use floe_agent_contract::{
-    AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent,
+    AgentFailure, ContextIssue, ContextIssueReason, ContextSource, DataClass, ModelPlacement,
+    SessionProtection, TransferConsent,
 };
 
 pub use a2a::{
@@ -123,7 +124,7 @@ pub use playbook::{
 };
 pub use policy::{
     AgentContext, ContextEvidence, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
-    MAX_CONTEXT_EVIDENCE_BYTES,
+    MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_ISSUES,
 };
 pub use portfolio_context::{
     LOGISTICS_VIEW_ID, LogisticsItem, LogisticsItemKind, LogisticsView, MAX_PORTFOLIO_VIEW_BYTES,

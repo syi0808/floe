@@ -529,7 +529,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<Vec<ContextMemory>, AgentFailure> {
         let mut context = Vec::new();
         let mut total_bytes = 0usize;
+        let mut budget_exceeded = false;
         for revision in self.active_personal_memories().await? {
+            project_memory_summary(&revision, self.person_id)?;
             if !self.evidence_is_independent(&revision.source_refs).await? {
                 continue;
             }
@@ -543,11 +545,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 continue;
             }
-            total_bytes = total_bytes
-                .checked_add(value.statement.len())
-                .ok_or(AgentFailure::BudgetExceeded)?;
+            total_bytes = total_bytes.saturating_add(value.statement.len());
             if context.len() >= MAX_CONTEXT_MEMORIES || total_bytes > MAX_CONTEXT_MEMORY_BYTES {
-                return Err(AgentFailure::BudgetExceeded);
+                budget_exceeded = true;
+                continue;
             }
             context.push(ContextMemory {
                 target_id: revision.target_id,
@@ -563,6 +564,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             });
         }
         self.check_access()?;
+        if budget_exceeded {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         Ok(context)
     }
 
@@ -935,6 +939,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(job)
         }.await;
         finish_transaction(transaction, result).await
+    }
+}
+
+impl<Keys: VaultKeyProvider> floe_knowledge::MemoryContextReader for EncryptedAgentVault<Keys> {
+    async fn read_memory_context(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ContextMemory>, AgentFailure> {
+        self.personal_memory_context(now).await
     }
 }
 

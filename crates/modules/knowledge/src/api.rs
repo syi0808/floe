@@ -32,6 +32,12 @@ pub struct ContextMemory {
     pub source_refs: Vec<LearningEvidenceRef>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryContextSnapshot {
+    pub memories: Vec<ContextMemory>,
+    pub issue: Option<floe_context_contract::ContextIssueReason>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LearningEvidenceRef {

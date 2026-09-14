@@ -439,6 +439,7 @@ mod tests {
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
+                optional_context_issues: vec![],
                 memories: vec![],
                 evidence: vec![ContextEvidence {
                     source_handle: "fixture".into(),

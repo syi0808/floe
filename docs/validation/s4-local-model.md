@@ -103,6 +103,18 @@ The exercise makes one fixed fictional scheduling request with no sources,
 credentials or persistence; it reports the validated common step and reservation.
 The helper uses ad-hoc signing and does not launch the normal app or access Calendar.
 
+To inspect whether the on-device model explains an unavailable memory source
+while still offering unrelated general help, run:
+
+```sh
+bash tools/validation/run-local-model-smoke.sh --exercise-optional-memory
+```
+
+This sends one fictional request with a structured Memory Unavailable issue,
+no saved-memory payload, credentials or persistence. Inspect the returned answer
+for an honest limitation and a general preparation tip; transport success alone
+does not establish answer quality or full T11 acceptance.
+
 ## Still required
 
 Multi-call Agent scenarios and interruption/error tests; real-model streaming and

@@ -184,6 +184,7 @@ async fn run_sample_with_capabilities(
             AgentContext {
                 projection_version: 1,
                 persona: None,
+                optional_context_issues: vec![],
                 memories: vec![],
                 evidence: vec![],
             },
@@ -719,6 +720,7 @@ impl InProcessAgent for FixtureCapabilities {
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
+                optional_context_issues: vec![],
                 memories: vec![],
                 evidence: vec![],
             },

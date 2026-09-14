@@ -3,8 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 [[ "$#" == 1 ]] || exit 2
 case "$1" in
-  --availability|--exercise) ;;
-  *) printf '%s\n' 'Use --availability or --exercise (one synthetic request).' >&2; exit 2 ;;
+  --availability|--exercise|--exercise-optional-memory) ;;
+  *) printf '%s\n' 'Use --availability, --exercise, or --exercise-optional-memory (synthetic only).' >&2; exit 2 ;;
 esac
 CARGO_INCREMENTAL=0 cargo build -p floe-ffi --example local_model_smoke
 bundle="$PWD/target/validation/FloeLocalModelSmoke.app"

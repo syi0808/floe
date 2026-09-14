@@ -54,6 +54,7 @@ fn schedule_context_includes_fresh_feasibility_and_coarse_capacity() {
     let mut context = AgentContext {
         projection_version: 1,
         persona: None,
+        optional_context_issues: vec![],
         memories: vec![],
         evidence: vec![],
     };
@@ -97,6 +98,7 @@ fn schedule_context_marks_missing_or_stale_optional_views_unavailable() {
     let mut context = AgentContext {
         projection_version: 1,
         persona: None,
+        optional_context_issues: vec![],
         memories: vec![],
         evidence: vec![],
     };
@@ -685,6 +687,7 @@ impl Fixture {
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
+                optional_context_issues: vec![],
                 memories: vec![],
                 evidence: vec![],
             },

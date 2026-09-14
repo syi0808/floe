@@ -406,6 +406,7 @@ impl ModelRequest {
     }
 
     pub fn context_envelope(&self) -> Result<ContextEnvelope, AgentFailure> {
+        self.context.validate()?;
         self.prompt.validate()?;
         let (history, current_turn) = self.model_conversation();
         if !current_turn.iter().any(|message| message["role"] == "user") {
@@ -422,6 +423,7 @@ impl ModelRequest {
             contextual_data: ContextualData {
                 projection_version: self.context.projection_version,
                 memories: self.context.memories.clone(),
+                optional_context_issues: self.context.optional_context_issues.clone(),
                 evidence: self.context.evidence.clone(),
             },
             conversation: ConversationContext {
@@ -492,6 +494,8 @@ pub struct ContextEnvelope {
 pub struct ContextualData {
     pub projection_version: u32,
     pub memories: Vec<crate::ContextMemory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_context_issues: Vec<crate::ContextIssue>,
     pub evidence: Vec<crate::ContextEvidence>,
 }
 

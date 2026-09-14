@@ -16,6 +16,7 @@ use chrono::{TimeZone, Utc};
 use floe_agent::*;
 use floe_core::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
 use floe_domain::PersonId;
+use floe_knowledge::MAX_CONTEXT_MEMORIES;
 use uuid::Uuid;
 
 #[derive(Clone, Default)]
@@ -61,6 +62,89 @@ impl VaultKeyProvider for Keys {
         values.insert((person, vault), *key.as_bytes());
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn memory_context_budget_is_optional_but_key_failure_remains_fatal() {
+    let root = private_root();
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id,
+            text: "Preference fixture".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id,
+            text: "Recorded fixture".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    governed_commit(&vault, &session, 0).await;
+    let now = Utc::now();
+    for index in 0..=MAX_CONTEXT_MEMORIES {
+        let candidate = vault
+            .stage_memory_candidate(StageMemoryCandidate {
+                session_id: session.id,
+                expected_session_revision: session.revision,
+                turn_ids: vec![turn_id],
+                observation_kind: LearningObservationKind::ExplicitRemember,
+                digest: format!("Preference fixture {index}"),
+                value: memory_value(&format!("Preference number {index}")),
+                target_id: None,
+                base_revision: None,
+                extractor_version: "memory.fixture.v1".into(),
+                prompt_version: "explicit-memory.v1".into(),
+                actor: KnowledgeActor::User,
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        vault
+            .decide_knowledge_candidate(
+                candidate.id,
+                KnowledgeDecisionKind::Approve,
+                KnowledgeActor::User,
+                now,
+            )
+            .await
+            .unwrap();
+        if index + 1 == MAX_CONTEXT_MEMORIES {
+            let snapshot = floe_knowledge::acquire_memory_context(&vault, now)
+                .await
+                .unwrap();
+            assert_eq!(snapshot.memories.len(), MAX_CONTEXT_MEMORIES);
+            assert_eq!(snapshot.issue, None);
+        }
+    }
+    assert_eq!(
+        vault.personal_memory_context(now).await,
+        Err(AgentFailure::BudgetExceeded)
+    );
+    let snapshot = floe_knowledge::acquire_memory_context(&vault, now)
+        .await
+        .unwrap();
+    assert!(snapshot.memories.is_empty());
+    assert_eq!(snapshot.issue, Some(ContextIssueReason::BudgetExceeded));
+    assert_eq!(
+        vault
+            .memory_overview_snapshot(100)
+            .await
+            .unwrap()
+            .saved_count,
+        MAX_CONTEXT_MEMORIES + 1
+    );
+    keys.0.blocked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        floe_knowledge::acquire_memory_context(&vault, now).await,
+        Err(AgentFailure::VaultUnavailable)
+    );
 }
 
 fn assert_no_plaintext(directory: &Path, markers: &[&str]) {
@@ -1625,6 +1709,7 @@ async fn runtime_fails_closed_on_key_loss_and_recovers_without_model_replay() {
     let context = AgentContext {
         projection_version: 1,
         persona: None,
+        optional_context_issues: vec![],
         memories: vec![],
         evidence: vec![],
     };

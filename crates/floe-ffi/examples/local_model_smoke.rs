@@ -12,8 +12,9 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
-    if arguments != ["--availability"] && arguments != ["--exercise"] {
-        eprintln!("Use --availability (no generation) or --exercise (one synthetic request)");
+    let optional_memory = arguments == ["--exercise-optional-memory"];
+    if arguments != ["--availability"] && arguments != ["--exercise"] && !optional_memory {
+        eprintln!("Use --availability, --exercise, or --exercise-optional-memory (synthetic only)");
         return std::process::ExitCode::FAILURE;
     }
     let model = FoundationModelRunner::synthetic();
@@ -58,12 +59,24 @@ async fn main() -> std::process::ExitCode {
         context: AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: if optional_memory {
+                vec![floe_agent::ContextIssue {
+                    source: floe_agent::ContextSource::Memory,
+                    reason: floe_agent::ContextIssueReason::Unavailable,
+                }]
+            } else {
+                vec![]
+            },
             memories: vec![],
             evidence: vec![],
         },
         messages: vec![AgentMessage::User {
             turn_id,
-            text: "This is a fictional test, not my calendar. A fictional person has a meeting at 14:00 and a free hour at 11:00. Suggest a preparation time in one sentence, explicitly noting that this is synthetic data. Do not call a tool.".into(),
+            text: if optional_memory {
+                "This is a synthetic test about a fictional person, not my personal data. What meeting time does saved memory say the fictional person prefers? If you cannot determine that, can you still suggest one general preparation tip?"
+            } else {
+                "This is a fictional test, not my calendar. A fictional person has a meeting at 14:00 and a free hour at 11:00. Suggest a preparation time in one sentence, explicitly noting that this is synthetic data. Do not call a tool."
+            }.into(),
         }],
         capabilities: vec![],
         active_agents: vec![],

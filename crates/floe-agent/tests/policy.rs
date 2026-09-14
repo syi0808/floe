@@ -17,6 +17,7 @@ fn context(class: DataClass) -> AgentContext {
         projection_version: 1,
         persona: None,
         memories: vec![],
+        optional_context_issues: vec![],
         evidence: vec![ContextEvidence {
             source_handle: "synthetic:coarse-state".into(),
             data_class: class,
@@ -215,6 +216,50 @@ fn context_evidence_is_bounded_and_source_handles_are_unique() {
     projected.evidence.push(duplicate);
     assert_eq!(
         policy.authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &projected,
+            1,
+        ),
+        Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[test]
+fn optional_context_issues_are_explicit_and_memory_issues_cannot_hide_data() {
+    let mut projected = context(DataClass::Personal);
+    projected.optional_context_issues = vec![ContextIssue {
+        source: ContextSource::Memory,
+        reason: ContextIssueReason::Unavailable,
+    }];
+    assert_eq!(
+        policy(DataClass::Personal).authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &projected,
+            1,
+        ),
+        Ok(())
+    );
+
+    projected.memories.push(memory());
+    assert_eq!(
+        policy(DataClass::Personal).authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &projected,
+            1,
+        ),
+        Err(AgentFailure::PolicyDenied)
+    );
+
+    projected.memories.clear();
+    projected.optional_context_issues.push(ContextIssue {
+        source: ContextSource::Memory,
+        reason: ContextIssueReason::Denied,
+    });
+    assert_eq!(
+        policy(DataClass::Personal).authorize(
             ModelPlacement::DeviceLocal,
             SessionProtection::Encrypted,
             &projected,

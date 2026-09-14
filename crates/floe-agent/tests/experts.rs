@@ -424,6 +424,7 @@ impl Fixture {
                 projection_version: 1,
                 persona: None,
                 memories: vec![],
+                optional_context_issues: vec![],
                 evidence: vec![],
             },
             schema_version: 1,

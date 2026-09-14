@@ -13,6 +13,30 @@ const MAX_MEMORY_STATEMENT_BYTES: usize = 2 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
 const MAX_VERSION_BYTES: usize = 128;
 
+pub async fn acquire_memory_context(
+    reader: &impl crate::MemoryContextReader,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<crate::MemoryContextSnapshot, AgentFailure> {
+    use floe_context_contract::ContextIssueReason;
+
+    let issue = match reader.read_memory_context(now).await {
+        Ok(memories) => {
+            return Ok(crate::MemoryContextSnapshot {
+                memories,
+                issue: None,
+            });
+        }
+        Err(AgentFailure::CapabilityUnavailable) => ContextIssueReason::Unavailable,
+        Err(AgentFailure::CapabilityDenied) => ContextIssueReason::Denied,
+        Err(AgentFailure::BudgetExceeded) => ContextIssueReason::BudgetExceeded,
+        Err(error) => return Err(error),
+    };
+    Ok(crate::MemoryContextSnapshot {
+        memories: Vec::new(),
+        issue: Some(issue),
+    })
+}
+
 pub fn validate_memory_overview_limit(limit: usize) -> Result<(), AgentFailure> {
     if limit == 0 || limit > MAX_MEMORY_OVERVIEW_ITEMS {
         return Err(AgentFailure::InvalidInput);

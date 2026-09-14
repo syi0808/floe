@@ -10,7 +10,10 @@ mod ports;
 mod replay;
 
 pub use delegation::{DelegationRequest, TaskReceipt, TaskSnapshot, TaskState};
-pub use floe_context_contract::{DataClass, DependencyCoverage, ModelPlacement, TransferConsent};
+pub use floe_context_contract::{
+    ContextIssue, ContextIssueReason, ContextSource, DataClass, DependencyCoverage, ModelPlacement,
+    TransferConsent,
+};
 pub use floe_execution::{CancelReason, Cancellation, ExecutionScope};
 pub use floe_kernel::{
     AgentFailure, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,

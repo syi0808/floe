@@ -68,12 +68,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     if request.continuation && floe_agent::has_calendar_history(&session.messages) {
         return Err(AgentFailure::StaleContext);
     }
-    let context = AgentContext {
-        projection_version: 1,
-        persona: None,
-        memories: vault.personal_memory_context(chrono::Utc::now()).await?,
-        evidence: vec![],
-    };
+    let context = conversation_context(vault).await?;
     let inputs = ConversationTurnInputs {
         core,
         vault,
@@ -82,6 +77,26 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         request,
     };
     Box::pin(expert_dispatch::run(&inputs, context, cancellation, emit)).await
+}
+
+async fn conversation_context(
+    reader: &impl floe_knowledge::MemoryContextReader,
+) -> Result<AgentContext, AgentFailure> {
+    let snapshot = floe_knowledge::acquire_memory_context(reader, chrono::Utc::now()).await?;
+    Ok(AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: snapshot.memories,
+        optional_context_issues: snapshot
+            .issue
+            .map(|reason| floe_agent::ContextIssue {
+                source: floe_agent::ContextSource::Memory,
+                reason,
+            })
+            .into_iter()
+            .collect(),
+        evidence: vec![],
+    })
 }
 
 async fn run_general_turn<Keys: VaultKeyProvider>(
@@ -1492,6 +1507,135 @@ mod tests {
 
     struct PositiveFakeModel;
 
+    struct UnavailableMemoryReader(AgentFailure);
+
+    impl floe_knowledge::MemoryContextReader for UnavailableMemoryReader {
+        async fn read_memory_context(
+            &self,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> Result<Vec<floe_knowledge::ContextMemory>, AgentFailure> {
+            Err(self.0)
+        }
+    }
+
+    struct OptionalMemoryModel {
+        requests: Mutex<Vec<ModelRequest>>,
+    }
+
+    impl ModelRunner for OptionalMemoryModel {
+        fn placement(&self) -> ModelPlacement {
+            ModelPlacement::DeviceLocal
+        }
+
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+            assert!(request.context.memories.is_empty());
+            assert_eq!(request.context.optional_context_issues.len(), 1);
+            assert_eq!(
+                request.context.optional_context_issues[0].source,
+                floe_agent::ContextSource::Memory
+            );
+            let asks_memory = request.messages.iter().any(|message| {
+                matches!(
+                    message,
+                    AgentMessage::User { text, .. } if text == "What do you remember about me?"
+                )
+            });
+            self.requests.lock().unwrap().push(request);
+            Ok(ModelResponse {
+                replay: None,
+                schema_version: AGENT_VERSION,
+                output: vec![ModelStep::Answer {
+                    text: if asks_memory {
+                        "Saved memory is unavailable; I cannot inspect it right now."
+                    } else {
+                        "Hello! How can I help?"
+                    }
+                    .into(),
+                }],
+                used_tokens: 1,
+                cost_micros: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_memory_failure_preserves_conversation_and_integrity_fence() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+            .await
+            .unwrap();
+        let local_context = LocalContextStore::default();
+        let liveness = personal_grants::PersonalDependencyLiveness {
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()), None);
+        let model = OptionalMemoryModel {
+            requests: Mutex::new(Vec::new()),
+        };
+        for failure in [
+            AgentFailure::CapabilityUnavailable,
+            AgentFailure::CapabilityDenied,
+            AgentFailure::BudgetExceeded,
+        ] {
+            for text in ["Hello", "What do you remember about me?"] {
+                let session = vault.create_session().await.unwrap();
+                let context = conversation_context(&UnavailableMemoryReader(failure))
+                    .await
+                    .unwrap();
+                let store = vault.governed_general_store_with_liveness(session.id, &liveness);
+                let completed = AgentRuntime {
+                    store: &store,
+                    model: &model,
+                    capabilities: &NoCapabilities,
+                    policy: &policy,
+                    budget: AgentBudget::default(),
+                }
+                .run_turn(
+                    AgentCommand {
+                        schema_version: AGENT_VERSION,
+                        person_id,
+                        session_id: session.id,
+                        expected_revision: 0,
+                        text: text.into(),
+                    },
+                    context,
+                    Cancellation::default(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    completed.last_outcome,
+                    Some(floe_agent::AgentOutcome::Completed)
+                );
+                assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
+                assert!(completed.messages.iter().any(|message| matches!(
+                    message,
+                    AgentMessage::Assistant { text: answer, .. }
+                        if if text == "Hello" { answer.contains("Hello") }
+                        else { answer.contains("unavailable") }
+                )));
+            }
+        }
+        assert_eq!(model.requests.lock().unwrap().len(), 6);
+        for failure in [
+            AgentFailure::VaultUnavailable,
+            AgentFailure::StorageUnavailable,
+            AgentFailure::PolicyDenied,
+            AgentFailure::Cancelled,
+        ] {
+            assert_eq!(
+                conversation_context(&UnavailableMemoryReader(failure)).await,
+                Err(failure)
+            );
+        }
+        assert_eq!(model.requests.lock().unwrap().len(), 6);
+    }
+
     impl ModelRunner for PositiveFakeModel {
         fn placement(&self) -> ModelPlacement {
             ModelPlacement::DeviceLocal
@@ -1642,6 +1786,7 @@ mod tests {
                 AgentContext {
                     projection_version: 1,
                     persona: None,
+                    optional_context_issues: vec![],
                     memories: vec![],
                     evidence: vec![],
                 },
@@ -2014,6 +2159,7 @@ mod tests {
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
+                optional_context_issues: vec![],
                 memories: vec![],
                 evidence: vec![],
             },
@@ -2121,6 +2267,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };
@@ -2278,6 +2425,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };
@@ -2316,6 +2464,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };
@@ -2512,6 +2661,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };
@@ -2698,6 +2848,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![floe_agent::ContextMemory {
                 target_id: memory_id,
                 revision: 2,
@@ -2925,6 +3076,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };
@@ -3192,6 +3344,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };
@@ -3259,6 +3412,7 @@ mod tests {
         let context = AgentContext {
             projection_version: 1,
             persona: None,
+            optional_context_issues: vec![],
             memories: vec![],
             evidence: vec![],
         };

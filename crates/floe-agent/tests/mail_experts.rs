@@ -75,6 +75,7 @@ fn invocation(assignment: &str, item: CommunicationItem) -> MailExpertInvocation
             projection_version: 1,
             persona: None,
             memories: vec![],
+            optional_context_issues: vec![],
             evidence: vec![],
         },
         view: CommunicationView {
