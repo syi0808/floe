@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+use super::calendar::{
+    CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
+    CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto,
+};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DayQueryDto {
     pub date: String,
@@ -26,7 +31,7 @@ pub struct DaySnapshotDto {
     pub next_event_id: Option<String>,
     pub overdue_task_count: u32,
     pub items: Vec<TimelineItemDto>,
-    pub calendar: Option<floe_domain::CalendarConnection>,
+    pub calendar: Option<CalendarConnectionDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -69,7 +74,7 @@ pub enum EventScheduleDto {
 pub enum SourceRefDto {
     Manual,
     Capture { capture_id: String },
-    Calendar { source: floe_domain::CalendarSource },
+    Calendar { source: CalendarSourceDto },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -168,7 +173,7 @@ pub struct CalendarRecordDto {
 pub struct CalendarBatchDto {
     pub calendar_id: String,
     pub records: Vec<CalendarRecordDto>,
-    pub failure: Option<floe_domain::CalendarFailure>,
+    pub failure: Option<CalendarFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -181,29 +186,29 @@ pub enum CommandDto {
         connection_id: String,
         connection_revision: u64,
         device_id: String,
-        provider: floe_domain::CalendarProvider,
-        calendars: Vec<floe_domain::CalendarSelection>,
-        scope: floe_domain::CalendarScope,
+        provider: CalendarProviderDto,
+        calendars: Vec<CalendarSelectionDto>,
+        scope: CalendarScopeDto,
     },
     DiscoverCalendars {
         expected_revision: u64,
-        calendars: Vec<floe_domain::CalendarSelection>,
+        calendars: Vec<CalendarSelectionDto>,
     },
     ImportCalendarSources {
         expected_revision: u64,
-        range: floe_domain::CalendarRange,
+        range: CalendarRangeDto,
         batches: Vec<CalendarBatchDto>,
         occurred_at: String,
     },
     ImportCalendar {
         expected_revision: u64,
-        range: floe_domain::CalendarRange,
+        range: CalendarRangeDto,
         records: Vec<CalendarRecordDto>,
         occurred_at: String,
     },
     CalendarFailed {
         expected_revision: u64,
-        failure: floe_domain::CalendarFailure,
+        failure: CalendarFailureDto,
     },
     SubmitCapture {
         input: String,

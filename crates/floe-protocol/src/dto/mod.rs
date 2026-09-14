@@ -1,4 +1,5 @@
 mod agent;
+mod calendar;
 mod day;
 mod envelope;
 mod local_context;
@@ -28,6 +29,10 @@ pub use agent::{
     RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemotePairingChallengeDto,
     RemotePairingConfirmationDto, RemotePairingStatusDto, RemoteProducerIdentityDto,
     RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto,
+};
+pub use calendar::{
+    CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
+    CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto,
 };
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,

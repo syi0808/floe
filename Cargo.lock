@@ -874,6 +874,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -914,10 +915,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-agent-contract",
- "floe-domain",
+ "floe-context-contract",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
  "uuid",
 ]
 

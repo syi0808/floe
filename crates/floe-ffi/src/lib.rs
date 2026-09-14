@@ -2,6 +2,7 @@ mod abi;
 mod agent_run;
 #[cfg(target_os = "android")]
 mod android_vault_keys;
+mod conversion;
 mod diagnostics;
 
 pub use abi::*;
@@ -26,6 +27,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio::runtime::{Builder, Runtime};
 use uuid::Uuid;
+
+use conversion::ProtocolConversionError;
 
 pub struct FloeHandle {
     runtime: Runtime,
@@ -102,7 +105,7 @@ fn core_error(value: CoreError) -> ErrorDto {
     }
 }
 
-fn conversion_error(value: ProtocolConversionError) -> ErrorDto {
+fn conversion_error(value: conversion::ProtocolConversionError) -> ErrorDto {
     match value {
         ProtocolConversionError::UnsupportedVersion { actual, expected } => {
             let mut value = error(
@@ -220,7 +223,7 @@ fn snapshot(
             now,
         ))
         .map_err(core_error)?;
-    value.try_into().map_err(conversion_error)
+    conversion::day_snapshot_to_dto(value).map_err(conversion_error)
 }
 
 pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult<DaySnapshotDto> {
@@ -539,15 +542,20 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
         } => {
             handle
                 .runtime
-                .block_on(handle.core.set_calendar_scope(
-                    person_id,
-                    connection_id,
-                    connection_revision,
-                    device_id,
-                    provider,
-                    calendars,
-                    scope,
-                ))
+                .block_on(
+                    handle.core.set_calendar_scope(
+                        person_id,
+                        connection_id,
+                        connection_revision,
+                        device_id,
+                        conversion::calendar_provider_from_dto(provider),
+                        calendars
+                            .into_iter()
+                            .map(conversion::calendar_selection_from_dto)
+                            .collect(),
+                        conversion::calendar_scope_from_dto(scope),
+                    ),
+                )
                 .map_err(core_error)?;
         }
         CommandDto::DiscoverCalendars {
@@ -557,9 +565,14 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
             handle
                 .runtime
                 .block_on(
-                    handle
-                        .core
-                        .discover_calendars(person_id, expected_revision, calendars),
+                    handle.core.discover_calendars(
+                        person_id,
+                        expected_revision,
+                        calendars
+                            .into_iter()
+                            .map(conversion::calendar_selection_from_dto)
+                            .collect(),
+                    ),
                 )
                 .map_err(core_error)?;
         }
@@ -582,15 +595,15 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                                 external_id: record.external_id,
                                 external_revision: record.external_revision,
                                 title: record.title,
-                                schedule: record.schedule.try_into()?,
+                                schedule: conversion::event_schedule_from_dto(record.schedule)?,
                             })
                         })
-                        .collect::<Result<Vec<_>, floe_protocol::ProtocolConversionError>>();
+                        .collect::<Result<Vec<_>, conversion::ProtocolConversionError>>();
                     match records {
                         Ok(records) => floe_domain::CalendarBatch {
                             calendar_id: batch.calendar_id,
                             records,
-                            failure: batch.failure,
+                            failure: batch.failure.map(conversion::calendar_failure_from_dto),
                         },
                         Err(_) => floe_domain::CalendarBatch {
                             calendar_id: batch.calendar_id,
@@ -605,7 +618,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .block_on(handle.core.import_calendar_sources(
                     person_id,
                     expected_revision,
-                    range,
+                    conversion::calendar_range_from_dto(range),
                     batches,
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
@@ -626,7 +639,8 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                         external_id: record.external_id,
                         external_revision: record.external_revision,
                         title: record.title,
-                        schedule: record.schedule.try_into().map_err(conversion_error)?,
+                        schedule: conversion::event_schedule_from_dto(record.schedule)
+                            .map_err(conversion_error)?,
                     })
                 })
                 .collect::<BridgeResult<Vec<_>>>()?;
@@ -635,7 +649,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .block_on(handle.core.import_calendar(
                     person_id,
                     expected_revision,
-                    range,
+                    conversion::calendar_range_from_dto(range),
                     records,
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
@@ -650,7 +664,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .block_on(handle.core.record_calendar_failure(
                     person_id,
                     expected_revision,
-                    failure,
+                    conversion::calendar_failure_from_dto(failure),
                     request_now,
                 ))
                 .map_err(core_error)?;
@@ -661,7 +675,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .runtime
                 .block_on(handle.core.submit_capture(person_id, input, occurred_at))
                 .map_err(core_error)?;
-            capture = Some(value.into());
+            capture = Some(conversion::capture_to_dto(value));
         }
         CommandDto::ClassifyCapture {
             capture_id,
@@ -673,7 +687,8 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
             let classification = match classification {
                 ClassificationDto::Event { title, schedule } => Classification::Event {
                     title,
-                    schedule: schedule.try_into().map_err(conversion_error)?,
+                    schedule: conversion::event_schedule_from_dto(schedule)
+                        .map_err(conversion_error)?,
                 },
                 ClassificationDto::Task {
                     title,
@@ -685,7 +700,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                         .as_deref()
                         .map(|value| parse_time(value, "deadline"))
                         .transpose()?,
-                    priority: priority.into(),
+                    priority: conversion::priority_from_dto(priority),
                 },
                 ClassificationDto::Note { content } => Classification::Note { content },
             };
@@ -698,7 +713,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
                 .map_err(core_error)?;
-            changed_item = Some(value.into());
+            changed_item = Some(conversion::timeline_item_to_dto(value));
         }
         CommandDto::CreateEvent {
             title,
@@ -710,11 +725,11 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .block_on(handle.core.create_event(
                     person_id,
                     title,
-                    schedule.try_into().map_err(conversion_error)?,
+                    conversion::event_schedule_from_dto(schedule).map_err(conversion_error)?,
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Event(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Event(value)));
         }
         CommandDto::CreateTask {
             title,
@@ -732,12 +747,12 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                             .as_deref()
                             .map(|value| parse_time(value, "deadline"))
                             .transpose()?,
-                        priority.into(),
+                        conversion::priority_from_dto(priority),
                         parse_time(&occurred_at, "occurred_at")?,
                     ),
                 )
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Task(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Task(value)));
         }
         CommandDto::CreateNote {
             content,
@@ -751,7 +766,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Note(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Note(value)));
         }
         CommandDto::UpdateEvent {
             event_id,
@@ -766,11 +781,11 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     parse_id(&event_id, "event_id", floe_domain::EventId)?,
                     Revision(expected_revision),
                     title,
-                    schedule.try_into().map_err(conversion_error)?,
+                    conversion::event_schedule_from_dto(schedule).map_err(conversion_error)?,
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Event(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Event(value)));
         }
         CommandDto::UpdateTask {
             task_id,
@@ -791,12 +806,12 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                             .as_deref()
                             .map(|value| parse_time(value, "deadline"))
                             .transpose()?,
-                        priority.into(),
+                        conversion::priority_from_dto(priority),
                         parse_time(&occurred_at, "occurred_at")?,
                     ),
                 )
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Task(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Task(value)));
         }
         CommandDto::UpdateNote {
             note_id,
@@ -813,7 +828,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Note(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Note(value)));
         }
         CommandDto::SetTaskCompletion {
             task_id,
@@ -830,14 +845,15 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     parse_time(&occurred_at, "occurred_at")?,
                 ))
                 .map_err(core_error)?;
-            changed_item = Some(TimelineItem::Task(value).into());
+            changed_item = Some(conversion::timeline_item_to_dto(TimelineItem::Task(value)));
         }
         CommandDto::DeleteItem {
             target,
             expected_revision,
             occurred_at,
         } => {
-            let reference: DomainRef = target.try_into().map_err(conversion_error)?;
+            let reference: DomainRef =
+                conversion::domain_ref_from_dto(target).map_err(conversion_error)?;
             handle
                 .runtime
                 .block_on(handle.core.delete_item(

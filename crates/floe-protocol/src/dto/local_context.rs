@@ -1,6 +1,6 @@
-use floe_domain::CalendarProvider;
 use serde::{Deserialize, Serialize};
 
+use super::calendar::{CalendarFailureDto, CalendarProviderDto};
 use crate::CalendarBatchDto;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -27,7 +27,7 @@ pub enum LocalContextOperationDto {
     FailAcquisition {
         host_epoch: String,
         request_id: String,
-        failure: floe_domain::CalendarFailure,
+        failure: CalendarFailureDto,
     },
     DisposeAcquisitionHost {
         host_epoch: String,
@@ -76,7 +76,7 @@ pub enum LocalContextOperationDto {
         device_id: String,
         connection_id: String,
         connection_revision: u64,
-        provider: CalendarProvider,
+        provider: CalendarProviderDto,
         calendar_ids: Vec<String>,
         observed_at_unix_ms: i64,
         expires_at_unix_ms: i64,
@@ -105,7 +105,7 @@ pub struct LocalContextAcquisitionRequestDto {
     pub device_id: String,
     pub connection_id: String,
     pub connection_revision: u64,
-    pub provider: CalendarProvider,
+    pub provider: CalendarProviderDto,
     pub mode: LocalContextAcquisitionModeDto,
     pub calendar_ids: Vec<String>,
     pub range_start_unix_ms: i64,
@@ -131,7 +131,7 @@ pub struct LocalContextAcquisitionResultDto {
     pub device_id: String,
     pub connection_id: String,
     pub connection_revision: u64,
-    pub provider: CalendarProvider,
+    pub provider: CalendarProviderDto,
     pub mode: LocalContextAcquisitionModeDto,
     pub calendar_ids: Vec<String>,
     pub range_start_unix_ms: i64,

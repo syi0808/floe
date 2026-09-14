@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
+
+use super::calendar::{CalendarProviderDto, CalendarScopeDto};
+
 pub use floe_agent_contract::{
     AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
 };
@@ -77,13 +81,13 @@ pub struct CalendarExpertSetupDto {
     pub instance_id: Uuid,
     pub expected_revision: u64,
     pub setup_id: Uuid,
-    pub provider: floe_domain::CalendarProvider,
+    pub provider: CalendarProviderDto,
     pub device_id: String,
     pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_scope: CalendarScopeDto,
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<floe_domain::SourceAuthority>,
+    pub source_authority: Option<SourceAuthority>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_native_subject_fingerprint: Option<String>,
 }
@@ -100,25 +104,25 @@ pub struct CalendarAccessConfigurationDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarSubjectPreviewRequestDto {
-    pub provider: floe_domain::CalendarProvider,
+    pub provider: CalendarProviderDto,
     pub device_id: String,
     pub connection_id: String,
     pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_scope: CalendarScopeDto,
     pub connection_revision: u64,
-    pub source_authority: floe_domain::SourceAuthority,
+    pub source_authority: SourceAuthority,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarSubjectPreviewDto {
-    pub provider: floe_domain::CalendarProvider,
+    pub provider: CalendarProviderDto,
     pub device_id: String,
     pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_scope: CalendarScopeDto,
     pub connection_id: String,
     pub connection_revision: u64,
-    pub source_authority: floe_domain::SourceAuthority,
+    pub source_authority: SourceAuthority,
     pub native_subject_fingerprint: String,
 }
 
@@ -129,13 +133,13 @@ pub enum CalendarAccessChangeDto {
         enabled: bool,
     },
     SetScope {
-        provider: floe_domain::CalendarProvider,
+        provider: CalendarProviderDto,
         device_id: String,
         calendar_ids: Vec<String>,
-        connection_scope: floe_domain::CalendarScope,
+        connection_scope: CalendarScopeDto,
         connection_revision: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        source_authority: Option<floe_domain::SourceAuthority>,
+        source_authority: Option<SourceAuthority>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reviewed_native_subject_fingerprint: Option<String>,
     },
@@ -249,11 +253,11 @@ pub enum AgentVaultActionDto {
         expected_producer_fingerprint: String,
     },
     RemoteCalendarGrantStatus {
-        grant_id: floe_domain::GrantId,
+        grant_id: GrantId,
     },
     RemoteCalendarGrantPause {
-        grant_id: floe_domain::GrantId,
-        expected_authority: floe_domain::GrantAuthority,
+        grant_id: GrantId,
+        expected_authority: GrantAuthority,
     },
     RemoteViewGrantPreview {
         route: AgentRemoteRouteDto,
@@ -271,17 +275,17 @@ pub enum AgentVaultActionDto {
         resource: String,
         consumer: String,
         expected_producer_fingerprint: String,
-        expected_source_authority: floe_domain::SourceAuthority,
+        expected_source_authority: SourceAuthority,
         expected_connection_revision: u64,
         expected_provider_identity: String,
         expected_recipient: String,
     },
     RemoteViewGrantStatus {
-        grant_id: floe_domain::GrantId,
+        grant_id: GrantId,
     },
     RemoteViewGrantPause {
-        grant_id: floe_domain::GrantId,
-        expected_authority: floe_domain::GrantAuthority,
+        grant_id: GrantId,
+        expected_authority: GrantAuthority,
     },
 }
 
@@ -303,9 +307,9 @@ pub enum PersonalAccessChangeDto {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feasibility_query: Option<FeasibilityGrantQueryDto>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_id: Option<floe_domain::GrantId>,
+        expected_grant_id: Option<GrantId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_authority: Option<floe_domain::GrantAuthority>,
+        expected_grant_authority: Option<GrantAuthority>,
     },
     SetEnabled {
         enabled: bool,
@@ -343,9 +347,9 @@ pub enum ContactsAccessChangeDto {
         expected_native_subject_fingerprint: String,
         consumers: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_id: Option<floe_domain::GrantId>,
+        expected_grant_id: Option<GrantId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_grant_authority: Option<floe_domain::GrantAuthority>,
+        expected_grant_authority: Option<GrantAuthority>,
     },
     SetEnabled {
         enabled: bool,
@@ -360,9 +364,9 @@ pub struct PersonalAccessOverviewDto {
     pub connector: String,
     pub device_id: String,
     pub connection_id: String,
-    pub source_authority: Option<floe_domain::SourceAuthority>,
-    pub grant_id: Option<floe_domain::GrantId>,
-    pub grant_authority: Option<floe_domain::GrantAuthority>,
+    pub source_authority: Option<SourceAuthority>,
+    pub grant_id: Option<GrantId>,
+    pub grant_authority: Option<GrantAuthority>,
     pub state: String,
     pub review_required: bool,
     pub presence_available: bool,
@@ -441,7 +445,7 @@ pub struct RemoteCalendarGrantPreviewDto {
     pub connector_id: String,
     pub connection_id: String,
     pub resource: String,
-    pub source_authority: floe_domain::SourceAuthority,
+    pub source_authority: SourceAuthority,
     pub provider_identity: String,
     pub execution_owner: String,
     pub producer: RemoteProducerIdentityDto,
@@ -455,12 +459,12 @@ pub struct RemoteCalendarGrantPreviewDto {
 pub struct RemoteCalendarGrantOverviewDto {
     pub schema_version: u32,
     pub person_id: String,
-    pub grant_id: floe_domain::GrantId,
-    pub grant_authority: floe_domain::GrantAuthority,
+    pub grant_id: GrantId,
+    pub grant_authority: GrantAuthority,
     pub connector_id: String,
     pub connection_id: String,
     pub resource: String,
-    pub source_authority: floe_domain::SourceAuthority,
+    pub source_authority: SourceAuthority,
     pub execution_owner: String,
     pub state: String,
     pub review_required: bool,
@@ -479,7 +483,7 @@ pub struct RemoteViewGrantPreviewDto {
     pub connection_id: String,
     pub connection_revision: u64,
     pub resource: String,
-    pub source_authority: floe_domain::SourceAuthority,
+    pub source_authority: SourceAuthority,
     pub provider_identity: String,
     pub execution_owner: String,
     pub producer: RemoteProducerIdentityDto,
@@ -493,14 +497,14 @@ pub struct RemoteViewGrantPreviewDto {
 pub struct RemoteViewGrantOverviewDto {
     pub schema_version: u32,
     pub person_id: String,
-    pub grant_id: floe_domain::GrantId,
-    pub grant_authority: floe_domain::GrantAuthority,
+    pub grant_id: GrantId,
+    pub grant_authority: GrantAuthority,
     pub view_id: String,
     pub connector_id: String,
     pub connection_id: String,
     pub connection_revision: Option<u64>,
     pub resource: String,
-    pub source_authority: floe_domain::SourceAuthority,
+    pub source_authority: SourceAuthority,
     pub execution_owner: String,
     pub state: String,
     pub review_required: bool,

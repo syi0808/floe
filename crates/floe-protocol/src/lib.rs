@@ -1,7 +1,5 @@
-mod conversion;
 mod dto;
 
-pub use conversion::ProtocolConversionError;
 pub use dto::{
     ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentConversationTurnRequestDto,
     AgentEventDto, AgentFailureCategory, AgentFailureDomain, AgentFailureDto,
@@ -15,8 +13,10 @@ pub use dto::{
     AgentVaultFailureDto, AgentVaultOperationDto, AgentVaultRecoveryActionDto,
     AgentVaultRequestDto, AgentVaultResultDto, AgentVaultStateDto, CalendarAccessChangeDto,
     CalendarAccessConfigurationDto, CalendarActionDecisionDto, CalendarActionOperationDto,
-    CalendarActionRequestDto, CalendarBatchDto, CalendarExpertOverviewDto, CalendarExpertSetupDto,
-    CalendarRecordDto, CalendarSubjectPreviewDto, CalendarSubjectPreviewRequestDto, CaptureDto,
+    CalendarActionRequestDto, CalendarBatchDto, CalendarConnectionDto, CalendarExpertOverviewDto,
+    CalendarExpertSetupDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
+    CalendarRecordDto, CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto,
+    CalendarSubjectPreviewDto, CalendarSubjectPreviewRequestDto, CalendarSyncStatusDto, CaptureDto,
     CaptureProcessingDto, CaptureSourceDto, ClassificationDto, CommandDto, CommandRequestDto,
     ConnectorSnapshotDto, ContactsAccessChangeDto, ContactsAccessConfigurationDto, DayQueryDto,
     DaySnapshotDto, DomainRefDto, EpistemicStatusDto, ErrorCodeDto, ErrorDto, EventDto,

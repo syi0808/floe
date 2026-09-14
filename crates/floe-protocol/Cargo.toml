@@ -7,9 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 floe-agent-contract = { path = "../floe-agent-contract" }
+floe-context-contract = { path = "../contracts/context" }
 chrono.workspace = true
-floe-domain = { path = "../floe-domain" }
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 uuid.workspace = true

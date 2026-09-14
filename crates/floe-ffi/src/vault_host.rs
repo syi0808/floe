@@ -2255,7 +2255,7 @@ async fn calendar_grant_authority(
                         device_id: request.device_id.clone(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: request.provider,
+                        provider: crate::conversion::calendar_provider_to_dto(request.provider),
                         mode: LocalContextAcquisitionModeDto::InspectSubject,
                         calendar_ids,
                         range_start_unix_ms: start,
@@ -2307,6 +2307,8 @@ async fn calendar_subject_preview(
         return Err(AgentFailure::Cancelled);
     }
     let mut calendar_ids = request.calendar_ids.clone();
+    let provider = crate::conversion::calendar_provider_from_dto(request.provider);
+    let scope = crate::conversion::calendar_scope_from_dto(request.connection_scope);
     calendar_ids.sort();
     if calendar_ids.is_empty()
         || calendar_ids.len() > 4
@@ -2325,8 +2327,8 @@ async fn calendar_subject_preview(
     if connection.disconnected
         || connection.connection_id != request.connection_id
         || connection.device_id != request.device_id
-        || connection.provider != request.provider
-        || connection.scope != request.connection_scope
+        || connection.provider != provider
+        || connection.scope != scope
         || connection.source_authority != request.source_authority
         || !connection.source_authority.is_valid()
         || calendar_ids.iter().any(|identifier| {
@@ -2338,13 +2340,13 @@ async fn calendar_subject_preview(
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    let fingerprint = match request.provider {
+    let fingerprint = match provider {
         #[cfg(target_os = "macos")]
         floe_domain::CalendarProvider::EventKit => {
             let access = floe_infra::native_calendar::NativeCalendarReadAccess::new(
                 person_id,
                 request.device_id.clone(),
-                request.provider,
+                provider,
                 calendar_ids.clone(),
                 connection.connection_id.clone(),
                 connection.revision,
@@ -2353,7 +2355,7 @@ async fn calendar_subject_preview(
                 .check(CalendarReadAccessRequest {
                     person_id,
                     device_id: request.device_id.clone(),
-                    provider: request.provider,
+                    provider,
                     calendar_ids: calendar_ids.clone(),
                     expected_native_subject_fingerprint: None,
                     deadline: tokio::time::Instant::now() + Duration::from_secs(30),
@@ -2375,7 +2377,7 @@ async fn calendar_subject_preview(
                         device_id: request.device_id.clone(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: request.provider,
+                        provider: crate::conversion::calendar_provider_to_dto(provider),
                         mode: LocalContextAcquisitionModeDto::InspectSubject,
                         calendar_ids: calendar_ids.clone(),
                         range_start_unix_ms: range_start,
@@ -2401,7 +2403,7 @@ async fn calendar_subject_preview(
     if !calendar_connection_matches(
         &refreshed,
         &connection.connection_id,
-        request.provider,
+        provider,
         &request.device_id,
         connection.scope,
         &request.calendar_ids,
@@ -2410,10 +2412,10 @@ async fn calendar_subject_preview(
         return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(CalendarSubjectPreviewDto {
-        provider: request.provider,
+        provider: crate::conversion::calendar_provider_to_dto(provider),
         device_id: request.device_id.clone(),
         calendar_ids,
-        connection_scope: refreshed.scope,
+        connection_scope: crate::conversion::calendar_scope_to_dto(refreshed.scope),
         connection_id: refreshed.connection_id,
         connection_revision: refreshed.revision,
         source_authority: refreshed.source_authority,

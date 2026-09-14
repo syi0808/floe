@@ -11,10 +11,11 @@ use floe_agent::{
     validate_wellbeing_view,
 };
 use floe_domain::{
-    CalendarBatch, CalendarFailure, CalendarProvider, CalendarRecord, EventSchedule, PersonId,
+    CalendarBatch, CalendarFailure, CalendarProvider as DomainCalendarProvider, CalendarRecord,
+    PersonId,
 };
 use floe_protocol::{
-    LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
+    CalendarProviderDto, LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAcquisitionResultDto, LocalContextAttentionAcquisitionModeDto,
     LocalContextAttentionAcquisitionRequestDto, LocalContextAttentionAcquisitionResultDto,
     LocalContextOperationDto, LocalContextPersonalAcquisitionRequestDto,
@@ -233,7 +234,7 @@ pub(crate) struct PublishedCalendarObservation {
     #[cfg(test)]
     pub(crate) source_authority: floe_domain::SourceAuthority,
     pub(crate) connection_revision: u64,
-    pub(crate) provider: CalendarProvider,
+    pub(crate) provider: DomainCalendarProvider,
     pub(crate) calendar_ids: Vec<String>,
     pub(crate) observed_at_unix_ms: i64,
     pub(crate) expires_at_unix_ms: i64,
@@ -284,7 +285,12 @@ impl LocalContextStore {
             } => {
                 validate_host_epoch(&host_epoch)?;
                 validate_handle(&request_id, "operation.request_id")?;
-                self.fail_acquisition(person_id, &host_epoch, &request_id, failure)?;
+                self.fail_acquisition(
+                    person_id,
+                    &host_epoch,
+                    &request_id,
+                    crate::conversion::calendar_failure_from_dto(failure),
+                )?;
                 Ok(result(person_id, None, None, 0, None))
             }
             LocalContextOperationDto::DisposeAcquisitionHost { host_epoch } => {
@@ -411,11 +417,12 @@ impl LocalContextStore {
                 range_end_unix_ms,
                 batches,
             } => {
+                let provider = crate::conversion::calendar_provider_from_dto(provider);
                 validate_handle(&device_id, "operation.device_id")?;
                 validate_handle(&connection_id, "operation.connection_id")?;
                 if !matches!(
                     provider,
-                    CalendarProvider::EventKit | CalendarProvider::Android
+                    DomainCalendarProvider::EventKit | DomainCalendarProvider::Android
                 ) {
                     return Err(agent_failure(AgentFailure::InvalidInput));
                 }
@@ -436,12 +443,16 @@ impl LocalContextStore {
                                         external_id: record.external_id,
                                         external_revision: record.external_revision,
                                         title: record.title,
-                                        schedule: EventSchedule::try_from(record.schedule)
-                                            .map_err(|_| AgentFailure::InvalidInput)?,
+                                        schedule: crate::conversion::event_schedule_from_dto(
+                                            record.schedule,
+                                        )
+                                        .map_err(|_| AgentFailure::InvalidInput)?,
                                     })
                                 })
                                 .collect::<Result<Vec<_>, AgentFailure>>()?,
-                            failure: batch.failure,
+                            failure: batch
+                                .failure
+                                .map(crate::conversion::calendar_failure_from_dto),
                         })
                     })
                     .collect::<Result<Vec<_>, AgentFailure>>()
@@ -1832,7 +1843,7 @@ fn validate_calendar_observation(
         .collect();
     if !matches!(
         observation.provider,
-        CalendarProvider::EventKit | CalendarProvider::Android
+        DomainCalendarProvider::EventKit | DomainCalendarProvider::Android
     ) || observation.connection_revision == 0
         || observation.calendar_ids.is_empty()
         || observation.calendar_ids.len() > 128
@@ -2195,7 +2206,7 @@ fn validate_acquisition_request(request: &LocalContextAcquisitionRequestDto) -> 
     if request.connection_revision == 0
         || !matches!(
             request.provider,
-            CalendarProvider::EventKit | CalendarProvider::Android
+            CalendarProviderDto::EventKit | CalendarProviderDto::Android
         )
         || request.calendar_ids.is_empty()
         || request.calendar_ids.len() > MAX_ACQUISITION_CALENDARS
@@ -2331,7 +2342,10 @@ fn valid_native_subject_fingerprint(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use floe_protocol::{CalendarBatchDto, CalendarRecordDto, EventScheduleDto, PROTOCOL_VERSION};
+    use floe_protocol::{
+        CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, CalendarRecordDto,
+        EventScheduleDto, PROTOCOL_VERSION,
+    };
     use serde_json::json;
     use uuid::Uuid;
 
@@ -2355,7 +2369,7 @@ mod tests {
     fn calendar_publication(
         now: i64,
         device_id: &str,
-        provider: CalendarProvider,
+        provider: CalendarProviderDto,
     ) -> LocalContextOperationDto {
         LocalContextOperationDto::PublishCalendarObservation {
             device_id: device_id.into(),
@@ -2396,7 +2410,7 @@ mod tests {
         let error = store
             .request(
                 person(),
-                calendar_publication(now_unix_ms().unwrap(), "mac", CalendarProvider::Google),
+                calendar_publication(now_unix_ms().unwrap(), "mac", CalendarProviderDto::Google),
             )
             .unwrap_err();
         assert_eq!(error.code, floe_protocol::ErrorCodeDto::Validation);
@@ -2412,7 +2426,7 @@ mod tests {
         let error = store
             .request(
                 person(),
-                calendar_publication(now_unix_ms().unwrap(), "mac", CalendarProvider::EventKit),
+                calendar_publication(now_unix_ms().unwrap(), "mac", CalendarProviderDto::EventKit),
             )
             .unwrap_err();
         assert_eq!(
@@ -2430,7 +2444,7 @@ mod tests {
             device_id: "device-a".into(),
             connection_id: "connection-a".into(),
             connection_revision: 2,
-            provider: CalendarProvider::Android,
+            provider: CalendarProviderDto::Android,
             mode: LocalContextAcquisitionModeDto::ReadEvents,
             calendar_ids: vec!["calendar-a".into()],
             range_start_unix_ms: 1_000,
@@ -2609,7 +2623,7 @@ mod tests {
                 LocalContextOperationDto::FailAcquisition {
                     host_epoch: "host-a".into(),
                     request_id: request.request_id,
-                    failure: CalendarFailure::PermissionDenied,
+                    failure: CalendarFailureDto::PermissionDenied,
                 },
             )
             .unwrap();
@@ -2998,7 +3012,7 @@ mod tests {
             device_id: "iphone".into(),
             disconnected: false,
             scope: floe_domain::CalendarScope::All,
-            provider: CalendarProvider::EventKit,
+            provider: DomainCalendarProvider::EventKit,
             revision: 7,
             source_authority: floe_domain::SourceAuthority::new(),
             calendars: (0..11)
@@ -3022,7 +3036,7 @@ mod tests {
             device_id: "iphone".into(),
             connection_id: connection.connection_id.clone(),
             connection_revision: 7,
-            provider: CalendarProvider::EventKit,
+            provider: CalendarProviderDto::EventKit,
             calendar_ids: ids.clone(),
             observed_at_unix_ms: now - 1,
             expires_at_unix_ms: now + 60_000,
@@ -3034,7 +3048,7 @@ mod tests {
                     calendar_id: identifier.clone(),
                     records: vec![],
                     failure: (identifier == "calendar-1")
-                        .then_some(floe_domain::CalendarFailure::ProviderUnavailable),
+                        .then_some(CalendarFailureDto::ProviderUnavailable),
                 })
                 .collect(),
         };
@@ -3050,7 +3064,7 @@ mod tests {
         );
         let allowed = ids[..2].to_vec();
         let mut wrong_provider = connection.clone();
-        wrong_provider.provider = CalendarProvider::Android;
+        wrong_provider.provider = DomainCalendarProvider::Android;
         assert!(
             store
                 .authorized_calendar_observation(person_id, &wrong_provider, &allowed)

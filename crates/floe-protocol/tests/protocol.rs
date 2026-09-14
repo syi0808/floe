@@ -1,10 +1,5 @@
 use std::collections::BTreeMap;
 
-use chrono::{TimeZone, Utc};
-use floe_domain::{
-    Capture, CaptureSource, DaySnapshot, DomainRef, Event, EventId, EventSchedule, Note, PersonId,
-    Priority, SourceRef, Task, TimedSchedule, TimelineItem,
-};
 use floe_protocol::*;
 
 #[test]
@@ -209,10 +204,6 @@ fn memory_overview_transport_is_read_only() {
     }
 }
 
-fn id(value: &str) -> Uuid {
-    Uuid::parse_str(value).unwrap()
-}
-
 #[test]
 fn snapshot_has_a_versioned_stable_wire_shape() {
     let snapshot = DaySnapshotDto {
@@ -392,98 +383,6 @@ fn capture_and_error_envelopes_have_explicit_tags() {
             }
         })
     );
-}
-
-#[test]
-fn domain_snapshot_round_trip_preserves_all_item_kinds() {
-    let person_id = PersonId(id("00000000-0000-0000-0000-000000000001"));
-    let capture_id = floe_domain::CaptureId(id("00000000-0000-0000-0000-000000000004"));
-    let now = Utc.with_ymd_and_hms(2026, 9, 2, 10, 30, 0).unwrap();
-    let event = Event::new(
-        person_id,
-        "Review",
-        EventSchedule::Timed(
-            TimedSchedule::new(now, now + chrono::Duration::hours(1), "Asia/Seoul").unwrap(),
-        ),
-        SourceRef::Capture(capture_id),
-        now,
-    )
-    .unwrap();
-    let task = Task::new(
-        person_id,
-        "Ship",
-        Some(now),
-        Priority::High,
-        SourceRef::Manual,
-        now,
-    )
-    .unwrap();
-    let note = Note::new(person_id, "Remember", SourceRef::Manual, now).unwrap();
-    let snapshot = DaySnapshot {
-        calendar: None,
-        person_id,
-        date: now.date_naive(),
-        generated_at: now,
-        timezone_offset_seconds: 32_400,
-        now_event_id: Some(event.id),
-        next_event_id: None,
-        overdue_task_count: 1,
-        items: vec![
-            TimelineItem::Event(event),
-            TimelineItem::Task(task),
-            TimelineItem::Note(note),
-        ],
-    };
-
-    let dto = DaySnapshotDto::try_from(snapshot.clone()).unwrap();
-    assert_eq!(DaySnapshot::try_from(dto).unwrap(), snapshot);
-}
-
-#[test]
-fn capture_round_trip_preserves_processing_and_revision() {
-    let person_id = PersonId(id("00000000-0000-0000-0000-000000000001"));
-    let now = Utc.with_ymd_and_hms(2026, 9, 2, 10, 30, 0).unwrap();
-    let mut capture = Capture::new(person_id, "Ship", now, CaptureSource::Typed).unwrap();
-    capture.classify(
-        DomainRef::Event(EventId(id("00000000-0000-0000-0000-000000000002"))),
-        now,
-    );
-
-    let dto = CaptureDto::from(capture.clone());
-    assert_eq!(dto.revision, 1);
-    assert_eq!(Capture::try_from(dto).unwrap(), capture);
-}
-
-#[test]
-fn conversion_rejects_invalid_versions_and_domain_values() {
-    let snapshot = DaySnapshotDto {
-        calendar: None,
-        schema_version: 99,
-        person_id: "00000000-0000-0000-0000-000000000001".into(),
-        date: "2026-09-02".into(),
-        generated_at: "2026-09-02T10:30:00Z".into(),
-        timezone_offset_seconds: 0,
-        now_event_id: None,
-        next_event_id: None,
-        overdue_task_count: 0,
-        items: vec![],
-    };
-    assert!(matches!(
-        DaySnapshot::try_from(snapshot),
-        Err(ProtocolConversionError::UnsupportedVersion { actual: 99, .. })
-    ));
-
-    let schedule = EventScheduleDto::Timed {
-        starts_at: "2026-09-02T10:30:00Z".into(),
-        ends_at: "2026-09-02T10:30:00Z".into(),
-        timezone: "UTC".into(),
-    };
-    assert!(EventSchedule::try_from(schedule).is_err());
-
-    let invalid_id = SourceRefDto::Capture {
-        capture_id: "not-a-uuid".into(),
-    };
-    assert!(SourceRef::try_from(invalid_id).is_err());
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use floe_agent::{AgentFailure, Cancellation};
 use floe_core::{
     ActionFailure, CalendarAction, CalendarActionProvider, CalendarCreateReceipt,
@@ -10,15 +10,56 @@ use floe_core::{
     CalendarReadAccessRequest, CalendarReadAccessStamp,
 };
 use floe_domain::{
-    CalendarBatch, CalendarProvider, CalendarRecord, ContextDependency, Event, PersonId,
+    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarProvider, CalendarRecord,
+    ContextDependency, Event, EventSchedule, PersonId, TimedSchedule,
 };
-use floe_protocol::{CalendarBatchDto, PROTOCOL_VERSION};
+use floe_protocol::{CalendarBatchDto, CalendarFailureDto, EventScheduleDto, PROTOCOL_VERSION};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
 pub const LOCAL_PERSON: &str = "00000000-0000-4000-8000-000000000001";
+
+fn schedule_from_native(value: EventScheduleDto) -> Result<EventSchedule, AgentFailure> {
+    match value {
+        EventScheduleDto::Timed {
+            starts_at,
+            ends_at,
+            timezone,
+        } => {
+            let starts_at = DateTime::parse_from_rfc3339(&starts_at)
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .with_timezone(&Utc);
+            let ends_at = DateTime::parse_from_rfc3339(&ends_at)
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .with_timezone(&Utc);
+            TimedSchedule::new(starts_at, ends_at, timezone)
+                .map(EventSchedule::Timed)
+                .map_err(|_| AgentFailure::InvalidInput)
+        }
+        EventScheduleDto::AllDay {
+            start_date,
+            end_date_exclusive,
+        } => {
+            let start_date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+                .map_err(|_| AgentFailure::InvalidInput)?;
+            let end_date_exclusive = NaiveDate::parse_from_str(&end_date_exclusive, "%Y-%m-%d")
+                .map_err(|_| AgentFailure::InvalidInput)?;
+            AllDaySchedule::new(start_date, end_date_exclusive)
+                .map(EventSchedule::AllDay)
+                .map_err(|_| AgentFailure::InvalidInput)
+        }
+    }
+}
+
+fn failure_from_native(value: CalendarFailureDto) -> CalendarFailure {
+    match value {
+        CalendarFailureDto::PermissionDenied => CalendarFailure::PermissionDenied,
+        CalendarFailureDto::CalendarUnavailable => CalendarFailure::CalendarUnavailable,
+        CalendarFailureDto::ProviderUnavailable => CalendarFailure::ProviderUnavailable,
+    }
+}
 
 pub struct NativeCalendar {
     pub calendar_ids: Vec<String>,
@@ -325,17 +366,14 @@ impl CalendarReadAccess for NativeCalendarReadAccess {
                             external_id: record.external_id,
                             external_revision: record.external_revision,
                             title: record.title,
-                            schedule: record
-                                .schedule
-                                .try_into()
-                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            schedule: schedule_from_native(record.schedule)?,
                         })
                     })
                     .collect::<Result<Vec<_>, AgentFailure>>()?;
                 Ok(CalendarBatch {
                     calendar_id: batch.calendar_id,
                     records,
-                    failure: batch.failure,
+                    failure: batch.failure.map(failure_from_native),
                 })
             })
             .collect::<Result<Vec<_>, AgentFailure>>()?;
@@ -650,5 +688,44 @@ fn invoke_with_limit(
             release(output);
             result
         }
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    #[test]
+    fn native_schedule_conversion_preserves_domain_interval_validation() {
+        let timed = |ends_at: &str| EventScheduleDto::Timed {
+            starts_at: "2026-09-14T10:00:00+09:00".into(),
+            ends_at: ends_at.into(),
+            timezone: " Asia/Seoul ".into(),
+        };
+        let EventSchedule::Timed(schedule) =
+            schedule_from_native(timed("2026-09-14T11:00:00+09:00")).unwrap()
+        else {
+            panic!("expected timed schedule");
+        };
+        assert_eq!(schedule.timezone, "Asia/Seoul");
+        assert_eq!(schedule.starts_at.to_rfc3339(), "2026-09-14T01:00:00+00:00");
+        assert_eq!(
+            schedule_from_native(timed("2026-09-14T10:00:00+09:00")),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            schedule_from_native(EventScheduleDto::AllDay {
+                start_date: "2026-09-14".into(),
+                end_date_exclusive: "2026-09-14".into(),
+            }),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert!(
+            schedule_from_native(EventScheduleDto::AllDay {
+                start_date: "2026-09-14".into(),
+                end_date_exclusive: "2026-09-15".into(),
+            })
+            .is_ok()
+        );
     }
 }

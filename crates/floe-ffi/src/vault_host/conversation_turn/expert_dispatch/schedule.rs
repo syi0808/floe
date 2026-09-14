@@ -582,7 +582,7 @@ impl DeviceCalendarAccess<'_> {
                     device_id: self.device_id.clone(),
                     connection_id: connection.connection_id,
                     connection_revision: connection.revision,
-                    provider: self.provider,
+                    provider: crate::conversion::calendar_provider_to_dto(self.provider),
                     mode,
                     calendar_ids: self.calendar_ids.clone(),
                     range_start_unix_ms: starts_at.timestamp_millis(),
@@ -713,9 +713,7 @@ fn calendar_batch_from_dto(batch: CalendarBatchDto) -> Result<CalendarBatch, Age
                 external_id: record.external_id,
                 external_revision: record.external_revision,
                 title: record.title,
-                schedule: record
-                    .schedule
-                    .try_into()
+                schedule: crate::conversion::event_schedule_from_dto(record.schedule)
                     .map_err(|_| AgentFailure::InvalidInput)?,
             })
         })
@@ -723,7 +721,9 @@ fn calendar_batch_from_dto(batch: CalendarBatchDto) -> Result<CalendarBatch, Age
     Ok(CalendarBatch {
         calendar_id: batch.calendar_id,
         records,
-        failure: batch.failure,
+        failure: batch
+            .failure
+            .map(crate::conversion::calendar_failure_from_dto),
     })
 }
 
@@ -2102,7 +2102,7 @@ mod tests {
                         device_id: "device-a".into(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider,
+                        provider: crate::conversion::calendar_provider_to_dto(provider),
                         calendar_ids: vec!["primary".into()],
                         observed_at_unix_ms: now,
                         expires_at_unix_ms: now + 240_000,
@@ -2251,7 +2251,9 @@ mod tests {
                     device_id: connection.device_id.clone(),
                     connection_id: connection.connection_id.clone(),
                     connection_revision: connection.revision,
-                    provider: CalendarProvider::EventKit,
+                    provider: crate::conversion::calendar_provider_to_dto(
+                        CalendarProvider::EventKit,
+                    ),
                     calendar_ids: vec!["primary".into()],
                     observed_at_unix_ms,
                     expires_at_unix_ms: observed_at_unix_ms + 240_000,
