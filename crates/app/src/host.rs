@@ -189,6 +189,7 @@ mod tests {
         assert_eq!(request.request_id(), request_id);
         assert_eq!(request.caller().device_id(), "mac-local");
         assert!(!request.caller().person_id().is_nil());
+        assert!((1..=i64::MAX as u64).contains(&request.caller().runtime_epoch()));
         drop(request);
         host.shutdown().unwrap();
         host.shutdown().unwrap();

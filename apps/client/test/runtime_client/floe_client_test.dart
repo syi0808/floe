@@ -1,0 +1,170 @@
+import 'dart:async';
+import 'dart:collection';
+
+import 'package:floe_client/runtime_client/floe_client.dart';
+import 'package:floe_client/runtime_client/transport/app_wire_transport.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test(
+    'StartTurn keeps its command identity across transport retries',
+    () async {
+      final transport = FakeTransport();
+      final identifiers = Queue.of([
+        '00000000-0000-4000-8000-000000000201',
+        '00000000-0000-4000-8000-000000000202',
+        '00000000-0000-4000-8000-000000000203',
+      ]);
+      final client = FloeClient(transport, newId: identifiers.removeFirst);
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: 'hello',
+      );
+      transport.command = (request) async => {
+        'kind': 'command_receipt',
+        'command_id': request['command_id'],
+        'admission': 'accepted',
+        'run_id': '00000000-0000-4000-8000-000000000205',
+        'session_revision': 4,
+      };
+
+      final first = await client.submitStartTurn(command);
+      final second = await client.submitStartTurn(command);
+      expect(first.commandId, command.commandId);
+      expect(second.runId, first.runId);
+      expect(
+        transport.commandRequests.map((request) => request['request_id']),
+        containsAll([
+          '00000000-0000-4000-8000-000000000202',
+          '00000000-0000-4000-8000-000000000203',
+        ]),
+      );
+      for (final request in transport.commandRequests) {
+        expect(request['command_id'], command.commandId);
+        expect(request.containsKey('person_id'), isFalse);
+        expect(request.containsKey('device_id'), isFalse);
+        expect(
+          (request['command'] as Map).containsKey('remote_route'),
+          isFalse,
+        );
+      }
+    },
+  );
+
+  test(
+    'query decoding restores command, Run, report, and final message',
+    () async {
+      final identifiers = Queue.of([
+        '00000000-0000-4000-8000-000000000211',
+        '00000000-0000-4000-8000-000000000212',
+        '00000000-0000-4000-8000-000000000213',
+      ]);
+      final transport = FakeTransport();
+      final client = FloeClient(transport, newId: identifiers.removeFirst);
+      transport.query = (request) async {
+        final query = request['query'] as Map;
+        return switch (query['kind']) {
+          'conversation.get_command' => {
+            'kind': 'command_receipt',
+            'command_id': query['command_id'],
+            'admission': 'accepted',
+            'run_id': '00000000-0000-4000-8000-000000000214',
+            'session_revision': 8,
+          },
+          'conversation.get_run' => {
+            'kind': 'run_snapshot',
+            'run_id': query['run_id'],
+            'session_id': '00000000-0000-4000-8000-000000000215',
+            'revision': 2,
+            'runtime_epoch': 7,
+            'executor_generation': 1,
+            'state': 'finished',
+            'progress': 'completed',
+            'task_refs': <Object?>[],
+            'attempt_refs': <Object?>[],
+            'report': {
+              'execution': 'completed',
+              'reply': 'generated',
+              'issues': <Object?>[],
+              'action_refs': <Object?>[],
+              'final_message_ref': '00000000-0000-4000-8000-000000000214',
+            },
+          },
+          'conversation.get_message' => {
+            'kind': 'message',
+            'message_id': query['message_id'],
+            'role': 'assistant',
+            'text': 'done',
+          },
+          _ => throw StateError('unexpected query'),
+        };
+      };
+
+      final receipt = await client.getCommand(
+        '00000000-0000-4000-8000-000000000216',
+      );
+      final run = await client.getRun(receipt!.runId);
+      final message = await client.getMessage(run.report!.finalMessageRef!);
+      expect(run.state, AppRunState.finished);
+      expect(run.runtimeEpoch, 7);
+      expect(message.text, 'done');
+    },
+  );
+
+  test('close settles a pending request once and rejects new work', () async {
+    final transport = FakeTransport();
+    final response = Completer<Map<String, dynamic>>();
+    transport.command = (_) => response.future;
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000221',
+      '00000000-0000-4000-8000-000000000222',
+    ]);
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000223',
+      expectedRevision: 0,
+      text: 'hello',
+    );
+    final pending = client.submitStartTurn(command);
+    final settled = expectLater(pending, throwsStateError);
+    await client.close();
+    await settled;
+    response.complete({
+      'kind': 'command_receipt',
+      'command_id': command.commandId,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000224',
+      'session_revision': 1,
+    });
+    await expectLater(client.getCommand(command.commandId), throwsStateError);
+    expect(transport.closed, isTrue);
+  });
+}
+
+final class FakeTransport implements AppWireTransport {
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? command;
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? query;
+  final List<Map<String, dynamic>> commandRequests = [];
+  bool closed = false;
+
+  @override
+  Future<Map<String, dynamic>> commandV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    commandRequests.add(request);
+    return command!(request);
+  }
+
+  @override
+  Future<Map<String, dynamic>> queryV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => query!(request);
+
+  @override
+  Future<void> close() async {
+    closed = true;
+  }
+}

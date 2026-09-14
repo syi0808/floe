@@ -7,9 +7,9 @@ import 'package:ffi/ffi.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../features/day_canvas/infrastructure/floe_native_bindings.dart';
+import '../../runtime_client/transport/app_wire_transport.dart';
 
 const nativeProtocolVersion = 1;
-const appWireProtocolVersion = 2;
 
 final class NativeTransportException implements Exception {
   const NativeTransportException(
@@ -158,7 +158,7 @@ abstract interface class LocalContextTransport {
   });
 }
 
-final class NativeTransport implements LocalContextTransport {
+final class NativeTransport implements AppWireTransport, LocalContextTransport {
   NativeTransport._(this._isolate, this._commands) {
     _finalizer.attach(this, _commands, detach: this);
   }
@@ -239,11 +239,13 @@ final class NativeTransport implements LocalContextTransport {
     return _unwrapEnvelope(result['response']! as String);
   }
 
+  @override
   Future<Map<String, dynamic>> commandV2(
     Map<String, dynamic> request, {
     Duration timeout = const Duration(seconds: 3),
   }) => _appWireRequest('command_v2', request, timeout);
 
+  @override
   Future<Map<String, dynamic>> queryV2(
     Map<String, dynamic> request, {
     Duration timeout = const Duration(seconds: 3),
@@ -654,6 +656,7 @@ final class NativeTransport implements LocalContextTransport {
     return result['removed_count']! as int;
   }
 
+  @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;

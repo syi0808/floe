@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:floe_client/infrastructure/native/native_transport.dart';
+import 'package:floe_client/runtime_client/floe_client.dart';
+import 'package:floe_client/runtime_client/transport/app_wire_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -23,20 +25,30 @@ void main() {
         libraryPath: library.path,
         databasePath: '${personDirectory.path}/floe.db',
       );
+      final client = FloeClient(transport);
       addTearDown(() async {
-        await transport.close();
+        await client.close();
         await support.delete(recursive: true);
       });
 
       await expectLater(
-        transport.queryV2({
-          'schema_version': appWireProtocolVersion,
-          'request_id': '00000000-0000-4000-8000-000000000102',
-          'query': {
-            'kind': 'conversation.get_command',
-            'command_id': '00000000-0000-4000-8000-000000000103',
-          },
-        }),
+        client.getCommand('00000000-0000-4000-8000-000000000103'),
+        throwsA(
+          isA<NativeTransportException>().having(
+            (error) => error.code,
+            'code',
+            'unavailable',
+          ),
+        ),
+      );
+
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000106',
+        expectedRevision: 0,
+        text: 'Use the host-selected model route.',
+      );
+      await expectLater(
+        client.submitStartTurn(command),
         throwsA(
           isA<NativeTransportException>().having(
             (error) => error.code,

@@ -54,6 +54,7 @@ impl CallerContext {
             || claim.device_id.len() > 128
             || claim.device_id.chars().any(char::is_control)
             || runtime_epoch == 0
+            || runtime_epoch > i64::MAX as u64
         {
             return Err(HostError::InvalidIdentity);
         }
