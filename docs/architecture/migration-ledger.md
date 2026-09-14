@@ -2856,3 +2856,43 @@ staged FFI Expert endpoint is removed by P11 when scoped ports and built-in
 implementations move to `floe-experts-builtin`. The next executable P12 task is
 to move continuation/recovery generation onto `ConversationService` without a
 new-to-legacy root fallback. P11 and P12 remain partial.
+
+### P12 explicit Session recovery ownership checkpoint (2026-09-15)
+
+Code checkpoint `47f3848` moves the production `ConversationSession::Recover`
+caller off `floe-agent::AgentRuntime` and into a Conversation-owned recovery
+contract. `RecoveryRequest` is bound to the Session, expected revision and
+principal; `ConversationService` validates the repository receipt rather than
+allowing an adapter to return a different Session or revision. The encrypted
+Vault adapter performs one short immediate read boundary and rejects a stale
+revision, a foreign principal, an invalid Session shape, and any current-
+generation Working root. An explicit recovery read therefore cannot act as an
+implicit cancellation of live work.
+
+Startup executor activation remains the only path that interrupts orphaned
+Working Runs: it generation-fences them, terminalizes them and releases their
+Session claims before the explicit recovery read succeeds. A terminal or idle
+Session recovery is an idempotent revision-bound resynchronization. Legacy
+active-turn state without a Conversation Run is intentionally not migrated;
+local development Vault data is disposable and the adapter fails closed rather
+than reconstructing a legacy runtime root.
+
+Implemented and wired: Conversation recovery domain values, repository port,
+service validation, encrypted Vault implementation and the production FFI
+caller. Direct validation passed 4 Conversation tests, including refusal to
+interrupt a blocked live root; 3 encrypted Conversation Vault tests, including
+post-activation recovery and live-claim rejection; and the actual Vault worker
+Recover flow for stale and exact revisions. All 87 FFI library tests passed.
+Focused Conversation Clippy passed with warnings denied, workspace all-target
+check and diff check passed, and the migration boundary gate passed (20 nodes /
+68 edges / no errors). No Apple UI or crash-driven UI recovery flow was
+exercised.
+
+Blocker/remove-by: `ConversationTurn { continuation: true }` still invokes the
+legacy runtime because the Conversation store does not yet persist a
+continuation reference or expose journal replay receipts. Cutting that caller
+over before those contracts exist could re-execute a settled tool or Expert.
+The next executable task is to add a generation-bound continuation reference
+and bounded journal read/replay contract, then admit Continue through
+`ConversationService` without appending a duplicate user message. P12 remains
+partial; the legacy continuation branch is removed by that checkpoint.
