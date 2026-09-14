@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Partial: current/history policy plus authorized bounded archive projection wired; generic acquisition and remaining cutover pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: root turns, Run queries/cancel, recovery, continuation, finalization, Session management and archive use extracted owner services; host lifetime pending |
+| P12 | Partial: root turns, Run queries/cancel, recovery, continuation, finalization, Session management/archive and independent management host execution wired; legacy host cutover pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -3301,3 +3301,43 @@ P12/P16 task is to split bounded UI request correlations from the live
 Conversation executor and directly exercise T09/T22 without weakening Vault
 authorization or settlement. T18 is covered at the host boundary, but full
 P12/P16 and Apple acceptance remain pending.
+
+### P12/P16 independent management execution checkpoint (2026-09-15)
+
+Code checkpoints `24e7d65` and `27f3568` remove the single live-job gate from
+the current production host. The UI correlation store is bounded to 64 jobs
+and eight in-flight submissions, retains completed results until explicit
+release or bounded eviction, and keeps same-id payload immutability. Unsafe
+host lifecycle actions and an already blocked non-Conversation operation still
+exclude concurrent work.
+
+Conversation roots now execute on a separately owned bounded Tokio runtime
+over an `Arc<OpenVault>`, while short Vault management operations retain the
+existing current-thread executor used by the Apple-first host. Fatal root
+Vault/interrupt failures mark the shared open Vault unavailable before later
+work. Foreground learner suppression now uses a checked count rather than a
+boolean, so one short management completion cannot re-enable background work
+while a root remains active.
+
+Implemented and wired: bounded request correlations, detached Conversation
+network waits, concurrent management reads and grant mutation, retained
+terminal query results, exclusive lock/create/unlock fencing and multi-job
+foreground accounting. Direct T09/T22 validation held a production Manager
+model response behind a real HTTP barrier, completed Calendar grant preview,
+disabled the active Calendar grant and queried Connections without opening the
+barrier, then proved the original root remained Working and its cancellation
+scope was untouched before allowing it to complete. The blocked key/setup
+ownership regression also still rejects incompatible work.
+
+All 96 FFI library tests and both focused learner-scheduling tests passed on the
+integrated revision. Workspace all-target check, diff check and the migration
+boundary gate passed (20 nodes / 69 edges / no errors). No Apple UI,
+device-local model or live provider was exercised.
+
+Blocker/remove-by: this is still the legacy `VaultBridge`/Worker composition,
+and the synchronous ABI still exposes Submit/Poll/Release rather than the P16
+AppHost and schema-2 command/query/event boundary. Per-turn built-in refresh and
+remaining product assembly also still live in FFI. The next executable P16
+slice is to introduce the target AppHost ownership shell and move these bounded
+correlations behind its service-facing API without duplicating execution.
+P12/P16 and Apple acceptance remain partial.
