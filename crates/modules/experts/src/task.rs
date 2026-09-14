@@ -8,10 +8,12 @@ use floe_agent_contract::{
     AgentFailure, BoxFuture, DelegationPort, DelegationRequest, DependencyCoverage,
     EndpointInvocation, TaskId, TaskReceipt, TaskSnapshot, TaskState, input_digest,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{Directory, DirectoryQuery};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskRecord {
     pub snapshot: TaskSnapshot,
     pub invocation_key: floe_agent_contract::InvocationKey,
@@ -20,13 +22,137 @@ pub struct TaskRecord {
     pub executor_generation: u64,
 }
 
+impl TaskRecord {
+    pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
+        self.snapshot.validate(maximum_bytes)?;
+        if self.aggregate_revision == 0
+            || self.executor_generation == 0
+            || self.invocation_key.as_uuid().is_nil()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let valid = match self.snapshot.state {
+            TaskState::Submitted | TaskState::Working => {
+                self.snapshot.result.is_none()
+                    && self.snapshot.artifacts.is_empty()
+                    && self.snapshot.issue.is_none()
+                    && self.snapshot.coverage == DependencyCoverage::Unknown
+            }
+            TaskState::Completed => {
+                self.snapshot
+                    .result
+                    .as_deref()
+                    .is_some_and(|result| !result.trim().is_empty())
+                    && self.snapshot.issue.is_none()
+                    && self.snapshot.coverage != DependencyCoverage::Unknown
+            }
+            TaskState::Failed
+            | TaskState::Rejected
+            | TaskState::Cancelled
+            | TaskState::TimedOut
+            | TaskState::Interrupted => {
+                self.snapshot.result.is_none()
+                    && self.snapshot.artifacts.is_empty()
+                    && self.snapshot.issue.is_some()
+                    && self.snapshot.coverage == DependencyCoverage::Unknown
+            }
+        };
+        valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
+    }
+
+    pub fn validate_initial(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
+        self.validate(maximum_bytes)?;
+        if self.aggregate_revision != 1 || self.snapshot.state != TaskState::Submitted {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+
+    pub fn transition(
+        &self,
+        expected_aggregate_revision: u64,
+        executor_generation: u64,
+        snapshot: TaskSnapshot,
+        maximum_bytes: usize,
+    ) -> Result<Self, AgentFailure> {
+        self.validate(maximum_bytes)?;
+        if self.aggregate_revision != expected_aggregate_revision
+            || self.executor_generation != executor_generation
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        if snapshot.task_id != self.snapshot.task_id
+            || snapshot.parent_run_id != self.snapshot.parent_run_id
+            || snapshot.principal != self.snapshot.principal
+            || snapshot.agent_id != self.snapshot.agent_id
+            || snapshot.definition_revision != self.snapshot.definition_revision
+            || !valid_transition(self.snapshot.state, snapshot.state)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let next = Self {
+            snapshot,
+            invocation_key: self.invocation_key,
+            request_digest: self.request_digest,
+            aggregate_revision: self
+                .aggregate_revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?,
+            executor_generation: self.executor_generation,
+        };
+        next.validate(maximum_bytes)?;
+        Ok(next)
+    }
+
+    pub fn interrupt_orphan(
+        &self,
+        executor_generation: u64,
+        maximum_bytes: usize,
+    ) -> Result<Option<Self>, AgentFailure> {
+        self.validate(maximum_bytes)?;
+        if executor_generation == 0 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if terminal(self.snapshot.state) || self.executor_generation == executor_generation {
+            return Ok(None);
+        }
+        if self.executor_generation > executor_generation {
+            return Err(AgentFailure::Conflict);
+        }
+        let snapshot = TaskSnapshot {
+            state: TaskState::Interrupted,
+            result: None,
+            artifacts: vec![],
+            coverage: DependencyCoverage::Unknown,
+            issue: Some(AgentFailure::Interrupted),
+            ..self.snapshot.clone()
+        };
+        let mut interrupted = self.transition(
+            self.aggregate_revision,
+            self.executor_generation,
+            snapshot,
+            maximum_bytes,
+        )?;
+        interrupted.executor_generation = executor_generation;
+        Ok(Some(interrupted))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskAdmission {
     Created(TaskRecord),
     Existing(TaskRecord),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskActivation {
+    pub executor_generation: u64,
+    pub interrupted: Vec<TaskRecord>,
+}
+
 pub trait TaskRepository: Send + Sync {
+    fn activate<'a>(&'a self) -> BoxFuture<'a, Result<TaskActivation, AgentFailure>>;
+
     fn admit<'a>(
         &'a self,
         proposed: TaskRecord,
@@ -56,29 +182,53 @@ pub struct TaskCoordinator<Repository> {
 }
 
 impl<Repository> TaskCoordinator<Repository> {
-    pub fn new(
+    pub async fn activate(
         directory: Directory,
         repository: Arc<Repository>,
         purpose: impl Into<String>,
         maximum_output_bytes: usize,
-        executor_generation: u64,
-    ) -> Result<Self, AgentFailure> {
+    ) -> Result<(Self, Vec<TaskReceipt>), AgentFailure>
+    where
+        Repository: TaskRepository,
+    {
         let purpose = purpose.into();
         if purpose.trim().is_empty()
             || maximum_output_bytes == 0
             || maximum_output_bytes > floe_agent_contract::MAX_OUTPUT_BYTES
-            || executor_generation == 0
         {
             return Err(AgentFailure::InvalidInput);
         }
-        Ok(Self {
-            directory,
-            repository,
-            purpose,
-            maximum_output_bytes,
-            executor_generation,
-            active: Mutex::new(HashMap::new()),
-        })
+        let activation = repository.activate().await?;
+        if activation.executor_generation == 0 {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let mut task_ids = std::collections::HashSet::new();
+        let interrupted = activation
+            .interrupted
+            .into_iter()
+            .map(|record| {
+                record.validate(maximum_output_bytes)?;
+                if record.snapshot.state != TaskState::Interrupted
+                    || record.snapshot.issue != Some(AgentFailure::Interrupted)
+                    || record.executor_generation != activation.executor_generation
+                    || !task_ids.insert(record.snapshot.task_id)
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                Ok(receipt(record))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((
+            Self {
+                directory,
+                repository,
+                purpose,
+                maximum_output_bytes,
+                executor_generation: activation.executor_generation,
+                active: Mutex::new(HashMap::new()),
+            },
+            interrupted,
+        ))
     }
 }
 
@@ -493,37 +643,7 @@ fn validate_replay(
 }
 
 fn validate_owned_record(record: &TaskRecord, maximum_bytes: usize) -> Result<(), AgentFailure> {
-    record.snapshot.validate(maximum_bytes)?;
-    if record.aggregate_revision == 0 || record.executor_generation == 0 {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    let valid = match record.snapshot.state {
-        TaskState::Submitted | TaskState::Working => {
-            record.snapshot.result.is_none()
-                && record.snapshot.artifacts.is_empty()
-                && record.snapshot.issue.is_none()
-                && record.snapshot.coverage == DependencyCoverage::Unknown
-        }
-        TaskState::Completed => {
-            record
-                .snapshot
-                .result
-                .as_deref()
-                .is_some_and(|result| !result.trim().is_empty())
-                && record.snapshot.issue.is_none()
-        }
-        TaskState::Failed
-        | TaskState::Rejected
-        | TaskState::Cancelled
-        | TaskState::TimedOut
-        | TaskState::Interrupted => {
-            record.snapshot.result.is_none()
-                && record.snapshot.artifacts.is_empty()
-                && record.snapshot.issue.is_some()
-                && record.snapshot.coverage == DependencyCoverage::Unknown
-        }
-    };
-    valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
+    record.validate(maximum_bytes)
 }
 
 fn validate_saved_transition(
@@ -579,5 +699,26 @@ fn failure_state(failure: AgentFailure) -> TaskState {
         AgentFailure::DeadlineExceeded => TaskState::TimedOut,
         AgentFailure::Interrupted => TaskState::Interrupted,
         _ => TaskState::Failed,
+    }
+}
+
+fn valid_transition(previous: TaskState, next: TaskState) -> bool {
+    match previous {
+        TaskState::Submitted => matches!(
+            next,
+            TaskState::Working
+                | TaskState::Rejected
+                | TaskState::Cancelled
+                | TaskState::TimedOut
+                | TaskState::Interrupted
+                | TaskState::Failed
+        ),
+        TaskState::Working => terminal(next),
+        TaskState::Completed
+        | TaskState::Failed
+        | TaskState::Rejected
+        | TaskState::Cancelled
+        | TaskState::TimedOut
+        | TaskState::Interrupted => false,
     }
 }

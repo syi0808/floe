@@ -20,30 +20,79 @@ use floe_execution::{
     budget::{BudgetConfig, BudgetLedger},
 };
 use floe_experts::{
-    Directory, DirectoryEntry, DirectoryQuery, TaskAdmission, TaskCoordinator, TaskRecord,
-    TaskRepository,
+    Directory, DirectoryEntry, DirectoryQuery, TaskActivation, TaskAdmission, TaskCoordinator,
+    TaskRecord, TaskRepository,
 };
 use floe_kernel::{RunId, TraceContext};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 #[derive(Default)]
-struct MemoryTasks(Mutex<HashMap<TaskId, TaskRecord>>);
+struct MemoryTasks(Mutex<MemoryTaskState>);
+
+#[derive(Default)]
+struct MemoryTaskState {
+    executor_generation: u64,
+    records: HashMap<TaskId, TaskRecord>,
+}
 
 impl TaskRepository for MemoryTasks {
+    fn activate<'a>(&'a self) -> BoxFuture<'a, Result<TaskActivation, AgentFailure>> {
+        Box::pin(async move {
+            let mut state = self
+                .0
+                .lock()
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+            state.executor_generation = state
+                .executor_generation
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            let executor_generation = state.executor_generation;
+            let mut interrupted = Vec::new();
+            for current in state.records.values_mut() {
+                if let Some(recovered) = current
+                    .interrupt_orphan(executor_generation, floe_agent_contract::MAX_OUTPUT_BYTES)?
+                {
+                    *current = recovered;
+                    interrupted.push(current.clone());
+                }
+            }
+            Ok(TaskActivation {
+                executor_generation,
+                interrupted,
+            })
+        })
+    }
+
     fn admit<'a>(
         &'a self,
         proposed: TaskRecord,
     ) -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>> {
         Box::pin(async move {
+            proposed.validate_initial(floe_agent_contract::MAX_OUTPUT_BYTES)?;
             let mut records = self
                 .0
                 .lock()
                 .map_err(|_| AgentFailure::StorageUnavailable)?;
-            if let Some(record) = records.get(&proposed.snapshot.task_id) {
+            if let Some(record) = records.records.get(&proposed.snapshot.task_id) {
+                if record.invocation_key != proposed.invocation_key
+                    || record.request_digest != proposed.request_digest
+                    || record.snapshot.task_id != proposed.snapshot.task_id
+                    || record.snapshot.parent_run_id != proposed.snapshot.parent_run_id
+                    || record.snapshot.principal != proposed.snapshot.principal
+                    || record.snapshot.agent_id != proposed.snapshot.agent_id
+                    || record.snapshot.definition_revision != proposed.snapshot.definition_revision
+                {
+                    return Err(AgentFailure::Conflict);
+                }
                 return Ok(TaskAdmission::Existing(record.clone()));
             }
-            records.insert(proposed.snapshot.task_id, proposed.clone());
+            if proposed.executor_generation != records.executor_generation {
+                return Err(AgentFailure::Conflict);
+            }
+            records
+                .records
+                .insert(proposed.snapshot.task_id, proposed.clone());
             Ok(TaskAdmission::Created(proposed))
         })
     }
@@ -60,14 +109,16 @@ impl TaskRepository for MemoryTasks {
                 .0
                 .lock()
                 .map_err(|_| AgentFailure::StorageUnavailable)?;
-            let current = records.get_mut(&task_id).ok_or(AgentFailure::NotFound)?;
-            if current.aggregate_revision != expected_aggregate_revision
-                || current.executor_generation != executor_generation
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            current.aggregate_revision += 1;
-            current.snapshot = snapshot;
+            let current = records
+                .records
+                .get_mut(&task_id)
+                .ok_or(AgentFailure::NotFound)?;
+            *current = current.transition(
+                expected_aggregate_revision,
+                executor_generation,
+                snapshot,
+                floe_agent_contract::MAX_OUTPUT_BYTES,
+            )?;
             Ok(current.clone())
         })
     }
@@ -81,6 +132,7 @@ impl TaskRepository for MemoryTasks {
                 .0
                 .lock()
                 .map_err(|_| AgentFailure::StorageUnavailable)?
+                .records
                 .get(&task_id)
                 .cloned())
         })
@@ -184,14 +236,15 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
     )
     .unwrap();
     let repository = Arc::new(MemoryTasks::default());
-    let coordinator = TaskCoordinator::new(
+    let coordinator = TaskCoordinator::activate(
         directory.clone(),
         Arc::clone(&repository),
         "everyday-assistance",
         16 * 1024,
-        1,
     )
+    .await
     .unwrap();
+    let coordinator = coordinator.0;
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let request = delegation(run_id, task_id, "floe.test.ninth");
@@ -295,16 +348,16 @@ async fn explicit_task_cancel_is_authorized_persisted_and_does_not_cancel_parent
             }),
         )
         .unwrap();
-    let coordinator = Arc::new(
-        TaskCoordinator::new(
-            directory,
-            Arc::new(MemoryTasks::default()),
-            "everyday-assistance",
-            16 * 1024,
-            7,
-        )
-        .unwrap(),
-    );
+    let (coordinator, recovered) = TaskCoordinator::activate(
+        directory,
+        Arc::new(MemoryTasks::default()),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    assert!(recovered.is_empty());
+    let coordinator = Arc::new(coordinator);
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let request = delegation(run_id, task_id, "floe.test.blocking");
@@ -333,6 +386,75 @@ async fn explicit_task_cancel_is_authorized_persisted_and_does_not_cancel_parent
 }
 
 #[tokio::test]
+async fn restart_recovery_interrupts_only_an_orphaned_nonterminal_task() {
+    let repository = Arc::new(MemoryTasks::default());
+    repository.0.lock().unwrap().executor_generation = 7;
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let request = delegation(run_id, task_id, "floe.test.recovery");
+    let request_digest =
+        floe_agent_contract::input_digest(&serde_json::to_string(&request).unwrap());
+    let submitted = TaskRecord {
+        snapshot: TaskSnapshot {
+            task_id,
+            parent_run_id: request.parent_run_id,
+            principal: request.principal.clone(),
+            agent_id: request.selected_agent_id.clone(),
+            definition_revision: request.selected_definition_revision,
+            state: TaskState::Submitted,
+            result: None,
+            artifacts: vec![],
+            coverage: DependencyCoverage::Unknown,
+            issue: None,
+        },
+        invocation_key: request.invocation_key,
+        request_digest,
+        aggregate_revision: 1,
+        executor_generation: 7,
+    };
+    assert!(matches!(
+        repository.admit(submitted.clone()).await.unwrap(),
+        TaskAdmission::Created(_)
+    ));
+    let working = repository
+        .compare_and_swap(
+            task_id,
+            1,
+            7,
+            TaskSnapshot {
+                state: TaskState::Working,
+                ..submitted.snapshot
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(working.snapshot.state, TaskState::Working);
+    let (_coordinator, recovered) = TaskCoordinator::activate(
+        Directory::default(),
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let persisted = repository.get(task_id).await.unwrap().unwrap();
+
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].snapshot.state, TaskState::Interrupted);
+    assert_eq!(persisted.aggregate_revision, 3);
+    assert_eq!(persisted.executor_generation, 8);
+    let (_, recovered_again) = TaskCoordinator::activate(
+        Directory::default(),
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    assert!(recovered_again.is_empty());
+}
+
+#[tokio::test]
 async fn disabled_selection_is_persisted_as_rejected_without_endpoint_execution() {
     let directory = Directory::default();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -348,14 +470,15 @@ async fn disabled_selection_is_persisted_as_rejected_without_endpoint_execution(
     directory
         .set_enabled("floe.test.disabled", 1, false)
         .unwrap();
-    let coordinator = TaskCoordinator::new(
+    let coordinator = TaskCoordinator::activate(
         directory,
         Arc::new(MemoryTasks::default()),
         "everyday-assistance",
         16 * 1024,
-        1,
     )
+    .await
     .unwrap();
+    let coordinator = coordinator.0;
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let receipt = floe_agent_contract::DelegationPort::delegate(
@@ -501,14 +624,15 @@ async fn run_manager(
         })
         .unwrap();
     assert_eq!(catalog.cards.len(), 2);
-    let coordinator = TaskCoordinator::new(
+    let coordinator = TaskCoordinator::activate(
         directory,
         Arc::new(MemoryTasks::default()),
         "everyday-assistance",
         16 * 1024,
-        1,
     )
+    .await
     .unwrap();
+    let coordinator = coordinator.0;
     let run_id = RunId::new();
     let root_scope = scope(run_id, None);
     let observed_coverage = Arc::new(Mutex::new(vec![]));

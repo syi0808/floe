@@ -4,4 +4,4 @@ mod directory;
 mod task;
 
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
-pub use task::{TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};
+pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

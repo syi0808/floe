@@ -1107,7 +1107,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
     }
 
-    async fn finish_registry_transaction_checked<T>(
+    pub(super) async fn finish_registry_transaction_checked<T>(
         &self,
         transaction: turso::transaction::Transaction<'_>,
         result: Result<T, AgentFailure>,

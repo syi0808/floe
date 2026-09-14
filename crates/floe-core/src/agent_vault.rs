@@ -6,7 +6,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::Path,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use floe_agent::{
@@ -33,6 +33,7 @@ mod remote_authority;
 mod remote_calendar_grants;
 mod remote_view_grants;
 mod session_archive;
+mod tasks;
 pub use access_grants::AccessGrantCleanup;
 pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
@@ -46,6 +47,7 @@ pub use remote_authority::{
 pub use remote_calendar_grants::RemoteCalendarGrantBinding;
 pub use remote_view_grants::RemoteViewGrantBinding;
 pub use session_archive::*;
+pub use tasks::{VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);
 
@@ -93,6 +95,7 @@ pub struct EncryptedAgentVault<Keys> {
     person_id: PersonId,
     vault_id: Uuid,
     unavailable: AtomicBool,
+    task_executor_generation: AtomicU64,
     _host_lock: File,
 }
 
@@ -445,6 +448,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             person_id,
             vault_id,
             unavailable: AtomicBool::new(false),
+            task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;
@@ -466,6 +470,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_remote_calendar_grant_store(true).await?;
         vault.initialize_remote_view_grant_store(true).await?;
         vault.initialize_context_dependencies().await?;
+        vault.initialize_task_store().await?;
         vault.initialize_context_cleanup(true).await?;
         vault.initialize_remote_authority_store(true).await?;
         vault.checkpoint().await?;
@@ -511,6 +516,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             person_id,
             vault_id,
             unavailable: AtomicBool::new(false),
+            task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;
@@ -548,6 +554,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_remote_calendar_grant_store(false).await?;
         vault.initialize_remote_view_grant_store(false).await?;
         vault.initialize_context_dependencies().await?;
+        vault.initialize_task_store().await?;
         vault.initialize_context_cleanup(false).await?;
         vault.initialize_remote_authority_store(false).await?;
         vault.expert_registry().await?;
