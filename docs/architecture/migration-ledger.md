@@ -1055,3 +1055,13 @@ Code checkpoint `bf1b628`, based on `9ef9463`, removes the protocol crate's doma
 - `cargo test -p floe-ffi --test c_abi`: 11 pass, 1 fails (`action_authority_defaults_to_ask_and_persists`, PolicyDenied). An isolated detached worktree at pre-change `9ef9463` reproduces the exact failure. The worktree was removed; policy checks and test assertions were not weakened. Resolve the pre-existing contract discrepancy in the Actions/FFI owner cutover.
 - `cargo clippy -p floe-protocol -p floe-ffi -p floe-infra --all-targets -- -D warnings`: fails at `AgentVaultOperationDto` with `large_enum_variant`; remaining crates are not certified lint-clean by this command. No lint suppression or unrelated boxing change was added.
 - No post-change native UI, iPhone/iPad, external provider account or real LLM run. P01 extraction is not v2/T37 or final product acceptance.
+
+## P02 bounded-call follow-up — 2026-09-14
+
+Code checkpoint `295def5` moves the existing runtime `bounded`/`CallCancellationGuard` mechanism from `crates/floe-agent/src/runtime.rs` into `crates/runtime/execution/src/tasks.rs:10` (`run_bounded`). The legacy runtime now directly invokes that implementation. Pre-expired operations are never polled; deadline cancellation remains a deadline failure rather than being flattened into user cancellation. Other legacy admission checks still need the full typed-outcome cutover.
+
+`cancel_and_join` borrows an owner's task handle and returns no result on timeout without detaching it or claiming settlement. Owners still control registry removal and terminal persistence; adoption by all owners is pending P03/P11/P12/P16. There is no global Run/Task registry in execution.
+
+- Actual legacy runtime flow: `cargo test -p floe-agent --test runtime`, all 44 pass after extraction.
+- Added and ran four focused execution regressions: expired scope dispatch count zero; inherited deadline reason; dropped polled future cancels only child; timed-out join retains handle until actual settlement. `cargo test -p floe-execution tasks::tests`, all 4 pass.
+- No native/LLM acceptance is implied. Shared lease partitions, `ExecutionScope`, diagnostics and owner journal work remain in progress.
