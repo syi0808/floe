@@ -2141,7 +2141,7 @@ async fn native_lease_reuses_exact_query_payload_after_observation_generation_ch
     );
     let third = views.timeline(different).await.unwrap();
     assert_ne!(third.source_handle, first.source_handle);
-    assert_eq!(views.consumed_dependencies().unwrap().len(), 2);
+    assert_eq!(views.consumed_context_dependencies().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -2182,7 +2182,7 @@ async fn native_lease_rejects_wall_clock_rollback_during_acquisition() {
         })
         .await;
     assert_eq!(result, Err(AgentFailure::StaleContext));
-    assert!(views.consumed_dependencies().unwrap().is_empty());
+    assert!(views.consumed_context_dependencies().unwrap().is_empty());
 }
 
 #[tokio::test]

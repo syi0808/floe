@@ -2060,3 +2060,37 @@ Conversation/composition adapter seam removed by P12/P13/P16, not permission for
 the final Vault crate to depend on Context. Remaining P08 scope/budget/Playbook
 work, Apple review UI/iOS validation and the previously recorded normal-app and
 Flutter fixture failures remain open. The full P00–P25 goal stays active.
+
+### P09 consumed lineage ownership checkpoint (2026-09-14)
+
+Context now owns ConsumedLineage: canonical dependencies, the full acquired grant
+scope and the monotonic deadline are recorded together under one lock. Calendar
+retains its provider-specific acquisition/cache and current authorization checks,
+but no longer owns separate consumed-dependency and deadline collections. Its
+canonical dependency accessor delegates to Context; existing consumption test
+assertions remain intact.
+
+Expired or revoked consumed sources remain in lineage rather than disappearing
+with live cache eviction. Either wall-clock or monotonic expiry rejects use.
+Exact duplicate recording is idempotent; conflicting evidence for the same
+Person/observation cannot extend its deadline. Recording rejects a scope that
+does not match the dependency resources/categories or permit its selected
+operation, purpose, consumer and processing restriction. Revalidation retains
+full acquired scope equality, not merely the narrower canonical dependency
+fields, preserving the existing scope-expansion protection. Empty lineage does
+not request authorization. This owner does not issue source-read authorization.
+
+Focused regressions cover both expiry clocks, changed authorization, retained
+expired lineage, conflicting deadline extension, mismatched scope and unused
+source behavior. Context tests (11), workspace all-target check, Context all-target
+Clippy with `-D warnings` and migration gate passed (18 nodes / 57 edges / no
+errors). Core Calendar runtime tests passed (37); fixtures exercise source acquisition, history,
+revocation, scope expansion, generation-change cache reuse and publication
+protection; these use controlled source/model fixtures, not live external account
+reads or normal Apple app UI. No Apple model, UI or iOS validation was performed
+for this checkpoint.
+
+The provider-neutral live registry/quota extraction remains pending. Calendar
+query keys, cache payloads and historical observation retention still reside in
+the temporary Core adapter. This checkpoint does not finish SourceViews, history
+replacement, P09 acceptance or the full P00–P25 goal.

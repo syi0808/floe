@@ -250,8 +250,7 @@ pub struct CalendarTimelineViews<'host, Access, Clock> {
     invocation_id: Uuid,
     process_incarnation: Uuid,
     leases: Mutex<HashMap<CalendarLeaseKey, Arc<CalendarLeaseEntry>>>,
-    consumed: Mutex<Vec<CalendarLeaseDependencies>>,
-    consumed_deadlines: Mutex<HashMap<Uuid, Instant>>,
+    consumed: floe_context::ConsumedLineage,
     acquisition: tokio::sync::Mutex<()>,
     source_observed: AtomicBool,
     authorized_once: AtomicBool,
@@ -341,8 +340,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             invocation_id: Uuid::new_v4(),
             process_incarnation: core.lease_registry.process_incarnation(),
             leases: Mutex::new(HashMap::new()),
-            consumed: Mutex::new(Vec::new()),
-            consumed_deadlines: Mutex::new(HashMap::new()),
+            consumed: floe_context::ConsumedLineage::default(),
             acquisition: tokio::sync::Mutex::new(()),
             source_observed: AtomicBool::new(false),
             authorized_once: AtomicBool::new(false),
@@ -358,20 +356,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         (self.clock)()
     }
 
-    pub fn consumed_dependencies(&self) -> Result<Vec<CalendarLeaseDependencies>, AgentFailure> {
-        Ok(self
-            .consumed
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .clone())
-    }
-
     pub fn consumed_context_dependencies(&self) -> Result<Vec<ContextDependency>, AgentFailure> {
-        Ok(self
-            .consumed_dependencies()?
-            .into_iter()
-            .map(|dependency| dependency.dependency)
-            .collect())
+        self.consumed.dependencies()
     }
 
     pub fn source_was_observed(&self) -> bool {
@@ -503,31 +489,12 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                 return Err(AgentFailure::StaleContext);
             }
         }
-        let consumed = self
-            .consumed
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        let consumed_deadlines = self
-            .consumed_deadlines
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        let now = (self.clock)();
-        for dependency in consumed.iter() {
-            if dependency.expires_at <= now
-                || consumed_deadlines
-                    .get(&dependency.observation_id)
-                    .is_some_and(|deadline| *deadline <= Instant::now())
-            {
-                return Err(AgentFailure::StaleContext);
-            }
-            let Some(admission) = admission else {
-                return Err(AgentFailure::StaleContext);
-            };
-            if !admission_matches(admission, dependency) {
-                return Err(AgentFailure::StaleContext);
-            }
-        }
-        Ok(())
+        self.consumed
+            .validate((self.clock)(), Instant::now(), |dependency, scope| {
+                admission.is_some_and(|admission| {
+                    admission.scope == *scope && admission_matches_dependency(admission, dependency)
+                })
+            })
     }
 
     async fn finish_lease(
@@ -612,14 +579,11 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .insert(key, lease);
-        self.consumed
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .push(dependency);
-        self.consumed_deadlines
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .insert(observation_id, expires_at_monotonic);
+        self.consumed.record(
+            dependency.dependency,
+            dependency.scope,
+            expires_at_monotonic,
+        )?;
         let mut saved = self
             .stamp
             .lock()
