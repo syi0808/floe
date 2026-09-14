@@ -8,6 +8,110 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/server_credentials.dart';
 
 void main() {
+  test('no saved connection is the only not-configured observation', () async {
+    final client = LocalServerClient(store: MemoryServerCredentials());
+
+    final observation = await observeRemoteInferenceRoute(client);
+    expect(observation.status, RemoteInferenceRouteStatus.notConfigured);
+    expect(observation.route, isNull);
+    expect(await resolveRemoteInferenceRoute(client), isNull);
+  });
+
+  test('configured unavailable and denied routes do not become null', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    var status = 500;
+    server.listen((request) async {
+      request.response.statusCode = status;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write('{}');
+      await request.response.close();
+    });
+    final client = LocalServerClient(store: MemoryServerCredentials());
+    await client.save(
+      ServerConnection(
+        address: 'http://127.0.0.1:${server.port}',
+        token: 'fixture_token_that_is_long_enough_for_validation',
+        clientId: '00000000-0000-4000-8000-000000000002',
+        personId: client.personId,
+        deviceId: client.deviceId,
+      ),
+    );
+
+    final unavailable = await observeRemoteInferenceRoute(client);
+    expect(unavailable.status, RemoteInferenceRouteStatus.unavailable);
+    await expectLater(
+      resolveRemoteInferenceRoute(client),
+      throwsA(
+        isA<RemoteInferenceRouteException>().having(
+          (error) => error.status,
+          'status',
+          RemoteInferenceRouteStatus.unavailable,
+        ),
+      ),
+    );
+
+    status = 401;
+    final denied = await observeRemoteInferenceRoute(client);
+    expect(denied.status, RemoteInferenceRouteStatus.denied);
+    await expectLater(
+      resolveRemoteInferenceRoute(client),
+      throwsA(
+        isA<RemoteInferenceRouteException>().having(
+          (error) => error.status,
+          'status',
+          RemoteInferenceRouteStatus.denied,
+        ),
+      ),
+    );
+  });
+
+  test('external route retains exact recipient consent observation', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/v1/inference-purposes') {
+        request.response.write(
+          jsonEncode({
+            'schema_version': 1,
+            'purposes': {
+              for (final purpose in InferencePurpose.values)
+                purpose.wireName: {
+                  'available': true,
+                  'requires_external_consent': true,
+                  'placement': 'external',
+                  'recipient': 'approved.example',
+                },
+            },
+          }),
+        );
+      } else {
+        request.response.statusCode = 500;
+        request.response.write('{}');
+      }
+      await request.response.close();
+    });
+    final client = LocalServerClient(store: MemoryServerCredentials());
+    await client.save(
+      ServerConnection(
+        address: 'http://127.0.0.1:${server.port}',
+        token: 'fixture_token_that_is_long_enough_for_validation',
+        clientId: '00000000-0000-4000-8000-000000000002',
+        personId: client.personId,
+        deviceId: client.deviceId,
+      ),
+    );
+
+    final observation = await observeRemoteInferenceRoute(client);
+    expect(observation.status, RemoteInferenceRouteStatus.consentRequired);
+    expect(observation.route?['recipient'], 'approved.example');
+    expect(observation.route?['allow_external'], isFalse);
+    final resolved = await resolveRemoteInferenceRoute(client);
+    expect(resolved?['recipient'], 'approved.example');
+    expect(resolved?['allow_external'], isFalse);
+  });
+
   test(
     'catalog failure preserves model route and exact recipient consent',
     () async {

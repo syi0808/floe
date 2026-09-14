@@ -74,8 +74,17 @@ final class FfiDayGateway
     resolveRemoteRoute: _remoteRoute,
   );
 
-  Future<Map<String, Object?>?> _remoteRoute() =>
-      resolveRemoteInferenceRoute(serverClient);
+  Future<Map<String, Object?>?> _remoteRoute() async {
+    try {
+      return await resolveRemoteInferenceRoute(serverClient);
+    } on RemoteInferenceRouteException catch (error) {
+      throw AgentVaultException(
+        error.agentFailure,
+        stage: 'remote_route',
+        metadata: {'route_status': error.status.name, 'route_code': error.code},
+      );
+    }
+  }
 
   Future<Map<String, dynamic>> _vaultRequest(
     Map<String, Object?> request,

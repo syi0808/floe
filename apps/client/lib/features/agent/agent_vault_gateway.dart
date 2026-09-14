@@ -1045,6 +1045,14 @@ final class NativeAgentVaultGateway
         !_sameConversationTurn(_conversationRun!, turn)) {
       throw const AgentVaultException('conflict');
     }
+    Map<String, Object?>? remoteRoute;
+    if (resolveRemoteRoute != null) {
+      remoteRoute = await resolveRemoteRoute!();
+    }
+    if (_conversationRun != null &&
+        !_sameConversationTurn(_conversationRun!, turn)) {
+      throw const AgentVaultException('conflict');
+    }
     if (_conversationRun == null) {
       if (_pending != null) await _drain();
       _pending = _VaultJob(
@@ -1057,9 +1065,7 @@ final class NativeAgentVaultGateway
     }
     final serialized = turn.toJson();
     serialized['device_id'] = deviceId;
-    if (resolveRemoteRoute != null) {
-      serialized['remote_route'] = await resolveRemoteRoute!();
-    }
+    if (resolveRemoteRoute != null) serialized['remote_route'] = remoteRoute;
     return _conversationUpdate(
       turn,
       await _call(_pending!, {
