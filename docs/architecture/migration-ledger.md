@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: durable Task coordinator and Schedule production dispatch wired; target ownership move pending |
-| P12 | Pending |
+| P12 | Partial: Conversation-owned root admission/Engine/finalization contract implemented; production repository wiring pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2635,3 +2635,47 @@ the remaining bridge. Static Directory registration is therefore not final
 catalog ownership. `/focus` normalization and guaranteed semantic routing also
 remain unverified and are not claimed by this checkpoint. P11 and P15 remain
 partial pending those ownership and Apple/live acceptance gates.
+
+### P12 Conversation root ownership foundation checkpoint (2026-09-15)
+
+Code checkpoint `a7f663b` adds the approved `floe-conversation` module with a
+`ConversationService` that owns command admission, one root `RunId`, Manager
+role invocation through the extracted role-neutral Engine, and terminal claim
+release. The repository port admits command receipt, user entry, Run and session
+claim as one operation, returns exact command replays without another model
+dispatch, provides the Run-scoped execution journal, and finalizes the Run and
+session claim through one exact aggregate revision. The contract journal is now
+`Send + Sync` so an owner-held journal can remain attached to a spawned Run.
+
+The service constructs the root `ExecutionScope` only after admission, binds
+its trace to the durable command and Run IDs, enforces the configured deadline
+and budget envelope, and converges Engine completion, cancellation, timeout,
+stalled output and boundary failures on `finish_run`. Final answer coverage is
+the conservative merge of bounded root context, tool results, delegated Task
+receipts and returned artifacts; unknown coverage is never relabelled as
+independent. Exact retries can still retrieve the stored receipt after their
+original execution deadline, and no UI Release participates in accepting the
+next turn.
+
+Implemented and wired: Conversation domain/service/repository contract to the
+extracted Engine with a controlled in-memory repository. Direct validation
+passed all 3 Conversation tests: exact command replay performs one model
+dispatch and rejects changed payload, a second root for the same Session is
+rejected while the first model waits, and a cancelled root dispatches no model,
+is durably terminalized, releases its claim, and permits the next command. The
+Agent contract test passed 1 test, Agent runtime passed 7 tests, focused
+Conversation Clippy passed with warnings denied, workspace all-target check
+passed, diff check passed, and the migration boundary gate passed (20 nodes /
+67 edges / no errors). This checkpoint did not exercise the Apple UI, a live
+provider/model, or the production FFI conversation entry.
+
+Blocker/remove-by: the production FFI still owns legacy Session mutation and
+invokes `floe-agent::AgentRuntime`; it does not yet depend on
+`floe-conversation`. The next P12/P13 integration must implement the encrypted
+Vault `ConversationRepository` adapter with atomic admission, Run journal and
+terminal claim release, translate the existing governed model/tool/Directory
+ports, and route the real conversation caller through `ConversationService`
+without a new-to-legacy root fallback. Continuation, recovery generation,
+bounded finalization reserve and archive/compaction ownership also remain in
+the legacy runtime. P12 remains partial until those production and recovery
+paths are transferred and directly exercised.
