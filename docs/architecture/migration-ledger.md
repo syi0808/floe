@@ -3599,3 +3599,42 @@ immediate isolate-exit settlement signal. The next executable P16/P17 task is a
 principal-bound v2 CancelRun result and bounded Run observation contract; after
 that, the conversation controller can consume this client without losing stop,
 progress or recovery behavior. P17 and V1 remain partial.
+
+### P16/P17 principal-bound CancelRun checkpoint (2026-09-15)
+
+Code checkpoint `e9020e7` adds `conversation.cancel_run` to the typed AppHost,
+schema-2 command ABI and Flutter runtime client. The command carries a stable
+CommandId, RunId and fixed user-requested reason; Person and device remain
+host-owned. The management worker first performs a principal-bound durable Run
+lookup, then signals only that Run's cancellation registry. Unknown or
+cross-Person Runs do not expose existence and return not-found/access-safe
+failure. Finished Runs accept the idempotent cancellation intent without
+rewriting their terminal state; callers use GetRun for the authoritative
+outcome.
+
+The Conversation admission observer now publishes the Working receipt only
+after registering the root cancellation handle. This closes the receipt-to-
+cancellation race: a caller that receives StartTurn admission can immediately
+issue CancelRun without falling through an unregistered window. Cancellation
+remains a bounded management request and does not route through legacy Stop or
+Release. Its wire receipt reports that the intent was accepted rather than
+claiming terminal cancellation before durable Run finalization.
+
+Implemented and directly exercised: protocol golden request/receipt, verified
+AppHost caller propagation, worker principal isolation, immediate cancellation
+of a production root blocked at the model server, durable Cancelled recovery by
+Run query, repeat cancellation of the terminal Run, and Dart CommandId reuse
+across transport retries. All 11 Conversation tests, six AppHost/service tests,
+the focused FFI app-wire tests, the production T08 cancellation regression and
+all four typed runtime-client tests passed. The changed Dart client and test
+analyze and format cleanly. Protocol Clippy remains blocked by the pre-existing
+large legacy `AgentVaultOperationDto` variant.
+
+Blocker/remove-by: accepted cancellation intents do not yet have their own
+durable command tombstone, so cross-restart CancelRun CommandId conflict/replay
+semantics are not complete even though RunId cancellation itself is idempotent.
+The product controller still uses Submit/Poll/Release, and bounded events with
+gap/resync behavior are absent. The next executable P16/P17 task is a durable
+cancel-command record plus bounded Run event observation; only then should the
+visible Flutter conversation controller cut over. P16, P17 and V1 remain
+partial.
