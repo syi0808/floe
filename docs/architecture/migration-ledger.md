@@ -46,11 +46,11 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P08 | Pending |
 | P09 | Pending |
 | P10 | Pending |
-| P11 | Pending |
+| P11 | Partial: durable Task coordinator and Schedule production dispatch wired; target ownership move pending |
 | P12 | Pending |
 | P13 | Pending |
 | P14 | Pending |
-| P15 | Partial: protected direct Schedule endpoint; production Task/FFI wiring pending |
+| P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
 | P16 | Pending |
 | P17 | Pending |
 | P18 | Pending |
@@ -2594,3 +2594,44 @@ retained Worker Directory remains empty. P15 must next register that adapter,
 bind current grant/model/source eligibility without per-turn generation
 activation, and run T03 through the common TaskCoordinator. The legacy Calendar
 root and `schedule::try_run` remain until that flow passes; P11/P15 are pending.
+
+### P11/P15 common Schedule dispatch checkpoint (2026-09-15)
+
+Code checkpoint `84a1ab3` registers a production Schedule `AgentEndpoint` in
+the Directory retained for the unlocked Worker lifetime and routes Schedule
+delegation through the same durable `TaskCoordinator` used for recovery. The
+Manager catalog exposes Schedule only when the current device has exactly one
+active Calendar setup, while the endpoint revalidates the current setup,
+binding, grant, connection and model placement before protected work. Each
+delegation receives a child `ExecutionScope` carrying its `TaskId`; successful
+endpoint reports pass the trusted settlement token to the Vault repository so
+the Task result and registry completion commit atomically.
+
+The pre-Manager `schedule::try_run` root has been removed. All conversation
+turns now start at the common Manager root, and a selected Schedule card uses
+the registered endpoint path before its result is translated back into the
+legacy in-process A2A artifact expected by the current runtime. Dependency-free
+controlled endpoints settle with explicit independent coverage; real Calendar
+reads retain their consumed dependency set.
+
+Direct validation exercised the complete controlled FFI flow: install and
+enable a Fixture Calendar expert, start an encrypted session, delegate from the
+Manager to Schedule, execute the Schedule capability, return the Manager answer,
+lock the Worker, reopen the Vault, and verify the durable Completed Task and
+result. The focused Schedule suite passed 8 tests, all FFI library tests passed
+82 tests, Core Calendar passed 44 tests, Vault registry passed 31 tests, focused
+Core and FFI Clippy passed with only the repository's pre-existing allowed lint
+classes, workspace all-target check passed, diff check passed, and the migration
+boundary gate passed (19 nodes / 63 edges / no errors). No Apple UI, live
+EventKit/provider account, or actual model was exercised; the macOS native flow
+remains conditional on its built dynamic library.
+
+Blocker/remove-by: FFI still stages bounded turn context in the endpoint and
+converts the extracted contract Task receipt back into the legacy in-process
+A2A/runtime representation. P12 must move common Manager execution and the
+synchronized eligibility catalog behind the extracted Engine/Directory owner;
+P13 must move the temporary Core Vault Task DTO behind `floe-vault`; P24 removes
+the remaining bridge. Static Directory registration is therefore not final
+catalog ownership. `/focus` normalization and guaranteed semantic routing also
+remain unverified and are not claimed by this checkpoint. P11 and P15 remain
+partial pending those ownership and Apple/live acceptance gates.
