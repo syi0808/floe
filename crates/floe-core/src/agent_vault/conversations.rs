@@ -5,7 +5,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -730,7 +730,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
                 (),
             )
             .await
@@ -765,7 +765,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 1)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 2)",
                 (),
             )
             .await
