@@ -76,22 +76,7 @@ impl<Payload: Serialize> SourceView<Payload> {
         reservation: SourceLeaseReservation,
     ) -> Result<Self, AgentFailure> {
         validate_stored_dependency(&dependency).map_err(|_| AgentFailure::InvalidInput)?;
-        scope.validate().map_err(|_| AgentFailure::InvalidInput)?;
-        if dependency
-            .resources()
-            .iter()
-            .any(|resource| !scope.resources().contains(resource))
-            || dependency
-                .categories()
-                .iter()
-                .any(|category| !scope.categories().contains(category))
-            || !scope.operations().contains(&dependency.operation())
-            || !scope.purposes().contains(&dependency.purpose())
-            || !scope.consumers().contains(dependency.consumer())
-            || scope.processing() != dependency.processing()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
+        validate_source_scope(&dependency, &scope)?;
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
         }
@@ -99,16 +84,7 @@ impl<Payload: Serialize> SourceView<Payload> {
             dependency.person_id(),
             dependency.process_incarnation_id(),
         )?;
-        let mut payload_writer = BoundedByteCounter::new(reservation.byte_allowance());
-        let serialization_result = serde_json::to_writer(&mut payload_writer, &payload);
-        if payload_writer.exceeded() {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        serialization_result.map_err(|_| AgentFailure::InvalidInput)?;
-        let payload_size = payload_writer.bytes_written();
-        if payload_size == 0 || payload_size > MAX_LEASE_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
-        }
+        bounded_serialized_size(&payload, reservation.byte_allowance())?;
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
         }
@@ -136,6 +112,46 @@ impl<Payload: Serialize> SourceView<Payload> {
     pub fn is_fresh(&self) -> bool {
         self.deadline > Instant::now()
     }
+}
+
+pub(crate) fn bounded_serialized_size(
+    payload: &impl Serialize,
+    allowance: usize,
+) -> Result<usize, AgentFailure> {
+    let mut payload_writer = BoundedByteCounter::new(allowance);
+    let serialization_result = serde_json::to_writer(&mut payload_writer, payload);
+    if payload_writer.exceeded() {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    serialization_result.map_err(|_| AgentFailure::InvalidInput)?;
+    let payload_size = payload_writer.bytes_written();
+    if payload_size == 0 || payload_size > MAX_LEASE_BYTES {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    Ok(payload_size)
+}
+
+pub(crate) fn validate_source_scope(
+    dependency: &ContextDependency,
+    scope: &GrantScope,
+) -> Result<(), AgentFailure> {
+    scope.validate().map_err(|_| AgentFailure::InvalidInput)?;
+    if dependency
+        .resources()
+        .iter()
+        .any(|resource| !scope.resources().contains(resource))
+        || dependency
+            .categories()
+            .iter()
+            .any(|category| !scope.categories().contains(category))
+        || !scope.operations().contains(&dependency.operation())
+        || !scope.purposes().contains(&dependency.purpose())
+        || !scope.consumers().contains(dependency.consumer())
+        || scope.processing() != dependency.processing()
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

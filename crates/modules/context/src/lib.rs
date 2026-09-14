@@ -5,11 +5,13 @@ pub mod application {
     pub mod history;
     pub mod leases;
     pub mod projection;
+    pub mod service;
     pub mod source_view;
 }
 
 pub mod ports {
     pub mod evidence_reader;
+    pub mod source_reader;
 }
 
 pub use application::assembler::{
@@ -22,5 +24,7 @@ pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
+pub use application::service::{ContextService, PreparedContext};
 pub use application::source_view::SourceView;
 pub use ports::evidence_reader::EvidenceReader;
+pub use ports::source_reader::{SourceKey, SourceRead, SourceReadRequest, SourceReader};

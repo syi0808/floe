@@ -21,7 +21,6 @@ use floe_infra::ServerSourceClient;
 use floe_protocol::AgentRemoteRouteDto;
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const MAIL_VIEW: &str = "mail.communication";
@@ -40,17 +39,6 @@ pub(crate) struct RemoteViewReader<'a, Keys: VaultKeyProvider> {
 
 pub(crate) struct RemoteDependencyResolver<'a, Keys: VaultKeyProvider> {
     pub(crate) reader: &'a RemoteViewReader<'a, Keys>,
-}
-
-pub(crate) trait RemoteViewReaderApi: Send + Sync {
-    fn read<'a>(
-        &'a self,
-        view_id: &'a str,
-        consumer: &'a str,
-        query: Value,
-        deadline: tokio::time::Instant,
-        cancellation: &'a floe_agent::Cancellation,
-    ) -> Pin<Box<dyn Future<Output = Result<(Value, ContextDependency), AgentFailure>> + Send + 'a>>;
 }
 
 pub(crate) struct RemoteViewGrantPreview {
@@ -217,29 +205,50 @@ pub(crate) async fn review_and_activate_remote_view_grant<Keys: VaultKeyProvider
         .await
 }
 
-impl<Keys: VaultKeyProvider> RemoteViewReaderApi for RemoteViewReader<'_, Keys> {
+impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_, Keys> {
     fn read<'a>(
         &'a self,
-        view_id: &'a str,
-        consumer: &'a str,
-        query: Value,
-        deadline: tokio::time::Instant,
-        cancellation: &'a floe_agent::Cancellation,
-    ) -> Pin<Box<dyn Future<Output = Result<(Value, ContextDependency), AgentFailure>> + Send + 'a>>
-    {
-        Box::pin(self.read(view_id, consumer, query, deadline, cancellation))
+        request: &'a floe_context::SourceReadRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let (payload, dependency, scope) = self
+                .read_view(
+                    request.source().as_str(),
+                    request.consumer().identifier(),
+                    request.query().clone(),
+                    request.deadline(),
+                    request.cancellation(),
+                    request.process_incarnation_id(),
+                    request.query_fingerprint(),
+                )
+                .await?;
+            Ok(floe_context::SourceRead::new(
+                request.source().clone(),
+                payload,
+                dependency,
+                scope,
+            ))
+        })
     }
 }
 
 impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
-    pub(crate) async fn read(
+    async fn read_view(
         &self,
         view_id: &str,
         consumer_name: &str,
         query: Value,
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
-    ) -> Result<(Value, ContextDependency), AgentFailure> {
+        process_incarnation_id: Uuid,
+        query_fingerprint: &[u8],
+    ) -> Result<(Value, ContextDependency, GrantScope), AgentFailure> {
         check_window(deadline, cancellation)?;
         let consumer =
             GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
@@ -306,9 +315,6 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
         let grant_id = grant.id().as_uuid().to_string();
         let grant_incarnation = grant.authority().incarnation().to_string();
         let path = format!("/v1/views/{view_id}/admit");
-        let query_fingerprint =
-            Sha256::digest(serde_json::to_vec(&query).map_err(|_| AgentFailure::InvalidInput)?)
-                .to_vec();
         let expected = RemoteCalendarAuthorizationExpectation {
             operation: "".into(),
             client_id: self.client_id.into(),
@@ -370,14 +376,14 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
             binding.grant.scope().processing().clone(),
             binding.consumer_policy,
             Uuid::new_v4(),
-            query_fingerprint,
-            Uuid::new_v4(),
+            query_fingerprint.to_vec(),
+            process_incarnation_id,
             process,
             observed,
             expires,
         )
         .map_err(|_| AgentFailure::InvalidInput)?;
-        Ok((value, dependency))
+        Ok((value, dependency, binding.grant.scope().clone()))
     }
 }
 

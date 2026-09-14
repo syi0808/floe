@@ -29,7 +29,7 @@ use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner}
 use floe_infra::{ServerSourceClient, remote_source::CalendarContextRequest};
 
 use super::personal_grants;
-use super::remote_views::{self, RemoteViewReaderApi};
+use super::remote_views;
 use super::session_uuid;
 
 struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
@@ -68,7 +68,13 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     if request.continuation && floe_agent::has_calendar_history(&session.messages) {
         return Err(AgentFailure::StaleContext);
     }
-    let context = conversation_context(vault).await?;
+    let context = AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: vec![],
+        optional_context_issues: vec![],
+        evidence: vec![],
+    };
     let inputs = ConversationTurnInputs {
         core,
         vault,
@@ -79,6 +85,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     Box::pin(expert_dispatch::run(&inputs, context, cancellation, emit)).await
 }
 
+#[cfg(test)]
 async fn conversation_context(
     reader: &impl floe_knowledge::MemoryContextReader,
 ) -> Result<AgentContext, AgentFailure> {
@@ -101,7 +108,7 @@ async fn conversation_context(
 
 async fn run_general_turn<Keys: VaultKeyProvider>(
     inputs: &ConversationTurnInputs<'_, Keys>,
-    mut context: AgentContext,
+    context: AgentContext,
     cancellation: floe_agent::Cancellation,
     emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
@@ -193,7 +200,11 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         resolver: &resolver,
     };
     let policy = policy(&model, request.remote_route.as_ref());
-    let task_views = optional_task_views(core, person_id, &mut context).await?;
+    let context_reader = ConversationContextReader {
+        core,
+        vault,
+        person_id,
+    };
     let expert_cards = vault.enabled_expert_cards().await?;
     let builtin_setup = vault
         .builtin_expert_overview()
@@ -211,7 +222,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
             .as_ref()
-            .map(|reader| reader as &dyn RemoteViewReaderApi),
+            .map(|reader| reader as &dyn floe_context::SourceReader),
     };
     let experts = ConversationExperts {
         model: &model,
@@ -226,8 +237,9 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
             .as_ref()
-            .map(|reader| reader as &dyn RemoteViewReaderApi),
-        task_views: &task_views,
+            .map(|reader| reader as &dyn floe_context::SourceReader),
+        context_reader: Some(&context_reader),
+        task_views: &[],
         cards: expert_cards,
         builtin_setup: Some(builtin_setup),
     };
@@ -270,6 +282,61 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
     }
 }
 
+trait ConversationContextReaderApi: Send + Sync {
+    fn memory<'a>(
+        &'a self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<floe_knowledge::MemoryContextSnapshot, AgentFailure>>
+                + Send
+                + 'a,
+        >,
+    >;
+
+    fn tasks<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>>;
+}
+
+struct ConversationContextReader<'a, Keys: VaultKeyProvider> {
+    core: &'a FloeCore,
+    vault: &'a EncryptedAgentVault<Keys>,
+    person_id: PersonId,
+}
+
+impl<Keys: VaultKeyProvider> ConversationContextReaderApi
+    for ConversationContextReader<'_, Keys>
+{
+    fn memory<'a>(
+        &'a self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<floe_knowledge::MemoryContextSnapshot, AgentFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(floe_context::acquire_memory_context(
+            self.vault,
+            chrono::Utc::now(),
+        ))
+    }
+
+    fn tasks<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>> {
+        let handle = uuid::Uuid::new_v5(&self.person_id.0, b"floe.tasks");
+        Box::pin(self.core.task_context_view(
+            self.person_id,
+            handle,
+            chrono::Utc::now(),
+            16,
+            8 * 1024,
+        ))
+    }
+}
+
+#[cfg(test)]
 async fn optional_task_views(
     core: &FloeCore,
     person_id: PersonId,
@@ -466,7 +533,7 @@ struct PersonalViewSource<'a> {
     people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
     feasibility_reader: Option<&'a dyn PersonalFeasibilityReaderApi>,
     wellbeing_reader: Option<&'a dyn PersonalWellbeingReaderApi>,
-    remote_reader: Option<&'a dyn RemoteViewReaderApi>,
+    remote_reader: Option<&'a dyn floe_context::SourceReader>,
     recorder: Option<&'a dyn ResultRecorder>,
     dependency_turn_id: Uuid,
     dependency_result_id: Uuid,
@@ -653,25 +720,26 @@ impl PersonalViewSource<'_> {
         let Some(reader) = self.remote_reader else {
             return Err(AgentFailure::CapabilityUnavailable);
         };
-        match reader
-            .read(
-                "work.context",
-                self.consumer_name,
-                serde_json::json!({"schema_version": AGENT_VERSION}),
-                deadline,
-                cancellation,
-            )
-            .await
+        match read_context_source(
+            reader,
+            self.person_id,
+            "work.context",
+            self.consumer_name,
+            serde_json::json!({"schema_version": AGENT_VERSION}),
+            deadline,
+            cancellation,
+        )
+        .await
         {
-            Ok((value, dependency)) => {
+            Ok(source_view) => {
                 if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
                     recorder.record(
                         self.dependency_turn_id,
                         self.dependency_turn_id,
-                        dependency,
+                        source_view.dependency().clone(),
                     )?;
                 }
-                let view = serde_json::from_value(value)
+                let view = serde_json::from_value(source_view.payload().clone())
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 Ok(vec![view])
             }
@@ -708,7 +776,28 @@ struct ConversationCapabilities<'model> {
     feasibility_reader: Option<&'model dyn PersonalFeasibilityReaderApi>,
     wellbeing_reader: Option<&'model dyn PersonalWellbeingReaderApi>,
     recorder: Option<&'model dyn ResultRecorder>,
-    remote_reader: Option<&'model dyn RemoteViewReaderApi>,
+    remote_reader: Option<&'model dyn floe_context::SourceReader>,
+}
+
+async fn read_context_source(
+    reader: &dyn floe_context::SourceReader,
+    person_id: PersonId,
+    source_id: &str,
+    consumer: &str,
+    query: serde_json::Value,
+    deadline: tokio::time::Instant,
+    cancellation: &floe_agent::Cancellation,
+) -> Result<floe_context::SourceView<serde_json::Value>, AgentFailure> {
+    let prepared = floe_context::ContextService::new(Some(reader)).prepare(person_id)?;
+    let source_request = prepared.source_request(
+        source_id,
+        floe_domain::GrantConsumer::builtin(consumer).map_err(|_| AgentFailure::InvalidInput)?,
+        floe_domain::GrantPurpose::Assistant,
+        query,
+        deadline,
+        cancellation.clone(),
+    )?;
+    prepared.read_source(&source_request).await
 }
 
 trait ResultRecorder: Send + Sync {
@@ -1095,20 +1184,23 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                 let reader = self
                     .remote_reader
                     .ok_or(AgentFailure::CapabilityUnavailable)?;
-                let (value, dependency) = reader
-                    .read(
-                        "mail.communication",
-                        personal_grants::ATTENTION_ASSISTANT_CONSUMER,
-                        serde_json::json!({
-                            "schema_version": AGENT_VERSION,
-                            "query": input.query,
-                            "cursor": input.cursor,
-                            "limit": input.limit,
-                        }),
-                        invocation.deadline,
-                        &invocation.cancellation,
-                    )
-                    .await?;
+                let source_view = read_context_source(
+                    reader,
+                    invocation.person_id,
+                    "mail.communication",
+                    personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                    serde_json::json!({
+                        "schema_version": AGENT_VERSION,
+                        "query": input.query,
+                        "cursor": input.cursor,
+                        "limit": input.limit,
+                    }),
+                    invocation.deadline,
+                    &invocation.cancellation,
+                )
+                .await?;
+                let value = source_view.payload().clone();
+                let dependency = source_view.dependency().clone();
                 self.recorder
                     .ok_or(AgentFailure::CapabilityUnavailable)?
                     .record(invocation.turn_id, invocation.call_id, dependency)?;
@@ -1144,15 +1236,18 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                         let reader = self
                             .remote_reader
                             .ok_or(AgentFailure::CapabilityUnavailable)?;
-                        let (value, dependency) = reader
-                            .read(
-                                "work.context",
-                                personal_grants::ATTENTION_ASSISTANT_CONSUMER,
-                                serde_json::json!({"schema_version": AGENT_VERSION}),
-                                invocation.deadline,
-                                &invocation.cancellation,
-                            )
-                            .await?;
+                        let source_view = read_context_source(
+                            reader,
+                            invocation.person_id,
+                            "work.context",
+                            personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                            serde_json::json!({"schema_version": AGENT_VERSION}),
+                            invocation.deadline,
+                            &invocation.cancellation,
+                        )
+                        .await?;
+                        let value = source_view.payload().clone();
+                        let dependency = source_view.dependency().clone();
                         self.recorder
                             .ok_or(AgentFailure::CapabilityUnavailable)?
                             .record(invocation.turn_id, invocation.call_id, dependency)?;
@@ -1162,15 +1257,18 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                         let reader = self
                             .remote_reader
                             .ok_or(AgentFailure::CapabilityUnavailable)?;
-                        let (value, dependency) = reader
-                            .read(
-                                "life.logistics",
-                                personal_grants::ATTENTION_ASSISTANT_CONSUMER,
-                                serde_json::json!({"schema_version": AGENT_VERSION}),
-                                invocation.deadline,
-                                &invocation.cancellation,
-                            )
-                            .await?;
+                        let source_view = read_context_source(
+                            reader,
+                            invocation.person_id,
+                            "life.logistics",
+                            personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                            serde_json::json!({"schema_version": AGENT_VERSION}),
+                            invocation.deadline,
+                            &invocation.cancellation,
+                        )
+                        .await?;
+                        let value = source_view.payload().clone();
+                        let dependency = source_view.dependency().clone();
                         self.recorder
                             .ok_or(AgentFailure::CapabilityUnavailable)?
                             .record(invocation.turn_id, invocation.call_id, dependency)?;
@@ -1272,26 +1370,24 @@ mod tests {
         person_id: PersonId,
     }
 
-    impl RemoteViewReaderApi for FixtureRemoteReader<'_> {
+    impl floe_context::SourceReader for FixtureRemoteReader<'_> {
         fn read<'a>(
             &'a self,
-            view_id: &'a str,
-            consumer: &'a str,
-            query: serde_json::Value,
-            deadline: tokio::time::Instant,
-            cancellation: &'a Cancellation,
+            request: &'a floe_context::SourceReadRequest,
         ) -> Pin<
             Box<
                 dyn Future<
-                        Output = Result<
-                            (serde_json::Value, floe_domain::ContextDependency),
-                            AgentFailure,
-                        >,
+                        Output = Result<floe_context::SourceRead, AgentFailure>,
                     > + Send
                     + 'a,
             >,
         > {
             Box::pin(async move {
+                let view_id = request.source().as_str();
+                let consumer = request.consumer().identifier();
+                let query = request.query();
+                let deadline = request.deadline();
+                let cancellation = request.cancellation();
                 let (value, category, connector) = match view_id {
                     "mail.communication" => {
                         let query = query.as_object().ok_or(AgentFailure::InvalidInput)?;
@@ -1390,14 +1486,19 @@ mod tests {
                     scope.processing().clone(),
                     floe_domain::ConsumerPolicyAuthority::new(),
                     Uuid::new_v4(),
-                    vec![1; 32],
+                    request.query_fingerprint().to_vec(),
                     Uuid::new_v4(),
-                    Uuid::new_v4(),
+                    request.process_incarnation_id(),
                     now,
                     now + chrono::Duration::minutes(5),
                 )
                 .map_err(|_| AgentFailure::InvalidInput)?;
-                Ok((value, dependency))
+                Ok(floe_context::SourceRead::new(
+                    request.source().clone(),
+                    value,
+                    dependency,
+                    scope,
+                ))
             })
         }
     }
@@ -2447,6 +2548,7 @@ mod tests {
             wellbeing_reader: None,
             recorder: None,
             remote_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Mail)),
@@ -2603,6 +2705,7 @@ mod tests {
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -2643,6 +2746,7 @@ mod tests {
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: vec![],
             builtin_setup: None,
@@ -2841,6 +2945,7 @@ mod tests {
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -3061,6 +3166,7 @@ mod tests {
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &tasks,
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -3256,6 +3362,7 @@ mod tests {
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -3523,6 +3630,7 @@ mod tests {
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -3591,6 +3699,7 @@ mod tests {
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
+            context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
