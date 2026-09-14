@@ -1,7 +1,8 @@
-use floe_domain::{
+pub(super) use floe_access::AccessGrantMutation;
+use floe_access::{
     ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority, GrantId,
-    GrantScope, GrantSourceBinding, GrantState, GrantTransitionError, GrantValidationError,
-    SourceAuthority,
+    GrantPolicyError, GrantScope, GrantSourceBinding, GrantState, GrantTransitionError,
+    GrantValidationError, SourceAuthority, apply_grant_mutation, create_grant,
 };
 use serde::{Deserialize, Serialize};
 use turso::{Row, transaction::TransactionBehavior};
@@ -19,24 +20,6 @@ const MAX_GRANT_PAYLOAD_BYTES: usize = 64 * 1024;
 pub struct AccessGrantCleanup {
     pub grant_id: GrantId,
     pub invalidated_authority: GrantAuthority,
-}
-
-#[derive(Clone)]
-pub(super) enum AccessGrantMutation {
-    Review {
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    },
-    Activate {
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    },
-    ReviewActive {
-        source: GrantSourceBinding,
-        scope: GrantScope,
-    },
-    Pause,
-    Revoke,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -131,9 +114,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if source.person_id() != self.person_id {
             return Err(AgentFailure::NotFound);
         }
-        source.validate().map_err(grant_input)?;
-        scope.validate().map_err(grant_input)?;
-        let grant = DataAccessGrant::new(id, self.vault_id, source, scope).map_err(grant_input)?;
+        let grant =
+            create_grant(id, self.person_id, self.vault_id, source, scope).map_err(grant_policy)?;
         let payload = grant_payload(&grant)?;
         let mut connection = self.connection()?;
         let transaction = match connection
@@ -183,9 +165,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if source.person_id() != self.person_id {
             return Err(AgentFailure::NotFound);
         }
-        source.validate().map_err(grant_input)?;
-        scope.validate().map_err(grant_input)?;
-        let grant = DataAccessGrant::new(id, self.vault_id, source, scope).map_err(grant_input)?;
+        let grant =
+            create_grant(id, self.person_id, self.vault_id, source, scope).map_err(grant_policy)?;
         let payload = grant_payload(&grant)?;
         self.ensure_access_grant_schema_transaction(transaction)
             .await?;
@@ -530,19 +511,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .ok_or(AgentFailure::NotFound)?;
         let mut grant = decode_grant(&row)?;
         let previous = grant.clone();
-        let changed = match mutation {
-            AccessGrantMutation::Review { source, scope } => grant
-                .review(expected, source, scope)
-                .map_err(grant_transition)?,
-            AccessGrantMutation::Activate { source, scope } => grant
-                .activate_review(expected, source, scope)
-                .map_err(grant_transition)?,
-            AccessGrantMutation::ReviewActive { source, scope } => grant
-                .review_active(expected, source, scope)
-                .map_err(grant_transition)?,
-            AccessGrantMutation::Pause => grant.pause(expected).map_err(grant_transition)?,
-            AccessGrantMutation::Revoke => grant.revoke(expected).map_err(grant_transition)?,
-        };
+        let changed = apply_grant_mutation(
+            &mut grant,
+            self.person_id,
+            self.vault_id,
+            expected,
+            mutation,
+        )
+        .map_err(grant_policy)?;
         if changed {
             self.invalidate_agent_actions_for_grant_in_transaction(
                 transaction,
@@ -806,6 +782,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
 fn grant_input(_: GrantValidationError) -> AgentFailure {
     AgentFailure::InvalidInput
+}
+fn grant_policy(error: GrantPolicyError) -> AgentFailure {
+    match error {
+        GrantPolicyError::Unauthorized => AgentFailure::PolicyDenied,
+        GrantPolicyError::Invalid(error) => grant_input(error),
+        GrantPolicyError::Transition(error) => grant_transition(error),
+    }
 }
 fn access_transaction_start_error(error: turso::Error) -> AgentFailure {
     match error {

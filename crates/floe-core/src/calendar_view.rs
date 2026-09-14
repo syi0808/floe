@@ -651,33 +651,38 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         actual.calendar_ids.sort();
         let mut expected = self.grant.calendar_ids.clone();
         expected.sort();
-        if actual.schema_version != 1
-            || actual.person_id != self.grant.person_id
-            || actual.device_id != self.grant.device_id
-            || actual.provider != self.grant.provider
-            || actual.calendar_ids != expected
-            || actual.native_subject_fingerprint.trim().is_empty()
-            || actual.native_subject_fingerprint.len() != 64
-            || actual
-                .native_subject_fingerprint
-                .bytes()
-                .any(|byte| !byte.is_ascii_hexdigit())
-            || actual.generation.is_empty()
-            || actual.generation.len() > 128
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        if self
+        floe_access::validate_read_authority(
+            &floe_access::ReadAuthorityIdentity {
+                person_id: self.grant.person_id,
+                device_id: &self.grant.device_id,
+                provider: &self.grant.provider,
+                resource_ids: &expected,
+            },
+            &floe_access::ReadAuthorityEvidence {
+                schema_version: actual.schema_version,
+                identity: floe_access::ReadAuthorityIdentity {
+                    person_id: actual.person_id,
+                    device_id: &actual.device_id,
+                    provider: &actual.provider,
+                    resource_ids: &actual.calendar_ids,
+                },
+                subject_fingerprint: &actual.native_subject_fingerprint,
+                generation: &actual.generation,
+            },
+        )?;
+        if let Some(previous) = self
             .stamp
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .as_ref()
-            .is_some_and(|previous| {
-                previous.native_subject_fingerprint != actual.native_subject_fingerprint
-                    || (!allow_generation_change && previous.generation != actual.generation)
-            })
         {
-            return Err(AgentFailure::StaleContext);
+            floe_access::validate_read_continuity(
+                &previous.native_subject_fingerprint,
+                &previous.generation,
+                &actual.native_subject_fingerprint,
+                &actual.generation,
+                allow_generation_change,
+            )?;
         }
         self.authorized_once.store(true, Ordering::Release);
         Ok(AuthorizedRead {
