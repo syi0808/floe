@@ -1,16 +1,78 @@
 use std::collections::HashSet;
 
-use floe_kernel::AgentFailure;
+use floe_kernel::{AgentFailure, PersonId};
 
 use crate::{
-    EpistemicStatus, KnowledgeActor, LearningEvidenceSnapshot, PersonalMemoryKind,
-    StageMemoryCandidate,
+    EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgePayload, KnowledgeRevision,
+    KnowledgeRevisionState, LearningEvidenceSnapshot, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin,
+    MemorySummary, PersonalMemoryKind, StageMemoryCandidate,
 };
 
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_MEMORY_STATEMENT_BYTES: usize = 2 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
 const MAX_VERSION_BYTES: usize = 128;
+
+pub fn validate_memory_overview_limit(limit: usize) -> Result<(), AgentFailure> {
+    if limit == 0 || limit > MAX_MEMORY_OVERVIEW_ITEMS {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
+}
+
+pub fn project_memory_summary(
+    revision: &KnowledgeRevision,
+    expected_person_id: PersonId,
+) -> Result<MemorySummary, AgentFailure> {
+    if revision.schema_version != KNOWLEDGE_VERSION
+        || revision.person_id != expected_person_id
+        || revision.kind != crate::KnowledgeKind::Memory
+        || revision.state != KnowledgeRevisionState::Active
+        || revision.target_id.is_nil()
+        || revision.revision == 0
+        || revision.source_refs.is_empty()
+        || revision
+            .source_refs
+            .iter()
+            .any(|reference| reference.session_id.is_nil() || reference.turn_id.is_nil())
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    let KnowledgePayload::Memory { value } = &revision.payload else {
+        return Err(AgentFailure::VaultUnavailable);
+    };
+    if value.statement.trim().is_empty()
+        || value.confidence_millis > 1000
+        || (matches!(value.kind, PersonalMemoryKind::Inference)
+            != matches!(value.epistemic_status, EpistemicStatus::Inference))
+        || value
+            .valid_until
+            .zip(value.valid_from)
+            .is_some_and(|(until, from)| until <= from)
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    let origin = match revision.created_by {
+        KnowledgeActor::User => MemoryOrigin::UserProvided,
+        KnowledgeActor::Learner { .. } => MemoryOrigin::Learned,
+        KnowledgeActor::Curator | KnowledgeActor::System => {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+    };
+    Ok(MemorySummary {
+        target_id: revision.target_id,
+        revision: revision.revision,
+        statement: value.statement.clone(),
+        memory_kind: value.kind,
+        epistemic_status: value.epistemic_status,
+        confidence_millis: value.confidence_millis,
+        source_count: revision.source_refs.len(),
+        origin,
+        created_at: revision.created_at,
+        valid_from: value.valid_from,
+        valid_until: value.valid_until,
+    })
+}
 
 pub fn validate_stage_request(request: &StageMemoryCandidate) -> Result<(), AgentFailure> {
     let digest = request.digest.trim();
@@ -84,7 +146,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{LearningObservationKind, PersonalMemoryValue};
+    use crate::{
+        KnowledgeKind, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
+        LearningEvidenceRef, LearningObservationKind, PersonalMemoryValue,
+    };
 
     fn request() -> StageMemoryCandidate {
         StageMemoryCandidate {
@@ -173,5 +238,43 @@ mod tests {
         snapshot.completed = true;
         snapshot.turn_ids.clear();
         assert_eq!(validate(&snapshot), Err(AgentFailure::NotFound));
+    }
+
+    #[test]
+    fn memory_summary_projection_validates_owner_and_origin() {
+        let person_id = PersonId::new();
+        let request = request();
+        let revision = KnowledgeRevision {
+            schema_version: KNOWLEDGE_VERSION,
+            target_id: Uuid::new_v4(),
+            revision: 1,
+            person_id,
+            kind: KnowledgeKind::Memory,
+            payload: KnowledgePayload::Memory {
+                value: request.value,
+            },
+            state: KnowledgeRevisionState::Active,
+            source_refs: vec![LearningEvidenceRef {
+                session_id: request.session_id,
+                turn_id: request.turn_ids[0],
+            }],
+            created_by: KnowledgeActor::User,
+            created_at: Utc::now(),
+        };
+        let summary = project_memory_summary(&revision, person_id).unwrap();
+        assert_eq!(summary.origin, MemoryOrigin::UserProvided);
+        assert_eq!(summary.source_count, 1);
+        assert_eq!(
+            validate_memory_overview_limit(0),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            validate_memory_overview_limit(MAX_MEMORY_OVERVIEW_ITEMS + 1),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            project_memory_summary(&revision, PersonId::new()),
+            Err(AgentFailure::VaultUnavailable)
+        );
     }
 }

@@ -9,9 +9,10 @@ use floe_knowledge::{
     LearnerJobClaim, LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState,
     LearnerReviewInput, LearnerReviewJob, LearningEvidenceRef, LearningEvidenceSnapshot,
     LearningObservation, LearningObservationKind, LearningOutcome, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, StageMemoryCandidate, claim_learner_job, reject_learner_claim,
-    settle_learner_job, validate_learner_job_lifecycle, validate_learning_evidence,
-    validate_stage_request, validate_learner_input,
+    MAX_CONTEXT_MEMORY_BYTES, MemoryOverviewSnapshot, MemoryReviewSnapshot, StageMemoryCandidate,
+    claim_learner_job, project_memory_summary, reject_learner_claim, settle_learner_job,
+    validate_learner_input, validate_learner_job_lifecycle, validate_learning_evidence,
+    validate_memory_overview_limit, validate_memory_review_candidate, validate_stage_request,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -23,7 +24,6 @@ use super::*;
 const MAX_LEARNER_DISCOVERY_JOBS: usize = 8;
 const MAX_LEARNER_DISCOVERY_SESSIONS: i64 = 64;
 const MAX_LEARNER_DIGEST_TEXT_BYTES: usize = 1536;
-const MAX_MEMORY_OVERVIEW_ITEMS: usize = 100;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn initialize_learning_store(&self) -> Result<(), AgentFailure> {
@@ -271,6 +271,112 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         usize::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)
     }
 
+    pub async fn memory_review_snapshot(&self) -> Result<MemoryReviewSnapshot, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let mut rows = transaction
+                .query(
+                    "SELECT payload FROM knowledge_candidates WHERE person_id = ? AND state = 'pending' AND json_extract(payload, '$.kind') = 'memory' ORDER BY created_at, id",
+                    [self.person_id.to_string()],
+                )
+                .await
+                .map_err(storage)?;
+            let mut candidates = Vec::new();
+            while let Some(row) = rows.next().await.map_err(storage)? {
+                let candidate: KnowledgeCandidate =
+                    decode(&row.get::<String>(0).map_err(storage)?)?;
+                validate_memory_review_candidate(&candidate, self.person_id)?;
+                candidates.push(candidate);
+            }
+            drop(rows);
+            self.check_access()?;
+            Ok(MemoryReviewSnapshot {
+                person_id: self.person_id,
+                candidates,
+            })
+        }
+        .await;
+        finish_transaction(transaction, result).await
+    }
+
+    pub async fn memory_overview_snapshot(
+        &self,
+        limit: usize,
+    ) -> Result<MemoryOverviewSnapshot, AgentFailure> {
+        validate_memory_overview_limit(limit)?;
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let mut saved_rows = transaction
+                .query(
+                    "SELECT COUNT(*) FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active'",
+                    [self.person_id.to_string()],
+                )
+                .await
+                .map_err(storage)?;
+            let saved_count = saved_rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .get::<i64>(0)
+                .map_err(storage)?;
+            drop(saved_rows);
+            let mut pending_rows = transaction
+                .query(
+                    "SELECT COUNT(*) FROM knowledge_candidates WHERE person_id = ? AND state = 'pending' AND json_extract(payload, '$.kind') = 'memory'",
+                    [self.person_id.to_string()],
+                )
+                .await
+                .map_err(storage)?;
+            let pending_count = pending_rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .get::<i64>(0)
+                .map_err(storage)?;
+            drop(pending_rows);
+            let mut rows = transaction
+                .query(
+                    "SELECT payload FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active' ORDER BY json_extract(payload, '$.created_at') DESC, target_id LIMIT ?",
+                    (
+                        self.person_id.to_string(),
+                        i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            let mut memories = Vec::new();
+            while let Some(row) = rows.next().await.map_err(storage)? {
+                let revision: KnowledgeRevision =
+                    decode(&row.get::<String>(0).map_err(storage)?)?;
+                memories.push(project_memory_summary(&revision, self.person_id)?);
+            }
+            drop(rows);
+            let saved_count = usize::try_from(saved_count)
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            let pending_count = usize::try_from(pending_count)
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            self.check_access()?;
+            Ok(MemoryOverviewSnapshot {
+                person_id: self.person_id,
+                saved_count,
+                pending_count,
+                memories,
+            })
+        }
+        .await;
+        finish_transaction(transaction, result).await
+    }
+
     pub async fn decide_knowledge_candidate(
         &self,
         candidate_id: Uuid,
@@ -417,48 +523,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.check_access()?;
         Ok(revisions)
     }
-
-    pub async fn personal_memory_overview(
-        &self,
-        limit: usize,
-    ) -> Result<(usize, Vec<KnowledgeRevision>), AgentFailure> {
-        if limit == 0 || limit > MAX_MEMORY_OVERVIEW_ITEMS {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let connection = self.connection()?;
-        let mut count_rows = connection
-            .query(
-                "SELECT COUNT(*) FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active'",
-                [self.person_id.to_string()],
-            )
-            .await
-            .map_err(storage)?;
-        let total = count_rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::VaultUnavailable)?
-            .get::<i64>(0)
-            .map_err(storage)?;
-        drop(count_rows);
-        let total = usize::try_from(total).map_err(|_| AgentFailure::VaultUnavailable)?;
-        let mut rows = connection
-            .query(
-                "SELECT payload FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active' ORDER BY json_extract(payload, '$.created_at') DESC, target_id LIMIT ?",
-                (self.person_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?),
-            )
-            .await
-            .map_err(storage)?;
-        let mut revisions = Vec::new();
-        while let Some(row) = rows.next().await.map_err(storage)? {
-            let revision: KnowledgeRevision = decode(&row.get::<String>(0).map_err(storage)?)?;
-            validate_revision(&revision, self.person_id)?;
-            revisions.push(revision);
-        }
-        self.check_access()?;
-        Ok((total, revisions))
-    }
-
     pub async fn personal_memory_context(
         &self,
         now: DateTime<Utc>,
@@ -943,7 +1007,6 @@ fn learning_signal_name(signal: LearningObservationKind) -> &'static str {
         LearningObservationKind::ReusableProcedure => "reusable_procedure",
     }
 }
-
 
 async fn evidence_is_independent(
     transaction: &turso::transaction::Transaction<'_>,

@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub const KNOWLEDGE_VERSION: u32 = 1;
 pub const MAX_CONTEXT_MEMORIES: usize = 32;
 pub const MAX_CONTEXT_MEMORY_BYTES: usize = 16 * 1024;
+pub const MAX_MEMORY_OVERVIEW_ITEMS: usize = 100;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -205,6 +206,47 @@ pub struct KnowledgeRevision {
     pub source_refs: Vec<LearningEvidenceRef>,
     pub created_by: KnowledgeActor,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryOrigin {
+    UserProvided,
+    Learned,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemorySummary {
+    pub target_id: Uuid,
+    pub revision: u64,
+    pub statement: String,
+    pub memory_kind: PersonalMemoryKind,
+    pub epistemic_status: EpistemicStatus,
+    pub confidence_millis: u16,
+    pub source_count: usize,
+    pub origin: MemoryOrigin,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryOverviewSnapshot {
+    pub person_id: PersonId,
+    pub saved_count: usize,
+    pub pending_count: usize,
+    pub memories: Vec<MemorySummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryReviewSnapshot {
+    pub person_id: PersonId,
+    pub candidates: Vec<KnowledgeCandidate>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

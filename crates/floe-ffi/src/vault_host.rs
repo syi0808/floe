@@ -18,7 +18,7 @@ use base64::Engine as _;
 use floe_agent::{
     AgentEvent, AgentFailure, AgentOutcome, AgentSession, BuiltinContextSource, BuiltinExpertKind,
     BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState, Cancellation, ConnectionState,
-    KnowledgeActor, KnowledgeDecisionKind, KnowledgeKind, SessionStore,
+    SessionStore,
 };
 #[cfg(not(target_os = "android"))]
 use floe_core::KeyringVaultKeys as PlatformVaultKeys;
@@ -33,6 +33,7 @@ use floe_domain::{
     PersonId, ProcessingRestriction, ResourceHandle,
 };
 use floe_infra::remote_authorization::{RemoteAuthorizationClient, RemotePairingClient};
+use floe_knowledge::{KnowledgeActor, KnowledgeDecisionKind};
 use floe_protocol::*;
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -1406,16 +1407,18 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let pending = vault.pending_knowledge_candidates().await?;
+            let pending = vault.memory_review_snapshot().await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
             let decision = match decision {
                 Some(request) => {
                     let candidate_id = session_uuid(&request.candidate_id)?;
-                    if !pending.iter().any(|candidate| {
-                        candidate.id == candidate_id && candidate.kind == KnowledgeKind::Memory
-                    }) {
+                    if !pending
+                        .candidates
+                        .iter()
+                        .any(|candidate| candidate.id == candidate_id)
+                    {
                         return Err(AgentFailure::NotFound);
                     }
                     Some(
@@ -1438,20 +1441,21 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
                 }
                 None => None,
             };
-            let candidates = if decision.is_some() {
-                vault.pending_knowledge_candidates().await?
+            let snapshot = if decision.is_some() {
+                vault.memory_review_snapshot().await?
             } else {
                 pending
-            }
-            .into_iter()
-            .filter(|candidate| candidate.kind == KnowledgeKind::Memory)
-            .map(|candidate| encode_contract(&candidate))
-            .collect::<Result<Vec<_>, _>>()?;
+            };
+            let candidates = snapshot
+                .candidates
+                .into_iter()
+                .map(|candidate| encode_contract(&candidate))
+                .collect::<Result<Vec<_>, _>>()?;
             let decision = decision.as_ref().map(encode_contract).transpose()?;
             Ok(VaultExecutionResult {
                 memory_review: Some(AgentMemoryReviewOverviewDto {
                     schema_version: PROTOCOL_VERSION,
-                    person_id: job.person.to_string(),
+                    person_id: snapshot.person_id.to_string(),
                     candidates,
                     decision,
                 }),
@@ -1463,41 +1467,40 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let (saved_count, revisions) = vault.personal_memory_overview(100).await?;
-            let pending_count = vault.pending_memory_candidate_count().await?;
+            let snapshot = vault.memory_overview_snapshot(100).await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let memories = revisions
+            let memories = snapshot
+                .memories
                 .into_iter()
-                .map(|revision| {
-                    let floe_agent::KnowledgePayload::Memory { value } = revision.payload else {
-                        return Err(AgentFailure::VaultUnavailable);
-                    };
+                .map(|memory| {
                     Ok(AgentMemorySummaryDto {
-                        target_id: revision.target_id.to_string(),
-                        revision: revision.revision,
-                        statement: value.statement,
-                        memory_kind: encode_contract(&value.kind)?,
-                        epistemic_status: encode_contract(&value.epistemic_status)?,
-                        confidence_millis: value.confidence_millis,
-                        source_count: revision.source_refs.len(),
-                        origin: match revision.created_by {
-                            KnowledgeActor::User => AgentMemoryOriginDto::UserProvided,
-                            _ => AgentMemoryOriginDto::Learned,
+                        target_id: memory.target_id.to_string(),
+                        revision: memory.revision,
+                        statement: memory.statement,
+                        memory_kind: encode_contract(&memory.memory_kind)?,
+                        epistemic_status: encode_contract(&memory.epistemic_status)?,
+                        confidence_millis: memory.confidence_millis,
+                        source_count: memory.source_count,
+                        origin: match memory.origin {
+                            floe_knowledge::MemoryOrigin::UserProvided => {
+                                AgentMemoryOriginDto::UserProvided
+                            }
+                            floe_knowledge::MemoryOrigin::Learned => AgentMemoryOriginDto::Learned,
                         },
-                        created_at: revision.created_at,
-                        valid_from: value.valid_from,
-                        valid_until: value.valid_until,
+                        created_at: memory.created_at,
+                        valid_from: memory.valid_from,
+                        valid_until: memory.valid_until,
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(VaultExecutionResult {
                 memory: Some(AgentMemoryOverviewDto {
                     schema_version: PROTOCOL_VERSION,
-                    person_id: job.person.to_string(),
-                    saved_count,
-                    pending_count,
+                    person_id: snapshot.person_id.to_string(),
+                    saved_count: snapshot.saved_count,
+                    pending_count: snapshot.pending_count,
                     memories,
                 }),
                 ..VaultExecutionResult::ready()

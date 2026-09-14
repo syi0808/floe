@@ -328,12 +328,17 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     assert!(rejected.revision.is_none());
     assert!(rejected.mutation.is_none());
     assert_eq!(vault.pending_memory_candidate_count().await.unwrap(), 0);
+    let overview = vault.memory_overview_snapshot(1).await.unwrap();
+    assert_eq!(overview.person_id, person);
+    assert_eq!(overview.saved_count, 1);
+    assert_eq!(overview.pending_count, 0);
+    assert_eq!(overview.memories.len(), 1);
+    assert_eq!(overview.memories[0].target_id, active_revision.target_id);
+    assert_eq!(overview.memories[0].revision, active_revision.revision);
+    assert_eq!(overview.memories[0].source_count, active_revision.source_refs.len());
+    assert_eq!(overview.memories[0].statement, "사용자는 회의를 14시 이후에 선호한다.");
     assert_eq!(
-        vault.personal_memory_overview(1).await.unwrap(),
-        (1, vec![active_revision.clone()])
-    );
-    assert_eq!(
-        vault.personal_memory_overview(0).await,
+        vault.memory_overview_snapshot(0).await,
         Err(AgentFailure::InvalidInput)
     );
     let context = vault

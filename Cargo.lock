@@ -940,6 +940,7 @@ dependencies = [
  "floe-diagnostics",
  "floe-domain",
  "floe-infra",
+ "floe-knowledge",
  "floe-protocol",
  "jni",
  "ring",

@@ -3,9 +3,10 @@ use floe_kernel::AgentFailure;
 use uuid::Uuid;
 
 use crate::{
-    KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
-    KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeMutation,
-    KnowledgeOperation, KnowledgeRevision, KnowledgeRevisionState,
+    EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
+    KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult,
+    KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
+    KnowledgeRevisionState,
 };
 
 pub struct ReviewAdmission {
@@ -31,6 +32,39 @@ pub fn validate_review_actor(actor: &KnowledgeActor) -> Result<(), AgentFailure>
 pub fn validate_review_candidate(candidate: &KnowledgeCandidate) -> Result<(), AgentFailure> {
     if candidate.state != KnowledgeCandidateState::Pending {
         return Err(AgentFailure::Conflict);
+    }
+    Ok(())
+}
+
+pub fn validate_memory_review_candidate(
+    candidate: &KnowledgeCandidate,
+    expected_person_id: floe_kernel::PersonId,
+) -> Result<(), AgentFailure> {
+    if candidate.schema_version != KNOWLEDGE_VERSION
+        || candidate.person_id != expected_person_id
+        || candidate.state != KnowledgeCandidateState::Pending
+        || candidate.kind != KnowledgeKind::Memory
+        || candidate.source_refs.is_empty()
+        || candidate
+            .source_refs
+            .iter()
+            .any(|reference| reference.session_id.is_nil() || reference.turn_id.is_nil())
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    let KnowledgePayload::Memory { value } = &candidate.payload else {
+        return Err(AgentFailure::VaultUnavailable);
+    };
+    if value.confidence_millis > 1000
+        || value.statement.trim().is_empty()
+        || (matches!(value.kind, crate::PersonalMemoryKind::Inference)
+            != matches!(value.epistemic_status, EpistemicStatus::Inference))
+        || value
+            .valid_until
+            .zip(value.valid_from)
+            .is_some_and(|(until, from)| until <= from)
+    {
+        return Err(AgentFailure::VaultUnavailable);
     }
     Ok(())
 }
