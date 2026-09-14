@@ -1546,3 +1546,52 @@ the assurance that saved conversations had not been replaced. This confirms
 the observed UI failure remains closed; it does not establish the underlying
 Vault failure cause. No conversation, model dispatch or memory-review UI flow
 was exercised, and the app was not yet rebuilt with the P08 checkpoint.
+
+## P08 review transitions and Playbook ownership — 2026-09-14
+
+Code checkpoint `3d8c120`: Knowledge now owns candidate, decision, revision,
+mutation, payload and evidence-reference types. Core imports these from the
+canonical owner and invokes Knowledge's review policy inside its existing
+immediate transaction. Knowledge constructs approval/rejection results,
+superseded revisions and rollback metadata from transaction-local admission
+facts; Core still loads those facts and performs SQL writes. Admission facts
+and the returned plan are not transferable authorization permits.
+
+User-only review, pending-candidate admission, independent evidence, current
+revision/hash comparison, supersede CAS, candidate CAS and final key-health
+check remain enforced. All revision, mutation and decision writes still commit
+or roll back together. Rejection intentionally does not require source or
+current-revision readmission, so a stale candidate can still be dismissed.
+Additional target/person/kind matching fails closed. Luna review found no
+authorization/rollback regression; its observation about malformed-create
+query ordering was resolved by calling the same Knowledge shape validator
+before the target-existence query.
+
+Playbook types, hierarchy validation, visibility and loading budgets moved from
+legacy Agent into Knowledge. General `PromptRole` remains outside Knowledge;
+the temporary Agent bridge maps it explicitly into a string-valued
+`PlaybookAudience`, preserving existing wire names without making Knowledge
+the owner of all prompt roles. Empty/oversized audience keys and the learner
+audience are rejected. Existing hierarchy/visibility assertions moved with the
+implementation. No new production Playbook loading UI or scheduler is claimed.
+
+Validation passed: Knowledge tests (8), legacy Agent library tests (23), three
+focused encrypted-Vault memory tests, three FFI memory worker tests, Knowledge
+all-target Clippy with `-D warnings`, workspace check and migration boundary
+check (17 nodes / 47 edges / 0 errors). After the final create-ordering guard
+adjustment, Knowledge tests, Clippy and the three Core memory tests passed
+again. The new Core regression stages competing revision candidates, approves
+one, rejects stale approval without changing active memory or mutation history,
+then permits user rejection and checks persistence after reopen. New owner
+tests cover review authorization, independent admission, revision/hash/person
+binding and rollback metadata; the legacy bridge test checks every role's
+serialized audience name.
+
+This is not full P08 acceptance: LearningObservation/AgentOutcome, learner
+requests, prompts and scheduling, evidence coverage/purpose and current-state
+ports, memory UI snapshots, optional-context failure classification, and SQL
+repository ownership remain to migrate. Playbook persistence/edit/rollback
+delivery is also not established by registry unit tests. No new Apple UI flow
+was exercised in this checkpoint; the previously observed secure-storage
+failure remains an unverified UI limitation, not permission to bypass Vault
+protection. No local app data or external account/provider data was changed.
