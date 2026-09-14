@@ -533,7 +533,7 @@ fn calendar_decisions_are_person_scoped_durable_and_never_create() {
 }
 
 #[test]
-fn action_authority_defaults_to_ask_and_persists() {
+fn action_authority_defaults_to_ask_and_rejects_legacy_mutation() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("authority.db");
     let person = Uuid::new_v4().to_string();
@@ -543,19 +543,18 @@ fn action_authority_defaults_to_ask_and_persists() {
         data(&core.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
         "ask"
     );
-    assert_eq!(
-        data(&core.actions(
-            &person,
-            json!({"kind": "set_authority", "calendar_create": "allow"}),
-        ))["authority"]["calendar_create"],
-        "allow"
+    let denied = core.actions(
+        &person,
+        json!({"kind": "set_authority", "calendar_create": "allow"}),
     );
+    assert_eq!(denied["status"], "error");
+    assert_eq!(denied["error"]["metadata"]["agent_failure"], "policy_denied");
     drop(core);
 
     let reopened = Core::open(path.to_str().unwrap());
     assert_eq!(
         data(&reopened.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
-        "allow"
+        "ask"
     );
 }
 
