@@ -39,16 +39,17 @@ type CodexClient interface {
 }
 
 type Request struct {
-	ProviderIdentity string          `json:"-"`
-	Agent            bool            `json:"-"`
-	SchemaVersion    int             `json:"schema_version"`
-	Purpose          string          `json:"purpose,omitempty"`
-	DataClasses      []string        `json:"data_classes,omitempty"`
-	AllowExternal    bool            `json:"allow_external"`
-	Instructions     string          `json:"instructions"`
-	Input            json.RawMessage `json:"input"`
-	OutputSchema     json.RawMessage `json:"output_schema,omitempty"`
-	ReplayOf         string          `json:"replay_of,omitempty"`
+	ProviderIdentity  string          `json:"-"`
+	Agent             bool            `json:"-"`
+	SchemaVersion     int             `json:"schema_version"`
+	Purpose           string          `json:"purpose,omitempty"`
+	DataClasses       []string        `json:"data_classes,omitempty"`
+	AllowExternal     bool            `json:"allow_external"`
+	ExpectedRecipient string          `json:"expected_recipient,omitempty"`
+	Instructions      string          `json:"instructions"`
+	Input             json.RawMessage `json:"input"`
+	OutputSchema      json.RawMessage `json:"output_schema,omitempty"`
+	ReplayOf          string          `json:"replay_of,omitempty"`
 }
 
 type Gateway struct {
@@ -233,6 +234,13 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	if adapter.external && !input.AllowExternal {
 		writeError(writer, http.StatusForbidden, "external_transfer_denied")
 		return
+	}
+	if input.Agent {
+		_, recipient := adapter.disclosure()
+		if adapter.external && (input.ExpectedRecipient == "" || input.ExpectedRecipient != recipient) || !adapter.external && input.ExpectedRecipient != "" {
+			writeError(writer, http.StatusForbidden, "external_transfer_denied")
+			return
+		}
 	}
 	select {
 	case gateway.active <- struct{}{}:

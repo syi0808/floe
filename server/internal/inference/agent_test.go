@@ -123,6 +123,12 @@ func agentRequest() Request {
 	return Request{SchemaVersion: 1, Agent: true, Purpose: "deep_work", DataClasses: []string{"synthetic"}, AllowExternal: true, Instructions: "Answer the current request", Input: json.RawMessage(`{"messages":[{"role":"user","content":"Brief today"}],"tools":[{"type":"function","function":{"name":"schedule_read","parameters":{"type":"object","properties":{}}}}]}`)}
 }
 
+func externalAgentRequest(recipient string) Request {
+	request := agentRequest()
+	request.ExpectedRecipient = recipient
+	return request
+}
+
 func TestAgentUsesNativeToolsAndPlainAnswer(test *testing.T) {
 	for _, content := range []string{
 		`{"content":"Today is clear."}`,
@@ -145,7 +151,7 @@ func TestAgentUsesNativeToolsAndPlainAnswer(test *testing.T) {
 			_ = json.NewEncoder(writer).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": message}}, "usage": map[string]any{"total_tokens": 42}})
 		}))
 		gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
-		response := invokePath(gateway, "/v1/agent", agentRequest())
+		response := invokePath(gateway, "/v1/agent", externalAgentRequest("127.0.0.1"))
 		upstream.Close()
 		if response.Code != 200 || !strings.Contains(response.Body.String(), `"schema_version":1`) {
 			test.Fatal(response.Body.String())
@@ -186,7 +192,7 @@ func TestReplaySourceRejectsRouteChangesBeforeProvider(test *testing.T) {
 	}))
 	defer upstream.Close()
 	gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
-	first := invokePath(gateway, "/v1/agent", agentRequest())
+	first := invokePath(gateway, "/v1/agent", externalAgentRequest("127.0.0.1"))
 	var response struct {
 		Routing struct {
 			Source string `json:"replay_source"`
@@ -195,7 +201,7 @@ func TestReplaySourceRejectsRouteChangesBeforeProvider(test *testing.T) {
 	if first.Code != 200 || json.Unmarshal(first.Body.Bytes(), &response) != nil || len(response.Routing.Source) != 64 {
 		test.Fatal(first.Body.String())
 	}
-	input := agentRequest()
+	input := externalAgentRequest("127.0.0.1")
 	var transcript map[string]any
 	_ = json.Unmarshal(input.Input, &transcript)
 	transcript["replay_source"] = response.Routing.Source
@@ -208,6 +214,38 @@ func TestReplaySourceRejectsRouteChangesBeforeProvider(test *testing.T) {
 	gateway.routes["high_effort"] = configured
 	if rejected := invokePath(gateway, "/v1/agent", input); rejected.Code != 409 || calls != 2 {
 		test.Fatal("foreign replay reached provider", rejected.Body.String(), calls)
+	}
+}
+
+func TestAgentExternalRecipientFencePrecedesProvider(test *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"Done"}}]}`))
+	}))
+	defer upstream.Close()
+	gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
+	for _, recipient := range []string{"", "stale.example", "127.0.0.2"} {
+		request := externalAgentRequest(recipient)
+		response := invokePath(gateway, "/v1/agent", request)
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "external_transfer_denied") || calls != 0 {
+			test.Fatalf("recipient %q reached provider: status=%d calls=%d body=%s", recipient, response.Code, calls, response.Body.String())
+		}
+	}
+}
+
+func TestAgentLocalRejectsExternalRecipientExpectation(test *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		_, _ = writer.Write([]byte(`{"done":true,"message":{"content":"Done"}}`))
+	}))
+	defer upstream.Close()
+	request := agentRequest()
+	request.ExpectedRecipient = "provider.example"
+	response := invokePath(fixtureGateway(test, "ollama", upstream.URL), "/v1/agent", request)
+	if response.Code != http.StatusForbidden || calls != 0 {
+		test.Fatalf("local route accepted external recipient: status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
 	}
 }
 
