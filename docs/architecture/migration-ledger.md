@@ -49,9 +49,9 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
 | P12 | Partial: root turns, Run queries/cancel, recovery, continuation, finalization, Session management/archive and independent management host execution wired; legacy host cutover pending |
 | P13 | Pending |
-| P14 | Pending |
+| P14 | Partial: verified native local identity adapter wired; model/source/control adapter split pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
-| P16 | Partial: app-wire v2 foundation and AppHost lifecycle shell wired; verified caller/service and ABI cutover pending |
+| P16 | Partial: app-wire v2 foundation, AppHost lifecycle, verified native identity and durable v2 query ABI wired; command/events and Flutter cutover pending |
 | P17 | Pending |
 | P18 | Pending |
 | P19 | Pending |
@@ -3412,3 +3412,72 @@ then expose v2 command/query/event conversion without adding principal, device
 or credentials to app-wire requests. `LegacyComposition` and
 `legacy_services()` are removed after that service cutover. P16 and Apple
 acceptance remain partial.
+
+### P14/P16 verified native caller checkpoint (2026-09-15)
+
+Code checkpoint `315aa49` adds the initial `floe-native` platform crate and
+`floe-provider-adapters` adapter crate, then binds product database opens to a
+host-derived Person and local device identity. A product path must have the
+shape `<support>/people/<person UUID>/floe.db`; the device identifier is read
+from `<support>/local_device_id` with a 128-byte bound and no-follow semantics.
+Missing, malformed and symbolic-link identity inputs fail before `FloeCore`
+opens the database. Non-product test paths remain an explicit legacy host and
+cannot admit app-wire v2 requests.
+
+Implemented and wired: native local identity acquisition, adapter conversion,
+AppHost verified caller binding and product-open preflight. Direct validation
+opened a product-shaped database with the derived caller, rejected missing and
+symbolic-link identity, and proved a missing identity does not create the
+database. All four native tests, four AppHost tests and 13 C-ABI tests passed;
+workspace all-target check, diff check and the migration boundary gate passed
+(23 nodes / 72 edges / no errors). No Apple UI, Keychain-backed Vault, device
+model or live provider was exercised.
+
+Blocker/remove-by: this checkpoint supplies only local identity. Apple source,
+model and control adapters and host-selected credential/inference handles are
+still pending, while `LegacyComposition` remains assembled inside FFI. The
+identity path is retained when those services move behind AppHost; the legacy
+service accessor is removed at the P16 command/event and Flutter cutover. P14
+and P16 remain partial.
+
+### P16 durable app-wire query checkpoint (2026-09-15)
+
+Code checkpoint `fb54b61` exports `floe_core_query_v2` for the Apple-first Unix
+host and converts typed v2 GetCommand, GetRun and GetMessage requests to
+principal-bound Conversation repository reads. Caller Person and runtime epoch
+come only from the verified AppHost context. The wire has no Person, device,
+credential or mutable provider handle, rejects an unsupported schema or unknown
+field before AppHost admission, preserves request correlation in every
+response, and quarantines panics behind a safe internal error.
+
+The existing Vault worker now accepts a short Conversation read message on its
+management executor while Conversation roots remain on their separate runtime.
+The read neither creates work nor acquires or cancels a Run. Durable command
+receipts replay their original Run and Session revision; terminal Run snapshots
+include a report; an assistant final-message reference resolves to the bounded
+stored Run output. Task and attempt projections remain empty until their owner
+read models are connected.
+
+Implemented and wired: production C ABI entry, verified caller conversion,
+durable Conversation command/Run/message projection and golden message wire
+shape. Direct C-ABI validation used a product-shaped verified host to preserve
+request correlation, report a locked Vault as unavailable, and reject wrong
+versions and injected fields. The encrypted worker regression cancelled an
+admitted production Run and recovered the same terminal receipt by CommandId,
+RunId and final message reference without sending Stop or Release during the
+queries. Four protocol golden/validation tests, four AppHost tests, all 97 FFI
+library tests and all 13 C-ABI tests passed. Workspace all-target check, diff
+check and the migration boundary gate passed (23 nodes / 72 edges / no errors).
+The focused all-target Clippy command remains blocked by the pre-existing
+`AgentVaultOperationDto` large-enum lint in untouched legacy protocol code.
+
+Blocker/remove-by: the query adapter still reaches the temporary
+`LegacyComposition`/`VaultBridge` and FFI still depends directly on
+Conversation and kernel types. No Keychain-backed product Vault or Flutter
+transport exercised a successful terminal query, and command/events v2 do not
+yet exist at the ABI. The next executable P16 task is to place a host-selected
+inference route and credential handle behind AppHost, then wire
+`conversation.start_turn` to return the durable admission receipt without
+reviving Submit/Poll/Release. The direct legacy service/query bridge is removed
+when that owner service and Flutter transport cut over. P16 and Apple acceptance
+remain partial.
