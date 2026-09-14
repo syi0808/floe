@@ -5,6 +5,7 @@ mod agent_calendar;
 mod agent_fixture;
 #[cfg(unix)]
 mod agent_vault;
+mod context_evidence;
 mod calendar;
 mod calendar_action;
 mod calendar_lease;

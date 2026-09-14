@@ -787,6 +787,17 @@ impl<
                 by_turn.push((turn_id, vec![message]));
             }
         }
+        let reader =
+            crate::context_evidence::ContextEvidenceReader::new(self.vault, request.session_id);
+        let coverage_by_turn = floe_context::read_history_coverage(
+            &reader,
+            request.session_id,
+            by_turn
+                .iter()
+                .map(|(turn_id, _)| *turn_id)
+                .filter(|turn_id| *turn_id != current_turn),
+        )
+        .await?;
         let mut projected = Vec::new();
         for (turn_id, messages) in by_turn {
             if turn_id == current_turn {
@@ -794,12 +805,11 @@ impl<
                 continue;
             }
             let has_calendar_boundary = messages.iter().any(calendar_history_boundary);
-            let coverage = self
-                .vault
-                .read_turn_coverage(request.session_id, turn_id)
-                .await?;
-            let coverage_independent = matches!(&coverage, DependencyCoverage::Independent);
-            let projection = floe_context::project_coverage(&coverage, |dependency| {
+            let coverage = coverage_by_turn
+                .get(&turn_id)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let coverage_independent = matches!(coverage, DependencyCoverage::Independent);
+            let projection = floe_context::project_coverage(coverage, |dependency| {
                 let resolver = &resolver;
                 async move {
                     Ok(resolver

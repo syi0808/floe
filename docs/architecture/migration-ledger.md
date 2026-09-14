@@ -2171,3 +2171,40 @@ full SourceViews and final Conversation/Vault separation remain open. No Apple
 UI, native model or external provider account was directly exercised in this
 checkpoint; integration validation uses the existing controlled runtime and
 encrypted local storage fixtures. P09 and the full P00–P25 goal remain active.
+
+### P09 evidence reader port checkpoint (2026-09-14)
+
+Context owns the read-only EvidenceReader port and read_history_coverage
+orchestration. It validates identifiers before I/O, reads each distinct turn once
+in first-seen order, validates returned canonical coverage and returns a complete
+map only on success. Reader errors remain fatal; malformed trusted coverage is
+StorageUnavailable, not missing optional context. Empty history returns an empty
+map without accessing storage.
+
+Both general and Calendar history projection use this port. Core supplies a
+separate session-bound ContextEvidenceReader facade over its existing encrypted
+repository; EncryptedAgentVault itself does not implement the Context trait.
+Person isolation remains bound to the supplied Vault instance, and the facade
+rejects different sessions and nil identifiers. The existing read transaction,
+key-health checks, dependency authorization and final release revalidation remain.
+Calendar loads its historical coverage before per-turn authorization and excludes
+the current turn from these reads. This is not a cross-turn transactional snapshot
+or permission to skip final authorization.
+
+Integration found an initial helper bug rejecting empty history, which halted
+new Calendar conversations. The helper now permits that case; a focused no-read
+regression was added, and the original first-turn tests are retained. Additional
+coverage exercises ordered deduplication, invalid IDs before I/O, malformed
+coverage, fatal reader errors and session binding through a real encrypted local
+Vault fixture. No external provider account or normal Apple UI/model was used.
+
+Final validation passed: Context tests (26), Core encrypted coverage tests (19),
+Core Calendar runtime tests (37 after correcting empty history), workspace
+all-target check, Context all-target Clippy with `-D warnings`, diff check and
+migration gate (18 nodes / 57 edges / no errors). The new regressions comprise
+five Context history-reader tests and one encrypted facade session-binding test.
+
+ArchiveReader, bounded full history projection, SourceViews, removal of Calendar
+prefix guards and final Conversation/Vault ownership remain pending. This
+temporary Core facade must move with the Conversation composition; it does not
+authorize a final Vault-to-Context dependency. P09 and P00–P25 remain incomplete.

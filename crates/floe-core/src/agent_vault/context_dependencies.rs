@@ -1198,6 +1198,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn context_evidence_reader_is_bound_to_its_session() {
+        use floe_context::EvidenceReader;
+
+        let root = root();
+        let vault = Vault::create(root.path(), PersonId::new(), TestKeys::default())
+            .await
+            .unwrap();
+        let session = vault.create_session().await.unwrap();
+        let reader = crate::context_evidence::ContextEvidenceReader::new(&vault, session.id);
+        let turn_id = Uuid::new_v4();
+        assert_eq!(
+            reader.read_turn_coverage(session.id, turn_id).await,
+            Ok(DependencyCoverage::Unknown)
+        );
+        assert_eq!(
+            reader.read_turn_coverage(Uuid::new_v4(), turn_id).await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            reader.read_turn_coverage(session.id, Uuid::nil()).await,
+            Err(AgentFailure::InvalidInput)
+        );
+    }
+
+    #[tokio::test]
     async fn projection_requires_resolver_and_persists_authorized_dependency() {
         let root = root();
         let person = PersonId::new();

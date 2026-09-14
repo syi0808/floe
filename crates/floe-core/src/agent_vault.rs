@@ -255,16 +255,13 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
             return Err(AgentFailure::Conflict);
         }
         let messages = std::mem::take(&mut request.messages);
-        let mut coverage_by_turn = HashMap::new();
-        for turn_id in messages.iter().map(floe_agent::AgentMessage::turn_id) {
-            if !coverage_by_turn.contains_key(&turn_id) {
-                let coverage = self
-                    .vault
-                    .read_turn_coverage(self.session_id, turn_id)
-                    .await?;
-                coverage_by_turn.insert(turn_id, coverage);
-            }
-        }
+        let reader = crate::context_evidence::ContextEvidenceReader::new(self.vault, self.session_id);
+        let coverage_by_turn = floe_context::read_history_coverage(
+            &reader,
+            self.session_id,
+            messages.iter().map(floe_agent::AgentMessage::turn_id),
+        )
+        .await?;
         let mut retained = Vec::with_capacity(messages.len());
         let mut filtered = false;
         for message in messages {
