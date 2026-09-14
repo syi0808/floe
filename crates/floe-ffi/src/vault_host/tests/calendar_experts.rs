@@ -726,6 +726,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
+    let competing_route = route.clone();
     let conversation_id = Uuid::new_v4();
     worker
         .request(
@@ -758,6 +759,29 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .unwrap()
         .cancellation
         .clone();
+
+    let competing_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            competing_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::ConversationTurn {
+                    request: floe_protocol::AgentConversationTurnRequestDto {
+                        session_id: session.id.to_string(),
+                        expected_revision: session.revision,
+                        text: "Compete for the same session".into(),
+                        device_id: "mac-local".into(),
+                        continuation: false,
+                        remote_route: Some(competing_route),
+                    },
+                },
+            },
+        )
+        .unwrap();
+    let competing = wait(&worker, person, competing_id);
+    assert_eq!(competing.failure, Some(AgentFailure::Conflict));
+    assert!(!root_cancellation.is_cancelled());
 
     let preview_id = Uuid::new_v4();
     worker
@@ -834,6 +858,13 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     let conversation = wait(&worker, person, conversation_id);
     assert_eq!(conversation.failure, None, "conversation: {conversation:?}");
     assert!(!root_cancellation.is_cancelled());
+    worker
+        .request(
+            person,
+            competing_id,
+            AgentVaultOperationDto::Release {},
+        )
+        .unwrap();
     worker
         .request(person, preview_id, AgentVaultOperationDto::Release {})
         .unwrap();
