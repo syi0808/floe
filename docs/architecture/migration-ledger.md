@@ -52,7 +52,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P14 | Partial: verified native local identity adapter wired; model/source/control adapter split pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
 | P16 | Partial: AppHost, verified native identity and durable v2 StartTurn/query ABI wired; cancel/events, remote route and Flutter cutover pending |
-| P17 | Pending |
+| P17 | Partial: Apple Dart isolate binds correlated v2 command/query calls with bounded timeout; typed façade, close/error settlement and product cutover pending |
 | P18 | Pending |
 | P19 | Pending |
 | P20 | Pending |
@@ -3529,3 +3529,34 @@ task is to give CancelRun a principal-bound v2 result and add bounded Run event
 observation, after which P17 can switch the Apple Flutter turn path to
 command/query without Submit/Poll/Release. Remote route ownership and removal
 of the legacy bridge remain required before full P16/V1 acceptance.
+
+### P17 Apple app-wire transport checkpoint (2026-09-15)
+
+Code checkpoint `97cfd42` binds the new command and query symbols in the
+existing Apple Dart FFI loader and exposes bounded schema-2 calls on the native
+transport isolate. Each call retains its request UUID, checks the response
+schema and correlation before decoding, frees the Rust string in the existing
+single-owner worker, and closes its reply port on success, typed error,
+malformed response or timeout. The three-second caller timeout returns a
+re-query instruction and does not send Stop or otherwise cancel backend work.
+
+Implemented and wired: low-level Flutter `commandV2`/`queryV2` transport and
+actual macOS Dart-isolate-to-C-ABI dispatch. Direct validation built the current
+`libfloe_ffi.dylib`, opened a product-shaped database with a host identity, sent
+a GetCommand and StartTurn through the real isolate and FFI symbols, preserved
+the error response correlation for the locked Vault, and rejected a
+caller-supplied remote route. The focused Flutter integration test passed, the
+new binding and integration test analyze cleanly, and all three changed Dart
+files pass formatting. An analyze invocation including the whole pre-existing
+native transport still reports two older missing-brace info lints outside this
+change.
+
+Blocker/remove-by: this is a raw map transport boundary, not the typed runtime
+client or AppReadModel, and the existing product `AgentVaultGateway` still uses
+Submit/Poll/Release. Worker exit and explicit host close do not yet settle a
+shared request map because that P17 client lifecycle has not been introduced.
+The successful terminal path also remains unverified through an actual Apple
+Keychain-backed Vault/device model. The next executable P16/P17 task is the
+principal-bound v2 CancelRun result plus a typed Dart command/query façade that
+retains CommandId across timeout and restores Run/message state. P17 and V1
+remain partial.
