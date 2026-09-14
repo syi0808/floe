@@ -15,7 +15,11 @@ import (
 
 func (console *Console) serveAuthority(writer http.ResponseWriter, request *http.Request, scope clientScope) {
 	principal := authorization.Principal{ClientID: scope.ClientID, PersonID: scope.PersonID, DeviceID: scope.DeviceID, Authenticated: true}
-	authorityTransport := transporthttp.AuthorityHandler{Service: console.authorityEngine(), ProducerMetadata: console.producerMetadata}
+	engine := console.authorityEngine()
+	authorityTransport := transporthttp.AuthorityHandler{ProducerMetadata: console.producerMetadata}
+	if engine != nil {
+		authorityTransport.Service = engine
+	}
 	if console.producer != nil {
 		authorityTransport.Sign = console.producer.signChallenge
 	}
@@ -26,6 +30,11 @@ func (console *Console) serveAuthority(writer http.ResponseWriter, request *http
 		console.serveCalendarSourcePreview(writer, request, scope)
 		return
 	}
+	if engine == nil {
+		failure(writer, http.StatusServiceUnavailable, "authority_unavailable")
+		return
+	}
+	failure(writer, http.StatusNotFound, "not_found")
 }
 
 func (console *Console) serveCalendarSourcePreview(writer http.ResponseWriter, request *http.Request, scope clientScope) {
@@ -101,7 +110,10 @@ func (console *Console) serveCalendarSourcePreview(writer http.ResponseWriter, r
 }
 
 func (console *Console) manageAuthority(writer http.ResponseWriter, request *http.Request) {
-	authorityTransport := transporthttp.AuthorityHandler{Service: console.authorityEngine(), ProducerMetadata: console.producerMetadata}
+	authorityTransport := transporthttp.AuthorityHandler{ProducerMetadata: console.producerMetadata}
+	if engine := console.authorityEngine(); engine != nil {
+		authorityTransport.Service = engine
+	}
 	if console.producer != nil {
 		authorityTransport.Sign = console.producer.signChallenge
 	}

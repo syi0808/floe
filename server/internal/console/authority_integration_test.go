@@ -123,6 +123,26 @@ func TestAuthorityEnrollmentHTTPFlowAndMethodGuards(t *testing.T) {
 	}
 }
 
+func TestAuthorityTransportPreservesUnavailableAndFallbackResponses(t *testing.T) {
+	fixture := setup(t)
+	_, token := fixture.pair()
+
+	unknown := fixture.call(http.MethodGet, "/v1/authority/enrollment-unknown", nil, token)
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown authority route status = %d, want %d", unknown.Code, http.StatusNotFound)
+	}
+
+	fixture.console.latchTrustUnavailable()
+	unavailable := fixture.call(http.MethodPost, "/v1/authority/enrollment/begin", nil, token)
+	if unavailable.Code != http.StatusServiceUnavailable || !strings.Contains(unavailable.Body.String(), `"authority_unavailable"`) {
+		t.Fatalf("unavailable enrollment = %d %s", unavailable.Code, unavailable.Body.String())
+	}
+	adminUnavailable := fixture.call(http.MethodGet, "/manage/api/authority/enrollments", nil, "")
+	if adminUnavailable.Code != http.StatusServiceUnavailable || !strings.Contains(adminUnavailable.Body.String(), `"authority_unavailable"`) {
+		t.Fatalf("unavailable admin authority = %d %s", adminUnavailable.Code, adminUnavailable.Body.String())
+	}
+}
+
 func TestAuthorityTrustWriteFailureTombstoneAndCorruptionIsolation(t *testing.T) {
 	fixture := setup(t)
 	clientID, token := fixture.pair()
