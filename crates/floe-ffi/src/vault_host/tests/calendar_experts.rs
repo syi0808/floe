@@ -333,6 +333,7 @@ fn answer_server(
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         },

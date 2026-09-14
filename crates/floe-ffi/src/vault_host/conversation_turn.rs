@@ -1816,6 +1816,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         }))
@@ -2111,6 +2112,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         }))
@@ -2231,6 +2233,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         }))
@@ -2366,6 +2369,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         }))
@@ -2490,6 +2494,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: test_calendar_connections(),
             pairing: None,
         };
@@ -2676,6 +2681,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: test_calendar_connections(),
             pairing: None,
         };
@@ -2901,6 +2907,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         };
@@ -3176,6 +3183,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: test_calendar_connections(),
             pairing: None,
         };
@@ -3242,6 +3250,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: test_calendar_connections(),
             pairing: None,
         };

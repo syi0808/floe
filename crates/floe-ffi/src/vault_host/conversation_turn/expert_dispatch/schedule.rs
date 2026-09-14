@@ -1724,6 +1724,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![floe_protocol::AgentRemoteCalendarConnectionDto {
                 connector_id: connector_id.into(),
                 connection_id: connection.connection_id.clone(),
@@ -1868,6 +1869,7 @@ mod tests {
                 purpose: "everyday_assistance".into(),
                 external: false,
                 allow_external: false,
+                recipient: None,
                 calendar_connections: vec![],
                 pairing: Some(floe_protocol::AgentRemotePairingDto {
                     client_id: "fixture-client".into(),

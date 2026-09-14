@@ -3199,6 +3199,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: None,
         };
@@ -3236,6 +3237,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: Some(AgentRemotePairingDto {
                 client_id: "saved-client".into(),
@@ -3304,6 +3306,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            recipient: None,
             calendar_connections: vec![],
             pairing: Some(AgentRemotePairingDto {
                 client_id: "client-1".into(),

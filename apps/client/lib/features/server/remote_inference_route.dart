@@ -41,6 +41,7 @@ Future<Map<String, Object?>?> resolveRemoteInferenceRoute(
       'purpose': InferencePurpose.everydayAssistance.wireName,
       'external': route.requiresExternalConsent,
       'allow_external': consentCoversRoute,
+      'recipient': route.recipient,
       'pairing': {
         'client_id': connection.clientId,
         'person_id': connection.personId,

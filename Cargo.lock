@@ -953,6 +953,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-inference"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "floe-infra"
 version = "0.1.0"
 dependencies = [
@@ -963,6 +972,7 @@ dependencies = [
  "floe-core",
  "floe-domain",
  "floe-execution",
+ "floe-inference",
  "floe-protocol",
  "reqwest",
  "serde",

@@ -15,6 +15,7 @@ void main() {
       addTearDown(() => server.close(force: true));
       final requests = <String>[];
       var catalogStatus = 403;
+      var configuredRecipient = 'approved.example';
       server.listen((request) async {
         requests.add('${request.method} ${request.uri.path}');
         request.response.headers.contentType = ContentType.json;
@@ -28,7 +29,7 @@ void main() {
                     'available': true,
                     'requires_external_consent': true,
                     'placement': 'external',
-                    'recipient': 'approved.example',
+                    'recipient': configuredRecipient,
                   },
               },
             }),
@@ -61,13 +62,22 @@ void main() {
           expect(route!['base_url'], connection.address);
           expect(route['bearer_token'], connection.token);
           expect(route['external'], isTrue);
+          expect(route['recipient'], 'approved.example');
           expect(route['allow_external'], recipient == 'approved.example');
           expect(route['calendar_connections'], isEmpty);
           expect(credentials.value, saved);
         }
       }
+      await client.save(
+        connection.withExternalConsent(true, recipients: ['approved.example']),
+      );
+      configuredRecipient = 'replacement.example';
+      final changedRoute = await resolveRemoteInferenceRoute(client);
+      expect(changedRoute, isNotNull);
+      expect(changedRoute!['recipient'], 'replacement.example');
+      expect(changedRoute['allow_external'], isFalse);
       expect(requests, [
-        for (var attempt = 0; attempt < 6; attempt++) ...[
+        for (var attempt = 0; attempt < 7; attempt++) ...[
           'GET /v1/inference-purposes',
           'GET /v1/connectors',
         ],

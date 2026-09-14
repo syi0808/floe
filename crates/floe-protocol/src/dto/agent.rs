@@ -570,6 +570,8 @@ pub struct AgentRemoteRouteDto {
     pub purpose: String,
     pub external: bool,
     pub allow_external: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<String>,
     pub calendar_connections: Vec<AgentRemoteCalendarConnectionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing: Option<AgentRemotePairingDto>,
@@ -600,6 +602,7 @@ impl std::fmt::Debug for AgentRemoteRouteDto {
             .field("purpose", &self.purpose)
             .field("external", &self.external)
             .field("allow_external", &self.allow_external)
+            .field("recipient", &self.recipient)
             .field("calendar_connections", &self.calendar_connections)
             .field("pairing", &self.pairing)
             .finish()

@@ -1237,6 +1237,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: true,
             allow_external: false,
+            recipient: Some("fixture.example".into()),
             calendar_connections: vec![],
             pairing: None,
         }

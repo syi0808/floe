@@ -8,6 +8,10 @@ use floe_agent::{
     ModelStep, SessionProtection,
 };
 use floe_execution::limits::{CallLimiter, CallLimits};
+use floe_inference::{
+    DataRecipient, ExecutionLocation, InferenceRouter, ModelCapabilities, ModelConsumer,
+    ModelProfile, ModelPurpose, RecipientConstraint, RouteRequest,
+};
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
@@ -25,7 +29,11 @@ struct ModelRouteConfig {
     purpose: String,
     external: bool,
     allow_external: bool,
+    recipient: Option<String>,
 }
+
+const LEGACY_INFERENCE_CONSUMER: &str = "legacy.inference";
+const MODEL_GENERATION_CAPABILITY: &str = "agent_steps";
 
 fn model_calls() -> &'static CallLimiter {
     static LIMIT: OnceLock<CallLimiter> = OnceLock::new();
@@ -58,6 +66,7 @@ impl ModelRouteConfig {
                 .bytes()
                 .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
             || route.purpose != "everyday_assistance"
+            || (!route.external && route.recipient.is_some())
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -67,7 +76,63 @@ impl ModelRouteConfig {
             purpose: route.purpose.clone(),
             external: route.external,
             allow_external: route.allow_external,
+            recipient: route.recipient.clone(),
         })
+    }
+
+    fn admit(&self) -> Result<(), AgentFailure> {
+        let purpose = ModelPurpose::new(self.purpose.clone()).ok_or(AgentFailure::InvalidInput)?;
+        let consumer =
+            ModelConsumer::new(LEGACY_INFERENCE_CONSUMER).ok_or(AgentFailure::InvalidInput)?;
+        let data_recipient = if self.external {
+            DataRecipient::external(
+                self.recipient
+                    .as_deref()
+                    .ok_or(AgentFailure::InvalidInput)?,
+            )
+            .ok_or(AgentFailure::InvalidInput)?
+        } else {
+            DataRecipient::Device
+        };
+        let profile = ModelProfile {
+            id: "configured-route".into(),
+            purpose: purpose.clone(),
+            consumer: consumer.clone(),
+            execution_location: if self.external {
+                ExecutionLocation::Remote
+            } else {
+                ExecutionLocation::Gateway
+            },
+            data_recipient,
+            capabilities: ModelCapabilities(vec![MODEL_GENERATION_CAPABILITY.into()]),
+            available: true,
+            external_transfer_consent: self.allow_external,
+        };
+        let recipient = if self.external {
+            RecipientConstraint::External {
+                recipient: self.recipient.clone().ok_or(AgentFailure::InvalidInput)?,
+                consent: self.allow_external,
+            }
+        } else {
+            RecipientConstraint::DeviceOnly
+        };
+        let request = RouteRequest {
+            purpose,
+            requested_capabilities: ModelCapabilities(vec![MODEL_GENERATION_CAPABILITY.into()]),
+            consumer,
+            recipient,
+            preferred_profile_id: Some("configured-route".into()),
+        };
+        InferenceRouter::new([profile])
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .plan(&request)
+            .map(|_| ())
+            .map_err(|error| match error {
+                floe_inference::RoutePlanError::NotConfigured => AgentFailure::ModelUnavailable,
+                floe_inference::RoutePlanError::ConsentRequired => AgentFailure::ConsentRequired,
+                floe_inference::RoutePlanError::Unavailable => AgentFailure::ServerModelUnavailable,
+                floe_inference::RoutePlanError::Denied => AgentFailure::PolicyDenied,
+            })
     }
 }
 
@@ -396,12 +461,14 @@ impl ModelRunner for ServerModelRunner {
             return Err(AgentFailure::DeadlineExceeded);
         }
         let mut input = model_input(&request)?;
+        self.route.admit()?;
         restore_replay(&request.replay, &self.route, &mut input)?;
         let body = json!({
             "schema_version": 1,
             "purpose": self.route.purpose,
             "data_classes": request.policy.data_classes,
             "allow_external": self.route.allow_external,
+            "expected_recipient": self.route.recipient,
             "instructions": request.prompt.render(),
             "input": input
         });
@@ -413,6 +480,7 @@ impl ModelRunner for ServerModelRunner {
             .model_calls
             .acquire(body.len(), request.deadline, &request.cancellation)
             .await?;
+        self.route.admit()?;
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
@@ -657,6 +725,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: true,
             allow_external: false,
+            recipient: Some("fixture.example".into()),
             calendar_connections: vec![],
             pairing: None,
         }
@@ -726,6 +795,7 @@ mod tests {
                     .unwrap();
             assert_eq!(body["purpose"], "everyday_assistance");
             assert_eq!(body["allow_external"], true);
+            assert_eq!(body["expected_recipient"], "fixture.example");
             assert!(!body.to_string().contains("unavailable.source"));
             let response = json!({
                 "schema_version": 1,
@@ -775,6 +845,24 @@ mod tests {
             deadline: tokio::time::Instant::now() + Duration::from_secs(5),
             cancellation: floe_agent::Cancellation::new(),
         };
+        let mut denied = config.clone();
+        denied.allow_external = false;
+        assert!(matches!(
+            ServerModelRunner::new_model_only(denied)
+                .unwrap()
+                .generate(request.clone())
+                .await,
+            Err(AgentFailure::ConsentRequired)
+        ));
+        let mut missing_recipient = config.clone();
+        missing_recipient.recipient = None;
+        assert!(matches!(
+            ServerModelRunner::new_model_only(missing_recipient)
+                .unwrap()
+                .generate(request.clone())
+                .await,
+            Err(AgentFailure::InvalidInput)
+        ));
         let response = ServerModelRunner::new_model_only(config)
             .unwrap()
             .generate(request)
