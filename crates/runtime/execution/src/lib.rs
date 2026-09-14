@@ -5,6 +5,8 @@
 
 pub mod budget;
 mod cancellation;
+mod scope;
 pub mod tasks;
 
 pub use cancellation::{CancelReason, Cancellation};
+pub use scope::ExecutionScope;
