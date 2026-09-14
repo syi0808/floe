@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../features/day_canvas/infrastructure/floe_native_bindings.dart';
 
 const nativeProtocolVersion = 1;
+const appWireProtocolVersion = 2;
 
 final class NativeTransportException implements Exception {
   const NativeTransportException(
@@ -236,6 +237,67 @@ final class NativeTransport implements LocalContextTransport {
       );
     }
     return _unwrapEnvelope(result['response']! as String);
+  }
+
+  Future<Map<String, dynamic>> commandV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _appWireRequest('command_v2', request, timeout);
+
+  Future<Map<String, dynamic>> queryV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _appWireRequest('query_v2', request, timeout);
+
+  Future<Map<String, dynamic>> _appWireRequest(
+    String operation,
+    Map<String, dynamic> request,
+    Duration timeout,
+  ) async {
+    if (_closed) throw StateError('NativeTransport is already closed.');
+    final requestId = request['request_id'];
+    if (request['schema_version'] != appWireProtocolVersion ||
+        requestId is! String ||
+        requestId.isEmpty) {
+      throw const FormatException('Invalid app-wire request envelope.');
+    }
+    final reply = ReceivePort();
+    _commands.send({
+      'operation': operation,
+      'request': jsonEncode(request),
+      'reply': reply.sendPort,
+    });
+    try {
+      final result = _asMap(
+        await reply.first.timeout(
+          timeout,
+          onTimeout: () => throw const NativeTransportException(
+            'timeout',
+            'The app request timed out; query the command or run state.',
+          ),
+        ),
+      );
+      if (result['status'] != 'ok') {
+        throw NativeTransportException(
+          'ffi',
+          result['message']?.toString() ?? 'The Rust core request failed.',
+        );
+      }
+      final envelope = _asMap(jsonDecode(result['response']! as String));
+      if (envelope['schema_version'] != appWireProtocolVersion ||
+          envelope['request_id'] != requestId) {
+        throw const FormatException('Mismatched app-wire response envelope.');
+      }
+      if (envelope['status'] == 'error') {
+        throw NativeTransportException.fromEnvelope(envelope);
+      }
+      if (envelope['status'] != 'ok' || envelope['result'] is! Map) {
+        throw const FormatException('Invalid app-wire response envelope.');
+      }
+      return _asMap(envelope['result']);
+    } finally {
+      reply.close();
+    }
   }
 
   @override
@@ -684,6 +746,8 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
           'agent_fixture' => bindings.agentFixture(handle, input),
           'agent_fixture_run' => bindings.agentFixtureRun(handle, input),
           'agent_vault' => bindings.agentVault(handle, input),
+          'command_v2' => bindings.commandV2(handle, input),
+          'query_v2' => bindings.queryV2(handle, input),
           'local_context' => bindings.localContext(handle, input),
           _ => throw StateError('Unknown core operation: $operation'),
         };

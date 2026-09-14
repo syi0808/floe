@@ -64,6 +64,10 @@ final class FloeNativeBindings {
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_fixture');
   late final FloeCallDart agentVault = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_vault');
+  late final FloeCallDart commandV2 = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_command_v2');
+  late final FloeCallDart queryV2 = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_query_v2');
   late final FloeCallDart localContext = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_local_context');
   late final FloeCallDart agentFixtureRun = _library
