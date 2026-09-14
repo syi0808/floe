@@ -3673,3 +3673,42 @@ still absent, so the visible Flutter controller remains on Submit/Poll/Release.
 The next executable P16/P17 task is the runtime-scoped event buffer and typed
 Dart event reader backed by durable GetRun resynchronization, followed by the
 conversation controller cutover. P16, P17 and V1 remain partial.
+
+### P16/P17 bounded runtime event checkpoint (2026-09-15)
+
+Code checkpoint `7c3ea46` exports `floe_core_events_v2` and connects it through
+the Apple Dart binding, native transport and typed FloeClient. Event polling is
+a short in-memory read with a maximum request batch of 256 and a retained ring
+of 128 small projections; it never waits for model work and never sends Stop.
+The buffer contains no prompt or generated reply text. StartTurn admission
+publishes a CommandUpdated receipt only after durable admission and cancellation
+registration, while terminal completion publishes a RunUpdated projection that
+points to the durable message query rather than embedding output.
+
+An initial subscription returns ResyncRequired with the current runtime epoch
+and a snapshot cursor. Subsequent reads must supply that epoch/cursor pair.
+Runtime restart, future cursor or retention gap returns a new resync boundary;
+bounded pages advance only through the last delivered cursor. Event envelopes
+carry their own cursor, aggregate revision and epoch, with typed command or Run
+payloads. The Dart decoder rejects epoch changes, non-contiguous cursors,
+revision mismatches, unknown event kinds and malformed nested snapshots. The
+intended recovery is durable GetCommand/GetRun/GetMessage, not cancellation or
+invented Run failure.
+
+Direct validation exercised initial resync and empty follow-up through the
+actual macOS Dart isolate and dylib, plus production StartTurn admission and
+terminal Cancelled events around the model-server barrier. Retention gap,
+runtime-epoch mismatch, future cursor and bounded pagination regressions passed.
+All 101 FFI library tests, 13 C-ABI tests, protocol golden tests and five typed
+client tests passed. Changed Dart code analyzes and formats cleanly; workspace
+all-target check, diff check and the migration boundary gate passed (23 nodes /
+72 edges / no errors).
+
+Blocker/remove-by: the buffer is still hosted by the temporary FFI
+LegacyComposition rather than a final AppHost observer service, and terminal
+publication currently performs a best-effort durable receipt read after owner
+completion. The visible conversation controller and a shared revision-aware
+AppReadModel are not yet consuming events, so Submit/Poll/Release remains the
+product path. The next executable P18/P19 task is the single Flutter read-model
+reducer with snapshot/event bootstrap, stale-revision suppression and explicit
+resync, followed by controller cutover. P16, P17 and V1 remain partial.
