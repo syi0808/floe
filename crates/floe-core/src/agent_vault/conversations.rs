@@ -7,10 +7,11 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
+const MAX_COMMAND_ROWS: i64 = 4_096;
 const MAX_JOURNAL_ENTRIES: u64 = 512;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -202,6 +203,26 @@ pub enum VaultConversationAdmission {
         session: AgentSession,
     },
     Existing(VaultConversationRunRecord),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultConversationCancelRequest {
+    pub command_id: CommandId,
+    pub run_id: RunId,
+    pub person_id: PersonId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultConversationCancelReceipt {
+    pub command_id: CommandId,
+    pub run_id: RunId,
+    pub person_id: PersonId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VaultConversationCancelAdmission {
+    Created(VaultConversationCancelReceipt),
+    Existing(VaultConversationCancelReceipt),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -443,6 +464,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     Err(AgentFailure::Conflict)
                 };
             }
+            let mut conflicting_command = transaction
+                .query(
+                    "SELECT 1 FROM agent_conversation_commands WHERE command_id = ?",
+                    [request.command_id.as_uuid().to_string()],
+                )
+                .await
+                .map_err(storage)?;
+            if conflicting_command.next().await.map_err(storage)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
             let executor_generation = self
                 .active_conversation_executor_generation(&transaction)
                 .await?;
@@ -579,6 +610,107 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(storage)?;
             self.check_access()?;
             Ok(VaultConversationAdmission::Created { record, session })
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
+    pub async fn admit_conversation_cancel(
+        &self,
+        request: VaultConversationCancelRequest,
+    ) -> Result<VaultConversationCancelAdmission, AgentFailure> {
+        if !request.command_id.is_valid() || !request.run_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if request.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            initialize(&transaction).await?;
+            let mut existing = transaction
+                .query(
+                    "SELECT person_id, target_id, kind FROM agent_conversation_commands WHERE command_id = ?",
+                    [request.command_id.as_uuid().to_string()],
+                )
+                .await
+                .map_err(storage)?;
+            if let Some(row) = existing.next().await.map_err(storage)? {
+                if row.get::<String>(2).map_err(storage)? != "cancel_run" {
+                    return Err(AgentFailure::Conflict);
+                }
+                let receipt = VaultConversationCancelReceipt {
+                    command_id: request.command_id,
+                    person_id: PersonId(
+                        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
+                            .map_err(|_| AgentFailure::VaultUnavailable)?,
+                    ),
+                    run_id: RunId::from_uuid(
+                        Uuid::parse_str(&row.get::<String>(1).map_err(storage)?)
+                            .map_err(|_| AgentFailure::VaultUnavailable)?,
+                    )
+                    .ok_or(AgentFailure::VaultUnavailable)?,
+                };
+                return if receipt.person_id == request.person_id
+                    && receipt.run_id == request.run_id
+                {
+                    Ok(VaultConversationCancelAdmission::Existing(receipt))
+                } else {
+                    Err(AgentFailure::Conflict)
+                };
+            }
+            if self
+                .conversation_run_by_command_on(&transaction, request.command_id)
+                .await?
+                .is_some()
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let run = self
+                .conversation_run_on(&transaction, request.run_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if run.person_id != request.person_id {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let mut count = transaction
+                .query("SELECT count(*) FROM agent_conversation_commands", ())
+                .await
+                .map_err(storage)?;
+            let rows = count
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .get::<i64>(0)
+                .map_err(storage)?;
+            if rows >= MAX_COMMAND_ROWS {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            transaction
+                .execute(
+                    "INSERT INTO agent_conversation_commands (command_id, person_id, kind, target_id) VALUES (?, ?, 'cancel_run', ?)",
+                    (
+                        request.command_id.as_uuid().to_string(),
+                        request.person_id.to_string(),
+                        request.run_id.as_uuid().to_string(),
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            self.check_access()?;
+            Ok(VaultConversationCancelAdmission::Created(
+                VaultConversationCancelReceipt {
+                    command_id: request.command_id,
+                    run_id: request.run_id,
+                    person_id: request.person_id,
+                },
+            ))
         }
         .await;
         self.finish_registry_transaction_checked(transaction, result)
@@ -964,7 +1096,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     let mut tables = transaction
         .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal')",
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal', 'agent_conversation_commands')",
             (),
         )
         .await
@@ -977,7 +1109,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 5))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 6))",
                 (),
             )
             .await
@@ -1005,6 +1137,13 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
+                "CREATE TABLE agent_conversation_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('cancel_run')), target_id TEXT NOT NULL, FOREIGN KEY (target_id) REFERENCES agent_conversation_runs(run_id))",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
                 "CREATE INDEX agent_conversation_active_session ON agent_conversation_runs (session_id, state, run_id)",
                 (),
             )
@@ -1012,7 +1151,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 5)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 6)",
                 (),
             )
             .await
@@ -1028,6 +1167,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     }
     if found
         != [
+            "agent_conversation_commands".to_owned(),
             "agent_conversation_executor".to_owned(),
             "agent_conversation_journal".to_owned(),
             "agent_conversation_runs".to_owned(),
@@ -1061,6 +1201,13 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     transaction
         .query(
             "SELECT run_id, revision, kind, payload FROM agent_conversation_journal LIMIT 0",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    transaction
+        .query(
+            "SELECT command_id, person_id, kind, target_id FROM agent_conversation_commands LIMIT 0",
             (),
         )
         .await

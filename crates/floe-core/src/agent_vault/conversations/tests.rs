@@ -55,6 +55,72 @@ fn request(
 }
 
 #[tokio::test]
+async fn cancel_command_receipt_replays_after_reopen_and_conflicts_on_changed_target() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    let start_command_id = CommandId::new();
+    vault
+        .admit_conversation_turn(request(person_id, session.id, run_id, start_command_id))
+        .await
+        .unwrap();
+    let cancel = VaultConversationCancelRequest {
+        command_id: CommandId::new(),
+        run_id,
+        person_id,
+    };
+    let receipt = VaultConversationCancelReceipt {
+        command_id: cancel.command_id,
+        run_id,
+        person_id,
+    };
+    assert_eq!(
+        vault
+            .admit_conversation_cancel(cancel.clone())
+            .await
+            .unwrap(),
+        VaultConversationCancelAdmission::Created(receipt.clone())
+    );
+    assert_eq!(
+        vault
+            .admit_conversation_cancel(VaultConversationCancelRequest {
+                command_id: start_command_id,
+                ..cancel.clone()
+            })
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    drop(vault);
+
+    let vault = EncryptedAgentVault::open(root.path(), person_id, keys)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .admit_conversation_cancel(cancel.clone())
+            .await
+            .unwrap(),
+        VaultConversationCancelAdmission::Existing(receipt)
+    );
+    assert_eq!(
+        vault
+            .admit_conversation_cancel(VaultConversationCancelRequest {
+                run_id: RunId::new(),
+                ..cancel
+            })
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+}
+
+#[tokio::test]
 async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();

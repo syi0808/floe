@@ -4,9 +4,9 @@ use floe_agent_contract::{BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, CommandId, RunId};
 
 use crate::{
-    AdmittedTurn, CompactionReceipt, CompactionRequest, JournalEntry, RecoveryReceipt,
-    RecoveryRequest, RunReceipt, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest,
-    TurnAdmission, TurnAdmissionRequest,
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CompactionReceipt, CompactionRequest,
+    JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, SessionReadRequest,
+    SessionReceipt, SessionRequest, TurnAdmission, TurnAdmissionRequest,
 };
 
 pub trait ConversationRepository: Send + Sync {
@@ -19,6 +19,11 @@ pub trait ConversationRepository: Send + Sync {
         &'a self,
         request: TurnAdmissionRequest,
     ) -> BoxFuture<'a, Result<TurnAdmission, AgentFailure>>;
+
+    fn admit_cancel<'a>(
+        &'a self,
+        request: CancelRunCommand,
+    ) -> BoxFuture<'a, Result<CancelRunAdmission, AgentFailure>>;
 
     fn journal(&self, run_id: RunId) -> Result<Arc<dyn ExecutionJournal>, AgentFailure>;
 

@@ -7,13 +7,15 @@ use floe_agent_contract::{
     ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId, TaskReceipt, TaskState,
 };
 use floe_conversation::{
-    AdmittedTurn, CompactionReceipt, CompactionRequest, ConversationRepository, JournalEntry,
-    RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, SessionArchiveRepository,
-    SessionReadRequest, SessionReceipt, SessionRepository, SessionRequest, TurnAdmission,
-    TurnAdmissionRequest, TurnMode,
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
+    CompactionRequest, ConversationRepository, JournalEntry, RecoveryReceipt, RecoveryRequest,
+    RunReceipt, RunState, RunTerminal, SessionArchiveRepository, SessionReadRequest,
+    SessionReceipt, SessionRepository, SessionRequest, TurnAdmission, TurnAdmissionRequest,
+    TurnMode,
 };
 use floe_core::{
     EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
+    VaultConversationCancelAdmission, VaultConversationCancelRequest,
     VaultConversationContinuationRef, VaultConversationRunRecord, VaultConversationRunState,
     VaultConversationTerminal, VaultKeyProvider,
 };
@@ -241,6 +243,39 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 .await?
                 .map(run_receipt)
                 .transpose()
+        })
+    }
+
+    fn admit_cancel<'a>(
+        &'a self,
+        request: CancelRunCommand,
+    ) -> BoxFuture<'a, Result<CancelRunAdmission, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            if request.principal != self.vault.person_id().to_string() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let admission = self
+                .vault
+                .admit_conversation_cancel(VaultConversationCancelRequest {
+                    command_id: request.command_id,
+                    run_id: request.run_id,
+                    person_id: self.vault.person_id(),
+                })
+                .await?;
+            let convert = |receipt: floe_core::VaultConversationCancelReceipt| CancelRunReceipt {
+                command_id: receipt.command_id,
+                run_id: receipt.run_id,
+                principal: receipt.person_id.to_string(),
+            };
+            Ok(match admission {
+                VaultConversationCancelAdmission::Created(receipt) => {
+                    CancelRunAdmission::Created(convert(receipt))
+                }
+                VaultConversationCancelAdmission::Existing(receipt) => {
+                    CancelRunAdmission::Existing(convert(receipt))
+                }
+            })
         })
     }
 

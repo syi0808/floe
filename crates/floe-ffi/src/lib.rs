@@ -98,9 +98,15 @@ impl floe_app::ConversationCommands for LegacyComposition {
         request.validate()?;
         let run_id = floe_kernel::RunId::from_uuid(request.run_id)
             .ok_or(floe_app::ServiceError::InvalidInput)?;
+        let command_id = floe_kernel::CommandId::from_uuid(request.command_id)
+            .ok_or(floe_app::ServiceError::InvalidInput)?;
         match self
             .agent_vault
-            .cancel_conversation(floe_kernel::PersonId(caller.person_id()), run_id)
+            .cancel_conversation(
+                floe_kernel::PersonId(caller.person_id()),
+                command_id,
+                run_id,
+            )
             .map_err(service_failure)?
         {
             floe_conversation::CancelRunStatus::Cancelled

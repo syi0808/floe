@@ -8,7 +8,8 @@ mod session;
 
 pub use archive::{compact_session, read_archive};
 pub use cancellation::{
-    CancelCommandRequest, CancelRunRequest, CancelRunStatus, RunCancellationRegistry,
+    CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
+    CancelRunStatus, RunCancellationRegistry,
 };
 pub use coordinator::{ConversationService, continuation, recover_session};
 pub use query::{get_command, get_run};

@@ -219,9 +219,11 @@ impl VaultBridge {
     pub(crate) fn cancel_conversation(
         &self,
         person: PersonId,
+        command_id: floe_kernel::CommandId,
         run_id: floe_kernel::RunId,
     ) -> Result<floe_conversation::CancelRunStatus, AgentFailure> {
-        self.worker()?.cancel_conversation(person, run_id)
+        self.worker()?
+            .cancel_conversation(person, command_id, run_id)
     }
 
     fn worker(&self) -> Result<RefMut<'_, Worker>, AgentFailure> {
@@ -433,6 +435,7 @@ struct ConversationQueryJob {
 
 struct ConversationCancelJob {
     person: PersonId,
+    command_id: floe_kernel::CommandId,
     run_id: floe_kernel::RunId,
     reply: mpsc::SyncSender<Result<floe_conversation::CancelRunStatus, AgentFailure>>,
 }
@@ -632,6 +635,15 @@ impl Worker {
                                             if *person == cancel.person =>
                                         {
                                             runtime.block_on(async {
+                                                floe_conversation::ConversationRepository::admit_cancel(
+                                                    open_vault.conversation_repository.as_ref(),
+                                                    floe_conversation::CancelRunCommand {
+                                                        command_id: cancel.command_id,
+                                                        run_id: cancel.run_id,
+                                                        principal: cancel.person.to_string(),
+                                                    },
+                                                )
+                                                .await?;
                                                 let request = floe_conversation::CancelRunRequest {
                                                     run_id: cancel.run_id,
                                                     principal: cancel.person.to_string(),
@@ -649,7 +661,14 @@ impl Worker {
                                                         if receipt.state
                                                             == floe_conversation::RunState::Working =>
                                                     {
-                                                        worker_run_cancellations.cancel_run(request)
+                                                        match worker_run_cancellations
+                                                            .cancel_run(request)?
+                                                        {
+                                                            floe_conversation::CancelRunStatus::Unknown => {
+                                                                Err(AgentFailure::Interrupted)
+                                                            }
+                                                            status => Ok(status),
+                                                        }
                                                     }
                                                     Some(_) => Ok(
                                                         floe_conversation::CancelRunStatus::Inactive,
@@ -1076,6 +1095,7 @@ impl Worker {
     fn cancel_conversation(
         &self,
         person: PersonId,
+        command_id: floe_kernel::CommandId,
         run_id: floe_kernel::RunId,
     ) -> Result<floe_conversation::CancelRunStatus, AgentFailure> {
         let (reply, response) = mpsc::sync_channel(1);
@@ -1084,6 +1104,7 @@ impl Worker {
             .sender
             .try_send(WorkerMessage::ConversationCancel(ConversationCancelJob {
                 person,
+                command_id,
                 run_id,
                 reply,
             }))

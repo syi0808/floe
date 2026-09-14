@@ -40,8 +40,10 @@ pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
-    VaultConversationContinuationRef, VaultConversationJournalEntry, VaultConversationRunRecord,
-    VaultConversationRunState, VaultConversationTerminal,
+    VaultConversationCancelAdmission, VaultConversationCancelReceipt,
+    VaultConversationCancelRequest, VaultConversationContinuationRef,
+    VaultConversationJournalEntry, VaultConversationRunRecord, VaultConversationRunState,
+    VaultConversationTerminal,
 };
 pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;

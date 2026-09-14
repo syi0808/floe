@@ -949,11 +949,16 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     }
 
     assert_eq!(
-        worker.cancel_conversation(PersonId::new(), admitted.run_id),
+        worker.cancel_conversation(
+            PersonId::new(),
+            floe_kernel::CommandId::new(),
+            admitted.run_id,
+        ),
         Err(AgentFailure::NotFound)
     );
+    let cancel_command_id = floe_kernel::CommandId::new();
     assert_eq!(
-        worker.cancel_conversation(person, admitted.run_id),
+        worker.cancel_conversation(person, cancel_command_id, admitted.run_id),
         Ok(floe_conversation::CancelRunStatus::Cancelled)
     );
     let cancelled = wait(&worker, person, request_id);
@@ -972,8 +977,12 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         .unwrap();
     assert_eq!(command.state, floe_conversation::RunState::Cancelled);
     assert_eq!(
-        worker.cancel_conversation(person, admitted.run_id),
+        worker.cancel_conversation(person, cancel_command_id, admitted.run_id),
         Ok(floe_conversation::CancelRunStatus::Inactive)
+    );
+    assert_eq!(
+        worker.cancel_conversation(person, cancel_command_id, floe_kernel::RunId::new()),
+        Err(AgentFailure::Conflict)
     );
     assert_eq!(
         worker

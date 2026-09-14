@@ -16,10 +16,10 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
-    AdmittedTurn, CancelCommandRequest, CancelRunRequest, CancelRunStatus, ConversationPorts,
-    ConversationRepository, JournalEntry, ManagerConfig, RecoveryReceipt, RecoveryRequest,
-    RunCancellationRegistry, RunReceipt, RunState, RunTerminal, TurnAdmission,
-    TurnAdmissionRequest, TurnRequest,
+    AdmittedTurn, CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt,
+    CancelRunRequest, CancelRunStatus, ConversationPorts, ConversationRepository, JournalEntry,
+    ManagerConfig, RecoveryReceipt, RecoveryRequest, RunCancellationRegistry, RunReceipt, RunState,
+    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnRequest,
 };
 
 use super::ConversationService;
@@ -39,6 +39,7 @@ struct StoredRun {
 struct State {
     sessions: HashMap<Uuid, Session>,
     commands: HashMap<CommandId, RunId>,
+    cancellations: HashMap<CommandId, CancelRunReceipt>,
     runs: HashMap<RunId, StoredRun>,
 }
 
@@ -153,6 +154,43 @@ impl ConversationRepository for MemoryRepository {
                 },
             );
             Ok(TurnAdmission::Created(admitted))
+        })
+    }
+
+    fn admit_cancel<'a>(
+        &'a self,
+        request: CancelRunCommand,
+    ) -> BoxFuture<'a, Result<CancelRunAdmission, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            let mut state = self.state.lock().unwrap();
+            if state.commands.contains_key(&request.command_id) {
+                return Err(AgentFailure::Conflict);
+            }
+            if let Some(receipt) = state.cancellations.get(&request.command_id) {
+                return if receipt.run_id == request.run_id && receipt.principal == request.principal
+                {
+                    Ok(CancelRunAdmission::Existing(receipt.clone()))
+                } else {
+                    Err(AgentFailure::Conflict)
+                };
+            }
+            let run = state
+                .runs
+                .get(&request.run_id)
+                .ok_or(AgentFailure::NotFound)?;
+            if run.admitted.receipt.principal != request.principal {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let receipt = CancelRunReceipt {
+                command_id: request.command_id,
+                run_id: request.run_id,
+                principal: request.principal,
+            };
+            state
+                .cancellations
+                .insert(receipt.command_id, receipt.clone());
+            Ok(CancelRunAdmission::Created(receipt))
         })
     }
 

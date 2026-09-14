@@ -16,6 +16,37 @@ pub struct CancelRunRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelRunCommand {
+    pub command_id: CommandId,
+    pub run_id: RunId,
+    pub principal: String,
+}
+
+impl CancelRunCommand {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal)?;
+        if !self.command_id.is_valid() || !self.run_id.is_valid() {
+            Err(AgentFailure::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelRunReceipt {
+    pub command_id: CommandId,
+    pub run_id: RunId,
+    pub principal: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CancelRunAdmission {
+    Created(CancelRunReceipt),
+    Existing(CancelRunReceipt),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CancelCommandRequest {
     pub command_id: CommandId,
     pub principal: String,

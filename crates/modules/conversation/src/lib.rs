@@ -11,9 +11,10 @@ pub use api::{
     TurnRequest,
 };
 pub use application::{
-    CancelCommandRequest, CancelRunRequest, CancelRunStatus, ConversationService,
-    RunCancellationRegistry, compact_session, continuation, get_command, get_run, get_session,
-    project_continuation, read_archive, recover_session, resume_session, start_session,
+    CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
+    CancelRunStatus, ConversationService, RunCancellationRegistry, compact_session, continuation,
+    get_command, get_run, get_session, project_continuation, read_archive, recover_session,
+    resume_session, start_session,
 };
 pub use domain::{
     AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest, ContinuationRef,
