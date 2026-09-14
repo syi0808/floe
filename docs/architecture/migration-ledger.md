@@ -2523,3 +2523,38 @@ Schedule completion and Task/result provenance one atomic durable settlement;
 then FFI can register the endpoint and replace `schedule::try_run`. The adapter
 and Core DTO remain temporary until P13 moves the repository to `floe-vault`.
 P11 remains pending.
+
+### P15 atomic Schedule Task settlement checkpoint (2026-09-15)
+
+The protected direct Schedule endpoint no longer commits execution state before
+its caller has a durable Task result. It performs bounded model/source work,
+revalidates cancellation, grant and source liveness, and returns a typed
+`CalendarExpertSettlement` containing the exact staged assignment completion,
+invocation identity, canonical result and consumed dependency set. Session state
+remains untouched and the endpoint itself leaves both registry and Task storage
+unchanged.
+
+`EncryptedAgentVault::settle_calendar_expert_task_checked` is the single commit
+boundary for that prepared result. In one immediate encrypted transaction it
+validates the exact registry revision and selected assignment mutation, binds
+the admitted Working Task's invocation and Schedule identity, verifies the
+canonical Task result and complete dependency coverage, rechecks current grant
+and consumer-policy authority, advances the Task with exact revision/generation
+CAS, and commits the registry completion. A mismatch or final check failure
+rolls back both aggregates; neither can become authoritative alone.
+
+Implemented: prepared endpoint settlement and atomic Schedule registry/Task
+commit. Wired: Core direct endpoint only. Controlled validation passed all 44
+Core Calendar tests, all 31 Vault registry tests and both Vault Task tests. New
+coverage proves a forged Task result is rejected before mutation and a failure
+after both transactional writes rolls back both Task and registry. Focused Core
+Clippy, workspace all-target check, diff check and the migration gate (19 nodes /
+61 edges / no errors) also passed. No Apple UI, live EventKit account or actual
+model was exercised.
+
+Blocker/remove-by: `TaskCoordinator` still calls the repository's ordinary
+terminal CAS and has no generic trusted endpoint-settlement handoff, so FFI
+cannot yet consume this atomic path. P11/P15 must next carry a bounded opaque
+settlement token from `ExpertReport` to the Vault adapter, reject unsupported
+tokens, register Schedule in the retained Directory, and exercise T03 before
+removing `schedule::try_run`. P15 remains incomplete.
