@@ -2326,3 +2326,42 @@ Validation passed: Context tests (37), Core Calendar runtime tests (38), workspa
 all-target check, Context all-target Clippy with `-D warnings`, diff check and
 migration gate (18 nodes / 57 edges / no errors). Four focused regressions were
 added: three SourceView construction cases and one cached-read expiry case.
+
+### P09 generic lazy source boundary checkpoint (2026-09-15)
+
+Code checkpoint `b13b6f8` adds the provider-neutral `SourceReader`, typed
+`SourceKey`/request/read values and `ContextService::prepare`. Preparation is
+payload-free. A read is person, consumer, purpose, source-key, canonical query
+fingerprint and process-incarnation bound; cancellation and the monotonic request
+deadline are checked around I/O. Returned dependencies must remain canonically
+fresh and covered by the returned grant scope.
+
+The service reserves the measured bounded JSON size in the process-wide
+`SourceLeaseRegistry` and returns an immutable `SourceView<Value>`. Its effective
+deadline is the earlier of the request deadline and dependency wall expiry.
+Remote mail/work/logistics readers now implement this port without removing their
+existing grant selection, pairing, signed preview, connection revision, provider
+identity, authorization admission or post-model release revalidation. Expert
+branches retain the view across the consuming model call.
+
+The normal root no longer reads Memory or Tasks before Manager execution. Those
+optional reads are deferred to the Commitments Expert after its registered source
+bindings are checked. Existing optional-unavailable versus fatal integrity
+classification is retained. The legacy remote client constructor and builtin
+setup metadata lookup are still composed by FFI and must move with P11/P14/P16.
+
+Implemented/wired: generic remote Expert and capability source reads plus lazy
+Commitments Memory/Tasks. Direct validation on `b13b6f8` passed Context library
+tests (41), FFI library tests (79), FFI all-target check, Context all-target
+Clippy with `-D warnings`, diff check and migration gate (18 nodes / 57 edges /
+no errors). Focused regressions cover preparation without reads, cancellation and
+Person rejection, source/query/process mismatch, measured concurrent leases,
+missing admitted readers and a fresh Commitments artifact. These are controlled
+local fixtures; no Apple UI, live external account or actual model was exercised.
+
+Blocker/remove-by: `schedule::try_run` still precedes the general Manager path, so
+an active Calendar setup can enter the Calendar-specific root before Manager
+selection. T01 and the generic source cutover are not complete until P11/P15
+register Schedule behind the common Manager decision and the Calendar root is
+removed by P24. ArchiveReader, generic native source adapters and complete
+Context/Conversation ownership also remain pending P09/P12/P13.
