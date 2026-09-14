@@ -9,7 +9,8 @@ use floe_agent_contract::{
 use floe_conversation::{
     AdmittedTurn, CompactionReceipt, CompactionRequest, ConversationRepository, JournalEntry,
     RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, SessionArchiveRepository,
-    TurnAdmission, TurnAdmissionRequest, TurnMode,
+    SessionReadRequest, SessionReceipt, SessionRepository, SessionRequest, TurnAdmission,
+    TurnAdmissionRequest, TurnMode,
 };
 use floe_core::{
     EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
@@ -20,6 +21,48 @@ use uuid::Uuid;
 
 pub(super) struct VaultConversationRepository<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+}
+
+impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRepository<Keys> {
+    fn start_session<'a>(
+        &'a self,
+        request: SessionRequest,
+    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            self.verify_principal(&request.principal)?;
+            session_receipt(self.vault.create_session().await?)
+        })
+    }
+
+    fn resume_session<'a>(
+        &'a self,
+        request: SessionRequest,
+    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            self.verify_principal(&request.principal)?;
+            session_receipt(self.vault.resume_session().await?)
+        })
+    }
+
+    fn get_session<'a>(
+        &'a self,
+        request: SessionReadRequest,
+    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            self.verify_principal(&request.principal)?;
+            session_receipt(
+                floe_agent::SessionStore::load(
+                    self.vault.as_ref(),
+                    self.vault.person_id(),
+                    request.session_id,
+                )
+                .await?,
+            )
+        })
+    }
 }
 
 impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
@@ -118,6 +161,15 @@ impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
 impl<Keys> VaultConversationRepository<Keys> {
     pub(super) fn new(vault: Arc<EncryptedAgentVault<Keys>>) -> Self {
         Self { vault }
+    }
+}
+
+impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
+    fn verify_principal(&self, principal: &str) -> Result<(), AgentFailure> {
+        if principal != self.vault.person_id().to_string() {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        Ok(())
     }
 }
 
@@ -405,6 +457,23 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         continuation_executor_generation: record.continuation_executor_generation,
         continuation_level: record.continuation_level,
         execution_profile: execution_profile(record.model_placement).into(),
+    };
+    receipt.validate()?;
+    Ok(receipt)
+}
+
+fn session_receipt(session: floe_agent::AgentSession) -> Result<SessionReceipt, AgentFailure> {
+    if session.scope.is_some()
+        || session.data_classes != [floe_agent::DataClass::Personal]
+        || session.person_id.0.is_nil()
+        || session.id.is_nil()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let receipt = SessionReceipt {
+        principal: session.person_id.to_string(),
+        session_id: session.id,
+        session_revision: session.revision,
     };
     receipt.validate()?;
     Ok(receipt)

@@ -578,6 +578,26 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
 
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
     perform(&worker, person, AgentVaultActionDto::Unlock {});
+    let fetched = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Get {
+                session_id: session.id.to_string(),
+            },
+        },
+    );
+    assert_eq!(fetched.failure, None);
+    assert_eq!(fetched.session.unwrap().id, session.id);
+    let resumed = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Resume {},
+        },
+    );
+    assert_eq!(resumed.failure, None);
+    assert_eq!(resumed.session.unwrap().id, session.id);
     let (mut route, server) = answer_server(vec![floe_agent::ModelStep::Answer {
         text: "General answer without experts".into(),
     }]);

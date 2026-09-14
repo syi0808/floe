@@ -344,6 +344,74 @@ fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
 }
 
 #[tokio::test]
+async fn session_management_uses_conversation_owner_and_rejects_foreign_or_sample_reads() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    let repository = VaultConversationRepository::new(Arc::clone(&vault));
+    let started = floe_conversation::start_session(
+        &repository,
+        floe_conversation::SessionRequest {
+            principal: person_id.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(started.session_revision, 0);
+    assert_eq!(
+        floe_conversation::get_session(
+            &repository,
+            floe_conversation::SessionReadRequest {
+                principal: person_id.to_string(),
+                session_id: started.session_id,
+            },
+        )
+        .await
+        .unwrap(),
+        started
+    );
+    assert_eq!(
+        floe_conversation::resume_session(
+            &repository,
+            floe_conversation::SessionRequest {
+                principal: person_id.to_string(),
+            },
+        )
+        .await
+        .unwrap(),
+        started
+    );
+    assert_eq!(
+        floe_conversation::get_session(
+            &repository,
+            floe_conversation::SessionReadRequest {
+                principal: PersonId::new().to_string(),
+                session_id: started.session_id,
+            },
+        )
+        .await,
+        Err(AgentFailure::CapabilityDenied)
+    );
+    let sample = vault.create_sample_session().await.unwrap();
+    assert_eq!(
+        floe_conversation::get_session(
+            &repository,
+            floe_conversation::SessionReadRequest {
+                principal: person_id.to_string(),
+                session_id: sample.id,
+            },
+        )
+        .await,
+        Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[tokio::test]
 async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();

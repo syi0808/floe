@@ -5,7 +5,8 @@ use floe_kernel::{AgentFailure, CommandId, RunId};
 
 use crate::{
     AdmittedTurn, CompactionReceipt, CompactionRequest, JournalEntry, RecoveryReceipt,
-    RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
+    RecoveryRequest, RunReceipt, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest,
+    TurnAdmission, TurnAdmissionRequest,
 };
 
 pub trait ConversationRepository: Send + Sync {
@@ -59,4 +60,21 @@ pub trait SessionArchiveRepository: Send + Sync {
         &'a self,
         request: &'a floe_context::ArchiveReadRequest,
     ) -> BoxFuture<'a, Result<floe_context::ArchiveSnapshot, AgentFailure>>;
+}
+
+pub trait SessionRepository: Send + Sync {
+    fn start_session<'a>(
+        &'a self,
+        request: SessionRequest,
+    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>>;
+
+    fn resume_session<'a>(
+        &'a self,
+        request: SessionRequest,
+    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>>;
+
+    fn get_session<'a>(
+        &'a self,
+        request: SessionReadRequest,
+    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>>;
 }

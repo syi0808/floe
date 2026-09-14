@@ -1380,28 +1380,48 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         AgentVaultActionDto::ConversationSession { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            if vault.builtin_expert_overview().await?.is_none() {
-                ensure_builtin_experts(
-                    vault,
-                    core,
-                    local_context,
-                    job.person,
-                    None,
-                    job.cancellation.clone(),
-                )
-                .await?;
-            }
             let session = match operation {
-                AgentConversationSessionOperationDto::Start {} => vault.create_session().await?,
-                AgentConversationSessionOperationDto::Resume {} => vault.resume_session().await?,
-                AgentConversationSessionOperationDto::Get { session_id } => {
-                    let session = vault.load(job.person, session_uuid(session_id)?).await?;
-                    if session.scope.is_some()
-                        || session.data_classes != [floe_agent::DataClass::Personal]
-                    {
-                        return Err(AgentFailure::PolicyDenied);
+                AgentConversationSessionOperationDto::Start {} => {
+                    if vault.builtin_expert_overview().await?.is_none() {
+                        ensure_builtin_experts(
+                            vault,
+                            core,
+                            local_context,
+                            job.person,
+                            None,
+                            job.cancellation.clone(),
+                        )
+                        .await?;
                     }
-                    session
+                    let receipt = floe_conversation::start_session(
+                        vault._conversation_repository.as_ref(),
+                        floe_conversation::SessionRequest {
+                            principal: job.person.to_string(),
+                        },
+                    )
+                    .await?;
+                    conversation_session_view(vault, job.person, receipt).await?
+                }
+                AgentConversationSessionOperationDto::Resume {} => {
+                    let receipt = floe_conversation::resume_session(
+                        vault._conversation_repository.as_ref(),
+                        floe_conversation::SessionRequest {
+                            principal: job.person.to_string(),
+                        },
+                    )
+                    .await?;
+                    conversation_session_view(vault, job.person, receipt).await?
+                }
+                AgentConversationSessionOperationDto::Get { session_id } => {
+                    let receipt = floe_conversation::get_session(
+                        vault._conversation_repository.as_ref(),
+                        floe_conversation::SessionReadRequest {
+                            principal: job.person.to_string(),
+                            session_id: session_uuid(session_id)?,
+                        },
+                    )
+                    .await?;
+                    conversation_session_view(vault, job.person, receipt).await?
                 }
                 AgentConversationSessionOperationDto::Recover {
                     session_id,
@@ -2196,6 +2216,27 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             })
         }
     }
+}
+
+async fn conversation_session_view<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    person_id: PersonId,
+    receipt: floe_conversation::SessionReceipt,
+) -> Result<AgentSession, AgentFailure> {
+    receipt.validate()?;
+    if receipt.principal != person_id.to_string() {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    let session = vault.load(person_id, receipt.session_id).await?;
+    if session.id != receipt.session_id
+        || session.person_id != person_id
+        || session.revision != receipt.session_revision
+        || session.scope.is_some()
+        || session.data_classes != [floe_agent::DataClass::Personal]
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(session)
 }
 
 async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(

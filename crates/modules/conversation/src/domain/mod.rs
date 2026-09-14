@@ -6,6 +6,61 @@ use uuid::Uuid;
 
 pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionRequest {
+    pub principal: String,
+}
+
+impl SessionRequest {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionReadRequest {
+    pub principal: String,
+    pub session_id: Uuid,
+}
+
+impl SessionReadRequest {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal)?;
+        if self.session_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionReceipt {
+    pub principal: String,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+}
+
+impl SessionReceipt {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal).map_err(|_| AgentFailure::StorageUnavailable)?;
+        if self.session_id.is_nil() {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(())
+    }
+}
+
+fn validate_principal(principal: &str) -> Result<(), AgentFailure> {
+    if principal.trim() != principal
+        || principal.is_empty()
+        || principal.len() > 256
+        || principal.chars().any(char::is_control)
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunState {
     Working,

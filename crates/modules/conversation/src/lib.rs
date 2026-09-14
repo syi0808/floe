@@ -11,13 +11,14 @@ pub use api::{
     TurnRequest,
 };
 pub use application::{
-    ConversationService, compact_session, continuation, project_continuation, read_archive,
-    recover_session,
+    ConversationService, compact_session, continuation, get_session, project_continuation,
+    read_archive, recover_session, resume_session, start_session,
 };
 pub use domain::{
     AdmittedTurn, CompactionReceipt, CompactionRequest, ContinuationRef, ContinuationSnapshot,
     JournalEntry, MAX_COMPACTION_SUMMARY_BYTES, RecoveryReceipt, RecoveryRequest, RunReceipt,
-    RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode,
+    RunState, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, TurnAdmission,
+    TurnAdmissionRequest, TurnMode,
 };
 pub use floe_agent_runtime::FinalPayloadValidator;
-pub use ports::{ConversationRepository, SessionArchiveRepository};
+pub use ports::{ConversationRepository, SessionArchiveRepository, SessionRepository};
