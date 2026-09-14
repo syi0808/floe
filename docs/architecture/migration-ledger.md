@@ -1992,3 +1992,71 @@ FFI library suite (77) passed after the service/scheduling cutover. No normal ap
 rebuild, Apple review UI or iOS device validation was performed. All live learner
 fixtures use temporary encrypted storage/in-memory keys, not normal app or
 external-account data. P08 and the full P00–P25 goal remain active.
+
+## P09 Context ownership, optional acquisition and coverage folding — 2026-09-14
+
+Code checkpoint `a2ebe29` introduces the approved floe-context module with real
+production callers, not empty layers. Its assembler owns optional acquisition
+classification for Memory, Tasks and Notes. CapabilityUnavailable, CapabilityDenied
+and BudgetExceeded produce typed issues without payloads; empty successful reads
+remain distinguishable. Storage/Vault faults, policy failures, cancellation,
+staleness and invalid input are not downgraded. Source refresh replaces only its
+own prior issue. Memory acquisition moved from Knowledge into this shared path;
+Knowledge still owns the Memory reader and snapshot types.
+
+FFI general-turn Task acquisition now attaches the structured issue instead of
+silently returning an empty list for unavailable data or aborting on a source
+budget limit. The Core Calendar adapter applies the same policy to optional
+Task/Note context, retaining integrity prerequisites and clearing only replaced
+source issues/evidence. This is not yet lazy source acquisition throughout every
+expert path. In particular legacy expert-specific context builders still need
+complete availability propagation before full T11 can be claimed.
+
+The native Day adapters previously mapped every repository failure, including
+malformed stored JSON, to CapabilityUnavailable. They now preserve these as
+StorageUnavailable and reject foreign-Person/nil-ID/empty-content rows before
+filtering or budget truncation. The current Day error contract does not reliably
+distinguish transient I/O from corruption, so unclassified local storage failures
+remain conservatively fatal rather than being disguised as optional availability.
+This does not assert full repository identity validation or finish P13.
+
+Context also owns CoverageAccumulator and the execution-local CoverageRegistry
+turn/result maps. Core supplies narrow message facts and stored coverage, then
+keeps the existing session/sidecar CAS, source release, liveness and key-health
+checks in the same database transaction. Context folds a batch under consistent
+map locks, staging its mutations before publishing the immutable snapshot. The
+old Domain accumulator and re-export are removed; its original regression was
+moved to Context with the assertions preserved.
+
+Review exposed a real accumulator bug: taking the old value before a fallible
+merge discarded prior coverage on rejection. Merges now stage before replacement,
+and exact before/after equality is tested. Integration also caught repeated
+appended messages on one existing turn consuming initial coverage twice; the
+owner batch fold now reads it correctly and retains the original lock scope.
+Additional regressions cover rejected batch rollback and invalid identifiers.
+Unknown coverage never becomes Independent merely because a later operation is
+independent. No Calendar-prefix/history protection was removed.
+
+Direct fixture exercises include real Day Task/Note budget overflow, malformed
+JSON and foreign-Person rows; those integrity failures remain fatal even when
+the item budget is exceeded. A real encrypted Vault/general runtime with a
+controlled model receives the Task BudgetExceeded issue, completes an unrelated
+greeting and persists the session. The existing optional Memory flow and fatal
+integrity assertions remain. These are adapter/runtime exercises, not a live
+Apple model or normal-app UI test; no such UI/model validation was performed in
+this checkpoint. Only disposable local fixtures were modified.
+
+Validation passed: Context tests (8), Core context-dependency tests (18), Core
+native-context tests (3), encrypted-Vault tests (20), Calendar-source tests (6),
+connected-Calendar tests (5), full FFI library tests (78), workspace all-target
+check, Context all-target Clippy with `-D warnings`, diff check and migration gate
+(18 nodes / 57 edges / no errors). The Domain suite after moving its accumulator
+test also passed (6, subagent validation). Migration is not the final 22-crate gate.
+
+P09 remains incomplete: provider-neutral SourceViews/leases, final projection and
+archive ports, lazy source reads, history replacement and full T11/T13/T14/T28
+acceptance still require work. Core's new Context dependency is a temporary
+Conversation/composition adapter seam removed by P12/P13/P16, not permission for
+the final Vault crate to depend on Context. Remaining P08 scope/budget/Playbook
+work, Apple review UI/iOS validation and the previously recorded normal-app and
+Flutter fixture failures remain open. The full P00–P25 goal stays active.
