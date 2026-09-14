@@ -1,4 +1,5 @@
 pub mod local_model;
+pub mod learner_model;
 pub mod native_calendar;
 pub mod remote_authorization;
 pub use remote_authorization::{

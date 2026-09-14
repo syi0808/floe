@@ -8,6 +8,7 @@ pub use application::learner::validate_learner_input;
 pub use ports::evidence::EvidenceReader;
 pub use ports::repository::MemoryContextReader;
 pub mod application {
+    pub mod inference;
     pub mod learner;
     pub mod memory;
     pub mod playbooks;
@@ -31,6 +32,10 @@ pub use application::learner::{
     LearnerRuntime, MAX_LEARNER_JOB_ATTEMPTS, MemoryCandidateSink, claim_learner_job,
     explicit_learning_signal, reject_learner_claim, retryable_learner_failure, settle_learner_job,
     settlement_for_learner_result, validate_learner_job_lifecycle,
+};
+pub use application::inference::{
+    InferenceLearnerModel, LearnerInferenceResponse, LearnerInferenceTransport,
+    LEARNER_INFERENCE_CAPABILITY, LEARNER_INFERENCE_CONSUMER, LEARNER_INFERENCE_PURPOSE,
 };
 pub use application::memory::{
     acquire_memory_context, admit_learning_evidence, project_memory_summary,

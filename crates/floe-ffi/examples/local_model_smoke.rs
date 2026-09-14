@@ -9,12 +9,20 @@ use floe_ffi::local_model::{FoundationModelRunner, LocalModelAvailability};
 use serde_json::json;
 use uuid::Uuid;
 
+#[path = "local_model_smoke/learner.rs"]
+mod learner;
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     let optional_memory = arguments == ["--exercise-optional-memory"];
-    if arguments != ["--availability"] && arguments != ["--exercise"] && !optional_memory {
-        eprintln!("Use --availability, --exercise, or --exercise-optional-memory (synthetic only)");
+    let learner = arguments == ["--exercise-learner"];
+    if arguments != ["--availability"]
+        && arguments != ["--exercise"]
+        && !optional_memory
+        && !learner
+    {
+        eprintln!("Use --availability, --exercise, --exercise-optional-memory, or --exercise-learner (synthetic only)");
         return std::process::ExitCode::FAILURE;
     }
     let model = FoundationModelRunner::synthetic();
@@ -37,6 +45,21 @@ async fn main() -> std::process::ExitCode {
     }
     if availability != LocalModelAvailability::Available {
         return std::process::ExitCode::FAILURE;
+    }
+    if learner {
+        return match learner::run().await {
+            Ok(result) => {
+                println!("{result}");
+                std::process::ExitCode::SUCCESS
+            }
+            Err(failure) => {
+                println!(
+                    "{}",
+                    json!({"schema_version":1,"failure":failure,"personal_data":false})
+                );
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
     let turn_id = Uuid::new_v4();
     let request = ModelRequest {

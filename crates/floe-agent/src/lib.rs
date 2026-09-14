@@ -7,7 +7,6 @@ mod connected_context;
 mod context_routing;
 mod contract;
 mod experts;
-mod learner;
 mod learning;
 mod model_attempt;
 mod model_journal;
@@ -89,10 +88,10 @@ pub use experts::{
     WorkContextExpertResult, WorkInsight, run_life_logistics_expert, run_work_context_expert,
 };
 pub use floe_execution::{CancelReason, Cancellation};
-pub use learner::{
+pub use floe_knowledge::{
     LearnerBudget, LearnerJobClaim, LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
     LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
-    MemoryCandidateSink, StructuredLearnerModel, explicit_learning_signal,
+    MemoryCandidateSink, explicit_learning_signal,
     retryable_learner_failure, settlement_for_learner_result,
 };
 pub use learning::{

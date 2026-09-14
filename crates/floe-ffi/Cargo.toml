@@ -32,5 +32,6 @@ jni = "0.21.1"
 zeroize = "1.9.0"
 
 [dev-dependencies]
+floe-inference = { path = "../modules/inference" }
 ring = "0.17.14"
 tempfile = "3.23.0"

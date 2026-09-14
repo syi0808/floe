@@ -197,6 +197,87 @@ private struct GeneratedAnswer {
 @available(iOS 26.0, *)
 #endif
 @Generable
+enum GeneratedLearnerObservationKind {
+  case explicitRemember
+  case userCorrection
+  case outcomeConflict
+  case reusableProcedure
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
+enum GeneratedLearnerMemoryKind {
+  case fact
+  case observation
+  case inference
+  case preference
+  case commitment
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
+enum GeneratedLearnerEpistemicStatus {
+  case fact
+  case inference
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
+struct GeneratedLearnerMemoryValue {
+  var kind: GeneratedLearnerMemoryKind
+  var statement: String
+  var epistemicStatus: GeneratedLearnerEpistemicStatus
+  @Guide(description: "Confidence as an integer from 0 to 1000, for example 950.", .range(0...1000))
+  var confidenceMillis: Int
+  @Guide(description: "Use null unless the user explicitly states when this memory starts being valid. Never invent dates or use the conversation observation time. A supplied date must be RFC3339.")
+  var validFrom: String?
+  @Guide(description: "Use null unless the user explicitly states when this memory expires. Never invent dates or use the conversation observation time. A supplied date must be RFC3339 and later than validFrom.")
+  var validUntil: String?
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
+struct GeneratedLearnerProposal {
+  var observationKind: GeneratedLearnerObservationKind
+  var value: GeneratedLearnerMemoryValue
+  @Guide(description: "For a new memory, nil. For a revision, the exact UUID of an existing memory in current context. Never a person's name.")
+  var targetID: String?
+  @Guide(description: "For a new memory, nil. For a revision, the positive revision number of the existing target memory.")
+  var baseRevision: Int?
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
+struct GeneratedLearnerAnswer {
+  var proposal: GeneratedLearnerProposal?
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
 private enum GeneratedStep {
   case answer(text: String)
   case call(capabilityID: String, input: String)
@@ -237,6 +318,17 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
   let session = LanguageModelSession(model: .default, tools: [], instructions: input.instructions)
   do {
     let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: input.maxResponseTokens)
+    switch learnerPromptClassification(input.prompt) {
+    case .learner:
+      let response = try await session.respond(to: input.prompt, generating: GeneratedLearnerAnswer.self,
+        options: options)
+      let text = try learnerOutputText(response.content)
+      return LocalModelStep(kind: "answer", text: text, capabilityID: nil, input: nil)
+    case .denied:
+      throw LocalModelFailure("policy_denied")
+    case .general:
+      break
+    }
     if !hasAvailableActions(input.prompt) {
       let response = try await session.respond(to: input.prompt, generating: GeneratedAnswer.self,
         options: options)
@@ -265,6 +357,152 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
     case .rateLimited: throw LocalModelFailure("quota_exceeded")
     default: throw LocalModelFailure("model_unavailable")
     }
+  }
+}
+
+enum LearnerPromptClassification: Equatable {
+  case learner
+  case denied
+  case general
+}
+
+func learnerPromptClassification(_ prompt: String) -> LearnerPromptClassification {
+  guard let data = prompt.data(using: .utf8),
+        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let scoped = root["scoped_instructions"] as? [String: Any] else { return .general }
+  guard scoped["purpose"] as? String == "governed-memory-review" else { return .general }
+  guard let capabilities = scoped["available_capabilities"] as? [Any],
+        let experts = scoped["active_experts"] as? [Any] else { return .denied }
+  return capabilities.isEmpty && experts.isEmpty ? .learner : .denied
+}
+
+private func learnerValidityDate(_ timestamp: String) -> Date? {
+  let formatter = ISO8601DateFormatter()
+  if let date = formatter.date(from: timestamp) { return date }
+  formatter.formatOptions.insert(.withFractionalSeconds)
+  return formatter.date(from: timestamp)
+}
+
+func isLearnerRequest(_ prompt: String) -> Bool {
+  learnerPromptClassification(prompt) == .learner
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+func learnerOutputText(_ answer: GeneratedLearnerAnswer) throws -> String {
+  var output: [String: Any] = ["schema_version": 1]
+  if let proposal = answer.proposal {
+    output["proposal"] = try learnerProposalObject(proposal)
+  } else {
+    output["proposal"] = NSNull()
+  }
+  guard JSONSerialization.isValidJSONObject(output) else {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  let data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
+  guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  return text
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private func learnerProposalObject(_ proposal: GeneratedLearnerProposal) throws -> [String: Any] {
+  let target: Any
+  let revision: Any
+  switch (proposal.targetID, proposal.baseRevision) {
+  case (nil, nil):
+    target = NSNull()
+    revision = NSNull()
+  case let (.some(targetID), .some(baseRevision)):
+    guard UUID(uuidString: targetID) != nil, baseRevision > 0 else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    target = targetID
+    revision = baseRevision
+  default:
+    throw LocalModelFailure("invalid_model_output")
+  }
+  let value = proposal.value
+  let validFrom = value.validFrom
+  let validUntil = value.validUntil
+  guard !value.statement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        (0...1000).contains(value.confidenceMillis),
+        (value.epistemicStatus == .inference) == (value.kind == .inference) else {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  if let validFrom, learnerValidityDate(validFrom) == nil {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  if let validUntil, learnerValidityDate(validUntil) == nil {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  if let validFrom, let validUntil,
+     let from = learnerValidityDate(validFrom),
+     let until = learnerValidityDate(validUntil), until <= from {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  return [
+    "observation_kind": learnerObservationKindName(proposal.observationKind),
+    "value": [
+      "kind": learnerMemoryKindName(value.kind),
+      "statement": value.statement,
+      "epistemic_status": learnerEpistemicStatusName(value.epistemicStatus),
+      "confidence_millis": value.confidenceMillis,
+      "valid_from": validFrom.map { $0 as Any } ?? NSNull(),
+      "valid_until": validUntil.map { $0 as Any } ?? NSNull(),
+      "observed_at": "1970-01-01T00:00:00Z",
+    ],
+    "target_id": target,
+    "base_revision": revision,
+  ]
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private func learnerObservationKindName(_ value: GeneratedLearnerObservationKind) -> String {
+  switch value {
+  case .explicitRemember: return "explicit_remember"
+  case .userCorrection: return "user_correction"
+  case .outcomeConflict: return "outcome_conflict"
+  case .reusableProcedure: return "reusable_procedure"
+  }
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private func learnerMemoryKindName(_ value: GeneratedLearnerMemoryKind) -> String {
+  switch value {
+  case .fact: return "fact"
+  case .observation: return "observation"
+  case .inference: return "inference"
+  case .preference: return "preference"
+  case .commitment: return "commitment"
+  }
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private func learnerEpistemicStatusName(_ value: GeneratedLearnerEpistemicStatus) -> String {
+  switch value {
+  case .fact: return "fact"
+  case .inference: return "inference"
   }
 }
 

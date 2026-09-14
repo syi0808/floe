@@ -18,6 +18,11 @@ private actor Gate {
   }
 }
 
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
 @main
 struct LocalModelHostTests {
   static func input(deadline: Int = 1000, output: Int = 16384) -> LocalModelInput {
@@ -131,6 +136,44 @@ struct LocalModelHostTests {
     precondition(!hasAvailableActions(#"{"scoped_instructions":{"available_capabilities":[],"active_agents":[]}}"#))
     precondition(hasAvailableActions(#"{"scoped_instructions":{"available_capabilities":[{"id":"fixture.read"}],"active_agents":[]}}"#))
     precondition(hasAvailableActions(#"{"scoped_instructions":{"available_capabilities":[],"active_agents":[{"id":"fixture"}]}}"#))
+    precondition(isLearnerRequest(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[{"content":"governed-memory-review"}]}}"#))
+    precondition(!isLearnerRequest(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}"#))
+    precondition(!isLearnerRequest(#"{"scoped_instructions":{"purpose":"everyday-assistance","available_capabilities":[],"active_experts":[]},"conversation":{"current_turn":[{"content":"governed-memory-review"}]}}"#))
+    precondition(learnerPromptClassification(#"{"scoped_instructions":{"purpose":"governed-memory-review","available_capabilities":[{"id":"fixture.read"}],"active_experts":[]}}"#) == .denied)
+    let emptyLearner = try learnerOutputText(GeneratedLearnerAnswer(proposal: nil))
+    let emptyObject = try JSONSerialization.jsonObject(with: Data(emptyLearner.utf8)) as! [String: Any]
+    precondition(emptyObject["schema_version"] as? Int == 1 && emptyObject["proposal"] is NSNull)
+    let learnerValue = GeneratedLearnerMemoryValue(
+      kind: .preference,
+      statement: "Prefers afternoon meetings",
+      epistemicStatus: .fact,
+      confidenceMillis: 1000,
+      validFrom: nil,
+      validUntil: nil)
+    let learnerProposal = GeneratedLearnerProposal(
+      observationKind: .explicitRemember,
+      value: learnerValue,
+      targetID: nil,
+      baseRevision: nil)
+    let encodedLearner = try learnerOutputText(GeneratedLearnerAnswer(proposal: learnerProposal))
+    let encodedObject = try JSONSerialization.jsonObject(with: Data(encodedLearner.utf8)) as! [String: Any]
+    let encodedValue = encodedObject["proposal"] as! [String: Any]
+    let encodedFields = encodedValue["value"] as! [String: Any]
+    precondition(encodedObject["schema_version"] as? Int == 1)
+    precondition(encodedValue["target_id"] is NSNull && encodedValue["base_revision"] is NSNull)
+    precondition(encodedFields["observed_at"] as? String == "1970-01-01T00:00:00Z")
+    precondition(encodedFields["valid_from"] is NSNull && encodedFields["valid_until"] is NSNull)
+    var invalidLearner = learnerProposal
+    invalidLearner.value.validFrom = "not-a-date"
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
+    invalidLearner.value.validFrom = "2026-09-14T00:00:00Z"
+    invalidLearner.value.validUntil = "2026-09-14T00:00:00Z"
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
+    invalidLearner.value.validUntil = "2026-09-15T00:00:00Z"
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) != nil)
+    invalidLearner.value.validFrom = "2026-09-14T00:00:00.123456Z"
+    invalidLearner.value.validUntil = "2026-09-15T00:00:00.123456Z"
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) != nil)
     let malformed = floeLocalModel(nil, 0)!
     precondition(String(cString: malformed).contains("invalid_input"))
     floeLocalModelFree(malformed)

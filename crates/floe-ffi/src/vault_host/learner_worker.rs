@@ -1,11 +1,11 @@
 use chrono::Utc;
-use floe_agent::{
-    AgentFailure, Cancellation, LearnerBudget, LearnerModel, LearnerReviewJob, LearnerRuntime,
-    StructuredLearnerModel, settlement_for_learner_result,
-};
+use floe_agent::{AgentFailure, Cancellation};
 use floe_core::{EncryptedAgentVault, VaultKeyProvider};
-
-use crate::local_model::FoundationModelRunner;
+use floe_infra::learner_model::FoundationLearnerTransport;
+use floe_knowledge::{
+    InferenceLearnerModel, LearnerBudget, LearnerModel, LearnerReviewJob, LearnerRuntime,
+    settlement_for_learner_result,
+};
 
 const DISCOVERY_LIMIT: usize = 8;
 
@@ -25,7 +25,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     let Some(job) = vault.claim_learner_review(Utc::now()).await? else {
         return Ok(false);
     };
-    let model = StructuredLearnerModel::new(FoundationModelRunner::encrypted());
+    let model = InferenceLearnerModel::new(FoundationLearnerTransport);
     review_claimed(vault, &job, &model, cancellation).await
 }
 
@@ -39,8 +39,8 @@ pub(super) async fn review_claimed<Keys: VaultKeyProvider, Model: LearnerModel +
         model,
         candidates: vault,
         budget: LearnerBudget::default(),
-        extractor_version: "memory-extractor-v1",
-        prompt_version: "memory-review-v1",
+        extractor_version: floe_knowledge::prompts::LEARNER_EXTRACTOR_VERSION,
+        prompt_version: floe_knowledge::prompts::LEARNER_PROMPT_VERSION,
     };
     let result = runtime.review(job.input.clone(), cancellation).await;
     let settled_at = Utc::now();

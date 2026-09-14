@@ -115,6 +115,32 @@ no saved-memory payload, credentials or persistence. Inspect the returned answer
 for an honest limitation and a general preparation tip; transport success alone
 does not establish answer quality or full T11 acceptance.
 
+To exercise the profile-routed learner with a real on-device model:
+
+```sh
+bash tools/validation/run-local-model-smoke.sh --exercise-learner
+```
+
+This uses a fixed fictional preference in a private disposable encrypted Vault
+with in-memory fixture keys, not the normal app Vault or Keychain. It commits a
+governed completed source session, discovers and claims a review, runs the
+Knowledge learner through the actual Foundation profile, settles successful
+work, and checks the pending-review snapshot. It prints only its synthetic model
+answer and smoke metadata; never adapt this diagnostic wrapper to personal data.
+It does not auto-approve a candidate. A valid no-proposal answer may report zero
+pending candidates, so inspect the count rather than treating transport success
+as proof of candidate creation. The temporary Vault is removed when the command
+exits normally. Model/schema failures remain failures; the smoke does not relax
+the production parser or retry with a remote model. For this fixed fixture it
+also rejects invented validity dates and a statement that loses Alex or the
+afternoon preference. These checks are synthetic-fixture assertions, not a
+general semantic verifier. Inspect the answer for other unsupported claims.
+
+The 2026-09-14 live runs exposed unsupported dates and a dropped subject, including
+one structurally valid pending candidate. That run is not semantic acceptance;
+the strengthened fixture must not count it as a pass. The learner live acceptance
+remains open even when routing, native schema and encrypted staging tests pass.
+
 ## Still required
 
 Multi-call Agent scenarios and interruption/error tests; real-model streaming and
