@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fs,
     ops::Deref,
     os::unix::fs::DirBuilderExt,
@@ -58,6 +59,8 @@ const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
 const LEARNER_ERROR_DELAY: Duration = Duration::from_secs(5);
 const AGENT_VAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
+const MAX_VAULT_JOBS: usize = 64;
+const MAX_IN_FLIGHT_VAULT_JOBS: usize = 8;
 
 fn operation_name(operation: &AgentVaultOperationDto) -> &'static str {
     match operation {
@@ -110,6 +113,48 @@ fn action_name(action: &AgentVaultActionDto) -> &'static str {
         AgentVaultActionDto::RemoteViewGrantStatus { .. } => "remote_view_grant_status",
         AgentVaultActionDto::RemoteViewGrantPause { .. } => "remote_view_grant_pause",
     }
+}
+
+fn exclusive_host_action(action: &AgentVaultActionDto) -> bool {
+    matches!(
+        action,
+        AgentVaultActionDto::Create {}
+            | AgentVaultActionDto::Unlock {}
+            | AgentVaultActionDto::Lock {}
+    )
+}
+
+fn concurrent_host_action(action: &AgentVaultActionDto) -> bool {
+    matches!(
+        action,
+        AgentVaultActionDto::Status {}
+            | AgentVaultActionDto::Registry { .. }
+            | AgentVaultActionDto::CalendarExperts { .. }
+            | AgentVaultActionDto::CalendarAccess { .. }
+            | AgentVaultActionDto::PersonalAccess { .. }
+            | AgentVaultActionDto::ContactsAccess { .. }
+            | AgentVaultActionDto::CalendarSubjectPreview { .. }
+            | AgentVaultActionDto::ConversationTurn { .. }
+            | AgentVaultActionDto::InspectProposal { .. }
+            | AgentVaultActionDto::MemoryReview { .. }
+            | AgentVaultActionDto::Memory {}
+            | AgentVaultActionDto::Connections {}
+            | AgentVaultActionDto::RemoteAuthorityInspectProducer { .. }
+            | AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { .. }
+            | AgentVaultActionDto::RemoteAuthorityEnrollmentStatus { .. }
+            | AgentVaultActionDto::RemotePairingPrepare {}
+            | AgentVaultActionDto::RemotePairingConfirm { .. }
+            | AgentVaultActionDto::RemotePairingStatus { .. }
+            | AgentVaultActionDto::RemotePairingFinalize { .. }
+            | AgentVaultActionDto::RemoteCalendarGrantPreview { .. }
+            | AgentVaultActionDto::RemoteCalendarGrantReview { .. }
+            | AgentVaultActionDto::RemoteCalendarGrantStatus { .. }
+            | AgentVaultActionDto::RemoteCalendarGrantPause { .. }
+            | AgentVaultActionDto::RemoteViewGrantPreview { .. }
+            | AgentVaultActionDto::RemoteViewGrantReview { .. }
+            | AgentVaultActionDto::RemoteViewGrantStatus { .. }
+            | AgentVaultActionDto::RemoteViewGrantPause { .. }
+    )
 }
 
 pub(crate) struct VaultBridge {
@@ -169,7 +214,7 @@ impl VaultBridge {
 
 struct Worker {
     sender: mpsc::SyncSender<Arc<Job>>,
-    active: Mutex<Option<Arc<Job>>>,
+    jobs: Mutex<HashMap<Uuid, Arc<Job>>>,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     closing: Arc<AtomicBool>,
     learner_scheduling: floe_knowledge::LearnerScheduling,
@@ -177,6 +222,7 @@ struct Worker {
 
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+    available: AtomicBool,
     _conversation_repository: Arc<VaultConversationRepository<Keys>>,
     _recovered_conversation_runs: Vec<floe_core::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
@@ -232,6 +278,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         .await?;
         Ok(Self {
             vault,
+            available: AtomicBool::new(true),
             _conversation_repository: conversation_repository,
             _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
@@ -268,6 +315,14 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             )?;
         }
         Ok(())
+    }
+
+    fn is_available(&self) -> bool {
+        self.available.load(Ordering::Acquire)
+    }
+
+    fn mark_unavailable(&self) {
+        self.available.store(false, Ordering::Release);
     }
 }
 
@@ -397,7 +452,7 @@ impl Worker {
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextStore>,
     ) -> Result<Self, AgentFailure> {
-        let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(1);
+        let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(MAX_IN_FLIGHT_VAULT_JOBS);
         let closing = Arc::new(AtomicBool::new(false));
         let run_cancellations = Arc::new(floe_conversation::RunCancellationRegistry::default());
         let worker_closing = closing.clone();
@@ -410,7 +465,12 @@ impl Worker {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build();
-                let mut vault = None;
+                let conversation_runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .thread_name("floe-conversation-runtime")
+                    .enable_all()
+                    .build();
+                let mut vault: Option<(PersonId, Arc<OpenVault<Keys>>)> = None;
                 let mut learner_delay = LEARNER_IDLE_DELAY;
                 loop {
                     match receiver.recv_timeout(learner_delay) {
@@ -419,11 +479,100 @@ impl Worker {
                             if worker_closing.load(Ordering::Acquire) {
                                 break;
                             }
+                            if vault
+                                .as_ref()
+                                .is_some_and(|(_, open_vault)| !open_vault.is_available())
+                            {
+                                vault = None;
+                            }
                             let operation = action_name(&job.action);
                             let started = Instant::now();
                             let trace_context = diagnostics::trace_context(job.id);
                             let request_id = trace_context.request_id().to_string();
                             tracing::info!(request_id, operation, "agent_job_started");
+                            if matches!(job.action, AgentVaultActionDto::ConversationTurn { .. }) {
+                                let failure = match (&conversation_runtime, vault.as_ref()) {
+                                    (Ok(runtime), Some((person, open_vault)))
+                                        if *person == job.person =>
+                                    {
+                                        let core = Arc::clone(&core);
+                                        let local_context = Arc::clone(&local_context);
+                                        let open_vault = Arc::clone(open_vault);
+                                        let health_vault = Arc::clone(&open_vault);
+                                        let task_job = Arc::clone(&job);
+                                        let task_scheduling = worker_learner_scheduling.clone();
+                                        runtime.spawn(async move {
+                                            let execution_job = Arc::clone(&task_job);
+                                            let execution = tokio::spawn(diagnostics::instrument(
+                                                async move {
+                                                    let AgentVaultActionDto::ConversationTurn {
+                                                        request,
+                                                    } = &execution_job.action
+                                                    else {
+                                                        return Err(AgentFailure::InvalidInput);
+                                                    };
+                                                    execute_conversation_turn_action(
+                                                        &core,
+                                                        &open_vault,
+                                                        &local_context,
+                                                        &execution_job,
+                                                        request,
+                                                    )
+                                                    .await
+                                                },
+                                                trace_context,
+                                                "agent_job",
+                                            ));
+                                            let result = match execution.await {
+                                                Ok(result) => result,
+                                                Err(error) => {
+                                                    if error.is_panic() {
+                                                        let _ = diagnostics::panic_error(
+                                                            error.into_panic(),
+                                                        );
+                                                    }
+                                                    Err(AgentFailure::Interrupted)
+                                                }
+                                            };
+                                            if matches!(
+                                                &result,
+                                                Err(
+                                                    AgentFailure::VaultUnavailable
+                                                        | AgentFailure::Interrupted
+                                                )
+                                            ) {
+                                                health_vault.mark_unavailable();
+                                            }
+                                            trace_job_result(
+                                                &request_id,
+                                                operation,
+                                                started,
+                                                &result,
+                                            );
+                                            finish_job(
+                                                &task_job,
+                                                result,
+                                                health_vault.is_available(),
+                                                &task_scheduling,
+                                            );
+                                        });
+                                        continue;
+                                    }
+                                    (Ok(_), Some(_)) => AgentFailure::NotFound,
+                                    (Ok(_), None) | (Err(_), _) => {
+                                        AgentFailure::VaultUnavailable
+                                    }
+                                };
+                                let result = Err(failure);
+                                trace_job_result(&request_id, operation, started, &result);
+                                finish_job(
+                                    &job,
+                                    result,
+                                    vault.is_some(),
+                                    &worker_learner_scheduling,
+                                );
+                                continue;
+                            }
                             let result = match catch_unwind(AssertUnwindSafe(|| match &runtime {
                                 Ok(runtime) => runtime.block_on(diagnostics::instrument(
                                     execute(
@@ -445,78 +594,32 @@ impl Worker {
                                     Err(AgentFailure::Interrupted)
                                 }
                             };
-                            let elapsed_ms = started.elapsed().as_millis() as u64;
-                            match &result {
-                                Ok(_) => tracing::info!(
-                                    request_id,
-                                    operation,
-                                    elapsed_ms,
-                                    "agent_job_completed"
-                                ),
-                                Err(failure) => tracing::error!(
-                                    request_id,
-                                    operation,
-                                    elapsed_ms,
-                                    failure = ?failure,
-                                    "agent_job_failed"
-                                ),
-                            }
+                            trace_job_result(&request_id, operation, started, &result);
                             if matches!(
                                 result,
                                 Err(AgentFailure::VaultUnavailable | AgentFailure::Interrupted)
                             ) {
                                 vault = None;
                             }
-                            if let Ok(mut progress) = job.progress.lock() {
-                                match result {
-                                    Ok(result) => {
-                                        progress.state = Some(result.state);
-                                        progress.session = result.session;
-                                        progress.registry = result.registry;
-                                        progress.calendar_experts = result.calendar_experts;
-                                        progress.calendar_subject_preview =
-                                            result.calendar_subject_preview;
-                                        progress.proposal = result.proposal;
-                                        progress.memory_review = result.memory_review;
-                                        progress.memory = result.memory;
-                                        progress.remote_producer = result.remote_producer;
-                                        progress.remote_enrollment = result.remote_enrollment;
-                                        progress.remote_pairing = result.remote_pairing;
-                                        progress.remote_owner = result.remote_owner;
-                                        progress.remote_calendar_grant =
-                                            result.remote_calendar_grant;
-                                        progress.remote_calendar_preview =
-                                            result.remote_calendar_preview;
-                                        progress.remote_view_grant = result.remote_view_grant;
-                                        progress.remote_view_preview = result.remote_view_preview;
-                                        progress.personal_access = result.personal_access;
-                                        progress.calendar_actions = result.calendar_actions;
-                                    }
-                                    Err(failure) => {
-                                        progress.state = Some(
-                                            if matches!(
-                                                failure,
-                                                AgentFailure::VaultUnavailable
-                                                    | AgentFailure::Interrupted
-                                            ) || vault
-                                                .as_ref()
-                                                .is_none_or(|(person, _)| *person != job.person)
-                                            {
-                                                AgentVaultStateDto::Unavailable
-                                            } else {
-                                                AgentVaultStateDto::Ready
-                                            },
-                                        );
-                                        progress.failure = Some(failure);
-                                    }
-                                }
-                                let _ = worker_learner_scheduling.foreground_finished();
-                                progress.done = true;
-                            }
+                            let vault_available = vault
+                                .as_ref()
+                                .is_some_and(|(person, _)| *person == job.person);
+                            finish_job(
+                                &job,
+                                result,
+                                vault_available,
+                                &worker_learner_scheduling,
+                            );
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             if worker_closing.load(Ordering::Acquire) {
                                 break;
+                            }
+                            if vault
+                                .as_ref()
+                                .is_some_and(|(_, open_vault)| !open_vault.is_available())
+                            {
+                                vault = None;
                             }
                             let Some((_, open_vault)) = vault.as_ref() else {
                                 learner_delay = LEARNER_EMPTY_DELAY;
@@ -580,7 +683,7 @@ impl Worker {
             .map_err(|_| AgentFailure::VaultUnavailable)?;
         Ok(Self {
             sender,
-            active: Mutex::new(None),
+            jobs: Mutex::new(HashMap::new()),
             run_cancellations,
             closing,
             learner_scheduling,
@@ -593,25 +696,56 @@ impl Worker {
         id: Uuid,
         operation: AgentVaultOperationDto,
     ) -> Result<VaultJobResult, AgentFailure> {
-        let mut active = self.active.lock().map_err(|_| AgentFailure::Interrupted)?;
+        let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         if let AgentVaultOperationDto::Submit { ref action } = operation {
-            if let Some(job) = active.as_ref() {
-                if job.person == person && job.id == id {
-                    if &job.action != action {
-                        return Err(AgentFailure::Conflict);
-                    }
-                } else if job
-                    .progress
-                    .lock()
-                    .map_err(|_| AgentFailure::Interrupted)?
-                    .done
-                {
-                    *active = None;
-                } else {
+            if let Some(job) = jobs.get(&id) {
+                if job.person != person {
+                    return Err(AgentFailure::NotFound);
+                }
+                if &job.action != action {
                     return Err(AgentFailure::Conflict);
                 }
-            }
-            if active.is_none() {
+            } else {
+                let mut in_flight = 0_usize;
+                let mut exclusive_in_flight = false;
+                let mut incompatible_in_flight = false;
+                let mut completed = Vec::new();
+                for (request_id, job) in jobs.iter() {
+                    if job
+                        .progress
+                        .lock()
+                        .map_err(|_| AgentFailure::Interrupted)?
+                        .done
+                    {
+                        completed.push(*request_id);
+                    } else {
+                        in_flight += 1;
+                        exclusive_in_flight |= exclusive_host_action(&job.action);
+                        incompatible_in_flight |= !matches!(
+                            job.action,
+                            AgentVaultActionDto::ConversationTurn { .. }
+                        );
+                    }
+                }
+                if in_flight >= MAX_IN_FLIGHT_VAULT_JOBS
+                    || (in_flight > 0 && exclusive_host_action(action))
+                    || exclusive_in_flight
+                    || (in_flight > 0
+                        && (!concurrent_host_action(action) || incompatible_in_flight))
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                if jobs.len() >= MAX_VAULT_JOBS {
+                    for request_id in completed {
+                        jobs.remove(&request_id);
+                        if jobs.len() < MAX_VAULT_JOBS {
+                            break;
+                        }
+                    }
+                }
+                if jobs.len() >= MAX_VAULT_JOBS {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
                 let job = Arc::new(Job {
                     person,
                     id,
@@ -625,13 +759,14 @@ impl Worker {
                     let _ = self.learner_scheduling.foreground_finished();
                     return Err(AgentFailure::VaultUnavailable);
                 }
-                *active = Some(job);
+                jobs.insert(id, job);
             }
         }
-        let job = active.as_ref().ok_or(AgentFailure::NotFound)?;
-        if job.person != person || job.id != id {
+        let job = jobs.get(&id).cloned().ok_or(AgentFailure::NotFound)?;
+        if job.person != person {
             return Err(AgentFailure::NotFound);
         }
+        drop(jobs);
         if matches!(operation, AgentVaultOperationDto::Stop {}) {
             if matches!(job.action, AgentVaultActionDto::ConversationTurn { .. }) {
                 let command_id = floe_agent_contract::CommandId::from_uuid(job.id)
@@ -696,7 +831,10 @@ impl Worker {
             if !response.done {
                 return Err(AgentFailure::Conflict);
             }
-            *active = None;
+            self.jobs
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?
+                .remove(&id);
         }
         Ok(response)
     }
@@ -705,10 +843,10 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.closing.store(true, Ordering::Release);
-        if let Ok(active) = self.active.lock()
-            && let Some(job) = active.as_ref()
-        {
-            job.cancellation.cancel();
+        if let Ok(jobs) = self.jobs.lock() {
+            for job in jobs.values() {
+                job.cancellation.cancel();
+            }
         }
         self.learner_scheduling.close();
     }
@@ -1001,12 +1139,79 @@ impl VaultExecutionResult {
     }
 }
 
+fn trace_job_result(
+    request_id: &str,
+    operation: &str,
+    started: Instant,
+    result: &Result<VaultExecutionResult, AgentFailure>,
+) {
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match result {
+        Ok(_) => tracing::info!(request_id, operation, elapsed_ms, "agent_job_completed"),
+        Err(failure) => tracing::error!(
+            request_id,
+            operation,
+            elapsed_ms,
+            failure = ?failure,
+            "agent_job_failed"
+        ),
+    }
+}
+
+fn finish_job(
+    job: &Job,
+    result: Result<VaultExecutionResult, AgentFailure>,
+    vault_available: bool,
+    learner_scheduling: &floe_knowledge::LearnerScheduling,
+) {
+    if let Ok(mut progress) = job.progress.lock() {
+        match result {
+            Ok(result) => {
+                progress.state = Some(result.state);
+                progress.session = result.session;
+                progress.registry = result.registry;
+                progress.calendar_experts = result.calendar_experts;
+                progress.calendar_subject_preview = result.calendar_subject_preview;
+                progress.proposal = result.proposal;
+                progress.memory_review = result.memory_review;
+                progress.memory = result.memory;
+                progress.remote_producer = result.remote_producer;
+                progress.remote_enrollment = result.remote_enrollment;
+                progress.remote_pairing = result.remote_pairing;
+                progress.remote_owner = result.remote_owner;
+                progress.remote_calendar_grant = result.remote_calendar_grant;
+                progress.remote_calendar_preview = result.remote_calendar_preview;
+                progress.remote_view_grant = result.remote_view_grant;
+                progress.remote_view_preview = result.remote_view_preview;
+                progress.personal_access = result.personal_access;
+                progress.calendar_actions = result.calendar_actions;
+            }
+            Err(failure) => {
+                progress.state = Some(
+                    if matches!(
+                        failure,
+                        AgentFailure::VaultUnavailable | AgentFailure::Interrupted
+                    ) || !vault_available
+                    {
+                        AgentVaultStateDto::Unavailable
+                    } else {
+                        AgentVaultStateDto::Ready
+                    },
+                );
+                progress.failure = Some(failure);
+            }
+        }
+        let _ = learner_scheduling.foreground_finished();
+        progress.done = true;
+    }
+}
+
 async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
     root: &std::path::Path,
     keys: &Keys,
     core: &Arc<FloeCore>,
     local_context: &Arc<LocalContextStore>,
-    current: &mut Option<(PersonId, OpenVault<Keys>)>,
+    current: &mut Option<(PersonId, Arc<OpenVault<Keys>>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
     if current
@@ -1029,12 +1234,86 @@ async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
     .await
 }
 
+async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
+    vault: &OpenVault<Keys>,
+    local_context: &LocalContextStore,
+    job: &Job,
+    request: &AgentConversationTurnRequestDto,
+) -> Result<VaultExecutionResult, AgentFailure> {
+    if vault.builtin_expert_overview().await?.is_some()
+        && let Err(failure) = Box::pin(ensure_builtin_experts(
+            vault,
+            core,
+            local_context,
+            job.person,
+            request.remote_route.as_ref(),
+            job.cancellation.clone(),
+        ))
+        .await
+    {
+        match failure {
+            AgentFailure::Cancelled
+            | AgentFailure::VaultUnavailable
+            | AgentFailure::StorageUnavailable => return Err(failure),
+            _ => tracing::warn!(
+                failure = ?failure,
+                stage = "refresh_builtin_experts",
+                "conversation_turn_degraded"
+            ),
+        }
+    }
+    vault.sync_expert_directory().await?;
+    let session = match Box::pin(conversation_turn::run(
+        core,
+        vault,
+        local_context,
+        &vault.task_coordinator,
+        &vault.schedule_endpoint,
+        &vault.legacy_expert_endpoint,
+        &vault._conversation_repository,
+        &job.run_cancellations,
+        job.person,
+        floe_agent_contract::CommandId::from_uuid(job.id)
+            .ok_or(AgentFailure::InvalidInput)?,
+        request,
+        job.cancellation.clone(),
+        |event| {
+            if let Ok(mut progress) = job.progress.lock() {
+                if progress.events.len() < 2048 {
+                    progress.events.push(event);
+                } else {
+                    job.cancellation.cancel();
+                }
+            } else {
+                job.cancellation.cancel();
+            }
+        },
+    ))
+    .await
+    {
+        Ok(session) => session,
+        Err(failure) => {
+            tracing::error!(
+                failure = ?failure,
+                stage = "runtime",
+                "conversation_turn_failed"
+            );
+            return Err(failure);
+        }
+    };
+    Ok(VaultExecutionResult {
+        session: Some(session),
+        ..VaultExecutionResult::ready()
+    })
+}
+
 async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
     root: &std::path::Path,
     keys: &Keys,
     core: &Arc<FloeCore>,
     local_context: &Arc<LocalContextStore>,
-    current: &mut Option<(PersonId, OpenVault<Keys>)>,
+    current: &mut Option<(PersonId, Arc<OpenVault<Keys>>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
     match &job.action {
@@ -1061,7 +1340,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 Arc::clone(local_context),
             )
             .await?;
-            *current = Some((job.person, vault));
+            *current = Some((job.person, Arc::new(vault)));
             Ok(VaultExecutionResult::ready())
         }
         AgentVaultActionDto::Unlock {} => {
@@ -1074,7 +1353,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 Arc::clone(local_context),
             )
             .await?;
-            *current = Some((job.person, vault));
+            *current = Some((job.person, Arc::new(vault)));
             Ok(VaultExecutionResult::ready())
         }
         AgentVaultActionDto::Lock {} => {
@@ -1087,15 +1366,15 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 AgentFixtureOperationDto::Start {} => vault.create_sample_session().await?,
                 AgentFixtureOperationDto::Resume {} => vault.resume_sample_session().await?,
                 AgentFixtureOperationDto::Get { session_id } => {
-                    sample_session(&**vault, job.person, session_uuid(session_id)?).await?
+                    sample_session(&***vault, job.person, session_uuid(session_id)?).await?
                 }
                 AgentFixtureOperationDto::Recover {
                     session_id,
                     expected_revision,
                 } => {
-                    sample_session(&**vault, job.person, session_uuid(session_id)?).await?;
+                    sample_session(&***vault, job.person, session_uuid(session_id)?).await?;
                     recover_agent_sample(
-                        &**vault,
+                        &***vault,
                         job.person,
                         session_uuid(session_id)?,
                         *expected_revision,
@@ -1482,71 +1761,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         AgentVaultActionDto::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            if vault.builtin_expert_overview().await?.is_some()
-                && let Err(failure) = Box::pin(ensure_builtin_experts(
-                    vault,
-                    core,
-                    local_context,
-                    job.person,
-                    request.remote_route.as_ref(),
-                    job.cancellation.clone(),
-                ))
-                .await
-            {
-                match failure {
-                    AgentFailure::Cancelled
-                    | AgentFailure::VaultUnavailable
-                    | AgentFailure::StorageUnavailable => return Err(failure),
-                    _ => tracing::warn!(
-                        failure = ?failure,
-                        stage = "refresh_builtin_experts",
-                        "conversation_turn_degraded"
-                    ),
-                }
-            }
-            vault.sync_expert_directory().await?;
-            let session = match Box::pin(conversation_turn::run(
-                core,
-                vault,
-                local_context,
-                &vault.task_coordinator,
-                &vault.schedule_endpoint,
-                &vault.legacy_expert_endpoint,
-                &vault._conversation_repository,
-                &job.run_cancellations,
-                job.person,
-                floe_agent_contract::CommandId::from_uuid(job.id)
-                    .ok_or(AgentFailure::InvalidInput)?,
-                request,
-                job.cancellation.clone(),
-                |event| {
-                    if let Ok(mut progress) = job.progress.lock() {
-                        if progress.events.len() < 2048 {
-                            progress.events.push(event);
-                        } else {
-                            job.cancellation.cancel();
-                        }
-                    } else {
-                        job.cancellation.cancel();
-                    }
-                },
-            ))
-            .await
-            {
-                Ok(session) => session,
-                Err(failure) => {
-                    tracing::error!(
-                        failure = ?failure,
-                        stage = "runtime",
-                        "conversation_turn_failed"
-                    );
-                    return Err(failure);
-                }
-            };
-            Ok(VaultExecutionResult {
-                session: Some(session),
-                ..VaultExecutionResult::ready()
-            })
+            execute_conversation_turn_action(core, vault, local_context, job, request).await
         }
         AgentVaultActionDto::InspectProposal {
             session_id,

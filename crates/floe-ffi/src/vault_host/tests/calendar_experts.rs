@@ -514,10 +514,10 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         .unwrap();
     let first = wait(&worker, person, request_id);
     let completed_job_cancellation = worker
-        .active
+        .jobs
         .lock()
         .unwrap()
-        .as_ref()
+        .get(&request_id)
         .unwrap()
         .cancellation
         .clone();
@@ -640,18 +640,217 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
     let second = wait(&worker, person, second_id);
     assert_eq!(second.failure, None, "second: {second:?}");
     assert!(second.session.unwrap().revision > first_session.revision);
-    assert_eq!(
-        worker.request(
+    let retained = worker
+        .request(
             person,
             first_id,
             AgentVaultOperationDto::Poll { after_sequence: 0 },
-        ),
-        Err(AgentFailure::NotFound)
-    );
+        )
+        .unwrap();
+    assert!(retained.done);
+    assert_eq!(retained.session.unwrap(), first_session);
+    worker
+        .request(person, first_id, AgentVaultOperationDto::Release {})
+        .unwrap();
     worker
         .request(person, second_id, AgentVaultOperationDto::Release {})
         .unwrap();
     assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
+fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Create {});
+    let setup_id = Uuid::new_v4();
+    let empty = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarExperts { setup: None },
+    )
+    .calendar_experts
+    .unwrap();
+    let installed = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarExperts {
+            setup: Some(
+                encode_contract(&CalendarExpertSetup {
+                    instance_id: empty.registry.instance_id,
+                    expected_revision: empty.registry.revision,
+                    setup_id,
+                    provider: floe_domain::CalendarProvider::Fixture,
+                    device_id: "mac-local".into(),
+                    calendar_ids: vec!["fixture-calendar".into()],
+                    connection_scope: floe_domain::CalendarScope::Selected,
+                    connection_revision: 1,
+                    source_authority: None,
+                    reviewed_native_subject_fingerprint: None,
+                })
+                .unwrap(),
+            ),
+        },
+    )
+    .calendar_experts
+    .unwrap();
+    let enabled = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarAccess {
+            change: encode_contract(&CalendarAccessConfiguration {
+                instance_id: installed.registry.instance_id,
+                expected_revision: installed.registry.revision,
+                setup_id,
+                change: CalendarAccessChange::SetEnabled { enabled: true },
+            })
+            .unwrap(),
+        },
+    )
+    .calendar_experts
+    .unwrap();
+    assert!(enabled.views.iter().any(|view| view.enabled));
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, entered, release, server) = blocking_answer_server();
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "conversation-concurrency-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let conversation_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            conversation_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::ConversationTurn {
+                    request: floe_protocol::AgentConversationTurnRequestDto {
+                        session_id: session.id.to_string(),
+                        expected_revision: session.revision,
+                        text: "Wait for the model".into(),
+                        device_id: "mac-local".into(),
+                        continuation: false,
+                        remote_route: Some(route),
+                    },
+                },
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !entered.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let root_cancellation = worker
+        .jobs
+        .lock()
+        .unwrap()
+        .get(&conversation_id)
+        .unwrap()
+        .cancellation
+        .clone();
+
+    let preview_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            preview_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::CalendarExperts { setup: None },
+            },
+        )
+        .unwrap();
+    let preview = wait(&worker, person, preview_id);
+    assert_eq!(preview.failure, None, "preview: {preview:?}");
+    let current = preview.calendar_experts.unwrap();
+    assert!(!root_cancellation.is_cancelled());
+
+    let revoke_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            revoke_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::CalendarAccess {
+                    change: encode_contract(&CalendarAccessConfiguration {
+                        instance_id: current.registry.instance_id,
+                        expected_revision: current.registry.revision,
+                        setup_id,
+                        change: CalendarAccessChange::SetEnabled { enabled: false },
+                    })
+                    .unwrap(),
+                },
+            },
+        )
+        .unwrap();
+    let revoked = wait(&worker, person, revoke_id);
+    assert_eq!(revoked.failure, None, "revoke: {revoked:?}");
+    assert!(
+        revoked
+            .calendar_experts
+            .as_ref()
+            .unwrap()
+            .views
+            .iter()
+            .all(|view| !view.enabled)
+    );
+    assert!(!root_cancellation.is_cancelled());
+
+    let query_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            query_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::Connections {},
+            },
+        )
+        .unwrap();
+    let query = wait(&worker, person, query_id);
+    assert_eq!(query.failure, None, "query: {query:?}");
+    assert!(query.connections.is_some());
+    assert!(!root_cancellation.is_cancelled());
+    assert!(
+        !worker
+            .request(
+                person,
+                conversation_id,
+                AgentVaultOperationDto::Poll { after_sequence: 0 },
+            )
+            .unwrap()
+            .done
+    );
+
+    release.store(true, Ordering::Release);
+    let conversation = wait(&worker, person, conversation_id);
+    assert_eq!(conversation.failure, None, "conversation: {conversation:?}");
+    assert!(!root_cancellation.is_cancelled());
+    worker
+        .request(person, preview_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    worker
+        .request(person, revoke_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    worker
+        .request(person, query_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    worker
+        .request(
+            person,
+            conversation_id,
+            AgentVaultOperationDto::Release {},
+        )
+        .unwrap();
+    server.join().unwrap();
 }
 
 #[test]
@@ -1154,6 +1353,95 @@ fn answer_server(
             calendar_connections: vec![],
             pairing: None,
         },
+        server,
+    )
+}
+
+fn blocking_answer_server() -> (
+    floe_protocol::AgentRemoteRouteDto,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let server_entered = Arc::clone(&entered);
+    let server_release = Arc::clone(&release);
+    let server = std::thread::spawn(move || {
+        let mut socket = listener.accept().unwrap().0;
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut bytes = vec![];
+        loop {
+            let mut chunk = [0; 4096];
+            let count = socket.read(&mut chunk).unwrap();
+            assert!(count > 0);
+            bytes.extend_from_slice(&chunk[..count]);
+            let text = String::from_utf8_lossy(&bytes);
+            let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+                continue;
+            };
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap();
+            if body.len() >= length {
+                break;
+            }
+        }
+        server_entered.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !server_release.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let output = serde_json::json!({
+            "output": [{"type": "answer", "text": "The model resumed."}],
+            "used_tokens": 10,
+        });
+        let response = serde_json::json!({
+            "schema_version": 1,
+            "purpose": "everyday_assistance",
+            "trace_id": "a".repeat(32),
+            "routing": {
+                "placement": "server_local",
+                "external_transfer": false,
+                "replay_source": "a".repeat(64),
+            },
+            "output": output.to_string(),
+        })
+        .to_string();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                    response.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+    });
+    (
+        floe_protocol::AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "a".repeat(32),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+            recipient: None,
+            calendar_connections: vec![],
+            pairing: None,
+        },
+        entered,
+        release,
         server,
     )
 }
