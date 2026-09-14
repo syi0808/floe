@@ -833,6 +833,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-app"
+version = "0.1.0"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
 name = "floe-connections"
 version = "0.1.0"
 dependencies = [
@@ -982,6 +989,7 @@ dependencies = [
  "chrono",
  "floe-agent",
  "floe-agent-contract",
+ "floe-app",
  "floe-context",
  "floe-conversation",
  "floe-core",

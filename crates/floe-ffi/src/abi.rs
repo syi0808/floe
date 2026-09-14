@@ -36,13 +36,16 @@ pub unsafe extern "C" fn floe_core_open(
             .map_err(|value| error(ErrorCodeDto::Internal, value.to_string()))?;
         let core = Arc::new(runtime.block_on(FloeCore::open(path)).map_err(core_error)?);
         let local_context = Arc::new(local_context::LocalContextStore::default());
-        Ok(Box::into_raw(Box::new(FloeHandle {
+        let services = LegacyComposition {
             runtime,
             core: core.clone(),
             agent_runs: Default::default(),
             local_context: local_context.clone(),
             #[cfg(unix)]
             agent_vault: vault_host::VaultBridge::new(path, core, local_context),
+        };
+        Ok(Box::into_raw(Box::new(FloeHandle {
+            app: AppHost::legacy(services),
         })))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
@@ -133,6 +136,7 @@ pub unsafe extern "C" fn floe_core_agent_vault(
         let request: AgentVaultRequestDto =
             serde_json::from_str(c_input(request_json, "request_json")?)
                 .map_err(|_| invalid("request_json", "invalid Agent vault request"))?;
+        let handle = handle.services();
         #[cfg(unix)]
         {
             handle.agent_vault.request(request)

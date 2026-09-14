@@ -210,6 +210,10 @@ impl VaultBridge {
                 error
             })
     }
+
+    pub(crate) fn shutdown(&self) {
+        self.worker.borrow_mut().take();
+    }
 }
 
 struct Worker {

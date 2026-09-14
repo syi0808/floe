@@ -20,6 +20,7 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDate, Utc};
+use floe_app::{AppHost, HostServices};
 use floe_core::{Classification, CoreError, ErrorCode, FloeCore};
 use floe_domain::{DomainRef, PersonId, Revision, TimelineItem};
 use floe_protocol::*;
@@ -31,6 +32,10 @@ use uuid::Uuid;
 use conversion::ProtocolConversionError;
 
 pub struct FloeHandle {
+    app: AppHost<LegacyComposition>,
+}
+
+struct LegacyComposition {
     runtime: Runtime,
     core: Arc<FloeCore>,
     agent_runs: agent_run::AgentRuns,
@@ -39,10 +44,26 @@ pub struct FloeHandle {
     agent_vault: vault_host::VaultBridge,
 }
 
+impl HostServices for LegacyComposition {
+    fn shutdown(&self) -> Result<(), floe_app::HostError> {
+        #[cfg(unix)]
+        self.agent_vault.shutdown();
+        self.agent_runs.close(&self.runtime);
+        Ok(())
+    }
+}
+
+impl FloeHandle {
+    fn services(&self) -> &LegacyComposition {
+        self.app.legacy_services()
+    }
+}
+
 pub fn local_context(
     handle: &FloeHandle,
     request: LocalContextRequestDto,
 ) -> BridgeResult<LocalContextResultDto> {
+    let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     let connection = if matches!(
@@ -62,12 +83,6 @@ pub fn local_context(
     handle
         .local_context
         .request_bound(person_id, request.operation, connection.as_ref())
-}
-
-impl Drop for FloeHandle {
-    fn drop(&mut self) {
-        self.agent_runs.close(&self.runtime);
-    }
 }
 
 type BridgeResult<T> = Result<T, ErrorDto>;
@@ -207,7 +222,7 @@ fn handle<'a>(value: *mut FloeHandle) -> BridgeResult<&'a FloeHandle> {
 }
 
 fn snapshot(
-    handle: &FloeHandle,
+    handle: &LegacyComposition,
     person_id: PersonId,
     day: &DayQueryDto,
 ) -> BridgeResult<DaySnapshotDto> {
@@ -229,13 +244,14 @@ fn snapshot(
 pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult<DaySnapshotDto> {
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
-    snapshot(handle, person_id, &request.day)
+    snapshot(handle.services(), person_id, &request.day)
 }
 
 pub fn agent_fixture(
     handle: &FloeHandle,
     request: AgentFixtureRequestDto,
 ) -> BridgeResult<AgentFixtureResultDto> {
+    let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     let session = match request.operation {
@@ -326,6 +342,7 @@ pub fn calendar_actions(
     handle: &FloeHandle,
     request: CalendarActionRequestDto,
 ) -> BridgeResult<CalendarActionsResult> {
+    let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     let recover = matches!(
@@ -514,6 +531,7 @@ pub fn calendar_actions(
 }
 
 pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<MutationResultDto> {
+    let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     parse_date(&request.day.date)?;

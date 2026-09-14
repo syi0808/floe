@@ -14,6 +14,7 @@ chrono.workspace = true
 floe-core = { path = "../floe-core" }
 floe-agent = { path = "../floe-agent" }
 floe-agent-contract = { path = "../contracts/agent" }
+floe-app = { path = "../app" }
 floe-diagnostics = { path = "../platform/diagnostics" }
 floe-domain = { path = "../floe-domain" }
 floe-infra = { path = "../floe-infra" }

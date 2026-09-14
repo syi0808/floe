@@ -60,6 +60,7 @@ pub(crate) fn run(
     handle: &FloeHandle,
     request: AgentFixtureRunRequestDto,
 ) -> BridgeResult<AgentFixtureRunDto> {
+    let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     let session_id = parse_id(&request.session_id, "session_id", |value| value)?;
