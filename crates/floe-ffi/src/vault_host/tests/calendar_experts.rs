@@ -553,6 +553,211 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     assert_eq!(server.join().unwrap().len(), 1);
 }
 
+#[test]
+fn production_builtin_expert_persists_access_denial_through_registered_task() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    assert_eq!(
+        perform(&worker, person, AgentVaultActionDto::Create {}).failure,
+        None
+    );
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = commitments_denial_server();
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "commitments-expert-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let result = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationTurn {
+            request: floe_protocol::AgentConversationTurnRequestDto {
+                session_id: session.id.to_string(),
+                expected_revision: session.revision,
+                text: "Review my commitments".into(),
+                device_id: "mac-local".into(),
+                continuation: false,
+                remote_route: Some(route),
+            },
+        },
+    );
+    assert_eq!(result.failure, None, "result: {result:?}");
+    let session = result.session.unwrap();
+    let task_id = session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            AgentMessage::Delegation { task, .. }
+                if task.agent_id == floe_agent::BuiltinExpertKind::Commitments.package_id()
+                    && task.state == floe_agent::A2ATaskState::Failed
+                    && task.failure == Some(AgentFailure::AccessReviewRequired) =>
+            {
+                Some(task.id)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("durable Commitments denial: {session:?}"));
+    assert_eq!(server.join().unwrap().len(), 2);
+    assert_eq!(
+        perform(&worker, person, AgentVaultActionDto::Lock {}).failure,
+        None
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let reopened = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let task = runtime
+        .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(task_id).unwrap()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.snapshot.state, floe_agent_contract::TaskState::Failed);
+    assert_eq!(
+        task.snapshot.issue,
+        Some(AgentFailure::AccessReviewRequired)
+    );
+}
+
+fn commitments_denial_server() -> (
+    floe_protocol::AgentRemoteRouteDto,
+    std::thread::JoinHandle<Vec<String>>,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let steps = [
+            floe_agent::ModelStep::Delegate {
+                agent_id: floe_agent::BuiltinExpertKind::Commitments
+                    .package_id()
+                    .into(),
+                message: "Review my commitments".into(),
+            },
+            floe_agent::ModelStep::Answer {
+                text: "Mail access needs review before I can check commitments.".into(),
+            },
+        ];
+        let mut requests = vec![];
+        let mut model_index = 0;
+        for _ in 0..2 {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![];
+            loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if body.len() >= length {
+                        requests.push(text.to_string());
+                        break;
+                    }
+                }
+            }
+            let request = requests.last().unwrap();
+            let body = if request.starts_with("POST /v1/views/mail.communication ") {
+                assert!(
+                    request.starts_with("POST /v1/views/mail.communication "),
+                    "unexpected request: {}",
+                    request.lines().next().unwrap_or_default()
+                );
+                let now = chrono::Utc::now().timestamp_millis();
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view": {
+                        "schema_version": 1,
+                        "view_id": "mail.communication",
+                        "source_handle": "mail:selected",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 300_000,
+                        "coverage_complete": true,
+                        "items": []
+                    }
+                })
+                .to_string()
+            } else {
+                assert!(request.starts_with("POST /v1/agent "));
+                let step = &steps[model_index];
+                model_index += 1;
+                let output = serde_json::json!({"output": [step], "used_tokens": 10});
+                serde_json::json!({
+                    "schema_version": 1,
+                    "purpose": "everyday_assistance",
+                    "trace_id": "a".repeat(32),
+                    "routing": {
+                        "placement": "server_local",
+                        "external_transfer": false,
+                        "replay_source": "a".repeat(64)
+                    },
+                    "output": output.to_string()
+                })
+                .to_string()
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        }
+        requests
+    });
+    (
+        floe_protocol::AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "a".repeat(32),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+            recipient: None,
+            calendar_connections: vec![],
+            pairing: None,
+        },
+        server,
+    )
+}
+
 fn answer_server(
     steps: Vec<floe_agent::ModelStep>,
 ) -> (

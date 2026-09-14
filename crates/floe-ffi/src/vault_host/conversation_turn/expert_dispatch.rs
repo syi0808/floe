@@ -1,6 +1,230 @@
 use super::*;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
 
 pub(in crate::vault_host) mod schedule;
+
+#[derive(Clone)]
+pub(in crate::vault_host) struct LegacyExpertEndpointContext {
+    pub request: floe_protocol::AgentConversationTurnRequestDto,
+    pub context: AgentContext,
+    pub session_id: Uuid,
+    pub max_output_bytes: usize,
+}
+
+pub(in crate::vault_host) struct LegacyExpertEndpoint<Keys> {
+    core: Arc<FloeCore>,
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    local_context: Arc<LocalContextStore>,
+    contexts: Mutex<HashMap<Uuid, LegacyExpertEndpointContext>>,
+}
+
+impl<Keys> LegacyExpertEndpoint<Keys> {
+    pub(in crate::vault_host) fn new(
+        core: Arc<FloeCore>,
+        vault: Arc<EncryptedAgentVault<Keys>>,
+        local_context: Arc<LocalContextStore>,
+    ) -> Self {
+        Self {
+            core,
+            vault,
+            local_context,
+            contexts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(in crate::vault_host) fn stage(
+        &self,
+        run_id: Uuid,
+        context: LegacyExpertEndpointContext,
+    ) -> Result<(), AgentFailure> {
+        if run_id.is_nil() || context.session_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut contexts = self
+            .contexts
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if contexts.len() >= 4 || contexts.insert(run_id, context).is_some() {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
+    pub(in crate::vault_host) fn clear(&self, run_id: Uuid) -> Result<(), AgentFailure> {
+        self.contexts
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .remove(&run_id);
+        Ok(())
+    }
+}
+
+impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for LegacyExpertEndpoint<Keys> {
+    fn execute<'a>(
+        &'a self,
+        invocation: EndpointInvocation,
+        scope: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
+        Box::pin(async move {
+            let run_id = invocation
+                .request
+                .parent_run_id
+                .ok_or(AgentFailure::InvalidInput)?;
+            let staged = self
+                .contexts
+                .lock()
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .remove(&run_id)
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if invocation.request.principal != self.vault.person_id().to_string()
+                || invocation.request.selected_agent_id == BuiltinExpertKind::Schedule.package_id()
+                || staged.session_id != super::session_uuid(&staged.request.session_id)?
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let source_client = staged
+                .request
+                .remote_route
+                .as_ref()
+                .map(|route| ServerSourceClient::new(route.clone()))
+                .transpose()?;
+            let model = Model::new(staged.request.remote_route.clone())?;
+            let remote_reader = match (&model, staged.request.remote_route.as_ref()) {
+                (Model::Server(_), Some(route)) => {
+                    let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+                    if pairing.person_id != self.vault.person_id().to_string()
+                        || pairing.device_id != staged.request.device_id
+                    {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    Some(remote_views::RemoteViewReader {
+                        vault: &self.vault,
+                        source_client: source_client
+                            .as_ref()
+                            .ok_or(AgentFailure::CapabilityUnavailable)?,
+                        person_id: self.vault.person_id(),
+                        client_id: &pairing.client_id,
+                        device_id: &pairing.device_id,
+                        route,
+                    })
+                }
+                _ => None,
+            };
+            let attention_reader = PersonalAttentionReader {
+                vault: &self.vault,
+                local_context: &self.local_context,
+                device_id: &staged.request.device_id,
+            };
+            let people_reader = PersonalPeopleReader {
+                vault: &self.vault,
+                local_context: &self.local_context,
+                device_id: &staged.request.device_id,
+            };
+            let feasibility_reader = PersonalFeasibilityReader {
+                vault: &self.vault,
+                local_context: &self.local_context,
+                device_id: &staged.request.device_id,
+            };
+            let wellbeing_reader = PersonalWellbeingReader {
+                vault: &self.vault,
+                local_context: &self.local_context,
+                device_id: &staged.request.device_id,
+            };
+            let governed_store = self.vault.governed_general_store(staged.session_id);
+            let recorder = StoreResultRecorder {
+                store: &governed_store,
+            };
+            let context_reader = ConversationContextReader {
+                core: &self.core,
+                vault: &self.vault,
+                person_id: self.vault.person_id(),
+            };
+            let policy = super::policy(&model, staged.request.remote_route.as_ref());
+            let cards = self.vault.enabled_expert_cards().await?;
+            let builtin_setup = self
+                .vault
+                .builtin_expert_overview()
+                .await?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .setup;
+            let experts = ConversationExperts {
+                model: &model,
+                source_client: source_client.as_ref(),
+                policy: &policy,
+                context: &staged.context,
+                local_context: &self.local_context,
+                attention: Some(&attention_reader),
+                people_reader: Some(&people_reader),
+                feasibility_reader: Some(&feasibility_reader),
+                wellbeing_reader: Some(&wellbeing_reader),
+                recorder: Some(&recorder),
+                remote_reader: remote_reader
+                    .as_ref()
+                    .map(|reader| reader as &dyn floe_context::SourceReader),
+                context_reader: Some(&context_reader),
+                task_views: &[],
+                cards,
+                builtin_setup: Some(builtin_setup),
+                schedule_runner: None,
+            };
+            let task_id = invocation.request.task_id.as_uuid();
+            governed_store.record_result_independent(task_id, task_id)?;
+            let task = experts
+                .handle_message(A2ASendMessageRequest {
+                    usage: Default::default(),
+                    schema_version: AGENT_VERSION,
+                    person_id: self.vault.person_id(),
+                    session_id: staged.session_id,
+                    parent_turn_id: run_id,
+                    agent_id: invocation.request.selected_agent_id.clone(),
+                    message: floe_agent::A2AMessage {
+                        message_id: invocation.request.invocation_key.as_uuid(),
+                        context_id: run_id,
+                        task_id: Some(task_id),
+                        role: A2AMessageRole::User,
+                        parts: vec![A2APart::Text {
+                            text: invocation.request.message.clone(),
+                        }],
+                    },
+                    max_output_bytes: staged.max_output_bytes,
+                    deadline: scope.deadline(),
+                    cancellation: scope.cancellation().clone(),
+                })
+                .await?;
+            if task.id != task_id
+                || task.context_id != run_id
+                || task.agent_id != invocation.request.selected_agent_id
+                || task.state != A2ATaskState::Completed
+                || task.failure.is_some()
+            {
+                return Err(AgentFailure::InvalidModelOutput);
+            }
+            let result = task
+                .data_part(EXPERT_RESULT_MEDIA_TYPE)
+                .or_else(|| task.result_text().ok())
+                .map(str::to_owned)
+                .ok_or(AgentFailure::InvalidModelOutput)?;
+            let coverage = governed_store
+                .result_coverage(task_id, task_id)?
+                .unwrap_or(floe_agent_contract::DependencyCoverage::Independent);
+            Ok(ExpertReport {
+                task_id: invocation.request.task_id,
+                principal: invocation.request.principal,
+                agent_id: invocation.request.selected_agent_id,
+                definition_revision: invocation.request.selected_definition_revision,
+                result,
+                artifacts: vec![],
+                coverage,
+                settlement: None,
+            })
+        })
+    }
+}
 
 pub(super) trait ScheduleTaskRunner: Send + Sync {
     fn run<'a>(
@@ -265,10 +489,14 @@ impl InProcessAgent for ConversationExperts<'_> {
                     .await?;
                 self.recorder
                     .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(invocation_id, invocation_id, source_view.dependency().clone())?;
+                    .record(
+                        invocation_id,
+                        invocation_id,
+                        source_view.dependency().clone(),
+                    )?;
                 let view: floe_agent::CommunicationView =
                     serde_json::from_value(source_view.payload().clone())
-                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
@@ -316,10 +544,14 @@ impl InProcessAgent for ConversationExperts<'_> {
                     .await?;
                 self.recorder
                     .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(invocation_id, invocation_id, source_view.dependency().clone())?;
+                    .record(
+                        invocation_id,
+                        invocation_id,
+                        source_view.dependency().clone(),
+                    )?;
                 let view: floe_agent::CommunicationView =
                     serde_json::from_value(source_view.payload().clone())
-                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let result: CommunicationExpertResult =
                     run_communication_expert(model, self.policy, mail_invocation(view)).await?;
                 drop(source_view);
@@ -339,10 +571,14 @@ impl InProcessAgent for ConversationExperts<'_> {
                     .await?;
                 self.recorder
                     .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(invocation_id, invocation_id, source_view.dependency().clone())?;
+                    .record(
+                        invocation_id,
+                        invocation_id,
+                        source_view.dependency().clone(),
+                    )?;
                 let view: floe_agent::WorkContextView =
                     serde_json::from_value(source_view.payload().clone())
-                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
@@ -366,10 +602,14 @@ impl InProcessAgent for ConversationExperts<'_> {
                     .await?;
                 self.recorder
                     .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(invocation_id, invocation_id, source_view.dependency().clone())?;
+                    .record(
+                        invocation_id,
+                        invocation_id,
+                        source_view.dependency().clone(),
+                    )?;
                 let view: floe_agent::LogisticsView =
                     serde_json::from_value(source_view.payload().clone())
-                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };

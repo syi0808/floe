@@ -1,13 +1,12 @@
 use floe_agent::{
-    A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
     AgentMessage as LegacyMessage, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
-    InProcessAgent, ModelRequest as LegacyModelRequest, ModelResponse as LegacyModelResponse,
+    ModelRequest as LegacyModelRequest, ModelResponse as LegacyModelResponse,
     ModelRunner as LegacyModelRunner, ModelStep as LegacyModelStep, UsageLedger,
 };
 use floe_agent_contract::{
     AgentDefinition, AllowedCatalog, Artifact, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, MessageRole, ModelPort, ModelRequest, ModelResponse, ModelStep,
-    TaskReceipt, TaskSnapshot, TaskState, ToolCall, ToolDescriptor, ToolPort, ToolResult,
+    TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
 use floe_core::{GovernedAgentSessionStore, VaultKeyProvider};
 use floe_domain::PersonId;
@@ -15,8 +14,7 @@ use floe_execution::ExecutionScope;
 use uuid::Uuid;
 
 use super::{
-    AgentContext, AgentFailure, BuiltinExpertKind, ConversationExperts, GovernedModel,
-    InferencePolicyDecision,
+    AgentContext, AgentFailure, BuiltinExpertKind, GovernedModel, InferencePolicyDecision,
 };
 
 const DEFINITION_REVISION: u64 = 1;
@@ -154,15 +152,13 @@ where
 }
 
 pub(super) struct LegacyDelegationPort<'a, Keys: VaultKeyProvider> {
-    pub experts: &'a ConversationExperts<'a>,
     pub task_coordinator: &'a floe_experts::TaskCoordinator<
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     pub schedule_endpoint: &'a super::expert_dispatch::schedule::ScheduleEndpoint<Keys>,
+    pub legacy_expert_endpoint: &'a super::expert_dispatch::LegacyExpertEndpoint<Keys>,
     pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
     pub context: &'a AgentContext,
-    pub store: &'a GovernedAgentSessionStore<'a, Keys>,
-    pub person_id: PersonId,
     pub session_id: Uuid,
     pub max_output_bytes: usize,
 }
@@ -174,11 +170,11 @@ impl<Keys: VaultKeyProvider + 'static> DelegationPort for LegacyDelegationPort<'
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
         Box::pin(async move {
+            let run_id = scope
+                .root_run_id()
+                .ok_or(AgentFailure::InvalidInput)?
+                .as_uuid();
             if request.selected_agent_id == BuiltinExpertKind::Schedule.package_id() {
-                let run_id = scope
-                    .root_run_id()
-                    .ok_or(AgentFailure::InvalidInput)?
-                    .as_uuid();
                 self.schedule_endpoint.stage(
                     run_id,
                     super::expert_dispatch::schedule::ScheduleEndpointContext {
@@ -196,45 +192,23 @@ impl<Keys: VaultKeyProvider + 'static> DelegationPort for LegacyDelegationPort<'
                 self.schedule_endpoint.clear(run_id)?;
                 return result;
             }
-            if request.principal != self.person_id.to_string()
-                || request.parent_run_id != scope.root_run_id().map(|run_id| run_id.as_uuid())
-                || scope.task_id() != Some(request.task_id)
-            {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let task_id = request.task_id.as_uuid();
-            self.store.record_result_independent(task_id, task_id)?;
-            let task = self
-                .experts
-                .handle_message(A2ASendMessageRequest {
-                    usage: UsageLedger::default(),
-                    schema_version: floe_agent::AGENT_VERSION,
-                    person_id: self.person_id,
+            self.legacy_expert_endpoint.stage(
+                run_id,
+                super::expert_dispatch::LegacyExpertEndpointContext {
+                    request: self.turn_request.clone(),
+                    context: self.context.clone(),
                     session_id: self.session_id,
-                    parent_turn_id: request.parent_run_id.ok_or(AgentFailure::InvalidInput)?,
-                    agent_id: request.selected_agent_id.clone(),
-                    message: A2AMessage {
-                        message_id: request.invocation_key.as_uuid(),
-                        context_id: request.parent_run_id.ok_or(AgentFailure::InvalidInput)?,
-                        task_id: Some(task_id),
-                        role: A2AMessageRole::User,
-                        parts: vec![A2APart::Text {
-                            text: request.message.clone(),
-                        }],
-                    },
                     max_output_bytes: self.max_output_bytes,
-                    deadline: scope.deadline(),
-                    cancellation: scope.cancellation().clone(),
-                })
-                .await?;
-            legacy_task_receipt(
+                },
+            )?;
+            let result = floe_agent_contract::DelegationPort::delegate(
+                self.task_coordinator,
                 request,
-                task,
-                self.store
-                    .result_coverage(task_id, task_id)?
-                    .unwrap_or(DependencyCoverage::Independent),
-                self.max_output_bytes,
+                scope,
             )
+            .await;
+            self.legacy_expert_endpoint.clear(run_id)?;
+            result
         })
     }
 }
@@ -276,7 +250,7 @@ pub(super) fn contract_tools(descriptors: &[CapabilityDescriptor]) -> Vec<ToolDe
         .collect()
 }
 
-pub(super) fn contract_definition(card: &floe_agent::AgentCard) -> AgentDefinition {
+pub(in crate::vault_host) fn contract_definition(card: &floe_agent::AgentCard) -> AgentDefinition {
     AgentDefinition {
         card: floe_agent_contract::AgentCard {
             schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
@@ -399,71 +373,6 @@ fn contract_response(
             tokens: response.used_tokens,
             cost_micros: response.cost_micros,
         },
-    })
-}
-
-fn legacy_task_receipt(
-    request: DelegationRequest,
-    task: A2ATask,
-    coverage: DependencyCoverage,
-    maximum_bytes: usize,
-) -> Result<TaskReceipt, AgentFailure> {
-    if task.id != request.task_id.as_uuid()
-        || task.context_id != request.parent_run_id.ok_or(AgentFailure::InvalidInput)?
-        || task.agent_id != request.selected_agent_id
-    {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    coverage
-        .validate()
-        .map_err(|_| AgentFailure::InvalidModelOutput)?;
-    let state = match task.state {
-        A2ATaskState::Submitted => TaskState::Submitted,
-        A2ATaskState::Working => TaskState::Working,
-        A2ATaskState::Completed => TaskState::Completed,
-        A2ATaskState::Failed => TaskState::Failed,
-        A2ATaskState::Cancelled => TaskState::Cancelled,
-        A2ATaskState::Rejected => TaskState::Rejected,
-    };
-    let result = if state == TaskState::Completed {
-        task.data_part(floe_agent::EXPERT_RESULT_MEDIA_TYPE)
-            .or_else(|| task.result_text().ok())
-            .map(str::to_owned)
-            .ok_or(AgentFailure::InvalidModelOutput)?
-            .into()
-    } else {
-        None
-    };
-    let issue = if state == TaskState::Completed {
-        None
-    } else {
-        Some(task.failure.unwrap_or(match state {
-            TaskState::Cancelled => AgentFailure::Cancelled,
-            TaskState::Rejected => AgentFailure::CapabilityDenied,
-            _ => AgentFailure::CapabilityUnavailable,
-        }))
-    };
-    let snapshot = TaskSnapshot {
-        task_id: request.task_id,
-        parent_run_id: request.parent_run_id,
-        principal: request.principal,
-        agent_id: request.selected_agent_id,
-        definition_revision: request.selected_definition_revision,
-        state,
-        result,
-        artifacts: vec![],
-        coverage: if state == TaskState::Completed {
-            coverage
-        } else {
-            DependencyCoverage::Unknown
-        },
-        issue,
-    };
-    snapshot.validate(maximum_bytes)?;
-    Ok(TaskReceipt {
-        task_id: snapshot.task_id,
-        snapshot,
-        replay: None,
     })
 }
 

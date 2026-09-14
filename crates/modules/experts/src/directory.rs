@@ -113,6 +113,25 @@ impl Directory {
         Ok(state.revision)
     }
 
+    pub fn unregister(&self, agent_id: &str) -> Result<u64, AgentFailure> {
+        if agent_id.trim().is_empty() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        state
+            .endpoints
+            .remove(agent_id)
+            .ok_or(AgentFailure::NotFound)?;
+        state.revision = state
+            .revision
+            .checked_add(1)
+            .ok_or(AgentFailure::Conflict)?;
+        Ok(state.revision)
+    }
+
     pub fn list_cards(&self, query: DirectoryQuery<'_>) -> Result<AllowedCatalog, AgentFailure> {
         validate_query(&query)?;
         let state = self

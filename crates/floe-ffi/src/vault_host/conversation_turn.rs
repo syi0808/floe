@@ -32,7 +32,7 @@ use super::personal_grants;
 use super::remote_views;
 use super::session_uuid;
 
-mod engine_ports;
+pub(in crate::vault_host) mod engine_ports;
 
 struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     core: &'a FloeCore,
@@ -47,6 +47,7 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
+    legacy_expert_endpoint: &'a expert_dispatch::LegacyExpertEndpoint<Keys>,
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
@@ -57,6 +58,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
+    legacy_expert_endpoint: &expert_dispatch::LegacyExpertEndpoint<Keys>,
     conversation_repository: &std::sync::Arc<
         crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
     >,
@@ -102,6 +104,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         conversation_repository,
         task_coordinator,
         schedule_endpoint,
+        legacy_expert_endpoint,
     };
     Box::pin(expert_dispatch::run(&inputs, context, cancellation, emit)).await
 }
@@ -280,8 +283,9 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     };
     if !request.continuation {
         let legacy_capabilities = capabilities.descriptors(person_id);
+        let active_agents = experts.agent_cards(person_id);
         let catalog = floe_agent_contract::AllowedCatalog {
-            cards: expert_cards
+            cards: active_agents
                 .iter()
                 .map(engine_ports::contract_definition)
                 .collect(),
@@ -318,7 +322,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             person_id,
             session_id,
             capabilities: legacy_capabilities,
-            active_agents: expert_cards,
+            active_agents,
             max_output_bytes: budget.max_output_bytes,
         };
         let tool_port = engine_ports::LegacyToolPort {
@@ -329,13 +333,11 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             max_output_bytes: budget.max_output_bytes,
         };
         let delegation_port = engine_ports::LegacyDelegationPort {
-            experts: &experts,
             task_coordinator: inputs.task_coordinator,
             schedule_endpoint: inputs.schedule_endpoint,
+            legacy_expert_endpoint: inputs.legacy_expert_endpoint,
             turn_request: request,
             context: &context,
-            store: &governed_store,
-            person_id,
             session_id,
             max_output_bytes: budget.max_output_bytes,
         };

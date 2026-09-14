@@ -179,7 +179,9 @@ struct OpenVault<Keys> {
     _conversation_repository: Arc<VaultConversationRepository<Keys>>,
     _recovered_conversation_runs: Vec<floe_core::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
+    directory: Directory,
     schedule_endpoint: Arc<conversation_turn::expert_dispatch::schedule::ScheduleEndpoint<Keys>>,
+    legacy_expert_endpoint: Arc<conversation_turn::expert_dispatch::LegacyExpertEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
 }
 
@@ -196,6 +198,13 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         let directory = Directory::default();
         let schedule_endpoint = Arc::new(
             conversation_turn::expert_dispatch::schedule::ScheduleEndpoint::new(
+                Arc::clone(&core),
+                Arc::clone(&vault),
+                Arc::clone(&local_context),
+            ),
+        );
+        let legacy_expert_endpoint = Arc::new(
+            conversation_turn::expert_dispatch::LegacyExpertEndpoint::new(
                 core,
                 Arc::clone(&vault),
                 local_context,
@@ -225,9 +234,39 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             _conversation_repository: conversation_repository,
             _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
+            directory,
             schedule_endpoint,
+            legacy_expert_endpoint,
             _recovered_tasks: recovered_tasks,
         })
+    }
+
+    async fn sync_expert_directory(&self) -> Result<(), AgentFailure> {
+        for kind in BuiltinExpertKind::BUILTIN_SETUP {
+            match self.directory.unregister(kind.package_id()) {
+                Ok(_) | Err(AgentFailure::NotFound) => {}
+                Err(failure) => return Err(failure),
+            }
+        }
+        for card in self.vault.enabled_expert_cards().await? {
+            if !BuiltinExpertKind::BUILTIN_SETUP
+                .iter()
+                .any(|kind| card.id == kind.package_id())
+            {
+                continue;
+            }
+            self.directory.register(
+                DirectoryEntry {
+                    definition: conversation_turn::engine_ports::contract_definition(&card),
+                    reviewed: true,
+                    enabled: true,
+                    admitted_principals: vec![self.vault.person_id().to_string()],
+                    purposes: vec!["everyday-assistance".into()],
+                },
+                self.legacy_expert_endpoint.clone(),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -1396,12 +1435,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 );
                 return Err(failure);
             }
+            vault.sync_expert_directory().await?;
             let session = match Box::pin(conversation_turn::run(
                 core,
                 vault,
                 local_context,
                 &vault.task_coordinator,
                 &vault.schedule_endpoint,
+                &vault.legacy_expert_endpoint,
                 &vault._conversation_repository,
                 job.person,
                 floe_agent_contract::CommandId::from_uuid(job.id)
