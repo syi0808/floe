@@ -2449,3 +2449,42 @@ Calendar dependencies rather than the optional Task/Note evidence. P11/P15 must
 next add the FFI Schedule adapter and durable Task/result provenance recording,
 then validate the common Manager-selected flow before P24 removes
 `schedule::try_run`. P15 and T01 remain incomplete until that cutover.
+
+### P11 durable Task repository foundation checkpoint (2026-09-15)
+
+The Experts-owned Task contract now makes repository activation authoritative.
+`TaskCoordinator::activate` obtains a store-issued executor generation and
+validates every recovered receipt before accepting delegation. Task records have
+bounded serialized form, immutable invocation/request identity, explicit
+aggregate revision and generation, lifecycle-specific terminal shapes, and
+legal CAS transitions. A strictly newer activation interrupts only orphaned
+Submitted/Working records; terminal Tasks remain immutable and exact retries
+continue to return their durable receipt.
+
+The legacy encrypted Vault now contains the first Task repository storage
+subset needed by the future adapter. Schema/version/index validation, generation
+increment and orphan recovery run in one immediate transaction during
+activation. Admission is disabled for a newly opened Vault until activation
+succeeds, is Person-bound, row- and payload-bounded, and accepts only exact
+immutable replay. Duplicated state/revision/generation columns are checked
+against the encrypted canonical payload on reads, and transitions use exact
+revision plus active-generation CAS. Commit or post-commit key/access failures
+retain the Vault's existing unavailable latch behavior.
+
+Implemented: durable encrypted Task admission, reads, CAS transitions,
+store-authoritative generation activation and restart orphan recovery. Wired:
+Experts unit/integration fixtures and a legacy Core storage bridge only; no app
+worker owns a production TaskCoordinator yet. Controlled validation passed all
+seven Experts delegation tests, two new encrypted Vault Task tests, focused
+Experts Clippy, focused Core Clippy with only the crate's pre-existing lint
+classes allowed, diff check and the migration boundary gate (19 nodes / 59
+edges / no errors). No Apple UI, live provider account or actual model was
+exercised.
+
+Blocker/remove-by: `crates/floe-core/src/agent_vault/tasks.rs` is a narrow
+legacy storage bridge, not the target owner; P13 must move it behind the
+`floe-vault` TaskRepository adapter and remove the Core export. P11 still needs
+Worker-lifetime activation and exact DTO conversion in FFI. Schedule completion
+and the Task terminal result are not yet one atomic durable operation, so P15
+must not route production dispatch through this repository until that crash
+window and Task/Note provenance are closed. P11 remains pending.
