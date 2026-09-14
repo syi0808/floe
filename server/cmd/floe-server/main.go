@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"floe/server/internal/application"
 	"floe/server/internal/codexauth"
 	"floe/server/internal/connectors/gmail"
 	"floe/server/internal/connectors/microsoftmail"
-	"floe/server/internal/console"
 	"floe/server/internal/credentials"
 	"floe/server/internal/envfile"
 	"floe/server/internal/googleauth"
@@ -47,81 +47,203 @@ func main() {
 		vault := credentials.Keychain{}
 		runtime := codexauth.New(vault)
 		defer runtime.Close()
-		management, err := console.New(directory, address, vault, runtime)
+		local, err := application.NewLocal(application.LocalConfig{Directory: directory, Address: address, Vault: vault, Runtime: runtime})
 		if err != nil {
 			log.Fatal("Cannot start local console: check private data directory and loopback address")
 		}
+		management := local.Management
 		if clientID := os.Getenv("FLOE_GITHUB_OAUTH_CLIENT_ID"); clientID != "" {
-			githubAuth, authError := workoauth.NewGitHub(vault, workoauth.Config{ClientID: clientID})
-			if authError != nil || management.SetGitHubAuth(githubAuth) != nil {
-				log.Fatal("Cannot configure GitHub OAuth")
+			var githubAuth *workoauth.Runtime
+			status := application.ConfigureOptional("github.oauth", func() error {
+				var authError error
+				githubAuth, authError = workoauth.NewGitHub(vault, workoauth.Config{ClientID: clientID})
+				if authError != nil {
+					return authError
+				}
+				if err := management.SetGitHubAuth(githubAuth); err != nil {
+					githubAuth.Close()
+					githubAuth = nil
+					_ = management.SetGitHubAuth(nil)
+					return err
+				}
+				return nil
+			})
+			if status.Available {
+				defer githubAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", status.Name, status.Diagnostic)
 			}
-			defer githubAuth.Close()
 		}
 		if clientID := os.Getenv("FLOE_SLACK_OAUTH_CLIENT_ID"); clientID != "" {
-			slackAuth, authError := workoauth.NewSlack(vault, workoauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_SLACK_OAUTH_CLIENT_SECRET")})
-			if authError != nil || management.SetSlackAuth(slackAuth) != nil {
-				log.Fatal("Cannot configure Slack OAuth")
+			var slackAuth *workoauth.Runtime
+			status := application.ConfigureOptional("slack.oauth", func() error {
+				var authError error
+				slackAuth, authError = workoauth.NewSlack(vault, workoauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_SLACK_OAUTH_CLIENT_SECRET")})
+				if authError != nil {
+					return authError
+				}
+				if err := management.SetSlackAuth(slackAuth); err != nil {
+					slackAuth.Close()
+					slackAuth = nil
+					_ = management.SetSlackAuth(nil)
+					return err
+				}
+				return nil
+			})
+			if status.Available {
+				defer slackAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", status.Name, status.Diagnostic)
 			}
-			defer slackAuth.Close()
 		}
 		if clientID := os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_ID"); clientID != "" {
 			googleConfig := googleauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}
-			gmailAuth, authError := googleauth.New(vault, googleConfig)
-			if authError != nil {
-				log.Fatal("Cannot configure Google OAuth")
+			var gmailAuth *googleauth.Runtime
+			var stopGmailSync context.CancelFunc
+			gmailStatus := application.ConfigureOptional("google.gmail", func() error {
+				var authError error
+				gmailAuth, authError = googleauth.New(vault, googleConfig)
+				if authError != nil {
+					return authError
+				}
+				query := os.Getenv("FLOE_GMAIL_QUERY")
+				if query == "" {
+					query = "newer_than:30d -in:spam -in:trash"
+				}
+				gmailService, serviceError := gmail.NewService(filepath.Join(directory, "connectors", "gmail"), "primary", query, gmailAuth)
+				if serviceError != nil {
+					gmailAuth.Close()
+					gmailAuth = nil
+					return serviceError
+				}
+				management.SetGmailAuth(gmailService)
+				syncContext, stopSync := context.WithCancel(context.Background())
+				stopGmailSync = stopSync
+				go func() { _ = gmailService.Run(syncContext, 5*time.Minute) }()
+				return nil
+			})
+			if gmailStatus.Available {
+				defer stopGmailSync()
+				defer gmailAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", gmailStatus.Name, gmailStatus.Diagnostic)
 			}
-			defer gmailAuth.Close()
-			driveAuth, driveAuthError := googleauth.NewDrive(vault, googleConfig)
-			if driveAuthError != nil || management.SetDriveAuth(driveAuth) != nil {
-				log.Fatal("Cannot configure Google Drive OAuth")
+
+			var driveAuth *googleauth.Runtime
+			driveStatus := application.ConfigureOptional("google.drive", func() error {
+				var err error
+				driveAuth, err = googleauth.NewDrive(vault, googleConfig)
+				if err != nil {
+					return err
+				}
+				if err := management.SetDriveAuth(driveAuth); err != nil {
+					driveAuth.Close()
+					driveAuth = nil
+					_ = management.SetDriveAuth(nil)
+					return err
+				}
+				return nil
+			})
+			if driveStatus.Available {
+				defer driveAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", driveStatus.Name, driveStatus.Diagnostic)
 			}
-			defer driveAuth.Close()
-			calendarAuth, calendarAuthError := googleauth.NewCalendar(vault, googleConfig)
-			if calendarAuthError != nil || management.SetCalendarAuth(calendarAuth) != nil {
-				log.Fatal("Cannot configure Google Calendar OAuth")
+
+			var calendarAuth *googleauth.Runtime
+			calendarStatus := application.ConfigureOptional("google.calendar", func() error {
+				var err error
+				calendarAuth, err = googleauth.NewCalendar(vault, googleConfig)
+				if err != nil {
+					return err
+				}
+				if err := management.SetCalendarAuth(calendarAuth); err != nil {
+					calendarAuth.Close()
+					calendarAuth = nil
+					_ = management.SetCalendarAuth(nil)
+					return err
+				}
+				return nil
+			})
+			if calendarStatus.Available {
+				defer calendarAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", calendarStatus.Name, calendarStatus.Diagnostic)
 			}
-			defer calendarAuth.Close()
-			query := os.Getenv("FLOE_GMAIL_QUERY")
-			if query == "" {
-				query = "newer_than:30d -in:spam -in:trash"
-			}
-			gmailService, serviceError := gmail.NewService(filepath.Join(directory, "connectors", "gmail"), "primary", query, gmailAuth)
-			if serviceError != nil {
-				log.Fatal("Cannot initialize Gmail connector")
-			}
-			management.SetGmailAuth(gmailService)
-			syncContext, stopSync := context.WithCancel(context.Background())
-			defer stopSync()
-			go func() { _ = gmailService.Run(syncContext, 5*time.Minute) }()
 		}
 		if clientID := os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_ID"); clientID != "" {
-			microsoftAuth, authError := microsoftauth.New(vault, microsoftauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")})
-			if authError != nil {
-				log.Fatal("Cannot configure Microsoft OAuth")
+			microsoftConfig := microsoftauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")}
+			var microsoftAuth *microsoftauth.Runtime
+			mailStatus := application.ConfigureOptional("microsoft.mail", func() error {
+				var err error
+				microsoftAuth, err = microsoftauth.New(vault, microsoftConfig)
+				if err != nil {
+					return err
+				}
+				microsoftClient, clientError := microsoftmail.New(microsoftAuth, "primary")
+				if clientError != nil {
+					microsoftAuth.Close()
+					microsoftAuth = nil
+					return clientError
+				}
+				microsoftService, serviceError := microsoftmail.NewService(microsoftClient)
+				if serviceError != nil {
+					microsoftAuth.Close()
+					microsoftAuth = nil
+					return serviceError
+				}
+				management.SetMicrosoftMail(microsoftAuth, microsoftService)
+				return nil
+			})
+			if mailStatus.Available {
+				defer microsoftAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", mailStatus.Name, mailStatus.Diagnostic)
 			}
-			defer microsoftAuth.Close()
-			microsoftCalendarAuth, calendarAuthError := microsoftauth.NewCalendar(vault, microsoftauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")})
-			if calendarAuthError != nil || management.SetMicrosoftCalendarAuth(microsoftCalendarAuth) != nil {
-				log.Fatal("Cannot configure Microsoft Calendar OAuth")
+
+			var microsoftCalendarAuth *microsoftauth.Runtime
+			calendarStatus := application.ConfigureOptional("microsoft.calendar", func() error {
+				var err error
+				microsoftCalendarAuth, err = microsoftauth.NewCalendar(vault, microsoftConfig)
+				if err != nil {
+					return err
+				}
+				if err := management.SetMicrosoftCalendarAuth(microsoftCalendarAuth); err != nil {
+					microsoftCalendarAuth.Close()
+					microsoftCalendarAuth = nil
+					_ = management.SetMicrosoftCalendarAuth(nil)
+					return err
+				}
+				return nil
+			})
+			if calendarStatus.Available {
+				defer microsoftCalendarAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", calendarStatus.Name, calendarStatus.Diagnostic)
 			}
-			defer microsoftCalendarAuth.Close()
-			microsoftTeamsAuth, teamsAuthError := microsoftauth.NewTeams(vault, microsoftauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")})
-			if teamsAuthError != nil || management.SetMicrosoftTeamsAuth(microsoftTeamsAuth) != nil {
-				log.Fatal("Cannot configure Microsoft Teams OAuth")
+
+			var microsoftTeamsAuth *microsoftauth.Runtime
+			teamsStatus := application.ConfigureOptional("microsoft.teams", func() error {
+				var err error
+				microsoftTeamsAuth, err = microsoftauth.NewTeams(vault, microsoftConfig)
+				if err != nil {
+					return err
+				}
+				if err := management.SetMicrosoftTeamsAuth(microsoftTeamsAuth); err != nil {
+					microsoftTeamsAuth.Close()
+					microsoftTeamsAuth = nil
+					_ = management.SetMicrosoftTeamsAuth(nil)
+					return err
+				}
+				return nil
+			})
+			if teamsStatus.Available {
+				defer microsoftTeamsAuth.Close()
+			} else {
+				log.Printf("Optional module %s unavailable: %s", teamsStatus.Name, teamsStatus.Diagnostic)
 			}
-			defer microsoftTeamsAuth.Close()
-			microsoftClient, clientError := microsoftmail.New(microsoftAuth, "primary")
-			if clientError != nil {
-				log.Fatal("Cannot initialize Microsoft Mail connector")
-			}
-			microsoftService, serviceError := microsoftmail.NewService(microsoftClient)
-			if serviceError != nil {
-				log.Fatal("Cannot initialize Microsoft Mail connector")
-			}
-			management.SetMicrosoftMail(microsoftAuth, microsoftService)
 		}
-		handler = management
+		handler = local
 		log.Printf("Local dashboard: http://%s/manage/", address)
 		log.Printf("Administrator token file (keep private): %s", filepath.Join(directory, "admin-token"))
 	} else {
