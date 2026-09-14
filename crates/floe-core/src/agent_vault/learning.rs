@@ -920,6 +920,30 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
+impl<Keys: VaultKeyProvider> floe_knowledge::LearnerJobRepository for EncryptedAgentVault<Keys> {
+    async fn discover_reviews(&self, now: DateTime<Utc>, limit: usize) -> Result<(), AgentFailure> {
+        self.discover_explicit_learner_reviews(now, limit)
+            .await
+            .map(|_| ())
+    }
+
+    async fn claim_review(&self, now: DateTime<Utc>) -> Result<Option<LearnerReviewJob>, AgentFailure> {
+        self.claim_learner_review(now).await
+    }
+
+    async fn settle_review(
+        &self,
+        job_id: Uuid,
+        expected_attempt: u8,
+        settlement: LearnerJobSettlement,
+        now: DateTime<Utc>,
+    ) -> Result<(), AgentFailure> {
+        self.settle_learner_review(job_id, expected_attempt, settlement, now)
+            .await
+            .map(|_| ())
+    }
+}
+
 impl<Keys: VaultKeyProvider> floe_knowledge::MemoryContextReader for EncryptedAgentVault<Keys> {
     async fn read_memory_context(
         &self,

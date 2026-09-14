@@ -7,8 +7,8 @@ use floe_domain::PersonId;
 use floe_inference::{ModelProfile, PlannedRoute};
 use floe_infra::learner_model::FoundationLearnerTransport;
 use floe_knowledge::{
-    InferenceLearnerModel, LearnerBudget, LearnerInferenceResponse, LearnerInferenceTransport,
-    LearnerJobSettlement, LearnerModelRequest, LearnerRuntime,
+    InferenceLearnerModel, LearnerInferenceResponse, LearnerInferenceTransport, LearnerJobState,
+    LearnerModelRequest, LearnerService,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -87,40 +87,28 @@ pub(super) async fn run() -> Result<Value, AgentFailure> {
     if queued.len() != 1 {
         return Err(AgentFailure::Conflict);
     }
-    let claimed = vault
-        .claim_learner_review(Utc::now())
-        .await?
-        .ok_or(AgentFailure::NotFound)?;
-    if claimed.id != queued[0].id {
-        return Err(AgentFailure::Conflict);
-    }
     let transport = SmokeTransport;
     let profile_id = transport.profile()?.id;
     let model = InferenceLearnerModel::new(transport);
-    let candidate = LearnerRuntime {
+    let processed = LearnerService {
         model: &model,
-        candidates: &vault,
-        budget: LearnerBudget::default(),
-        extractor_version: floe_knowledge::prompts::LEARNER_EXTRACTOR_VERSION,
-        prompt_version: floe_knowledge::prompts::LEARNER_PROMPT_VERSION,
+        repository: &vault,
     }
-    .review(claimed.input, Cancellation::default())
+    .run_next(Cancellation::default())
     .await?;
-    vault
-        .settle_learner_review(
-            claimed.id,
-            claimed.attempts,
-            LearnerJobSettlement::Completed {
-                candidate_id: candidate.as_ref().map(|candidate| candidate.id),
-            },
-            Utc::now(),
-        )
+    let settled = vault
+        .enqueue_learner_review(queued[0].input.clone(), Utc::now())
         .await?;
+    if !processed || settled.state != LearnerJobState::Completed {
+        return Err(settled.last_failure.unwrap_or(AgentFailure::Conflict));
+    }
     let pending = vault.memory_review_snapshot().await?;
-    if pending.candidates.len() != usize::from(candidate.is_some()) {
+    if pending.candidates.len() != usize::from(settled.candidate_id.is_some())
+        || pending.candidates.first().map(|candidate| candidate.id) != settled.candidate_id
+    {
         return Err(AgentFailure::Conflict);
     }
-    if let Some(candidate) = &candidate {
+    if let Some(candidate) = pending.candidates.first() {
         let floe_knowledge::KnowledgePayload::Memory { value } = &candidate.payload else {
             return Err(AgentFailure::InvalidModelOutput);
         };

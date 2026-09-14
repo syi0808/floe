@@ -164,8 +164,7 @@ struct Worker {
     sender: mpsc::SyncSender<Arc<Job>>,
     active: Mutex<Option<Arc<Job>>>,
     closing: Arc<AtomicBool>,
-    foreground_pending: Arc<AtomicBool>,
-    background: Arc<Mutex<Option<Cancellation>>>,
+    learner_scheduling: floe_knowledge::LearnerScheduling,
 }
 
 struct Job {
@@ -288,10 +287,8 @@ impl Worker {
         let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(1);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = closing.clone();
-        let foreground_pending = Arc::new(AtomicBool::new(false));
-        let worker_foreground_pending = foreground_pending.clone();
-        let background = Arc::new(Mutex::new(None));
-        let worker_background = background.clone();
+        let learner_scheduling = floe_knowledge::LearnerScheduling::default();
+        let worker_learner_scheduling = learner_scheduling.clone();
         std::thread::Builder::new()
             .name("floe-agent-vault".into())
             .stack_size(AGENT_VAULT_STACK_SIZE)
@@ -305,7 +302,6 @@ impl Worker {
                     match receiver.recv_timeout(learner_delay) {
                         Ok(job) => {
                             learner_delay = LEARNER_IDLE_DELAY;
-                            worker_foreground_pending.store(false, Ordering::Release);
                             if worker_closing.load(Ordering::Acquire) {
                                 break;
                             }
@@ -400,6 +396,7 @@ impl Worker {
                                         progress.failure = Some(failure);
                                     }
                                 }
+                                let _ = worker_learner_scheduling.foreground_finished();
                                 progress.done = true;
                             }
                         }
@@ -411,7 +408,7 @@ impl Worker {
                                 learner_delay = LEARNER_EMPTY_DELAY;
                                 continue;
                             };
-                            if !worker_foreground_pending.load(Ordering::Acquire) {
+                            if matches!(worker_learner_scheduling.foreground_pending(), Ok(false)) {
                                 let cleanup_result = match &runtime {
                                     Ok(runtime) => {
                                         runtime.block_on(open_vault.drain_context_cleanup(16))
@@ -430,30 +427,23 @@ impl Worker {
                                     }
                                 }
                             }
-                            let cancellation = Cancellation::default();
-                            if let Ok(mut active) = worker_background.lock() {
-                                *active = Some(cancellation.clone());
-                            } else {
-                                learner_delay = LEARNER_ERROR_DELAY;
-                                continue;
-                            }
-                            if worker_foreground_pending.load(Ordering::Acquire) {
-                                if let Ok(mut active) = worker_background.lock() {
-                                    *active = None;
+                            let learner = match worker_learner_scheduling.try_start() {
+                                Ok(Some(learner)) => learner,
+                                Ok(None) => continue,
+                                Err(_) => {
+                                    learner_delay = LEARNER_ERROR_DELAY;
+                                    continue;
                                 }
-                                continue;
-                            }
+                            };
                             let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
                                 Ok(runtime) => runtime.block_on(Box::pin(learner_worker::run(
                                     open_vault,
-                                    cancellation,
+                                    learner.cancellation(),
                                 ))),
                                 Err(_) => Err(AgentFailure::VaultUnavailable),
                             }))
                             .unwrap_or(Err(AgentFailure::Interrupted));
-                            if let Ok(mut active) = worker_background.lock() {
-                                *active = None;
-                            }
+                            drop(learner);
                             if matches!(
                                 result,
                                 Err(AgentFailure::VaultUnavailable | AgentFailure::Interrupted)
@@ -478,8 +468,7 @@ impl Worker {
             sender,
             active: Mutex::new(None),
             closing,
-            foreground_pending,
-            background,
+            learner_scheduling,
         })
     }
 
@@ -503,14 +492,9 @@ impl Worker {
                     cancellation: Cancellation::default(),
                     progress: Mutex::new(Progress::default()),
                 });
-                self.foreground_pending.store(true, Ordering::Release);
-                if let Ok(background) = self.background.lock()
-                    && let Some(cancellation) = background.as_ref()
-                {
-                    cancellation.cancel();
-                }
+                self.learner_scheduling.foreground_submitted()?;
                 if self.sender.try_send(job.clone()).is_err() {
-                    self.foreground_pending.store(false, Ordering::Release);
+                    let _ = self.learner_scheduling.foreground_finished();
                     return Err(AgentFailure::VaultUnavailable);
                 }
                 *active = Some(job);
@@ -577,11 +561,7 @@ impl Drop for Worker {
         {
             job.cancellation.cancel();
         }
-        if let Ok(background) = self.background.lock()
-            && let Some(cancellation) = background.as_ref()
-        {
-            cancellation.cancel();
-        }
+        self.learner_scheduling.close();
     }
 }
 
@@ -3582,8 +3562,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let person = PersonId::new();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-        let learner = Cancellation::default();
-        *worker.background.lock().unwrap() = Some(learner.clone());
+        let lease = worker.learner_scheduling.try_start().unwrap().unwrap();
+        let learner = lease.cancellation();
         let id = Uuid::new_v4();
 
         worker

@@ -8,6 +8,93 @@ use std::os::unix::fs::PermissionsExt;
 
 struct FailingModel(AgentFailure);
 
+struct NoChangeModel;
+
+impl LearnerModel for NoChangeModel {
+    fn placement(&self) -> ModelPlacement {
+        ModelPlacement::DeviceLocal
+    }
+
+    async fn review(
+        &self,
+        _request: LearnerModelRequest,
+    ) -> Result<LearnerReviewOutput, AgentFailure> {
+        Ok(LearnerReviewOutput {
+            schema_version: KNOWLEDGE_VERSION,
+            proposal: None,
+            used_tokens: 1,
+            cost_micros: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn owner_service_discovers_claims_and_settles_without_a_candidate() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault = EncryptedAgentVault::create(directory.path(), PersonId::new(), Keys::default())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id,
+            text: "Please remember for later that I prefer afternoon meetings.".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id,
+            text: "I will prepare the preference for review.".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault
+        .governed_general_store(session.id)
+        .compare_and_swap(&session, 0)
+        .await
+        .unwrap();
+    let service = floe_knowledge::LearnerService {
+        repository: &vault,
+        model: &NoChangeModel,
+    };
+    let cancelled = Cancellation::default();
+    cancelled.cancel();
+    assert_eq!(service.run_next(cancelled).await, Ok(false));
+    assert!(
+        vault
+            .claim_learner_review(Utc::now())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let queued = vault
+        .discover_explicit_learner_reviews(Utc::now(), 1)
+        .await
+        .unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(service.run_next(Cancellation::default()).await, Ok(true));
+    let settled = vault
+        .enqueue_learner_review(queued[0].input.clone(), Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(settled.state, LearnerJobState::Completed);
+    assert_eq!(settled.attempts, 1);
+    assert!(
+        vault
+            .memory_review_snapshot()
+            .await
+            .unwrap()
+            .candidates
+            .is_empty()
+    );
+    assert_eq!(service.run_next(Cancellation::default()).await, Ok(false));
+    assert_eq!(
+        vault.load(session.person_id, session.id).await.unwrap(),
+        session
+    );
+}
+
 impl LearnerModel for FailingModel {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
@@ -66,12 +153,11 @@ async fn storage_failure_escapes_without_terminal_settlement_but_model_failure_i
             .unwrap();
         let claimed = vault.claim_learner_review(now).await.unwrap().unwrap();
         assert_eq!(claimed.id, queued.id);
-        let result = crate::vault_host::learner_worker::review_claimed(
-            &vault,
-            &claimed,
-            &FailingModel(failure),
-            Cancellation::default(),
-        )
+        let result = floe_knowledge::LearnerService {
+            repository: &vault,
+            model: &FailingModel(failure),
+        }
+        .review_claimed(&claimed, Cancellation::default())
         .await;
         let stored = vault.enqueue_learner_review(input, now).await.unwrap();
         if failure == AgentFailure::InvalidModelOutput {

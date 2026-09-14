@@ -6,10 +6,14 @@ pub mod ports {
 }
 pub use application::learner::validate_learner_input;
 pub use ports::evidence::EvidenceReader;
-pub use ports::repository::MemoryContextReader;
+pub use ports::repository::{LearnerJobRepository, MemoryContextReader};
+pub use application::learner_service::LearnerService;
+pub use application::learner_scheduling::{LearnerLease, LearnerScheduling};
 pub mod application {
     pub mod inference;
     pub mod learner;
+    pub mod learner_service;
+    pub mod learner_scheduling;
     pub mod memory;
     pub mod playbooks;
     pub mod review;
