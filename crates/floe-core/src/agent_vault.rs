@@ -273,34 +273,28 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
                 .get(&turn_id)
                 .cloned()
                 .unwrap_or(DependencyCoverage::Unknown);
-            let allowed = match &coverage {
-                DependencyCoverage::Independent => true,
-                DependencyCoverage::Unknown => false,
-                DependencyCoverage::Dependent { dependencies } => match resolver {
+            let authorization_request = &*request;
+            let projection = floe_context::project_coverage(&coverage, |dependency| async move {
+                match resolver {
                     Some(resolver) => {
-                        let mut allowed = true;
-                        for dependency in dependencies {
-                            match resolver.authorize(dependency, request).await {
-                                Ok(()) => {}
-                                Err(AgentFailure::PolicyDenied) => allowed = false,
-                                Err(error) => return Err(error),
-                            }
+                        match resolver.authorize(&dependency, authorization_request).await {
+                            Ok(()) => Ok(true),
+                            Err(AgentFailure::PolicyDenied) => Ok(false),
+                            Err(error) => Err(error),
                         }
-                        allowed
                     }
-                    None => false,
-                },
-            };
-            if allowed {
-                if let DependencyCoverage::Dependent { dependencies } = coverage {
-                    for dependency in dependencies {
-                        self.coverage
-                            .record_dependency(request.turn_id, dependency, None)
-                            .map_err(|error| match error {
-                                AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
-                                error => error,
-                            })?;
-                    }
+                    None => Ok(false),
+                }
+            })
+            .await?;
+            if projection.retain_derived() {
+                for dependency in projection.authorized_dependencies() {
+                    self.coverage
+                        .record_dependency(request.turn_id, dependency.clone(), None)
+                        .map_err(|error| match error {
+                            AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
+                            error => error,
+                        })?;
                 }
                 retained.push(message);
             } else {

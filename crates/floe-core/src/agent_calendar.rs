@@ -799,30 +799,21 @@ impl<
                 .read_turn_coverage(request.session_id, turn_id)
                 .await?;
             let coverage_independent = matches!(&coverage, DependencyCoverage::Independent);
-            let valid_dependencies = match coverage {
-                DependencyCoverage::Dependent { dependencies } => {
-                    let dependency_count = dependencies.len();
-                    let mut valid = Vec::with_capacity(dependencies.len());
-                    for dependency in dependencies {
-                        if resolver
-                            .resolve(&dependency, self.deadline, self.cancellation.clone())
-                            .await
-                            .is_ok()
-                        {
-                            valid.push(dependency);
-                        }
-                    }
-                    (valid.len() == dependency_count).then_some(valid)
+            let projection = floe_context::project_coverage(&coverage, |dependency| {
+                let resolver = &resolver;
+                async move {
+                    Ok(resolver
+                        .resolve(&dependency, self.deadline, self.cancellation.clone())
+                        .await
+                        .is_ok())
                 }
-                DependencyCoverage::Independent => Some(Vec::new()),
-                DependencyCoverage::Unknown => None,
-            };
-            let retain_derived = valid_dependencies
-                .as_ref()
-                .is_some_and(|dependencies| !dependencies.is_empty())
-                || (!has_calendar_boundary && coverage_independent);
-            if let Some(dependencies) = valid_dependencies {
-                self.retain_historical_dependencies(dependencies)?;
+            })
+            .await?;
+            let retain_derived = projection.retain_derived()
+                && (!projection.authorized_dependencies().is_empty()
+                    || (!has_calendar_boundary && coverage_independent));
+            if projection.retain_derived() {
+                self.retain_historical_dependencies(projection.authorized_dependencies().to_vec())?;
             }
             for message in messages {
                 let retain = matches!(message, AgentMessage::User { .. }) || retain_derived;

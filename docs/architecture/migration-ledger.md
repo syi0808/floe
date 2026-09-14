@@ -2138,3 +2138,36 @@ history replacement, archive ports or final acceptance. Core's Context wiring
 remains temporary composition, not a final Vault-to-Context dependency. No live
 external account data or normal Apple UI was exercised by this extraction; runtime
 validation uses controlled source/model and disposable local storage fixtures.
+
+### P09 coverage projection decision checkpoint (2026-09-14)
+
+Context now owns the provider-neutral coverage projection decision used by both
+GovernedAgentSessionStore and CalendarTurn. Its immutable CoverageProjection
+returns whether derived content may be retained and the complete authorized
+dependency set. It validates canonical coverage before dispatching authorization;
+Independent requires no source check, Unknown excludes derived content, and
+Dependent requires every dependency to be authorized. One denial returns no
+partial dependency set. Checks continue after exclusion so a later fatal error
+is not hidden.
+
+The Core adapters still supply current authorization and preserve their existing
+error policies: general projection excludes PolicyDenied and propagates other
+failures; Calendar historical resolution excludes failed dependencies. Message
+ordering, current-turn treatment, user-input retention, replay clearing and
+post-generation revalidation are unchanged. This extraction is a decision owner,
+not a source-read permit, message store or complete history projector.
+
+Validation passed: Context tests (21, including four new projection regressions),
+Core encrypted coverage tests (18), Core Calendar runtime tests (37), FFI library
+tests (78), workspace all-target check, Context all-target Clippy with
+`-D warnings`, diff check and migration gate (18 nodes / 57 edges / no errors).
+The new regressions verify no unnecessary authorization for Independent/Unknown,
+exact complete dependencies on success, no partial lineage on denial, fatal
+errors after a prior denial, and malformed coverage rejection before callbacks.
+
+Calendar-prefix and continuation guards remain until coverage-based replacements
+prove T13/T14/T28. EvidenceReader/ArchiveReader ports, bounded history selection,
+full SourceViews and final Conversation/Vault separation remain open. No Apple
+UI, native model or external provider account was directly exercised in this
+checkpoint; integration validation uses the existing controlled runtime and
+encrypted local storage fixtures. P09 and the full P00–P25 goal remain active.

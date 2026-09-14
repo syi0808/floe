@@ -3,6 +3,7 @@ pub mod application {
     pub mod consumed;
     pub mod coverage;
     pub mod leases;
+    pub mod projection;
 }
 
 pub use application::assembler::{
@@ -13,3 +14,4 @@ pub use application::coverage::{CoverageAccumulator, CoverageMessageFact, Covera
 pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
+pub use application::projection::{CoverageProjection, project_coverage};
