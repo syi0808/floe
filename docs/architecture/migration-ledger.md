@@ -1326,3 +1326,44 @@ read-only catalog separation/reconciliation, and replacement of Widget polling
 and legacy gateway drain-stop are still pending. No external account pairing,
 credential reset, actual OAuth flow, Apple UI validation or T09/T10/T22–T25
 end-to-end completion is claimed by these loopback tests.
+
+## P07/P14 model and source separation checkpoint — 2026-09-14
+
+Code checkpoints `2011bda` and `663febb`: the live Flutter gateway preserves
+its approved model route when optional connector catalog retrieval throws a
+server connection error. Connection/purpose failures still return no route;
+exact-recipient external consent remains unchanged. Failed catalog reads yield
+empty source bindings for this request only, without changing saved credentials
+or inferring a provider disconnect. The catalog is still awaited, so this is
+failure isolation, not asynchronous catalog independence or typed failure-state
+completion.
+
+Infra now owns source HTTP reads in `ServerSourceClient`, with an independent
+source call limiter. `ServerModelRunner` stores model-only endpoint/purpose/
+consent configuration and delegates its existing source APIs to the new client.
+The combined constructor remains fail-closed on invalid source bindings;
+`new_model_only` ignores source fields but carries no source client or source
+authorization capability. Existing production hosts still use the combined
+constructor. The source client still accepts the legacy route DTO; typed
+credential handles, final adapter placement and host cutover remain pending.
+
+Direct loopback validation for the Dart route helper exercised actual
+`LocalServerClient` HTTP requests with catalog 403, 500 and malformed success
+responses, each with matching and nonmatching saved external-recipient consent.
+The regression asserts preserved model routing, unchanged consent/credentials,
+empty bindings and only read requests (1 test, 6 scenarios). Existing local
+server HTTP tests passed (4); targeted Flutter analysis reported no issues.
+Rust `remote_model::tests` passed (10), including existing authenticated source
+HTTP fixtures, replay checks and queued cancellation without a provider socket.
+The new model-only regression checks invalid source rejection by both source
+and combined constructors, preserved model consent, and source access rejection
+without opening a socket. `cargo check --workspace` and `git diff --check`
+passed. Independent read-only Luna review found no concrete regression in the
+extracted source validation, authorization, replay or resource limits.
+
+No actual model answer, external provider or Apple UI flow was exercised for
+this checkpoint. T10 end-to-end success and P07/P14 completion are not claimed.
+Canonical Inference ownership, typed profile/status/recipient contracts,
+authoritative attempt journaling and dispatch accounting, retry/fallback policy,
+credential-handle ownership and removal of the combined source/model host API
+remain unfinished.
