@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Partial: current/history policy plus authorized bounded archive projection wired; generic acquisition and remaining cutover pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: root turns, Run queries, recovery, continuation, finalization, Session management and archive use extracted owner services; cancel and host lifetime pending |
+| P12 | Partial: root turns, Run queries/cancel, recovery, continuation, finalization, Session management and archive use extracted owner services; host lifetime pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -3237,3 +3237,41 @@ global worker active-job slot is still the lifetime owner. The next executable
 P12/P16 task is to introduce a Conversation-owned cancellation registry keyed
 by RunId and principal, register it only after durable admission, and route Stop
 through that owner without cancelling management reads. P12 remains partial.
+
+### P12 Conversation-owned Run cancellation checkpoint (2026-09-15)
+
+Code checkpoint `46b1b26` adds the bounded Conversation
+`RunCancellationRegistry` and a durable-state-aware `ConversationService`
+`CancelRun` operation. A root is registered by RunId, CommandId and principal
+only after the repository returns and the owner validates a newly created
+durable admission. The registration guard removes the live cancellation token
+on every return path while retaining a bounded inactive correlation, so a
+terminal Run cannot be cancelled and a foreign principal cannot address a
+known live Run.
+
+The production host shares one owner registry across per-turn Conversation
+service instances. `Stop` for `ConversationTurn` resolves the request
+correlation through the Conversation registry; only the pre-admission race uses
+the existing job token as a fallback. A Stop after durable completion no longer
+cancels that job token, `Release` remains non-cancelling, and management
+operations are never registered as Conversation roots.
+
+Implemented and wired: post-admission root cancellation ownership,
+principal-bound Run cancellation/query validation, CommandId-to-RunId Stop
+correlation and terminal unregister behavior. Direct validation cancelled a
+model-blocked admitted root, rejected a foreign principal, observed the durable
+Cancelled terminal, then returned Inactive after settlement. The encrypted
+production replay path also verified that Stop after terminal does not mutate
+the job cancellation scope. All 10 Conversation tests, the affected FFI test,
+focused Conversation Clippy with warnings denied, workspace all-target check,
+diff check and the migration boundary gate passed (20 nodes / 69 edges / no
+errors). Broader FFI/Core Clippy remains blocked by pre-existing denied lints in
+untouched code. No Apple UI, device-local model or live provider was exercised.
+
+Blocker/remove-by: the FFI worker still serializes all requests through one
+global active-job slot, so management query/revocation concurrency and UI
+correlation lifetime are not yet independent of a long root. The next
+executable P12/P16 task is to replace that slot with bounded request
+correlations while keeping Run lifetime in Conversation and making UI Release
+pure correlation cleanup. T09/T18 and Apple acceptance remain pending. P12
+remains partial.
