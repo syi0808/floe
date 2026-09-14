@@ -31,12 +31,12 @@ These are recorded baseline inputs. P00 does not claim that all builds, host smo
 
 ## Package status
 
-P00 baseline/tooling is implemented; its shared T37 product acceptance remains pending P03/P16/P22. P01 is in progress. No product gate G0–G4 has passed.
+P00 baseline/tooling is implemented; its shared T37 product acceptance remains pending P03/P16/P22. P01 foundational values are extracted, but wire conversion separation and downstream acceptance are not complete. No product gate G0–G4 has passed.
 
 | package | status |
 |---|---|
 | P00 | Baseline/tooling implemented; T37 pending |
-| P01 | In progress |
+| P01 | Partial: canonical values extracted; protocol conversion separation pending |
 | P02 | Pending |
 | P03 | Pending |
 | P04 | Pending |
@@ -958,6 +958,8 @@ No iPhone/iPad native run, real model evaluation, live OAuth/pairing or final ar
 
 ## P00 artifacts
 
+Committed as `dba3b9c` (`docs(architecture): establish refactoring baseline and boundary gate`). Implemented entry points are `tools/architecture/check_boundaries.py:1`, `tools/architecture/test_check_boundaries.py:1`, and `tests/composition/main.rs:1`; the latter is intentionally unwired until P16.
+
 | old_path | symbol | source_sha | target_path | owner | package_id | temporary_bridge | remove_by | invariant | evidence |
 |---|---|---|---|---|---|---|---|---|---|
 | supplied plan bundle | P00–P25, N01–N12, I01–I16, T01–T40 | supplied 2026-09-14 plan | floe-implementation-plan-2026-09-14/ | tooling | P00 | none | retained specification | I16 | Original 51-file bundle preserved; historical helper results are not product evidence |
@@ -965,3 +967,43 @@ No iPhone/iPad native run, real model evaluation, live OAuth/pairing or final ar
 | new | baseline inventory and evidence | starting HEAD above | docs/architecture/migration-ledger.md | tooling | P00 | none | retained record | I16 | 851 initial tracked files; source anchor vs mechanical assignment explicit |
 | supplied module-dependencies.json and checker | approved DAG, production_deps, main | supplied 2026-09-14 plan | tools/architecture/{module-dependencies.json,check_boundaries.py,test_check_boundaries.py,.gitignore} | tooling | P00 | migration mode permits baseline paths | P24 | I14 | Policy byte match and 10 checker tests pass; this is not a source-level semantic checker |
 | new | composition test entry | new | tests/composition/main.rs | floe-app | P00 | unwired until real AppHost exists | P16 | I16 | Documentation-only entry; no fabricated passing test or additional product crate |
+
+## P01 extraction — 2026-09-14
+
+Code commit: `4c7598c30abb381389fe7afe2a372515d624943f`, based on `dba3b9c`. Public changes introduce `floe-kernel` and `floe-context-contract`, with only the approved context → kernel internal edge. Legacy consumers resolve the same canonical types through explicit re-exports. No new authoritative Run/Task/Grant record is introduced, no crate of the same package name is duplicated, and no external dependency version is upgraded.
+
+| old_path | symbol | source_sha | target_path | owner | package_id | temporary_bridge | remove_by | invariant | evidence |
+|---|---|---|---|---|---|---|---|---|---|
+| crates/floe-domain/src/id.rs | PersonId, Day IDs, Revision; new RunId/CommandId wrappers | dba3b9c | crates/contracts/kernel/src/lib.rs:11–64 | floe-kernel | P01 | legacy id.rs explicit re-export | P24 | I03, I06 | 4c7598c; existing UUID serialization and Revision behavior retained |
+| crates/floe-agent-contract/src/lib.rs | AgentFailure, failure domain/category/actions/retry | dba3b9c | crates/contracts/kernel/src/lib.rs:66–138 | floe-kernel | P01 | legacy agent-contract explicit re-export | P24 | I06, I12 | 4c7598c; existing snake_case variants preserved, no duplicate definition |
+| crates/floe-domain/src/connection_authority.rs | SourceAuthority | dba3b9c | crates/contracts/context/src/lib.rs:13–54 | floe-context-contract | P01 | legacy source-authority re-export | P24 | I06, I07 | 4c7598c; incarnation/epoch overflow regressions moved intact |
+| crates/floe-domain/src/data_access_grant.rs | immutable GrantId/ConnectionId/SourceBinding/Scope/Authority/ProcessingRestriction and validation | dba3b9c | crates/contracts/context/src/lib.rs:55–534 | floe-context-contract | P01 | legacy value re-exports; mutable DataAccessGrant stays legacy until Access extraction | P04/P24 | I06, I07 | 4c7598c; constructor and validation impl bodies preserved; transition tests retained |
+| crates/floe-domain/src/context_dependency.rs | ConsumerPolicyAuthority, ContextDependency, DependencyCoverage, immutable validation | dba3b9c | crates/contracts/context/src/lib.rs:536–983 | floe-context-contract | P01 | legacy value re-exports; CoverageAccumulator/ReplayRequest/ReplayTrust/admit_replay stay legacy | P04/P09/P24 | I07, I08 | 4c7598c; Unknown dominates, canonical union and replay assertions retained |
+| crates/floe-agent-contract/src/lib.rs | DataClass, ModelPlacement, TransferConsent | dba3b9c | crates/contracts/context/src/lib.rs:985–1008 | floe-context-contract | P01 | legacy agent-contract explicit re-export | P24 | I06, I08 | 4c7598c; same variants and wire names; SessionProtection remains assigned to Access P04 |
+| Cargo.toml, Cargo.lock, legacy contract/domain manifests | workspace membership and canonical dependencies | dba3b9c | Cargo.toml:2; crates/contracts/{kernel,context}/Cargo.toml | tooling | P01 | seven legacy crates still present | P24 | I14 | 4c7598c; nine current crates; migration graph 20 production edges, zero errors |
+
+### Validation and review
+
+- `cargo test -p floe-kernel -p floe-context-contract -p floe-domain -p floe-agent-contract -p floe-protocol`: pass, 35 tests (4 context, 14 domain, 17 protocol; kernel and agent-contract have zero tests).
+- `cargo clippy -p floe-kernel -p floe-context-contract -p floe-domain -p floe-agent-contract --all-targets -- -D warnings`: pass. Extracted `DependencyCoverage` uses derived Unknown default and equivalent collapsed conflict check to satisfy Clippy.
+- `cargo check --workspace`: pass, including all existing production consumers and FFI.
+- `python3 tools/architecture/check_boundaries.py --mode migration`: pass, 9 nodes / 20 edges; legacy-path warnings expected. No target → legacy dependency.
+- Integration review found that an intermediate hand-rewrite omitted the nested connection-ID validation and normalized a recipient category order that the original constructor rejected. The final code restores the original implementations. Added regression tests `dependency_constructor_revalidates_deserialized_connection_identity` and `dependency_constructor_rejects_noncanonical_recipient_categories`; both directly call the real constructor with valid controls and malformed inputs and pass.
+- Before the equivalent Clippy-only adjustment, all 14 extracted source/grant/dependency implementation blocks matched pre-extraction source after whitespace and crate-prefix normalization. Existing tests that accessed private fields now use public getters or malformed serialized inputs; protection assertions were not removed.
+- P01 did not rebuild/relaunch the macOS artifact after extraction. Native smoke evidence above is baseline only. T32/T33 existing protocol coverage passes, but v2 identity/golden and T37 headless engine acceptance remain pending. No actual model or external account test ran.
+
+### Explicit remaining ownership and next work
+
+| source symbols / requirement | target owner and package | status |
+|---|---|---|
+| AgentSession, transcript, authoritative revision and active turn | Conversation P12 | Assigned, not moved |
+| AgentSessionScope::Calendar | Schedule setup/context values only; remove from generic contract in P03/P12/P15 | Assigned, existing branch remains |
+| CapabilityExecution, ProviderReplay, model journal receipts | Agent contract/runtime P03 and Inference P07; invocation acknowledgement preserved | Assigned, not moved |
+| DelegationExecution, A2ATask state and replay identity | Experts P11 owns Task; Conversation P12 stores TaskRef rather than independent state | Assigned, not moved |
+| AgentCard, A2AMessageRole, A2APart, A2AMessage, A2AArtifact, immutable TaskSnapshot, endpoint port | Agent contract P03 after ExecutionScope P02 | Assigned, old agent-contract package is not relocated yet |
+| DataAccessGrant/GrantState transitions and SessionProtection | Access P04 | Remain legacy-side, never placed in context-contract |
+| Calendar/Event/Task/Note entity behavior | Day P05 | Remain floe-domain until owner extraction |
+| CoverageAccumulator and replay admission orchestration | Context P09 / Access P04 | Remain legacy-side, not shared contract policy |
+| P01 step 7: Day/Access conversion separation | Protocol/FFI conversion work; final free-function cutover P16 | **Pending**: legacy protocol conversion.rs still imports floe-domain. Do not call P01 or final wire boundary fully complete. |
+
+Next integration work must finish the outstanding P01 conversion separation with preserved wire semantics, then continue P02 execution scopes/budgets/diagnostics and dependent packages. P00/P01 changes are not a substitute for the full P00–P25 objective, the 22-crate final DAG, real Flutter/Go cutover, or Apple/LLM acceptance.
