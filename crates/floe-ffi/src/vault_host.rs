@@ -310,20 +310,22 @@ impl Worker {
                             }
                             let operation = action_name(&job.action);
                             let started = Instant::now();
-                            let request_id = job.id.to_string();
-                            let _request_guard = diagnostics::enter_request(request_id.clone());
-                            let span = tracing::info_span!("agent_job", request_id, operation,);
-                            let _guard = span.enter();
+                            let trace_context = diagnostics::trace_context(job.id);
+                            let request_id = trace_context.request_id().to_string();
                             tracing::info!(request_id, operation, "agent_job_started");
                             let result = match catch_unwind(AssertUnwindSafe(|| match &runtime {
-                                Ok(runtime) => runtime.block_on(Box::pin(execute(
-                                    &root,
-                                    &keys,
-                                    &core,
-                                    &local_context,
-                                    &mut vault,
-                                    &job,
-                                ))),
+                                Ok(runtime) => runtime.block_on(diagnostics::instrument(
+                                    execute(
+                                        &root,
+                                        &keys,
+                                        &core,
+                                        &local_context,
+                                        &mut vault,
+                                        &job,
+                                    ),
+                                    trace_context,
+                                    "agent_job",
+                                )),
                                 Err(_) => Err(AgentFailure::VaultUnavailable),
                             })) {
                                 Ok(result) => result,

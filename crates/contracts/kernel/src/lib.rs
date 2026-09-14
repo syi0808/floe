@@ -48,11 +48,66 @@ macro_rules! uuid_id {
 
 uuid_id!(PersonId);
 uuid_id!(RunId);
+uuid_id!(ScopeId);
 uuid_id!(TaskId);
 uuid_id!(CommandId);
 uuid_id!(EventId);
 uuid_id!(NoteId);
 uuid_id!(CaptureId);
+
+/// Correlation values that are safe to carry across asynchronous boundaries.
+///
+/// The context deliberately contains identifiers only.  Prompt text, model
+/// output, credentials, and other request payloads must not be added here.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct TraceContext {
+    request_id: Uuid,
+    run_id: Option<RunId>,
+    task_id: Option<TaskId>,
+    attempt_id: Option<Uuid>,
+}
+
+impl TraceContext {
+    pub fn new(request_id: Uuid) -> Self {
+        Self {
+            request_id,
+            run_id: None,
+            task_id: None,
+            attempt_id: None,
+        }
+    }
+
+    pub fn request_id(self) -> Uuid {
+        self.request_id
+    }
+
+    pub fn run_id(self) -> Option<RunId> {
+        self.run_id
+    }
+
+    pub fn task_id(self) -> Option<TaskId> {
+        self.task_id
+    }
+
+    pub fn attempt_id(self) -> Option<Uuid> {
+        self.attempt_id
+    }
+
+    pub fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = Some(run_id);
+        self
+    }
+
+    pub fn with_task_id(mut self, task_id: TaskId) -> Self {
+        self.task_id = Some(task_id);
+        self
+    }
+
+    pub fn with_attempt_id(mut self, attempt_id: Uuid) -> Self {
+        self.attempt_id = Some(attempt_id);
+        self
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Revision(pub u64);

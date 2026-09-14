@@ -836,6 +836,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "floe-kernel",
+ "serde",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "floe-domain"
 version = "0.1.0"
 dependencies = [
@@ -865,6 +876,7 @@ dependencies = [
  "chrono",
  "floe-agent",
  "floe-core",
+ "floe-diagnostics",
  "floe-domain",
  "floe-infra",
  "floe-protocol",

@@ -1,31 +1,25 @@
-use std::{any::Any, cell::RefCell, sync::Once};
+use std::{any::Any, sync::Once};
 
+use floe_diagnostics::{PanicRecord, TraceContext, panic_record};
 use floe_protocol::{ErrorCodeDto, ErrorDto};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
 static INITIALIZE: Once = Once::new();
 
-thread_local! {
-    static REQUEST_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+pub(crate) fn trace_context(request_id: Uuid) -> TraceContext {
+    TraceContext::new(request_id)
 }
 
-pub(crate) struct RequestGuard(Option<String>);
-
-impl Drop for RequestGuard {
-    fn drop(&mut self) {
-        REQUEST_ID.with(|current| *current.borrow_mut() = self.0.take());
-    }
-}
-
-pub(crate) fn enter_request(request_id: impl Into<String>) -> RequestGuard {
-    let request_id = request_id.into();
-    let previous = REQUEST_ID.with(|current| current.replace(Some(request_id)));
-    RequestGuard(previous)
-}
-
-pub(crate) fn request_id() -> Option<String> {
-    REQUEST_ID.with(|current| current.borrow().clone())
+pub(crate) fn instrument<F>(
+    future: F,
+    context: TraceContext,
+    operation: &'static str,
+) -> impl std::future::Future<Output = F::Output>
+where
+    F: std::future::Future,
+{
+    floe_diagnostics::instrument(future, context, operation)
 }
 
 pub(crate) fn initialize() {
@@ -46,14 +40,11 @@ pub(crate) fn initialize() {
 }
 
 pub(crate) fn panic_error(payload: Box<dyn Any + Send>) -> ErrorDto {
-    let error_id = Uuid::new_v4().to_string();
-    let panic_type = if payload.is::<&str>() {
-        "str"
-    } else if payload.is::<String>() {
-        "string"
-    } else {
-        "unknown"
-    };
+    let PanicRecord {
+        error_id,
+        panic_type,
+    } = panic_record(payload);
+    let error_id = error_id.to_string();
     tracing::error!(
         error_id,
         panic_type,

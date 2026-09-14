@@ -115,9 +115,7 @@ impl InProcessAgent for ConversationExperts<'_> {
         let expert = BuiltinExpertKind::from_package_id(&request.agent_id)
             .ok_or(AgentFailure::CapabilityDenied)?;
         let expert_started = std::time::Instant::now();
-        let request_id = crate::diagnostics::request_id().unwrap_or_default();
         tracing::info!(
-            request_id,
             expert = request.agent_id,
             invocation_id = %request.message.task_id.unwrap(),
             "expert_invocation_started"
@@ -446,7 +444,6 @@ impl InProcessAgent for ConversationExperts<'_> {
             failure: None,
         };
         tracing::info!(
-            request_id,
             expert = task.agent_id,
             invocation_id = %task.id,
             elapsed_ms = expert_started.elapsed().as_millis() as u64,

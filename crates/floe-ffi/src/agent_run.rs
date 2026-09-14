@@ -6,6 +6,7 @@ use std::{
 
 use floe_agent::{AgentEvent, AgentFailure, AgentSession, Cancellation};
 use floe_core::{AgentFixturePrompt, AgentFixtureTurn};
+use floe_diagnostics::{TraceContext, current_context};
 use floe_domain::PersonId;
 use floe_protocol::*;
 use tokio::task::JoinHandle;
@@ -84,6 +85,9 @@ pub(crate) fn run(
             let worker_cancellation = cancellation.clone();
             let events = Arc::new(Mutex::new(vec![]));
             let worker_events = events.clone();
+            let trace_context =
+                current_context().unwrap_or_else(|| TraceContext::new(Uuid::new_v4()));
+            let worker_trace_context = trace_context;
             let core = handle.core.clone();
             let turn = AgentFixtureTurn {
                 person_id,
@@ -91,20 +95,24 @@ pub(crate) fn run(
                 expected_revision: request.expected_revision,
                 prompt: fixture_prompt(prompt),
             };
-            let task = handle.runtime.spawn(async move {
-                core.stream_agent_fixture(turn, worker_cancellation.clone(), |event| {
-                    if let Ok(mut events) = worker_events.lock() {
-                        if events.len() < 64 {
-                            events.push(event);
+            let task = handle.runtime.spawn(super::diagnostics::instrument(
+                async move {
+                    core.stream_agent_fixture(turn, worker_cancellation.clone(), |event| {
+                        if let Ok(mut events) = worker_events.lock() {
+                            if events.len() < 64 {
+                                events.push(event);
+                            } else {
+                                worker_cancellation.cancel();
+                            }
                         } else {
                             worker_cancellation.cancel();
                         }
-                    } else {
-                        worker_cancellation.cancel();
-                    }
-                })
-                .await
-            });
+                    })
+                    .await
+                },
+                worker_trace_context,
+                "agent_fixture_run",
+            ));
             *slot = Some(AgentRun {
                 person_id,
                 session_id,

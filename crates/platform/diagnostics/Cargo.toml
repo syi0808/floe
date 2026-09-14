@@ -1,0 +1,15 @@
+[package]
+name = "floe-diagnostics"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+floe-kernel = { path = "../../contracts/kernel" }
+serde.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
