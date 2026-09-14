@@ -1,8 +1,9 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
+use super::calendar::CalendarSource;
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum DomainError {
@@ -25,7 +26,7 @@ fn required(value: impl Into<String>, field: &'static str) -> Result<String, Dom
 pub enum SourceRef {
     Manual,
     Capture(CaptureId),
-    Calendar(crate::CalendarSource),
+    Calendar(CalendarSource),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -109,6 +110,7 @@ impl Event {
             deleted_at: None,
         })
     }
+
     pub fn update(
         &mut self,
         title: impl Into<String>,
@@ -175,11 +177,13 @@ impl Task {
             deleted_at: None,
         })
     }
+
     pub fn complete(&mut self, now: DateTime<Utc>) {
         self.completed_at = Some(now);
         self.updated_at = now;
         self.revision = self.revision.next();
     }
+
     pub fn reopen(&mut self, now: DateTime<Utc>) {
         self.completed_at = None;
         self.updated_at = now;
@@ -260,6 +264,8 @@ impl Note {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
     #[test]
     fn empty_text_is_rejected() {
         assert!(matches!(
@@ -267,9 +273,10 @@ mod tests {
             Err(DomainError::EmptyText { .. })
         ));
     }
+
     #[test]
     fn invalid_interval_is_rejected() {
-        let now = Utc::now();
+        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
         assert_eq!(
             TimedSchedule::new(now, now, "UTC"),
             Err(DomainError::InvalidEventInterval)

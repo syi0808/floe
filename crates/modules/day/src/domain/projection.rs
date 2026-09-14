@@ -1,7 +1,8 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use floe_kernel::{EventId, PersonId};
 use serde::{Deserialize, Serialize};
 
-use crate::{Event, EventId, EventSchedule, Note, PersonId, Task};
+use super::{CalendarConnection, Event, EventSchedule, Note, Task};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TimelineItem {
@@ -21,7 +22,7 @@ pub struct DaySnapshot {
     pub overdue_task_count: usize,
     pub items: Vec<TimelineItem>,
     #[serde(default)]
-    pub calendar: Option<crate::CalendarConnection>,
+    pub calendar: Option<CalendarConnection>,
 }
 
 pub fn project_day(

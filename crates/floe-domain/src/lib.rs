@@ -1,19 +1,7 @@
-mod calendar;
-mod capture;
-mod connection_authority;
 mod context_dependency;
 mod data_access_grant;
-mod entity;
-mod id;
-mod projection;
 
-pub use calendar::{
-    CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror, CalendarProvider,
-    CalendarRange, CalendarRecord, CalendarScope, CalendarSelection, CalendarSource,
-    CalendarSyncStatus,
-};
-pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
-pub use connection_authority::SourceAuthority;
+pub use floe_context_contract::SourceAuthority;
 pub use context_dependency::{
     ConsumerPolicyAuthority, ContextDependency, ContextDependencyError, CoverageAccumulator,
     DependencyCoverage, MAX_CONTEXT_DEPENDENCIES, MAX_CONTEXT_DEPENDENCY_BYTES,
@@ -27,9 +15,11 @@ pub use data_access_grant::{
     MAX_CONSUMER_ID_BYTES, MAX_CONSUMERS, MAX_EXECUTION_OWNER_BYTES, MAX_RESOURCE_HANDLE_BYTES,
     MAX_RESOURCE_HANDLES, MAX_SCOPE_BYTES, ProcessingRestriction, ResourceHandle,
 };
-pub use entity::{
-    AllDaySchedule, DomainError, Event, EventSchedule, Note, Priority, SourceRef, Task,
-    TimedSchedule,
+pub use floe_day::{
+    project_day, project_day_with_end_offset, AllDaySchedule, CalendarBatch, CalendarConnection,
+    CalendarFailure, CalendarMirror, CalendarProvider, CalendarRange, CalendarRecord,
+    CalendarScope, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture,
+    CaptureProcessing, CaptureSource, DaySnapshot, DomainError, DomainRef, Event, EventSchedule,
+    Note, Priority, SourceRef, Task, TimelineItem, TimedSchedule,
 };
-pub use id::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
-pub use projection::{DaySnapshot, TimelineItem, project_day, project_day_with_end_offset};
+pub use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};

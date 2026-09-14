@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
+use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 use serde::{Deserialize, Serialize};
 
-use crate::{CaptureId, DomainError, EventId, NoteId, PersonId, Revision, TaskId};
+use super::DomainError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CaptureSource {
@@ -62,6 +63,7 @@ impl Capture {
             revision: Revision::default(),
         })
     }
+
     pub fn classify(&mut self, target: DomainRef, classified_at: DateTime<Utc>) {
         self.processing = CaptureProcessing::Classified {
             target,

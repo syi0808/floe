@@ -836,6 +836,7 @@ dependencies = [
  "base64",
  "chrono",
  "floe-agent",
+ "floe-day",
  "floe-domain",
  "getrandom 0.3.4",
  "keyring-core",
@@ -851,6 +852,18 @@ dependencies = [
  "turso",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "floe-day"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-context-contract",
+ "floe-kernel",
+ "serde",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
@@ -870,6 +883,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-context-contract",
+ "floe-day",
  "floe-kernel",
  "serde",
  "serde_json",

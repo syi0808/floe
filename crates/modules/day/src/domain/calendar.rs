@@ -1,8 +1,19 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
+use floe_context_contract::SourceAuthority;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::{Event, EventSchedule};
+use super::{Event, EventSchedule};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarSource {
+    pub can_modify: bool,
+    pub provider: CalendarProvider,
+    pub calendar_id: String,
+    pub calendar_name: String,
+    pub external_id: String,
+    pub external_revision: String,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,16 +25,6 @@ pub enum CalendarProvider {
     #[serde(rename = "microsoft_calendar")]
     Microsoft,
     Android,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CalendarSource {
-    pub can_modify: bool,
-    pub provider: CalendarProvider,
-    pub calendar_id: String,
-    pub calendar_name: String,
-    pub external_id: String,
-    pub external_revision: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -106,7 +107,7 @@ pub struct CalendarConnection {
     pub provider: CalendarProvider,
     pub calendars: Vec<CalendarSelection>,
     pub revision: u64,
-    pub source_authority: crate::SourceAuthority,
+    pub source_authority: SourceAuthority,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,

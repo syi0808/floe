@@ -397,6 +397,117 @@ impl TursoStore {
         self.put("notes", value.id.to_string(), value.person_id, value)
             .await
     }
+
+    async fn put_if_revision<T, F>(
+        &self,
+        table: &str,
+        id: String,
+        person_id: PersonId,
+        value: &T,
+        expected: floe_domain::Revision,
+        revision: F,
+    ) -> Result<(), CoreError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned,
+        F: Fn(&T) -> floe_domain::Revision,
+    {
+        let payload = to_string(value).map_err(storage_error)?;
+        let connection = self.connection().await?;
+        connection
+            .execute("BEGIN IMMEDIATE", ())
+            .await
+            .map_err(storage_error)?;
+        let result = async {
+            let mut rows = connection
+                .query(
+                    &format!("SELECT payload FROM {table} WHERE id = ? AND person_id = ?"),
+                    (id.clone(), person_id.to_string()),
+                )
+                .await
+                .map_err(storage_error)?;
+            let stored = rows
+                .next()
+                .await
+                .map_err(storage_error)?
+                .map(|row| row.get::<String>(0).map_err(storage_error))
+                .transpose()?;
+            drop(rows);
+            let Some(stored) = stored else {
+                return Err(CoreError::new(ErrorCode::NotFound, "timeline item not found"));
+            };
+            let current: T = from_str(&stored).map_err(storage_error)?;
+            if revision(&current) != expected {
+                return Err(CoreError::new(ErrorCode::Conflict, "stale revision")
+                    .with_metadata("expected", expected.0.to_string())
+                    .with_metadata("actual", revision(&current).0.to_string()));
+            }
+            let changed = connection
+                .execute(
+                    &format!("UPDATE {table} SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?"),
+                    (payload, id, person_id.to_string(), stored),
+                )
+                .await
+                .map_err(storage_error)?;
+            if changed != 1 {
+                return Err(CoreError::new(ErrorCode::Conflict, "timeline item changed; reload and retry"));
+            }
+            connection.execute("COMMIT", ()).await.map_err(storage_error)?;
+            Ok(())
+        }
+        .await;
+        if result.is_err() {
+            let _ = connection.execute("ROLLBACK", ()).await;
+        }
+        result
+    }
+
+    pub async fn put_event_if_revision(
+        &self,
+        value: &Event,
+        expected: floe_domain::Revision,
+    ) -> Result<(), CoreError> {
+        self.put_if_revision(
+            "events",
+            value.id.to_string(),
+            value.person_id,
+            value,
+            expected,
+            |item| item.revision,
+        )
+        .await
+    }
+
+    pub async fn put_task_if_revision(
+        &self,
+        value: &Task,
+        expected: floe_domain::Revision,
+    ) -> Result<(), CoreError> {
+        self.put_if_revision(
+            "tasks",
+            value.id.to_string(),
+            value.person_id,
+            value,
+            expected,
+            |item| item.revision,
+        )
+        .await
+    }
+
+    pub async fn put_note_if_revision(
+        &self,
+        value: &Note,
+        expected: floe_domain::Revision,
+    ) -> Result<(), CoreError> {
+        self.put_if_revision(
+            "notes",
+            value.id.to_string(),
+            value.person_id,
+            value,
+            expected,
+            |item| item.revision,
+        )
+        .await
+    }
     pub async fn get_capture(&self, id: CaptureId) -> Result<Option<Capture>, CoreError> {
         self.get("captures", id.to_string()).await
     }
@@ -454,6 +565,35 @@ impl TursoStore {
             .await
             .map_err(storage_error)?;
         let result = async {
+            let mut rows = connection
+                .query(
+                    "SELECT payload FROM captures WHERE id = ? AND person_id = ?",
+                    (capture.id.to_string(), capture.person_id.to_string()),
+                )
+                .await
+                .map_err(storage_error)?;
+            let stored = rows
+                .next()
+                .await
+                .map_err(storage_error)?
+                .map(|row| row.get::<String>(0).map_err(storage_error))
+                .transpose()?;
+            drop(rows);
+            let Some(stored) = stored else {
+                return Err(CoreError::new(ErrorCode::NotFound, "capture not found"));
+            };
+            let current: Capture = from_str(&stored).map_err(storage_error)?;
+            if current.revision.next() != capture.revision {
+                return Err(CoreError::new(ErrorCode::Conflict, "stale revision")
+                    .with_metadata(
+                        "expected",
+                        capture.revision.0.saturating_sub(1).to_string(),
+                    )
+                    .with_metadata("actual", current.revision.0.to_string()));
+            }
+            if !matches!(current.processing, floe_domain::CaptureProcessing::Pending) {
+                return Err(CoreError::new(ErrorCode::Conflict, "capture has already been resolved"));
+            }
             connection.execute(
                 &format!("INSERT INTO {table}(id, person_id, payload) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload"),
                 (id, person_id.to_string(), payload),
@@ -527,6 +667,169 @@ impl TimelineRepository for TursoStore {
     ) -> Result<Option<floe_domain::CalendarMirror>, CoreError> {
         TursoStore::calendar_mirror(self, person_id).await
     }
+}
+
+impl floe_day::TimelineRepository for TursoStore {
+    async fn put_capture(&self, value: &floe_day::Capture) -> Result<(), floe_day::DayError> {
+        TimelineRepository::put_capture(self, value)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_event(&self, value: &floe_day::Event) -> Result<(), floe_day::DayError> {
+        TimelineRepository::put_event(self, value)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_event_if_revision(
+        &self,
+        value: &floe_day::Event,
+        expected: floe_day::Revision,
+    ) -> Result<(), floe_day::DayError> {
+        TursoStore::put_event_if_revision(self, value, expected)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_task(&self, value: &floe_day::Task) -> Result<(), floe_day::DayError> {
+        TimelineRepository::put_task(self, value)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_task_if_revision(
+        &self,
+        value: &floe_day::Task,
+        expected: floe_day::Revision,
+    ) -> Result<(), floe_day::DayError> {
+        TursoStore::put_task_if_revision(self, value, expected)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_note(&self, value: &floe_day::Note) -> Result<(), floe_day::DayError> {
+        TimelineRepository::put_note(self, value)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_note_if_revision(
+        &self,
+        value: &floe_day::Note,
+        expected: floe_day::Revision,
+    ) -> Result<(), floe_day::DayError> {
+        TursoStore::put_note_if_revision(self, value, expected)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn get_capture(
+        &self,
+        id: floe_day::CaptureId,
+    ) -> Result<Option<floe_day::Capture>, floe_day::DayError> {
+        TimelineRepository::get_capture(self, id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn get_event(
+        &self,
+        id: floe_day::EventId,
+    ) -> Result<Option<floe_day::Event>, floe_day::DayError> {
+        TimelineRepository::get_event(self, id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn get_task(
+        &self,
+        id: floe_day::TaskId,
+    ) -> Result<Option<floe_day::Task>, floe_day::DayError> {
+        TimelineRepository::get_task(self, id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn get_note(
+        &self,
+        id: floe_day::NoteId,
+    ) -> Result<Option<floe_day::Note>, floe_day::DayError> {
+        TimelineRepository::get_note(self, id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn list_events(
+        &self,
+        person_id: floe_day::PersonId,
+    ) -> Result<Vec<floe_day::Event>, floe_day::DayError> {
+        TimelineRepository::list_events(self, person_id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn list_tasks(
+        &self,
+        person_id: floe_day::PersonId,
+    ) -> Result<Vec<floe_day::Task>, floe_day::DayError> {
+        TimelineRepository::list_tasks(self, person_id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn list_notes(
+        &self,
+        person_id: floe_day::PersonId,
+    ) -> Result<Vec<floe_day::Note>, floe_day::DayError> {
+        TimelineRepository::list_notes(self, person_id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn classify(
+        &self,
+        capture: &floe_day::Capture,
+        item: &floe_day::TimelineItem,
+    ) -> Result<(), floe_day::DayError> {
+        TimelineRepository::classify(self, capture, item)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn calendar_mirror(
+        &self,
+        person_id: floe_day::PersonId,
+    ) -> Result<Option<floe_day::CalendarMirror>, floe_day::DayError> {
+        TimelineRepository::calendar_mirror(self, person_id)
+            .await
+            .map_err(day_error)
+    }
+
+    async fn put_calendar_mirror(
+        &self,
+        person_id: floe_day::PersonId,
+        mirror: &floe_day::CalendarMirror,
+        previous: Option<&floe_day::CalendarMirror>,
+    ) -> Result<(), floe_day::DayError> {
+        TursoStore::put_calendar_mirror(self, person_id, mirror, previous)
+            .await
+            .map_err(day_error)
+    }
+}
+
+fn day_error(error: CoreError) -> floe_day::DayError {
+    let code = match error.code {
+        ErrorCode::Validation => floe_day::DayErrorCode::Validation,
+        ErrorCode::NotFound => floe_day::DayErrorCode::NotFound,
+        ErrorCode::Conflict => floe_day::DayErrorCode::Conflict,
+        _ => floe_day::DayErrorCode::Storage,
+    };
+    let mut result = floe_day::DayError::new(code, error.message);
+    for (key, value) in error.metadata {
+        result = result.with_metadata(key, value);
+    }
+    result
 }
 
 fn storage_error(error: impl std::fmt::Display) -> CoreError {

@@ -2,7 +2,6 @@ use chrono::{DateTime, NaiveDate, Utc};
 use floe_domain::*;
 use std::sync::Arc;
 
-use crate::ports::TimelineRepository;
 use crate::{CoreError, ErrorCode, TursoStore, calendar_lease::CalendarLeaseRegistry};
 
 pub struct FloeCore {
@@ -10,21 +9,7 @@ pub struct FloeCore {
     pub(crate) lease_registry: Arc<CalendarLeaseRegistry>,
 }
 
-#[derive(Clone, Debug)]
-pub enum Classification {
-    Event {
-        title: String,
-        schedule: EventSchedule,
-    },
-    Task {
-        title: String,
-        deadline: Option<DateTime<Utc>>,
-        priority: Priority,
-    },
-    Note {
-        content: String,
-    },
-}
+pub use floe_day::Classification;
 
 impl FloeCore {
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self, CoreError> {
@@ -34,8 +19,8 @@ impl FloeCore {
         })
     }
 
-    fn timeline_repository(&self) -> &impl TimelineRepository {
-        &self.store
+    pub fn day_service(&self) -> floe_day::DayService<'_, TursoStore> {
+        floe_day::DayService::new(&self.store)
     }
 
     pub async fn submit_capture(
@@ -44,9 +29,10 @@ impl FloeCore {
         input: impl Into<String>,
         now: DateTime<Utc>,
     ) -> Result<Capture, CoreError> {
-        let capture = Capture::new(person_id, input, now, CaptureSource::Typed)?;
-        self.timeline_repository().put_capture(&capture).await?;
-        Ok(capture)
+        self.day_service()
+            .submit_capture(person_id, input, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn create_event(
@@ -56,9 +42,10 @@ impl FloeCore {
         schedule: EventSchedule,
         now: DateTime<Utc>,
     ) -> Result<Event, CoreError> {
-        let event = Event::new(person_id, title, schedule, SourceRef::Manual, now)?;
-        self.timeline_repository().put_event(&event).await?;
-        Ok(event)
+        self.day_service()
+            .create_event(person_id, title, schedule, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn create_task(
@@ -69,9 +56,10 @@ impl FloeCore {
         priority: Priority,
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
-        let task = Task::new(person_id, title, deadline, priority, SourceRef::Manual, now)?;
-        self.timeline_repository().put_task(&task).await?;
-        Ok(task)
+        self.day_service()
+            .create_task(person_id, title, deadline, priority, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn create_note(
@@ -80,9 +68,10 @@ impl FloeCore {
         content: impl Into<String>,
         now: DateTime<Utc>,
     ) -> Result<Note, CoreError> {
-        let note = Note::new(person_id, content, SourceRef::Manual, now)?;
-        self.timeline_repository().put_note(&note).await?;
-        Ok(note)
+        self.day_service()
+            .create_note(person_id, content, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn classify_capture(
@@ -92,47 +81,10 @@ impl FloeCore {
         classification: Classification,
         now: DateTime<Utc>,
     ) -> Result<TimelineItem, CoreError> {
-        let mut capture = self
-            .timeline_repository()
-            .get_capture(capture_id)
-            .await?
-            .ok_or_else(|| not_found("capture", capture_id))?;
-        ensure_revision(capture.revision, expected_revision)?;
-        if !matches!(capture.processing, CaptureProcessing::Pending) {
-            return Err(CoreError::new(
-                ErrorCode::Conflict,
-                "capture has already been resolved",
-            ));
-        }
-        let source = SourceRef::Capture(capture.id);
-        let item = match classification {
-            Classification::Event { title, schedule } => {
-                TimelineItem::Event(Event::new(capture.person_id, title, schedule, source, now)?)
-            }
-            Classification::Task {
-                title,
-                deadline,
-                priority,
-            } => TimelineItem::Task(Task::new(
-                capture.person_id,
-                title,
-                deadline,
-                priority,
-                source,
-                now,
-            )?),
-            Classification::Note { content } => {
-                TimelineItem::Note(Note::new(capture.person_id, content, source, now)?)
-            }
-        };
-        let target = match &item {
-            TimelineItem::Event(value) => DomainRef::Event(value.id),
-            TimelineItem::Task(value) => DomainRef::Task(value.id),
-            TimelineItem::Note(value) => DomainRef::Note(value.id),
-        };
-        capture.classify(target, now);
-        self.timeline_repository().classify(&capture, &item).await?;
-        Ok(item)
+        self.day_service()
+            .classify_capture(capture_id, expected_revision, classification, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn set_task_completed(
@@ -142,19 +94,10 @@ impl FloeCore {
         completed: bool,
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
-        let mut task = self
-            .timeline_repository()
-            .get_task(task_id)
-            .await?
-            .ok_or_else(|| not_found("task", task_id))?;
-        ensure_revision(task.revision, expected_revision)?;
-        if completed {
-            task.complete(now);
-        } else {
-            task.reopen(now);
-        }
-        self.timeline_repository().put_task(&task).await?;
-        Ok(task)
+        self.day_service()
+            .set_task_completed(task_id, expected_revision, completed, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn update_event(
@@ -165,16 +108,10 @@ impl FloeCore {
         schedule: EventSchedule,
         now: DateTime<Utc>,
     ) -> Result<Event, CoreError> {
-        let mut event = self
-            .timeline_repository()
-            .get_event(event_id)
-            .await?
-            .ok_or_else(|| not_found("event", event_id))?;
-        ensure_revision(event.revision, expected_revision)?;
-        ensure_local_event(&event)?;
-        event.update(title, schedule, now)?;
-        self.timeline_repository().put_event(&event).await?;
-        Ok(event)
+        self.day_service()
+            .update_event(event_id, expected_revision, title, schedule, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn update_task(
@@ -186,15 +123,10 @@ impl FloeCore {
         priority: Priority,
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
-        let mut task = self
-            .timeline_repository()
-            .get_task(task_id)
-            .await?
-            .ok_or_else(|| not_found("task", task_id))?;
-        ensure_revision(task.revision, expected_revision)?;
-        task.update(title, deadline, priority, now)?;
-        self.timeline_repository().put_task(&task).await?;
-        Ok(task)
+        self.day_service()
+            .update_task(task_id, expected_revision, title, deadline, priority, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn update_note(
@@ -204,15 +136,10 @@ impl FloeCore {
         content: impl Into<String>,
         now: DateTime<Utc>,
     ) -> Result<Note, CoreError> {
-        let mut note = self
-            .timeline_repository()
-            .get_note(note_id)
-            .await?
-            .ok_or_else(|| not_found("note", note_id))?;
-        ensure_revision(note.revision, expected_revision)?;
-        note.update(content, now)?;
-        self.timeline_repository().put_note(&note).await?;
-        Ok(note)
+        self.day_service()
+            .update_note(note_id, expected_revision, content, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn delete_item(
@@ -221,40 +148,10 @@ impl FloeCore {
         expected_revision: Revision,
         now: DateTime<Utc>,
     ) -> Result<(), CoreError> {
-        match reference {
-            DomainRef::Event(id) => {
-                let mut value = self
-                    .timeline_repository()
-                    .get_event(id)
-                    .await?
-                    .ok_or_else(|| not_found("event", id))?;
-                ensure_revision(value.revision, expected_revision)?;
-                ensure_local_event(&value)?;
-                value.delete(now);
-                self.timeline_repository().put_event(&value).await?;
-            }
-            DomainRef::Task(id) => {
-                let mut value = self
-                    .timeline_repository()
-                    .get_task(id)
-                    .await?
-                    .ok_or_else(|| not_found("task", id))?;
-                ensure_revision(value.revision, expected_revision)?;
-                value.delete(now);
-                self.timeline_repository().put_task(&value).await?;
-            }
-            DomainRef::Note(id) => {
-                let mut value = self
-                    .timeline_repository()
-                    .get_note(id)
-                    .await?
-                    .ok_or_else(|| not_found("note", id))?;
-                ensure_revision(value.revision, expected_revision)?;
-                value.delete(now);
-                self.timeline_repository().put_note(&value).await?;
-            }
-        }
-        Ok(())
+        self.day_service()
+            .delete_item(reference, expected_revision, now)
+            .await
+            .map_err(day_error)
     }
 
     pub async fn day_snapshot(
@@ -276,63 +173,31 @@ impl FloeCore {
         end_timezone_offset_seconds: Option<i32>,
         now: DateTime<Utc>,
     ) -> Result<DaySnapshot, CoreError> {
-        let range = CalendarRange {
-            start_date: date,
-            end_date_exclusive: date
-                .succ_opt()
-                .ok_or_else(|| CoreError::new(ErrorCode::Validation, "date out of range"))?,
-            timezone_offset_seconds,
-            end_timezone_offset_seconds,
-        };
-        if !range.is_valid() {
-            return Err(CoreError::new(ErrorCode::Validation, "invalid day offsets"));
-        }
-        let repository = self.timeline_repository();
-        let mirror = repository.calendar_mirror(person_id).await?;
-        let mut events = repository.list_events(person_id).await?;
-        if let Some(mirror) = &mirror {
-            events.extend(mirror.events.clone());
-        }
-        let mut snapshot = project_day_with_end_offset(
-            person_id,
-            date,
-            timezone_offset_seconds,
-            end_timezone_offset_seconds,
-            now,
-            events,
-            repository.list_tasks(person_id).await?,
-            repository.list_notes(person_id).await?,
-        );
-        snapshot.calendar = mirror
-            .filter(|mirror| !mirror.connection.disconnected)
-            .map(|mirror| mirror.connection);
-        Ok(snapshot)
+        self.day_service()
+            .day_snapshot_with_end_offset(
+                person_id,
+                date,
+                timezone_offset_seconds,
+                end_timezone_offset_seconds,
+                now,
+            )
+            .await
+            .map_err(day_error)
     }
 }
 
-fn ensure_revision(actual: Revision, expected: Revision) -> Result<(), CoreError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(CoreError::new(ErrorCode::Conflict, "stale revision")
-            .with_metadata("expected", expected.0.to_string())
-            .with_metadata("actual", actual.0.to_string()))
+pub(crate) fn day_error(error: floe_day::DayError) -> CoreError {
+    let code = match error.code {
+        floe_day::DayErrorCode::Validation => ErrorCode::Validation,
+        floe_day::DayErrorCode::NotFound => ErrorCode::NotFound,
+        floe_day::DayErrorCode::Conflict => ErrorCode::Conflict,
+        floe_day::DayErrorCode::Storage => ErrorCode::Storage,
+    };
+    let mut result = CoreError::new(code, error.message);
+    for (key, value) in error.metadata {
+        result = result.with_metadata(key, value);
     }
-}
-
-fn ensure_local_event(event: &Event) -> Result<(), CoreError> {
-    if matches!(event.source, SourceRef::Calendar(_)) {
-        return Err(CoreError::new(
-            ErrorCode::Validation,
-            "external calendar events are read-only",
-        ));
-    }
-    Ok(())
-}
-
-fn not_found(kind: &str, id: impl std::fmt::Display) -> CoreError {
-    CoreError::new(ErrorCode::NotFound, format!("{kind} not found"))
-        .with_metadata("id", id.to_string())
+    result
 }
 
 #[cfg(test)]
@@ -402,6 +267,149 @@ mod tests {
                 .items
                 .is_empty()
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn stale_task_write_is_rejected_by_repository_cas() {
+        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
+        let person_id = PersonId::new();
+        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
+        let core = FloeCore::open(&path).await.unwrap();
+        let task = core
+            .create_task(person_id, "CAS", None, Priority::Normal, now)
+            .await
+            .unwrap();
+        let mut completed = task.clone();
+        completed.complete(now);
+        let mut reopened = task.clone();
+        reopened.reopen(now);
+        floe_day::TimelineRepository::put_task_if_revision(&core.store, &completed, task.revision)
+            .await
+            .unwrap();
+        let error = floe_day::TimelineRepository::put_task_if_revision(
+            &core.store,
+            &reopened,
+            task.revision,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, floe_day::DayErrorCode::Conflict);
+        assert_eq!(
+            error.metadata.get("expected"),
+            Some(&task.revision.0.to_string())
+        );
+        assert_eq!(
+            error.metadata.get("actual"),
+            Some(&completed.revision.0.to_string())
+        );
+        let stored = core.store.get_task(task.id).await.unwrap().unwrap();
+        assert_eq!(stored.completed_at, completed.completed_at);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn stale_observation_identity_is_rejected_at_day_boundary() {
+        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
+        let person_id = PersonId::new();
+        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
+        let core = FloeCore::open(&path).await.unwrap();
+        core.select_calendar(
+            person_id,
+            CalendarProvider::Fixture,
+            "home".into(),
+            "Home".into(),
+        )
+        .await
+        .unwrap();
+        let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
+        let error = core
+            .day_service()
+            .apply_observation(
+                person_id,
+                floe_day::CalendarObservation {
+                    connection_id: "calendar.fixture.rebound".into(),
+                    provider: connection.provider,
+                    source_authority: connection.source_authority,
+                    revision: connection.revision,
+                    range: CalendarRange {
+                        start_date: now.date_naive(),
+                        end_date_exclusive: now.date_naive().succ_opt().unwrap(),
+                        timezone_offset_seconds: 0,
+                        end_timezone_offset_seconds: None,
+                    },
+                    batches: vec![CalendarBatch {
+                        calendar_id: "home".into(),
+                        records: vec![],
+                        failure: None,
+                    }],
+                },
+                now,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, floe_day::DayErrorCode::Conflict);
+        assert_eq!(
+            core.calendar_connection(person_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            connection.revision
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn competing_capture_classification_cannot_leave_an_orphan_item() {
+        let path = std::env::temp_dir().join(format!("floe-{}.db", uuid::Uuid::new_v4()));
+        let person_id = PersonId::new();
+        let now = Utc.with_ymd_and_hms(2026, 9, 2, 9, 0, 0).unwrap();
+        let core = FloeCore::open(&path).await.unwrap();
+        let capture = core
+            .submit_capture(person_id, "classify", now)
+            .await
+            .unwrap();
+        let first = Task::new(
+            person_id,
+            "first",
+            None,
+            Priority::Normal,
+            SourceRef::Capture(capture.id),
+            now,
+        )
+        .unwrap();
+        let second = Task::new(
+            person_id,
+            "second",
+            None,
+            Priority::Normal,
+            SourceRef::Capture(capture.id),
+            now,
+        )
+        .unwrap();
+        let mut first_capture = capture.clone();
+        first_capture.classify(DomainRef::Task(first.id), now);
+        let mut second_capture = capture.clone();
+        second_capture.classify(DomainRef::Task(second.id), now);
+        floe_day::TimelineRepository::classify(
+            &core.store,
+            &first_capture,
+            &TimelineItem::Task(first),
+        )
+        .await
+        .unwrap();
+        let error = floe_day::TimelineRepository::classify(
+            &core.store,
+            &second_capture,
+            &TimelineItem::Task(second),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, floe_day::DayErrorCode::Conflict);
+        assert_eq!(error.metadata.get("expected"), Some(&"0".to_owned()));
+        assert_eq!(error.metadata.get("actual"), Some(&"1".to_owned()));
+        assert_eq!(core.store.list_tasks(person_id).await.unwrap().len(), 1);
         let _ = std::fs::remove_file(path);
     }
 }
