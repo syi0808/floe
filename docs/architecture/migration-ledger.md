@@ -2558,3 +2558,39 @@ cannot yet consume this atomic path. P11/P15 must next carry a bounded opaque
 settlement token from `ExpertReport` to the Vault adapter, reject unsupported
 tokens, register Schedule in the retained Directory, and exercise T03 before
 removing `schedule::try_run`. P15 remains incomplete.
+
+### P11 trusted endpoint settlement handoff checkpoint (2026-09-15)
+
+The role-neutral endpoint contract now carries an optional bounded in-process
+`EndpointSettlement`. The token is validated separately from model-visible
+output and is deliberately omitted from the serialized public Expert report.
+`TaskCoordinator` validates repository support before constructing a Completed
+Task, then supplies the token only to the repository's terminal settlement
+operation. Unsupported tokens become a durable Failed Task before any
+settlement write; they cannot strand a Working Task or silently fall back to an
+ordinary Completed CAS.
+
+Schedule settlements use a versioned canonical payload owned by Core. The FFI
+Vault adapter recognizes only `floe.builtin.schedule/v1`, decodes and validates
+it, and routes terminal persistence to the atomic Task/registry transaction from
+the previous checkpoint. A missing token retains ordinary Task CAS semantics
+for other endpoints and failure outcomes. Exact retries read the terminal Task
+and do not repeat settlement.
+
+Implemented and wired: Agent contract → Experts coordinator → FFI Vault
+repository settlement handoff. Controlled validation passed the Agent contract
+test, all nine Experts delegation tests, the Core direct Schedule settlement
+tests and the FFI Vault repository test. New cases prove the token is bounded
+and absent from public serialization, a supported token reaches settlement
+exactly once, an unsupported token persists failure before commit, and the
+Schedule payload survives canonical encode/decode before atomic persistence.
+Targeted Clippy for all changed crates, workspace all-target check, diff check
+and the migration gate (19 nodes / 61 edges / no errors) passed. No Apple UI,
+live provider account or actual model was exercised.
+
+Blocker/remove-by: no production `AgentEndpoint` yet translates an
+`EndpointInvocation` into the protected Schedule request and token, and the
+retained Worker Directory remains empty. P15 must next register that adapter,
+bind current grant/model/source eligibility without per-turn generation
+activation, and run T03 through the common TaskCoordinator. The legacy Calendar
+root and `schedule::try_run` remain until that flow passes; P11/P15 are pending.
