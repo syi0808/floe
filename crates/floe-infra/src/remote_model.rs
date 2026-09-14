@@ -855,6 +855,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_only_dispatch_uses_model_endpoint_without_source_bindings() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = route();
+        config.base_url = format!("http://{}", listener.local_addr().unwrap());
+        config.allow_external = true;
+        config.calendar_connections = vec![AgentRemoteCalendarConnectionDto {
+            connector_id: "unavailable.source".into(),
+            connection_id: String::new(),
+            connection_revision: 0,
+        }];
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let (header_end, content_length) = loop {
+                let mut chunk = [0_u8; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                assert!(bytes.len() <= 65_536);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let content_length = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if bytes.len() >= header_end + 4 + content_length {
+                        break (header_end, content_length);
+                    }
+                }
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
+            assert!(headers.starts_with("post /v1/agent http/1.1\r\n"));
+            assert!(
+                headers.contains("authorization: bearer secret_token_value_that_is_long_enough")
+            );
+            let body: serde_json::Value =
+                serde_json::from_slice(&bytes[header_end + 4..header_end + 4 + content_length])
+                    .unwrap();
+            assert_eq!(body["purpose"], "everyday_assistance");
+            assert_eq!(body["allow_external"], true);
+            assert!(!body.to_string().contains("unavailable.source"));
+            let response = json!({
+                "schema_version": 1,
+                "purpose": "everyday_assistance",
+                "trace_id": "a".repeat(32),
+                "routing": {"placement": "remote", "external_transfer": true, "replay_source": ""},
+                "output": json!({"output": [{"kind": "answer", "text": "Fixture answer"}], "used_tokens": 3}).to_string()
+            }).to_string();
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(), response
+            ).as_bytes()).await.unwrap();
+        });
+        let turn_id = uuid::Uuid::new_v4();
+        let request = ModelRequest {
+            usage: Default::default(),
+            replay: vec![],
+            schema_version: 1,
+            prompt: floe_agent::manager_prompt(None).unwrap(),
+            person_id: floe_domain::PersonId::new(),
+            session_id: uuid::Uuid::new_v4(),
+            turn_id,
+            policy: floe_agent::InferencePolicyDecision {
+                purpose: "everyday_assistance".into(),
+                data_classes: vec![floe_agent::DataClass::Synthetic],
+                allowed_placements: vec![ModelPlacement::Remote],
+                performance_class: "fast".into(),
+                projection_version: 1,
+                external_transfer_consent: floe_agent::TransferConsent::Granted,
+                bounded_sensitive_projection: false,
+            },
+            context: floe_agent::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            },
+            messages: vec![floe_agent::AgentMessage::User {
+                turn_id,
+                text: "Hello".into(),
+            }],
+            capabilities: vec![],
+            active_agents: vec![],
+            remaining_tokens: 512,
+            remaining_cost_micros: 0,
+            max_output_bytes: 1024,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+            cancellation: floe_agent::Cancellation::new(),
+        };
+        let response = ServerModelRunner::new_model_only(config)
+            .unwrap()
+            .generate(request)
+            .await
+            .unwrap();
+        assert_eq!(
+            response.output,
+            vec![ModelStep::Answer {
+                text: "Fixture answer".into()
+            }]
+        );
+        assert_eq!(response.used_tokens, 3);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn cancelled_queued_source_read_never_opens_a_provider_connection() {
         use std::{future::Future, task::Poll};
 
@@ -1150,11 +1259,24 @@ mod tests {
             "http://localhost:8431",
             "http://127.0.0.1:8431/path",
             "http://192.168.1.2:8431",
+            "http://127.0.0.1",
+            "http://127.0.0.1:8431?query=true",
+            "http://127.0.0.1:8431#fragment",
         ] {
             let mut candidate = route();
             candidate.base_url = invalid.into();
+            assert!(ServerModelRunner::new_model_only(candidate.clone()).is_err());
             assert!(ServerModelRunner::new(candidate).is_err());
         }
+
+        for token in ["short".to_owned(), "x".repeat(257), " ".repeat(32)] {
+            let mut candidate = route();
+            candidate.bearer_token = token;
+            assert!(ServerModelRunner::new_model_only(candidate).is_err());
+        }
+        let mut wrong_purpose = route();
+        wrong_purpose.purpose = "other".into();
+        assert!(ServerModelRunner::new_model_only(wrong_purpose).is_err());
 
         for (connection_id, revision) in [
             ("not-a-uuid", 1),
