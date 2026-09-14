@@ -51,7 +51,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
-| P16 | Pending |
+| P16 | Partial: app-wire v2 conversation DTO/golden foundation defined; AppHost and ABI cutover pending |
 | P17 | Pending |
 | P18 | Pending |
 | P19 | Pending |
@@ -3349,3 +3349,29 @@ remaining product assembly also still live in FFI. The next executable P16
 slice is to introduce the target AppHost ownership shell and move these bounded
 correlations behind its service-facing API without duplicating execution.
 P12/P16 and Apple acceptance remain partial.
+
+### P16 app-wire v2 contract checkpoint (2026-09-15)
+
+Code checkpoint `dae71bd` establishes a separate `APP_WIRE_VERSION = 2`
+without changing the legacy `PROTOCOL_VERSION = 1` used by the current app,
+provider and native-calendar paths. The protocol crate now defines the initial
+conversation command/query/event subset: StartTurn and explicit CancelRun,
+GetCommand and GetRun, durable command receipts, Run snapshots and reports, and
+bounded cursor reads with an explicit ResyncRequired result. Request UUIDs are
+parsed as UUIDs, nil identities and invalid continuation generations are
+rejected, unknown request/union fields are denied, and the app wire contains no
+principal, permit, raw credential or backend mutable handle.
+
+Four checked-in JSON fixtures fix the schema-2 StartTurn, command receipt,
+GetRun and event-resync shapes. The focused golden/validation suite and all 18
+`floe-protocol` tests passed. This is a contract foundation rather than a host
+cutover: `floe_protocol_version()` intentionally still reports legacy version
+1, no v2 ABI export exists yet, and no command reaches a second runtime.
+
+Blocker/remove-by: the v2 command cannot be wired safely until AppHost owns a
+verified local caller context and host-selected inference route; accepting a
+Person, device or bearer token from the new DTO would violate N01/N11. The next
+executable P16 slice is the AppHost ownership shell and its native identity /
+provider handles, after which FFI can convert these DTOs to typed service calls
+and reject version mismatch before side effects. P16 and Apple acceptance
+remain partial.
