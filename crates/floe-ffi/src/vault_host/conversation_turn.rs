@@ -356,16 +356,14 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 .await?
             {
                 let source_run_id = existing.continuation_of.ok_or(AgentFailure::Conflict)?;
-                let source = vault
-                    .conversation_run(source_run_id)
-                    .await?
-                    .ok_or(AgentFailure::Conflict)?;
                 if existing.model_placement != model.placement() {
                     return Err(AgentFailure::Conflict);
                 }
                 floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {
                     run_id: source_run_id,
-                    executor_generation: source.executor_generation,
+                    executor_generation: existing
+                        .continuation_executor_generation
+                        .ok_or(AgentFailure::Conflict)?,
                     level: existing.continuation_level,
                 })
             } else {

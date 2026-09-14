@@ -62,6 +62,7 @@ pub struct RunReceipt {
     pub aggregate_revision: u64,
     pub executor_generation: u64,
     pub continuation_of: Option<RunId>,
+    pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
     pub execution_profile: String,
 }
@@ -92,7 +93,10 @@ impl RunReceipt {
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        if self.continuation_of.is_some() != (self.continuation_level > 0) {
+        if self.continuation_of.is_some() != (self.continuation_level > 0)
+            || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
+            || self.continuation_executor_generation == Some(0)
+        {
             return Err(AgentFailure::StorageUnavailable);
         }
         let valid = match self.state {

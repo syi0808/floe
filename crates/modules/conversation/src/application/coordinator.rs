@@ -13,7 +13,7 @@ use crate::{
     TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
-use super::recovery::project_continuation;
+use super::recovery::project_journal;
 
 pub struct ConversationService<Repository> {
     repository: Arc<Repository>,
@@ -100,6 +100,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             || match &request.mode {
                 TurnMode::New => {
                     admitted.receipt.continuation_of.is_some()
+                        || admitted.receipt.continuation_executor_generation.is_some()
                         || admitted.receipt.continuation_level != 0
                         || admitted.transcript.last().is_none_or(|message| {
                             message.message_id != request.command_id.as_uuid()
@@ -108,6 +109,8 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 }
                 TurnMode::Continue(reference) => {
                     admitted.receipt.continuation_of != Some(reference.run_id)
+                        || admitted.receipt.continuation_executor_generation
+                            != Some(reference.executor_generation)
                         || admitted.receipt.continuation_level != reference.level
                         || admitted
                             .transcript
@@ -278,8 +281,100 @@ pub async fn continuation<Repository: ConversationRepository>(
     if admitted.receipt.principal != principal {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let entries = repository.load_journal(run_id).await?;
-    project_continuation(&admitted, &entries)
+    admitted.validate()?;
+    let current = admitted.receipt.clone();
+    let mut chain = vec![current.clone()];
+    let mut seen_runs = std::collections::HashSet::from([current.run_id]);
+    while let Some(parent_run_id) = chain.last().and_then(|receipt| receipt.continuation_of) {
+        if chain.len() >= 4 || !seen_runs.insert(parent_run_id) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let child = chain.last().ok_or(AgentFailure::StorageUnavailable)?;
+        let parent = repository
+            .load_receipt(parent_run_id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        parent.validate()?;
+        if parent.principal != principal
+            || parent.session_id != current.session_id
+            || parent.execution_profile != current.execution_profile
+            || child.continuation_executor_generation != Some(parent.executor_generation)
+            || parent.continuation().as_ref().is_none_or(|reference| {
+                reference.run_id != parent_run_id || reference.level != child.continuation_level
+            })
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        chain.push(parent);
+    }
+    chain.reverse();
+
+    let mut messages = admitted.transcript;
+    let mut replay = Vec::new();
+    let mut completed_iterations = 0_u32;
+    let mut usage = floe_execution::budget::ModelUsage::default();
+    let mut total_entries = 0_usize;
+    let mut message_ids = messages
+        .iter()
+        .map(|message| message.message_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut replay_invocations = std::collections::HashSet::new();
+    let mut replay_calls = std::collections::HashSet::new();
+    for receipt in chain {
+        let entries = repository.load_journal(receipt.run_id).await?;
+        total_entries = total_entries
+            .checked_add(entries.len())
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if total_entries > 512 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let projected = project_journal(&receipt, &entries)?;
+        if projected
+            .messages
+            .iter()
+            .any(|message| !message_ids.insert(message.message_id))
+            || projected
+                .replay
+                .iter()
+                .any(|receipt| {
+                    !replay_invocations.insert(receipt.invocation_key)
+                        || !replay_calls.insert(receipt.call_id)
+                })
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        messages.extend(projected.messages);
+        replay.extend(projected.replay);
+        completed_iterations = completed_iterations
+            .checked_add(projected.completed_iterations)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        usage.attempts = usage
+            .attempts
+            .checked_add(projected.usage.attempts)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        usage.tokens = usage
+            .tokens
+            .checked_add(projected.usage.tokens)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        usage.cost_micros = usage
+            .cost_micros
+            .checked_add(projected.usage.cost_micros)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+    }
+    if messages.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    messages.iter().try_for_each(AgentMessage::validate)?;
+    Ok(ContinuationSnapshot {
+        reference: current.continuation().ok_or(AgentFailure::Conflict)?,
+        session_id: current.session_id,
+        session_revision: current.session_revision,
+        execution_profile: current.execution_profile,
+        messages,
+        replay,
+        completed_iterations,
+        usage,
+    })
 }
 
 fn turn_digest(request: &TurnRequest) -> [u8; 32] {

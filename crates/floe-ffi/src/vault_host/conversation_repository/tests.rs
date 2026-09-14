@@ -239,7 +239,7 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
 }
 
 #[tokio::test]
-async fn encrypted_journal_projects_only_settled_continuation_work() {
+async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let person_id = PersonId::new();
@@ -331,6 +331,109 @@ async fn encrypted_journal_projects_only_settled_continuation_work() {
     assert_eq!(continuation.replay[0].call_id, call.call_id);
     assert_eq!(continuation.replay[0].result, result.text);
 
+    let second_run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id: second_run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: continuation.session_revision,
+            request_digest: [8; 32],
+            text: "continue safely".into(),
+            continuation: Some(floe_core::VaultConversationContinuationRef {
+                run_id: continuation.reference.run_id,
+                executor_generation: continuation.reference.executor_generation,
+                level: continuation.reference.level,
+            }),
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    let second_attempt_id = Uuid::new_v4();
+    let second_call = ToolCall {
+        call_id: Uuid::new_v4(),
+        invocation_key: floe_agent_contract::InvocationKey::new(),
+        tool_id: "read.more-context".into(),
+        definition_revision: 1,
+        input: "{}".into(),
+    };
+    let second_result = ToolResult {
+        call_id: second_call.call_id,
+        text: "second settled observation".into(),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+    };
+    for (kind, event) in [
+        (
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id: second_attempt_id,
+            },
+        ),
+        (
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id: second_attempt_id,
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            },
+        ),
+        (
+            "intent",
+            JournalEvent::ToolIntent {
+                call: second_call.clone(),
+            },
+        ),
+        (
+            "result",
+            JournalEvent::ToolResult {
+                result: second_result.clone(),
+            },
+        ),
+        ("checkpoint", JournalEvent::Checkpoint { iteration: 1 }),
+    ] {
+        vault
+            .append_conversation_journal(
+                second_run_id,
+                kind,
+                &serde_json::to_string(&event).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            second_run_id,
+            1,
+            floe_core::VaultConversationTerminal {
+                state: floe_core::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let continuation = floe_conversation::continuation(
+        repository.as_ref(),
+        second_run_id,
+        &person_id.to_string(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(continuation.completed_iterations, 2);
+    assert_eq!(continuation.usage.attempts, 2);
+    assert_eq!(continuation.usage.tokens, 3);
+    assert_eq!(continuation.messages.len(), 3);
+    assert_eq!(continuation.replay.len(), 2);
+    assert_eq!(continuation.replay[0].call_id, call.call_id);
+    assert_eq!(continuation.replay[1].call_id, second_call.call_id);
+
     let service = build_service(Arc::clone(&repository));
     let model = Model::default();
     let mut turn = request(
@@ -355,8 +458,8 @@ async fn encrypted_journal_projects_only_settled_continuation_work() {
         .await
         .unwrap();
     assert_eq!(completed.state, RunState::Completed);
-    assert_eq!(completed.continuation_of, Some(run_id));
-    assert_eq!(completed.continuation_level, 1);
+    assert_eq!(completed.continuation_of, Some(second_run_id));
+    assert_eq!(completed.continuation_level, 2);
     let session = vault.load(person_id, session.id).await.unwrap();
     assert_eq!(
         session

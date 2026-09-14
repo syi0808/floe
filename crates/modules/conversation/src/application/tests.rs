@@ -131,6 +131,10 @@ impl ConversationRepository for MemoryRepository {
                 aggregate_revision: 1,
                 executor_generation: 1,
                 continuation_of,
+                continuation_executor_generation: match &request.mode {
+                    crate::TurnMode::New => None,
+                    crate::TurnMode::Continue(reference) => Some(reference.executor_generation),
+                },
                 continuation_level,
                 execution_profile: request.execution_profile,
             };
@@ -221,6 +225,21 @@ impl ConversationRepository for MemoryRepository {
                 .runs
                 .get(&run_id)
                 .map(|stored| stored.admitted.clone()))
+        })
+    }
+
+    fn load_receipt<'a>(
+        &'a self,
+        run_id: RunId,
+    ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>> {
+        Box::pin(async move {
+            Ok(self
+                .state
+                .lock()
+                .unwrap()
+                .runs
+                .get(&run_id)
+                .map(|stored| stored.admitted.receipt.clone()))
         })
     }
 
@@ -644,6 +663,51 @@ async fn deadline_continuation_is_generation_bound_and_does_not_duplicate_the_us
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn continuation_chain_preserves_ancestor_generation_and_cumulative_budget_state() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut first = request(CommandId::new(), session_id, 0, "finish this");
+    first.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+    let first = service.run_turn(first, ports(&model)).await.unwrap();
+
+    let mut second = request(
+        CommandId::new(),
+        session_id,
+        first.session_revision,
+        "finish this",
+    );
+    second.mode = crate::TurnMode::Continue(first.continuation().unwrap());
+    second.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+    let second = service.run_turn(second, ports(&model)).await.unwrap();
+    let snapshot = service
+        .continuation(second.run_id, "person-a")
+        .await
+        .unwrap();
+    assert_eq!(snapshot.reference.level, 2);
+    assert_eq!(snapshot.completed_iterations, 0);
+    assert_eq!(snapshot.usage, Default::default());
+
+    repository
+        .state
+        .lock()
+        .unwrap()
+        .runs
+        .get_mut(&second.run_id)
+        .unwrap()
+        .admitted
+        .receipt
+        .continuation_executor_generation = Some(first.executor_generation + 1);
+    assert!(matches!(
+        service.continuation(second.run_id, "person-a").await,
+        Err(AgentFailure::StorageUnavailable)
+    ));
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

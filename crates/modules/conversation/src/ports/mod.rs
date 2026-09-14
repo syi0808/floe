@@ -33,6 +33,11 @@ pub trait ConversationRepository: Send + Sync {
         run_id: RunId,
     ) -> BoxFuture<'a, Result<Option<AdmittedTurn>, AgentFailure>>;
 
+    fn load_receipt<'a>(
+        &'a self,
+        run_id: RunId,
+    ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>>;
+
     fn recover_session<'a>(
         &'a self,
         request: RecoveryRequest,

@@ -7,7 +7,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -48,6 +48,7 @@ pub struct VaultConversationRunRecord {
     pub journal_revision: u64,
     pub executor_generation: u64,
     pub continuation_of: Option<RunId>,
+    pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
     pub model_placement: ModelPlacement,
 }
@@ -80,7 +81,10 @@ impl VaultConversationRunRecord {
         {
             return Err(AgentFailure::VaultUnavailable);
         }
-        if self.continuation_of.is_some() != (self.continuation_level > 0) {
+        if self.continuation_of.is_some() != (self.continuation_level > 0)
+            || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
+            || self.continuation_executor_generation == Some(0)
+        {
             return Err(AgentFailure::VaultUnavailable);
         }
         let valid = match self.state {
@@ -121,6 +125,11 @@ impl VaultConversationRunRecord {
             && self.initial_session_revision == request.expected_session_revision
             && self.request_digest == request.request_digest
             && self.continuation_of == request.continuation.as_ref().map(|value| value.run_id)
+            && self.continuation_executor_generation
+                == request
+                    .continuation
+                    .as_ref()
+                    .map(|value| value.executor_generation)
             && self.continuation_level
                 == request.continuation.as_ref().map_or(0, |value| value.level)
             && self.model_placement == request.model_placement
@@ -517,6 +526,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 journal_revision: 0,
                 executor_generation,
                 continuation_of: request.continuation.as_ref().map(|value| value.run_id),
+                continuation_executor_generation: request
+                    .continuation
+                    .as_ref()
+                    .map(|value| value.executor_generation),
                 continuation_level: request.continuation.as_ref().map_or(0, |value| value.level),
                 model_placement: request.model_placement,
             };
@@ -935,7 +948,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 4))",
                 (),
             )
             .await
@@ -970,7 +983,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 3)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 4)",
                 (),
             )
             .await

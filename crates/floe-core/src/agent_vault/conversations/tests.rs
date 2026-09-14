@@ -240,6 +240,10 @@ async fn continuation_admission_is_generation_bound_and_preserves_one_user_messa
         panic!("expected continuation admission");
     };
     assert_eq!(continued.continuation_of, Some(run_id));
+    assert_eq!(
+        continued.continuation_executor_generation,
+        Some(record.executor_generation)
+    );
     assert_eq!(continued.continuation_level, 1);
     assert_eq!(active_session.messages.len(), 1);
     assert!(matches!(

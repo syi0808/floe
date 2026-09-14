@@ -6,22 +6,56 @@ use floe_agent_contract::{
 };
 use floe_kernel::AgentFailure;
 
-use crate::{AdmittedTurn, ContinuationSnapshot, JournalEntry, RunState};
+use crate::{AdmittedTurn, ContinuationSnapshot, JournalEntry, RunReceipt, RunState};
+
+pub(super) struct JournalProjection {
+    pub(super) messages: Vec<AgentMessage>,
+    pub(super) replay: Vec<ReplayReceipt>,
+    pub(super) completed_iterations: u32,
+    pub(super) usage: floe_execution::budget::ModelUsage,
+}
 
 pub fn project_continuation(
     admitted: &AdmittedTurn,
     entries: &[JournalEntry],
 ) -> Result<ContinuationSnapshot, AgentFailure> {
     admitted.validate()?;
+    let projected = project_journal(&admitted.receipt, entries)?;
+    let mut messages = admitted.transcript.clone();
+    messages.extend(projected.messages);
+    if messages.len() > floe_agent_contract::MAX_AGENT_MESSAGES || projected.replay.len() > 128 {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    messages.iter().try_for_each(AgentMessage::validate)?;
+    Ok(ContinuationSnapshot {
+        reference: admitted
+            .receipt
+            .continuation()
+            .ok_or(AgentFailure::Conflict)?,
+        session_id: admitted.receipt.session_id,
+        session_revision: admitted.receipt.session_revision,
+        execution_profile: admitted.receipt.execution_profile.clone(),
+        messages,
+        replay: projected.replay,
+        completed_iterations: projected.completed_iterations,
+        usage: projected.usage,
+    })
+}
+
+pub(super) fn project_journal(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+) -> Result<JournalProjection, AgentFailure> {
+    source.validate()?;
     if !matches!(
-        (&admitted.receipt.state, admitted.receipt.issue),
+        (&source.state, source.issue),
         (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
             | (RunState::Failed, Some(AgentFailure::BudgetExceeded))
     ) || entries.len() > 512
     {
         return Err(AgentFailure::Conflict);
     }
-    let mut messages = admitted.transcript.clone();
+    let mut messages = Vec::new();
     let mut replay = Vec::new();
     let mut attempts = HashSet::new();
     let mut seen_attempts = HashSet::new();
@@ -29,6 +63,7 @@ pub fn project_continuation(
     let mut seen_calls = HashSet::new();
     let mut delegations = HashMap::new();
     let mut seen_tasks = HashSet::new();
+    let mut seen_invocations = HashSet::new();
     let mut completed_iterations = 0;
     let mut usage = floe_execution::budget::ModelUsage::default();
     for (index, entry) in entries.iter().enumerate() {
@@ -67,6 +102,7 @@ pub fn project_continuation(
             JournalEvent::ToolIntent { call } => {
                 if call.call_id.is_nil()
                     || call.invocation_key.as_uuid().is_nil()
+                    || !seen_invocations.insert(call.invocation_key)
                     || call.tool_id.trim().is_empty()
                     || call.definition_revision == 0
                     || floe_agent_contract::validate_tool_input(&call.input).is_err()
@@ -82,8 +118,8 @@ pub fn project_continuation(
                     .ok_or(AgentFailure::StorageUnavailable)?;
                 result.validate(call.call_id, floe_agent_contract::MAX_OUTPUT_BYTES)?;
                 let receipt = ReplayReceipt {
-                    principal: admitted.receipt.principal.clone(),
-                    run_id: Some(admitted.receipt.run_id),
+                    principal: source.principal.clone(),
+                    run_id: Some(source.run_id),
                     task_id: None,
                     agent_id: None,
                     tool_id: Some(call.tool_id),
@@ -112,9 +148,10 @@ pub fn project_continuation(
             }
             JournalEvent::DelegationIntent { request } => {
                 if !request.task_id.is_valid()
-                    || request.parent_run_id != Some(admitted.receipt.run_id.as_uuid())
-                    || request.principal != admitted.receipt.principal
+                    || request.parent_run_id != Some(source.run_id.as_uuid())
+                    || request.principal != source.principal
                     || request.invocation_key.as_uuid().is_nil()
+                    || !seen_invocations.insert(request.invocation_key)
                     || request.selected_agent_id.trim().is_empty()
                     || request.selected_definition_revision == 0
                     || request.message.trim().is_empty()
@@ -161,7 +198,7 @@ pub fn project_continuation(
                 });
                 replay.push(ReplayReceipt {
                     principal: request.principal,
-                    run_id: Some(admitted.receipt.run_id),
+                    run_id: Some(source.run_id),
                     task_id: Some(request.task_id),
                     agent_id: Some(request.selected_agent_id),
                     tool_id: None,
@@ -192,18 +229,8 @@ pub fn project_continuation(
     if !attempts.is_empty() || !tools.is_empty() || !delegations.is_empty() {
         return Err(AgentFailure::Interrupted);
     }
-    if messages.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
-        return Err(AgentFailure::BudgetExceeded);
-    }
     messages.iter().try_for_each(AgentMessage::validate)?;
-    Ok(ContinuationSnapshot {
-        reference: admitted
-            .receipt
-            .continuation()
-            .ok_or(AgentFailure::Conflict)?,
-        session_id: admitted.receipt.session_id,
-        session_revision: admitted.receipt.session_revision,
-        execution_profile: admitted.receipt.execution_profile.clone(),
+    Ok(JournalProjection {
         messages,
         replay,
         completed_iterations,
@@ -237,6 +264,7 @@ mod tests {
                 aggregate_revision: 2,
                 executor_generation: 1,
                 continuation_of: None,
+                continuation_executor_generation: None,
                 continuation_level: 0,
                 execution_profile: "test-local".into(),
             },

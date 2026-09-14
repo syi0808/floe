@@ -161,6 +161,19 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         })
     }
 
+    fn load_receipt<'a>(
+        &'a self,
+        run_id: RunId,
+    ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>> {
+        Box::pin(async move {
+            self.vault
+                .conversation_run(run_id)
+                .await?
+                .map(run_receipt)
+                .transpose()
+        })
+    }
+
     fn recover_session<'a>(
         &'a self,
         request: RecoveryRequest,
@@ -295,6 +308,7 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         aggregate_revision: record.aggregate_revision,
         executor_generation: record.executor_generation,
         continuation_of: record.continuation_of,
+        continuation_executor_generation: record.continuation_executor_generation,
         continuation_level: record.continuation_level,
         execution_profile: execution_profile(record.model_placement).into(),
     };
