@@ -7,8 +7,8 @@ use floe_agent_contract::{
     ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId, TaskReceipt, TaskState,
 };
 use floe_conversation::{
-    AdmittedTurn, ConversationRepository, RecoveryReceipt, RecoveryRequest, RunReceipt, RunState,
-    RunTerminal, TurnAdmission, TurnAdmissionRequest,
+    AdmittedTurn, ConversationRepository, JournalEntry, RecoveryReceipt, RecoveryRequest,
+    RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 use floe_core::{
     EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
@@ -127,6 +127,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 receipt.session_id,
             )
             .await?;
+            if session.revision != receipt.session_revision {
+                return Err(AgentFailure::Conflict);
+            }
             let transcript = transcript(&session.messages, &receipt)?;
             Ok(Some(AdmittedTurn {
                 receipt,
@@ -156,6 +159,40 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 session_id: request.session_id,
                 session_revision,
             })
+        })
+    }
+
+    fn load_journal<'a>(
+        &'a self,
+        run_id: RunId,
+    ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>> {
+        Box::pin(async move {
+            self.vault
+                .conversation_journal(run_id)
+                .await?
+                .into_iter()
+                .map(|entry| {
+                    let event = serde_json::from_str::<JournalEvent>(&entry.payload)
+                        .map_err(|_| AgentFailure::StorageUnavailable)?;
+                    let expected_kind = match &event {
+                        JournalEvent::ModelIntent { .. }
+                        | JournalEvent::ToolIntent { .. }
+                        | JournalEvent::DelegationIntent { .. } => "intent",
+                        JournalEvent::ModelResult { .. }
+                        | JournalEvent::ToolResult { .. }
+                        | JournalEvent::DelegationResult { .. } => "result",
+                        JournalEvent::Output { .. } => "output",
+                        JournalEvent::Checkpoint { .. } => "checkpoint",
+                    };
+                    if entry.kind != expected_kind {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    Ok(JournalEntry {
+                        revision: entry.revision,
+                        event,
+                    })
+                })
+                .collect()
         })
     }
 }

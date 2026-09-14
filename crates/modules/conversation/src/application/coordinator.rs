@@ -8,9 +8,12 @@ use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    ConversationPorts, ConversationRepository, ManagerConfig, RecoveryReceipt, RecoveryRequest,
-    RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnRequest,
+    ContinuationSnapshot, ConversationPorts, ConversationRepository, ManagerConfig,
+    RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission,
+    TurnAdmissionRequest, TurnRequest,
 };
+
+use super::recovery::project_continuation;
 
 pub struct ConversationService<Repository> {
     repository: Arc<Repository>,
@@ -170,6 +173,14 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
     ) -> Result<RecoveryReceipt, AgentFailure> {
         recover_session(self.repository.as_ref(), request).await
     }
+
+    pub async fn continuation(
+        &self,
+        run_id: RunId,
+        principal: &str,
+    ) -> Result<ContinuationSnapshot, AgentFailure> {
+        continuation(self.repository.as_ref(), run_id, principal).await
+    }
 }
 
 pub async fn recover_session<Repository: ConversationRepository>(
@@ -185,6 +196,30 @@ pub async fn recover_session<Repository: ConversationRepository>(
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(receipt)
+}
+
+pub async fn continuation<Repository: ConversationRepository>(
+    repository: &Repository,
+    run_id: RunId,
+    principal: &str,
+) -> Result<ContinuationSnapshot, AgentFailure> {
+    if !run_id.is_valid()
+        || principal.trim() != principal
+        || principal.is_empty()
+        || principal.len() > 256
+        || principal.chars().any(char::is_control)
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let admitted = repository
+        .load_run(run_id)
+        .await?
+        .ok_or(AgentFailure::NotFound)?;
+    if admitted.receipt.principal != principal {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    let entries = repository.load_journal(run_id).await?;
+    project_continuation(&admitted, &entries)
 }
 
 fn turn_digest(request: &TurnRequest) -> [u8; 32] {

@@ -111,6 +111,14 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
             .unwrap(),
         1
     );
+    assert_eq!(
+        vault.conversation_journal(run_id).await.unwrap(),
+        vec![VaultConversationJournalEntry {
+            revision: 1,
+            kind: "model_intent".into(),
+            payload: "{\"attempt\":1}".into(),
+        }]
+    );
 
     let terminal = vault
         .finish_conversation_run(

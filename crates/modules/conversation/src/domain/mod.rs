@@ -1,4 +1,6 @@
-use floe_agent_contract::{AgentMessage, DependencyCoverage, EngineStep};
+use floe_agent_contract::{
+    AgentMessage, DependencyCoverage, EngineStep, JournalEvent, ReplayReceipt,
+};
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
@@ -167,6 +169,20 @@ impl RecoveryRequest {
 pub struct RecoveryReceipt {
     pub session_id: Uuid,
     pub session_revision: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct JournalEntry {
+    pub revision: u64,
+    pub event: JournalEvent,
+}
+
+#[derive(Clone, Debug)]
+pub struct ContinuationSnapshot {
+    pub run_id: RunId,
+    pub messages: Vec<AgentMessage>,
+    pub replay: Vec<ReplayReceipt>,
+    pub completed_iterations: u32,
 }
 
 impl RecoveryReceipt {

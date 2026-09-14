@@ -1,6 +1,8 @@
 mod coordinator;
+mod recovery;
 
-pub use coordinator::{ConversationService, recover_session};
+pub use coordinator::{ConversationService, continuation, recover_session};
+pub use recovery::project_continuation;
 
 #[cfg(test)]
 mod tests;

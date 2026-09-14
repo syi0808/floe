@@ -4,8 +4,8 @@ use floe_agent_contract::{BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, RunId};
 
 use crate::{
-    AdmittedTurn, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission,
-    TurnAdmissionRequest,
+    AdmittedTurn, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal,
+    TurnAdmission, TurnAdmissionRequest,
 };
 
 pub trait ConversationRepository: Send + Sync {
@@ -32,4 +32,9 @@ pub trait ConversationRepository: Send + Sync {
         &'a self,
         request: RecoveryRequest,
     ) -> BoxFuture<'a, Result<RecoveryReceipt, AgentFailure>>;
+
+    fn load_journal<'a>(
+        &'a self,
+        run_id: RunId,
+    ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>>;
 }

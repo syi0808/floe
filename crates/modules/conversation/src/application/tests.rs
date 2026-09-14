@@ -15,9 +15,9 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
-    AdmittedTurn, ConversationPorts, ConversationRepository, ManagerConfig, RecoveryReceipt,
-    RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest,
-    TurnRequest,
+    AdmittedTurn, ConversationPorts, ConversationRepository, JournalEntry, ManagerConfig,
+    RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission,
+    TurnAdmissionRequest, TurnRequest,
 };
 
 use super::ConversationService;
@@ -215,15 +215,41 @@ impl ConversationRepository for MemoryRepository {
             })
         })
     }
+
+    fn load_journal<'a>(
+        &'a self,
+        run_id: RunId,
+    ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>> {
+        Box::pin(async move {
+            if !self.state.lock().unwrap().runs.contains_key(&run_id) {
+                return Err(AgentFailure::NotFound);
+            }
+            Ok(self
+                .journal
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, event)| JournalEntry {
+                    revision: index as u64 + 1,
+                    event,
+                })
+                .collect())
+        })
+    }
 }
 
 #[derive(Default)]
 struct Journal {
     revision: std::sync::atomic::AtomicU64,
+    events: Mutex<Vec<JournalEvent>>,
 }
 
 impl Journal {
-    fn accepted(&self) -> JournalAck {
+    fn accepted(&self, event: JournalEvent) -> JournalAck {
+        self.events.lock().unwrap().push(event);
         JournalAck::Accepted {
             revision: self
                 .revision
@@ -236,30 +262,30 @@ impl Journal {
 impl ExecutionJournal for Journal {
     fn record_intent<'a>(
         &'a self,
-        _: JournalEvent,
+        event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        Box::pin(async move { Ok(self.accepted()) })
+        Box::pin(async move { Ok(self.accepted(event)) })
     }
 
     fn record_result<'a>(
         &'a self,
-        _: JournalEvent,
+        event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        Box::pin(async move { Ok(self.accepted()) })
+        Box::pin(async move { Ok(self.accepted(event)) })
     }
 
     fn record_output<'a>(
         &'a self,
-        _: JournalEvent,
+        event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        Box::pin(async move { Ok(self.accepted()) })
+        Box::pin(async move { Ok(self.accepted(event)) })
     }
 
     fn checkpoint<'a>(
         &'a self,
-        _: JournalEvent,
+        event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
-        Box::pin(async move { Ok(self.accepted()) })
+        Box::pin(async move { Ok(self.accepted(event)) })
     }
 }
 

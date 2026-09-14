@@ -156,6 +156,13 @@ pub struct VaultConversationActivation {
     pub interrupted: Vec<VaultConversationRunRecord>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultConversationJournalEntry {
+    pub revision: u64,
+    pub kind: String,
+    pub payload: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct VaultConversationTerminal {
     pub state: VaultConversationRunState,
@@ -670,6 +677,54 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?;
         self.check_access()?;
         Ok(result)
+    }
+
+    pub async fn conversation_journal(
+        &self,
+        run_id: RunId,
+    ) -> Result<Vec<VaultConversationJournalEntry>, AgentFailure> {
+        if !run_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let connection = self.connection()?;
+        let record = self
+            .conversation_run_on(&connection, run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        let mut rows = connection
+            .query(
+                "SELECT revision, kind, payload FROM agent_conversation_journal WHERE run_id = ? ORDER BY revision LIMIT 513",
+                (run_id.as_uuid().to_string(),),
+            )
+            .await
+            .map_err(storage)?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let revision = row.get::<i64>(0).map_err(storage)?;
+            let kind = row.get::<String>(1).map_err(storage)?;
+            let payload = row.get::<String>(2).map_err(storage)?;
+            if revision <= 0
+                || revision as u64 != entries.len() as u64 + 1
+                || kind.is_empty()
+                || kind.len() > 64
+                || payload.is_empty()
+                || payload.len() > MAX_JOURNAL_ENTRY_BYTES
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            entries.push(VaultConversationJournalEntry {
+                revision: revision as u64,
+                kind,
+                payload,
+            });
+        }
+        if entries.len() > MAX_JOURNAL_ENTRIES as usize
+            || entries.len() as u64 != record.journal_revision
+        {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        self.check_access()?;
+        Ok(entries)
     }
 
     pub async fn recover_conversation_session(

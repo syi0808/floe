@@ -194,6 +194,11 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.journal_revision, 3);
+    let journal = repository.load_journal(receipt.run_id).await.unwrap();
+    assert_eq!(journal.len(), 3);
+    assert!(matches!(journal[0].event, JournalEvent::ModelIntent { .. }));
+    assert!(matches!(journal[1].event, JournalEvent::ModelResult { .. }));
+    assert!(matches!(journal[2].event, JournalEvent::Output { .. }));
     let legacy = vault.load(person_id, session.id).await.unwrap();
     assert_eq!(legacy.active_turn, None);
     assert!(matches!(
@@ -228,6 +233,97 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap();
     assert_eq!(replay, receipt);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn encrypted_journal_projects_only_settled_continuation_work() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: 0,
+            request_digest: [9; 32],
+            text: "continue safely".into(),
+        })
+        .await
+        .unwrap();
+    let attempt_id = Uuid::new_v4();
+    let call = ToolCall {
+        call_id: Uuid::new_v4(),
+        invocation_key: floe_agent_contract::InvocationKey::new(),
+        tool_id: "read.context".into(),
+        definition_revision: 1,
+        input: "{}".into(),
+    };
+    let result = ToolResult {
+        call_id: call.call_id,
+        text: "settled observation".into(),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+    };
+    for (kind, event) in [
+        ("intent", JournalEvent::ModelIntent { attempt_id }),
+        (
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+        ),
+        ("intent", JournalEvent::ToolIntent { call: call.clone() }),
+        (
+            "result",
+            JournalEvent::ToolResult {
+                result: result.clone(),
+            },
+        ),
+        ("checkpoint", JournalEvent::Checkpoint { iteration: 1 }),
+    ] {
+        vault
+            .append_conversation_journal(run_id, kind, &serde_json::to_string(&event).unwrap())
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            run_id,
+            1,
+            floe_core::VaultConversationTerminal {
+                state: floe_core::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let repository = VaultConversationRepository::new(vault);
+    let continuation = floe_conversation::continuation(&repository, run_id, &person_id.to_string())
+        .await
+        .unwrap();
+    assert_eq!(continuation.completed_iterations, 1);
+    assert_eq!(continuation.messages.len(), 2);
+    assert_eq!(continuation.replay.len(), 1);
+    assert_eq!(continuation.replay[0].call_id, call.call_id);
+    assert_eq!(continuation.replay[0].result, result.text);
 }
 
 #[tokio::test]
