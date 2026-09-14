@@ -793,7 +793,20 @@ dependencies = [
 name = "floe-agent-contract"
 version = "0.1.0"
 dependencies = [
+ "floe-context-contract",
+ "floe-kernel",
+]
+
+[[package]]
+name = "floe-context-contract"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-kernel",
  "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
@@ -826,6 +839,8 @@ name = "floe-domain"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-context-contract",
+ "floe-kernel",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -872,6 +887,14 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "floe-kernel"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "uuid",
 ]
 

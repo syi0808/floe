@@ -6,4 +6,5 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde.workspace = true
+floe-context-contract = { path = "../contracts/context" }
+floe-kernel = { path = "../contracts/kernel" }
