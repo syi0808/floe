@@ -2964,6 +2964,7 @@ mod tests {
     };
 
     mod calendar_experts;
+    mod learner_worker;
     mod memory_review;
     mod proposals;
 

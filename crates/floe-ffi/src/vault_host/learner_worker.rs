@@ -1,14 +1,13 @@
 use chrono::Utc;
 use floe_agent::{
-    AgentFailure, Cancellation, LearnerBudget, LearnerJobSettlement, LearnerRuntime,
-    StructuredLearnerModel, retryable_learner_failure,
+    AgentFailure, Cancellation, LearnerBudget, LearnerModel, LearnerReviewJob, LearnerRuntime,
+    StructuredLearnerModel, settlement_for_learner_result,
 };
 use floe_core::{EncryptedAgentVault, VaultKeyProvider};
 
 use crate::local_model::FoundationModelRunner;
 
 const DISCOVERY_LIMIT: usize = 8;
-const RETRY_DELAY_SECONDS: i64 = 5;
 
 pub(super) async fn run<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
@@ -27,8 +26,17 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         return Ok(false);
     };
     let model = StructuredLearnerModel::new(FoundationModelRunner::encrypted());
+    review_claimed(vault, &job, &model, cancellation).await
+}
+
+pub(super) async fn review_claimed<Keys: VaultKeyProvider, Model: LearnerModel + Sync>(
+    vault: &EncryptedAgentVault<Keys>,
+    job: &LearnerReviewJob,
+    model: &Model,
+    cancellation: Cancellation,
+) -> Result<bool, AgentFailure> {
     let runtime = LearnerRuntime {
-        model: &model,
+        model,
         candidates: vault,
         budget: LearnerBudget::default(),
         extractor_version: "memory-extractor-v1",
@@ -36,16 +44,10 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     };
     let result = runtime.review(job.input.clone(), cancellation).await;
     let settled_at = Utc::now();
-    let settlement = match result {
-        Ok(candidate) => LearnerJobSettlement::Completed {
-            candidate_id: candidate.map(|candidate| candidate.id),
-        },
-        Err(failure) if retryable_learner_failure(failure) => LearnerJobSettlement::Deferred {
-            available_at: settled_at + chrono::Duration::seconds(RETRY_DELAY_SECONDS),
-            failure,
-        },
-        Err(failure) => LearnerJobSettlement::Failed { failure },
-    };
+    let settlement = settlement_for_learner_result(
+        result.map(|candidate| candidate.map(|candidate| candidate.id)),
+        settled_at,
+    )?;
     vault
         .settle_learner_review(job.id, job.attempts, settlement, settled_at)
         .await?;
@@ -55,6 +57,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_agent::retryable_learner_failure;
 
     #[test]
     fn only_transient_background_failures_are_retried() {
