@@ -3329,12 +3329,18 @@ barrier, then proved the original root remained Working and its cancellation
 scope was untouched before allowing it to complete. A second production root
 against the same Session was rejected by durable admission without model I/O,
 while the original remained live. The blocked key/setup ownership regression
-also still rejects incompatible work.
+also still rejects incompatible work. Checkpoint `bc1d0b9` additionally drives
+Stop through the production FFI path while the admitted root is blocked in an
+actual HTTP model wait, then verifies the durable Session terminal is
+`Halted(Cancelled)` before releasing the UI correlation. The dropped client
+connection also proves the cancelled root does not resume finalization or retry
+the model exchange when the server barrier opens.
 
 All 96 FFI library tests and both focused learner-scheduling tests passed on the
 integrated revision. Workspace all-target check, diff check and the migration
 boundary gate passed (20 nodes / 69 edges / no errors). No Apple UI,
-device-local model or live provider was exercised.
+device-local model or live provider was exercised. The focused production Stop
+regression passed separately after it was added.
 
 Blocker/remove-by: this is still the legacy `VaultBridge`/Worker composition,
 and the synchronous ABI still exposes Submit/Poll/Release rather than the P16
