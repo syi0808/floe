@@ -1,9 +1,9 @@
 # ADR 0006: Deliver through connected vertical slices
 
 - **Date:** 2026-09-04
-- **Status:** accepted as historical product delivery rationale; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md) and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md). For the current refactor, execution order and progress ownership are superseded by the [active implementation plan](../architecture/implementation-plan.md).
+- **Status:** accepted as historical product delivery rationale; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md) and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md). For the current refactor, execution order and progress ownership are superseded by the [active refactoring edition](../refactoring/README.md).
 
-> Current refactor: one coding agent completes structure, real callers and old-path removal before broad product validation. The [migration ledger](../architecture/migration-ledger.md), not PROGRESS.md, owns current status. The historical decision below does not require a live demonstration after every structural change or declare any old acceptance gate passed. Product requirements and safety conditions remain in force.
+> Current refactor: one coding agent completes structure, real callers and old-path removal before broad product validation. The [migration ledger](../refactoring/migration-ledger.md), not PROGRESS.md, owns current status. The historical decision below does not require a live demonstration after every structural change or declare any old acceptance gate passed. Product requirements and safety conditions remain in force.
 
 ## Context
 

@@ -1,30 +1,14 @@
 # Architecture documentation
 
-## Read only what the current task needs
+이 디렉터리는 현재 아키텍처의 역할·책임·의존성 설명을 위한 공간이다. **리팩터링 계획과 실행 프롬프트의 버전 이력은 [docs/refactoring](../refactoring/README.md)으로 분리했다.** 같은 계획의 활성 사본을 이곳에 두지 않는다.
 
-| Question | Authoritative document |
+| 필요한 정보 | 기준 문서 |
 |---|---|
-| How should this coding agent work? | [agent-prompt.md](agent-prompt.md), with the repository's [AGENTS.md](../../AGENTS.md) |
-| What structure and remaining changes are approved? | [implementation-plan.md](implementation-plan.md) |
-| What has actually been implemented, removed or checked? | [migration-ledger.md](migration-ledger.md) |
-| Which internal dependencies are allowed? | [module-dependencies.json](../../tools/architecture/module-dependencies.json) |
-| What does the product intend to do? | [Product planning](../planning/README.md) and relevant accepted decisions |
-| What did an earlier run or plan say? | [Historical refactor records](history/README.md), [product history](../history/README.md) and [validation records](../validation/) |
+| 현재 리팩터링 계획·실행서·프롬프트와 버전 이력 | [Refactoring index](../refactoring/README.md) |
+| 현재 구현 상태·검사·다음 순차 작업 | [Refactoring ledger](../refactoring/migration-ledger.md) |
+| 승인된 목표 모듈 경계 | [Dependency policy](../../tools/architecture/module-dependencies.json)의 target |
+| 제품 의미·장기 범위 | [Product planning](../planning/README.md) |
+| 개별 설계 결정 | [ADRs](../decisions/) |
+| 검증의 실제 근거 | [Validation](../validation/)와 [refactoring history](../refactoring/history/README.md) |
 
-Start with the ledger's current checkpoint, then read the active plan section and actual symbols. Do not load the old implementation bundle, every checkpoint, or all past conversations as routine context.
-
-## Current execution policy
-
-One coding agent works sequentially in one workspace. Stage A implements real owner services, adapters, callers and the approved dependency graph, removes old paths, and performs structural checks plus limited safety checks. Stage B performs broad regressions, actual app/Keychain/provider validation and model evaluation. Product A2A delegation and Run/Task concurrency are not removed by the single-coding-agent workflow.
-
-Backward compatibility, parallel v2/next implementations and additional schema bumps are not required. Preserve authorization, key identity, provenance, transaction atomicity, durable intent and current-schema recovery. The active plan specifies exact scope and constraints.
-
-## Document maintenance
-
-- Keep one active plan and one execution prompt here. Put actual progress only in `migration-ledger.md`; README and PROGRESS are navigation, not competing boards.
-- Distinguish target design, source-level wiring, checks executed on a particular snapshot, and live product acceptance. Never update a historical test result to imply it ran on new code.
-- Keep the current ledger concise. Move closed historical checkpoints into a dated record and link them; preserve evidence and source IDs rather than duplicating it across new summaries.
-- Imported plans and former delivery sequences are historical. Read them for a specific rationale or old source anchor, not as current implementation instructions.
-- Relative paths inside immutable archived snapshots reflect their original location. The history index provides the original commit view when those paths are needed.
-
-The documentation refresh itself does not implement the target API, remove live Legacy code, change a schema constant, or certify product behavior.
+목표 policy와 현재 manifest는 다를 수 있다. 아직 이관 중인 구현을 최종 구조처럼 기술하지 않는다. source-level wiring, compile 결과, 실사용 결과를 구별한다. 코드 구조가 바뀌면 그 구조 설명을 갱신하되, 발행된 refactoring 판을 진행 로그로 덮어쓰지 않는다.

@@ -1,7 +1,7 @@
 # Floe Planning Documents
 
 > Status: Product planning specification, not the active refactoring schedule.  
-> 현재 코드 리팩터링은 [단일 에이전트 실행 계획](../architecture/implementation-plan.md)과 [실행 프롬프트](../architecture/agent-prompt.md)를 따른다. 실제 진행 상태는 [migration-ledger.md](../architecture/migration-ledger.md) 한 곳에서 관리한다. 이 디렉터리의 slice/PoC 순서는 현재 구조 우선 작업의 선행 gate가 아니다.
+> 현재 코드 리팩터링의 계획·상세 실행서·프롬프트는 [버전별 리팩터링 문서](../refactoring/README.md)에서 활성판을 선택한다. 실제 진행 상태는 [migration-ledger.md](../refactoring/migration-ledger.md) 한 곳에서 관리한다. 이 디렉터리의 slice/PoC 순서는 현재 구조 우선 작업의 선행 gate가 아니다.
 
 ## Floe in one sentence
 
@@ -39,7 +39,7 @@ LLM, Agent Runtime, MCP, 특정 inference provider는 이 위에서 교체 가�
 
 ## 현재 리팩터링을 시작하는 경우
 
-[실행 지침](../architecture/agent-prompt.md) → [현행 원장](../architecture/migration-ledger.md) → [계획서의 현재 단계](../architecture/implementation-plan.md) → 실제 코드·직접 호출자 순서로 읽는다. 과거 전체 planning bundle이나 모든 PoC를 다시 수행하지 않는다.
+[활성 문서판과 실행 프롬프트](../refactoring/README.md) → [현행 원장](../refactoring/migration-ledger.md) → 해당 판의 상세 실행서 현재 단계 → 실제 코드·직접 호출자 순서로 읽는다. 과거 전체 planning bundle이나 모든 PoC를 다시 수행하지 않는다.
 
 1차는 실제 모듈·상태 소유권·adapter·caller·구형 제거와 구조 검사다. 일반 앱·Keychain·OAuth·실제 LLM·넓은 기능 회귀는 구조 완료 후 2차에 검증한다. 설계 성립을 좌우하는 가정과 변경한 고위험 불변식은 필요한 최소 범위만 앞서 확인한다.
 

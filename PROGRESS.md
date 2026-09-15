@@ -1,11 +1,7 @@
-# Floe Progress
+# Floe progress
 
-Current implementation state and the next sequential task are maintained in one place:
+현재 구현 상태와 다음 순차 작업은 **[docs/refactoring/migration-ledger.md](docs/refactoring/migration-ledger.md)** 한 곳에서 관리한다.
 
-**[docs/architecture/migration-ledger.md](docs/architecture/migration-ledger.md)**
+리팩터링의 활성 계획·코드별 상세 실행서·프롬프트와 과거 문서판은 **[docs/refactoring/README.md](docs/refactoring/README.md)**에서 확인한다. Stage A는 실제 구조·owner·adapter·caller 연결과 구형 제거이며, Stage B는 그 뒤의 제품 동작 검증이다. 문서판의 발행은 코드 완료나 acceptance가 아니다.
 
-The active work is a single-coding-agent, structure-first refactor. Stage A completes real module boundaries, state ownership, callers and old-path removal; Stage B validates behavior. Structure completion is not product acceptance.
-
-Use the [implementation plan](docs/architecture/implementation-plan.md) for scope and the [agent prompt](docs/architecture/agent-prompt.md) for execution. Do not maintain a second package-status table or acceptance counter in this file.
-
-Earlier slice boards and validation checkpoints are historical evidence, indexed in [docs/history/README.md](docs/history/README.md). Requirements in the product slice plan remain requirements; their old delivery order does not override the active refactoring plan.
+이 파일에 별도 P 상태표나 성공 횟수를 복제하지 않는다. 제품 시나리오·이전 acceptance 근거는 [제품 이력](docs/history/README.md)과 [refactoring history](docs/refactoring/history/README.md)에 보존한다.

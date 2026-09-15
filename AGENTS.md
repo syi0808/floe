@@ -12,8 +12,9 @@
 
 # Active refactoring instructions
 
-- The active technical plan is [docs/architecture/implementation-plan.md](docs/architecture/implementation-plan.md). The execution prompt is [docs/architecture/agent-prompt.md](docs/architecture/agent-prompt.md).
-- [docs/architecture/migration-ledger.md](docs/architecture/migration-ledger.md) is the only mutable progress record. Read its current checkpoint, then the relevant plan section and actual callers. Do not repeatedly reread historical bundles or create another STATUS file.
+- Resolve the active document edition from [docs/refactoring/README.md](docs/refactoring/README.md). Use that edition's PLAN, EXECUTION_PLAN, step files and AGENT_PROMPT together; do not mix prescriptions from different editions.
+- Refactoring documents have version history under `docs/refactoring/versions/`. A document edition is not an application or schema version. Preserve prior editions; record meaningful plan changes in a new edition and update the index/changelog.
+- [docs/refactoring/migration-ledger.md](docs/refactoring/migration-ledger.md) is the only mutable progress record. Read its current checkpoint, then the relevant execution step and actual callers. Do not repeatedly reread historical bundles or create another STATUS file.
 - One coding agent performs the refactoring sequentially, including investigation, implementation, review, integration and validation. Do not spawn subagents or delegate reviews. Keep one active change set in one workspace; build-tool parallelism is allowed.
 - This workflow does not change Floe's product architecture: the Manager still selects Experts through A2A, and product Run/Task concurrency and cancellation scopes remain independent.
 - Preserve current user changes. Check the actual HEAD and working tree before editing; do not reset to the plan's historical source anchor.
@@ -40,4 +41,4 @@
 - Preserve authorization, exact-recipient consent, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery. Do not weaken checks or regression assertions to make a build pass.
 - Query, preview, observer timeout and screen disposal are not implicit Run cancellation. Do not hold a global Vault transaction while waiting for model or provider I/O.
 - Refactoring instructions alone do not authorize push, deployment or external-account changes; follow the user's explicit scope for the current task.
-- Keep product requirements, execution policy, current state and historical evidence separate. Start at [docs/architecture/README.md](docs/architecture/README.md); archived plans and old slice next-demo lists do not override the active plan.
+- Keep product requirements, architecture, versioned refactoring plans, mutable state and historical evidence separate. Start at [docs/refactoring/README.md](docs/refactoring/README.md) for execution; [docs/architecture/README.md](docs/architecture/README.md) describes document ownership. Archived plans and old slice next-demo lists do not override the active edition.
