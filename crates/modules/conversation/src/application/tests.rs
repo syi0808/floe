@@ -139,6 +139,7 @@ impl ConversationRepository for MemoryRepository {
                     crate::TurnMode::Continue(reference) => Some(reference.executor_generation),
                 },
                 continuation_level,
+                retry_of: request.retry_of,
                 execution_profile: request.execution_profile,
             };
             receipt.validate()?;
@@ -638,6 +639,7 @@ fn request(
         prompt: prompt.into(),
         request_context_digest: [1; 32],
         mode: crate::TurnMode::New,
+        retry_of: None,
         execution_profile: "test-local".into(),
         bounded_context: BoundedContext {
             text: String::new(),
@@ -706,6 +708,56 @@ async fn exact_command_replay_does_not_dispatch_again_and_release_is_not_require
         .await
         .unwrap();
     assert_eq!(second.state, RunState::Completed);
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn explicit_retry_records_a_terminal_source_and_conflicts_on_changed_lineage() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let source = service
+        .run_turn(
+            request(CommandId::new(), session_id, 0, "read this"),
+            ports(&model),
+        )
+        .await
+        .unwrap();
+
+    let retry_command = CommandId::new();
+    let mut retry = request(
+        retry_command,
+        session_id,
+        source.session_revision,
+        "read this",
+    );
+    retry.retry_of = Some(source.run_id);
+    let retried = service
+        .run_turn(retry.clone(), ports(&model))
+        .await
+        .unwrap();
+    assert_eq!(retried.retry_of, Some(source.run_id));
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    retry.retry_of = None;
+    assert_eq!(
+        service.run_turn(retry, ports(&model)).await,
+        Err(AgentFailure::Conflict)
+    );
+
+    let mut unknown = request(
+        CommandId::new(),
+        session_id,
+        retried.session_revision,
+        "read this",
+    );
+    unknown.retry_of = Some(RunId::new());
+    assert_eq!(
+        service.run_turn(unknown, ports(&model)).await,
+        Err(AgentFailure::NotFound)
+    );
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 

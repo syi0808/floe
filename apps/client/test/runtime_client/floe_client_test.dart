@@ -152,6 +152,89 @@ void main() {
     });
   });
 
+  test('Run report preserves typed retry recovery metadata', () async {
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: _unusedId);
+    transport.query = (request) async => {
+      'kind': 'run_snapshot',
+      'run_id': (request['query'] as Map)['run_id'],
+      'session_id': '00000000-0000-4000-8000-000000000215',
+      'revision': 2,
+      'runtime_epoch': 7,
+      'executor_generation': 1,
+      'state': 'finished',
+      'progress': 'failed',
+      'task_refs': <Object?>[],
+      'attempt_refs': <Object?>[],
+      'report': {
+        'execution': 'failed',
+        'reply': 'not_produced',
+        'issues': [
+          {
+            'code': 'unavailable',
+            'message': 'app request could not complete',
+            'metadata': {
+              'reason_code': 'server_model_unavailable',
+              'recovery_action': 'retry_read',
+            },
+          },
+        ],
+        'action_refs': <Object?>[],
+      },
+    };
+
+    final run = await client.getRun('00000000-0000-4000-8000-000000000214');
+
+    expect(run.report!.issues.single.metadata, {
+      'reason_code': 'server_model_unavailable',
+      'recovery_action': 'retry_read',
+    });
+  });
+
+  test('StartTurn serializes explicit retry lineage', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000209',
+      '00000000-0000-4000-8000-000000000210',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000204',
+      expectedRevision: 6,
+      text: 'retry safely',
+      retryOf: '00000000-0000-4000-8000-000000000205',
+    );
+    transport.command = (request) async => {
+      'kind': 'command_receipt',
+      'command_id': request['command_id'],
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000211',
+      'session_revision': 7,
+    };
+
+    await client.submitStartTurn(command);
+
+    expect(
+      transport.commandRequests.single['command'],
+      containsPair('retry_of', '00000000-0000-4000-8000-000000000205'),
+    );
+    expect(
+      () => client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 6,
+        text: 'invalid retry continuation',
+        retryOf: '00000000-0000-4000-8000-000000000205',
+        continuation: const AppContinuationRef(
+          runId: '00000000-0000-4000-8000-000000000206',
+          executorGeneration: 1,
+          level: 1,
+        ),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('CancelRun keeps command identity across transport retries', () async {
     final identifiers = Queue.of([
       '00000000-0000-4000-8000-000000000231',
@@ -270,6 +353,8 @@ void main() {
     },
   );
 }
+
+String _unusedId() => '00000000-0000-4000-8000-000000000299';
 
 final class FakeTransport implements AppWireTransport {
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? command;

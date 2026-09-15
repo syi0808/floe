@@ -50,6 +50,7 @@ fn request(
         request_digest: [7; 32],
         text: "hello".into(),
         continuation: None,
+        retry_of: None,
         model_placement: ModelPlacement::DeviceLocal,
     }
 }
@@ -367,6 +368,75 @@ async fn continuation_admission_is_generation_bound_and_preserves_one_user_messa
         active_session.messages.as_slice(),
         [AgentMessage::User { turn_id, .. }] if *turn_id == run_id.as_uuid()
     ));
+}
+
+#[tokio::test]
+async fn retry_admission_persists_terminal_source_and_replay_lineage() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let source_run_id = RunId::new();
+    vault
+        .admit_conversation_turn(request(
+            person_id,
+            session.id,
+            source_run_id,
+            CommandId::new(),
+        ))
+        .await
+        .unwrap();
+    let source = vault
+        .finish_conversation_run(
+            source_run_id,
+            1,
+            VaultConversationTerminal {
+                state: VaultConversationRunState::Completed,
+                output: Some("done".into()),
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                appended_messages: vec![AgentMessage::Assistant {
+                    turn_id: source_run_id.as_uuid(),
+                    text: "done".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    let retry_run_id = RunId::new();
+    let retry_command_id = CommandId::new();
+    let mut retry = request(person_id, session.id, retry_run_id, retry_command_id);
+    retry.expected_session_revision = source.session_revision;
+    retry.retry_of = Some(source_run_id);
+    let VaultConversationAdmission::Created { record, .. } =
+        vault.admit_conversation_turn(retry.clone()).await.unwrap()
+    else {
+        panic!("expected retry admission");
+    };
+    assert_eq!(record.retry_of, Some(source_run_id));
+    assert_eq!(
+        vault
+            .conversation_run(retry_run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .retry_of,
+        Some(source_run_id)
+    );
+    assert_eq!(
+        vault.admit_conversation_turn(retry.clone()).await.unwrap(),
+        VaultConversationAdmission::Existing(record)
+    );
+    retry.retry_of = None;
+    assert_eq!(
+        vault.admit_conversation_turn(retry).await,
+        Err(AgentFailure::Conflict)
+    );
 }
 
 #[tokio::test]

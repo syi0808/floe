@@ -214,6 +214,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     request_digest: request.request_digest,
                     text,
                     continuation,
+                    retry_of: request.retry_of,
                     model_placement: parse_execution_profile(&request.execution_profile)?,
                 })
                 .await?
@@ -491,6 +492,7 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         continuation_of: record.continuation_of,
         continuation_executor_generation: record.continuation_executor_generation,
         continuation_level: record.continuation_level,
+        retry_of: record.retry_of,
         execution_profile: execution_profile(record.model_placement).into(),
     };
     receipt.validate()?;

@@ -153,6 +153,7 @@ pub struct RunReceipt {
     pub continuation_of: Option<RunId>,
     pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
+    pub retry_of: Option<RunId>,
     pub execution_profile: String,
 }
 
@@ -170,6 +171,7 @@ impl RunReceipt {
             || self.aggregate_revision == 0
             || self.executor_generation == 0
             || self.continuation_level > 3
+            || self.retry_of == Some(self.run_id)
             || self.execution_profile.trim() != self.execution_profile
             || self.execution_profile.is_empty()
             || self.execution_profile.len() > 64
@@ -247,6 +249,7 @@ pub struct TurnAdmissionRequest {
     pub principal: String,
     pub request_digest: [u8; 32],
     pub mode: TurnMode,
+    pub retry_of: Option<RunId>,
     pub execution_profile: String,
     pub user_message: AgentMessage,
 }
@@ -270,6 +273,8 @@ impl TurnAdmissionRequest {
             || self.user_message.role != floe_agent_contract::MessageRole::User
             || self.user_message.call_id.is_some()
             || self.user_message.coverage != DependencyCoverage::Independent
+            || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
+            || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
             return Err(AgentFailure::InvalidInput);
         }

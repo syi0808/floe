@@ -3,7 +3,7 @@ use floe_agent_contract::{
 };
 use floe_agent_runtime::FinalPayloadValidator;
 use floe_execution::{Cancellation, budget::BudgetConfig};
-use floe_kernel::{AgentFailure, CommandId};
+use floe_kernel::{AgentFailure, CommandId, RunId};
 use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -52,6 +52,7 @@ pub struct TurnRequest {
     pub prompt: String,
     pub request_context_digest: [u8; 32],
     pub mode: TurnMode,
+    pub retry_of: Option<RunId>,
     pub execution_profile: String,
     pub bounded_context: BoundedContext,
     pub allowed_catalog: AllowedCatalog,
@@ -76,6 +77,8 @@ impl TurnRequest {
             || self.execution_profile.chars().any(char::is_control)
             || self.prompt.len() > floe_agent_contract::MAX_OUTPUT_BYTES
             || self.replay.len() > 128
+            || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
+            || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
             return Err(AgentFailure::InvalidInput);
         }

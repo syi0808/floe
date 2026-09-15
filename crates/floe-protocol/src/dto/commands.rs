@@ -67,6 +67,9 @@ impl AppCommandDto {
                 if retry_of.is_some_and(|id| id.is_nil()) {
                     return Err("command.retry_of");
                 }
+                if retry_of.is_some() && !matches!(mode, AppTurnModeDto::NewTurn {}) {
+                    return Err("command.retry_of");
+                }
                 mode.validate()
             }
             Self::ConversationCancelRun { run_id, .. } => {

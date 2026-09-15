@@ -87,6 +87,19 @@ fn app_wire_validates_continuation_and_event_bounds() {
     let request: AppCommandRequestDto = serde_json::from_value(continuation).unwrap();
     assert_eq!(request.validate(), Err("command.mode.continuation_ref"));
 
+    let mut retry_continuation = fixture("start_turn");
+    retry_continuation["command"]["retry_of"] = json!("00000000-0000-4000-8000-000000000005");
+    retry_continuation["command"]["mode"] = json!({
+        "kind": "continue",
+        "continuation_ref": {
+            "run_id": "00000000-0000-4000-8000-000000000004",
+            "executor_generation": 1,
+            "level": 1
+        }
+    });
+    let request: AppCommandRequestDto = serde_json::from_value(retry_continuation).unwrap();
+    assert_eq!(request.validate(), Err("command.retry_of"));
+
     let request: floe_protocol::AppEventsRequestDto = serde_json::from_value(json!({
         "schema_version": 2,
         "request_id": "00000000-0000-0000-0000-000000000006",

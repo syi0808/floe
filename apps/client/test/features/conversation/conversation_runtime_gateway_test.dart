@@ -137,6 +137,36 @@ void main() {
     });
   });
 
+  test(
+    'retry validates and serializes a durable terminal source Run',
+    () async {
+      final transport = _ConversationTransport();
+      final model = AppReadModel();
+      addTearDown(model.dispose);
+      final gateway = NativeConversationRuntimeGateway(
+        client: FloeClient(transport, newId: _ids()),
+        readModel: model,
+        loadSession: (_, _) async => _session(revision: 2),
+        observationInterval: Duration.zero,
+      );
+
+      await gateway.runConversationTurn(
+        AgentConversationTurnRequest(
+          session: _session(),
+          text: 'Retry safely',
+          retryOf: _sourceRunId,
+        ),
+        onRun: (_) {},
+      );
+
+      expect(
+        transport.commandRequests.single['command'],
+        containsPair('retry_of', _sourceRunId),
+      );
+      expect(transport.queryKinds.first, 'conversation.get_run');
+    },
+  );
+
   test('unsupported host route fails before StartTurn admission', () async {
     final transport = _ConversationTransport();
     final model = AppReadModel();

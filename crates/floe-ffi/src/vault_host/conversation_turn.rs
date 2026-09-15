@@ -421,6 +421,12 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         } else {
             floe_conversation::TurnMode::New
         };
+        let retry_of = request
+            .retry_of
+            .map(|run_id| {
+                floe_agent_contract::RunId::from_uuid(run_id).ok_or(AgentFailure::InvalidInput)
+            })
+            .transpose()?;
         let receipt = service
             .run_turn_observed(
                 floe_conversation::TurnRequest {
@@ -431,6 +437,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     prompt: request.text.trim().into(),
                     request_context_digest: floe_agent_contract::input_digest(&request_context),
                     mode,
+                    retry_of,
                     execution_profile: execution_profile.into(),
                     bounded_context: floe_agent_contract::BoundedContext {
                         text: String::new(),

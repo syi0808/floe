@@ -53,6 +53,7 @@ void main() {
         sessionId: '00000000-0000-4000-8000-000000000106',
         expectedRevision: 0,
         text: 'Use the host-selected model route.',
+        retryOf: '00000000-0000-4000-8000-000000000108',
       );
       await expectLater(
         client.submitStartTurn(command),

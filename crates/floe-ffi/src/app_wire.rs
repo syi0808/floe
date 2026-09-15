@@ -428,7 +428,27 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         | AgentFailure::ServerModelInvalidOutput
         | AgentFailure::Stalled => AppWireErrorCodeDto::Internal,
     };
-    wire_error(code, "app request could not complete", None)
+    let mut error = wire_error(code, "app request could not complete", None);
+    let reason_code = serde_json::to_value(failure)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".into());
+    error.metadata.insert("reason_code".into(), reason_code);
+    if matches!(
+        failure,
+        AgentFailure::ModelUnavailable
+            | AgentFailure::LocalModelUnavailable
+            | AgentFailure::ServerModelUnavailable
+            | AgentFailure::ServerModelTimeout
+            | AgentFailure::InvalidModelOutput
+            | AgentFailure::LocalModelInvalidOutput
+            | AgentFailure::ServerModelInvalidOutput
+    ) {
+        error
+            .metadata
+            .insert("recovery_action".into(), "retry_read".into());
+    }
+    error
 }
 
 pub(crate) fn internal_error() -> AppWireErrorDto {
@@ -526,6 +546,7 @@ mod tests {
         .unwrap();
         let command_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
+        let retry_of = Uuid::new_v4();
         let result = command_with_host(
             &host,
             AppCommandRequestDto {
@@ -537,7 +558,7 @@ mod tests {
                     expected_revision: 7,
                     text: "hello".into(),
                     mode: AppTurnModeDto::NewTurn {},
-                    retry_of: None,
+                    retry_of: Some(retry_of),
                 },
             },
         )
@@ -558,6 +579,7 @@ mod tests {
         assert_eq!(captured_person, person_id);
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.session_id, session_id);
+        assert_eq!(captured.retry_of, Some(retry_of));
     }
 
     #[test]
@@ -609,5 +631,23 @@ mod tests {
         assert_eq!(captured_person, person_id);
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.run_id, run_id);
+    }
+
+    #[test]
+    fn terminal_model_issue_exposes_safe_retry_classification() {
+        let error = agent_failure(AgentFailure::ServerModelUnavailable);
+        assert_eq!(
+            error.metadata.get("reason_code").map(String::as_str),
+            Some("server_model_unavailable")
+        );
+        assert_eq!(
+            error.metadata.get("recovery_action").map(String::as_str),
+            Some("retry_read")
+        );
+        assert!(
+            !agent_failure(AgentFailure::Cancelled)
+                .metadata
+                .contains_key("recovery_action")
+        );
     }
 }

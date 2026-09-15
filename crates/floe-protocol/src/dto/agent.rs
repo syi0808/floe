@@ -559,6 +559,8 @@ pub struct AgentConversationTurnRequestDto {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_route: Option<AgentRemoteRouteDto>,
 }
 

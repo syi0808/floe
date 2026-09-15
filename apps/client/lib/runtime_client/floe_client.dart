@@ -11,6 +11,7 @@ final class PreparedStartTurn {
     required this.expectedRevision,
     required this.text,
     this.continuation,
+    this.retryOf,
   });
 
   final String commandId;
@@ -18,6 +19,7 @@ final class PreparedStartTurn {
   final int expectedRevision;
   final String text;
   final AppContinuationRef? continuation;
+  final String? retryOf;
 }
 
 final class AppContinuationRef {
@@ -72,10 +74,11 @@ final class AppCancelRunReceipt {
 enum AppRunState { accepted, executing, finalizing, cancelling, finished }
 
 final class AppWireIssue {
-  const AppWireIssue(this.code, this.message);
+  const AppWireIssue(this.code, this.message, {this.metadata = const {}});
 
   final String code;
   final String message;
+  final Map<String, String> metadata;
 }
 
 final class AppTurnReport {
@@ -194,6 +197,7 @@ final class FloeClient {
     required int expectedRevision,
     required String text,
     AppContinuationRef? continuation,
+    String? retryOf,
   }) {
     if (_closed) throw StateError('FloeClient is already closed.');
     if (sessionId.isEmpty ||
@@ -207,12 +211,16 @@ final class FloeClient {
                 continuation.level > 3)) {
       throw const FormatException('Invalid conversation turn.');
     }
+    if (retryOf != null && (retryOf.isEmpty || continuation != null)) {
+      throw const FormatException('Invalid conversation retry.');
+    }
     return PreparedStartTurn(
       commandId: _newId(),
       sessionId: sessionId,
       expectedRevision: expectedRevision,
       text: text,
       continuation: continuation,
+      retryOf: retryOf,
     );
   }
 
@@ -243,6 +251,7 @@ final class FloeClient {
               },
             },
           },
+          'retry_of': ?command.retryOf,
         },
       }, timeout: timeout);
       return _commandReceipt(result, expectedCommandId: command.commandId);
@@ -554,6 +563,10 @@ AppRunSnapshot _runSnapshot(
             return AppWireIssue(
               value['code'] as String,
               value['message'] as String,
+              metadata: Map.unmodifiable(
+                _map(value['metadata'] ?? const <String, Object?>{})
+                    .map((key, value) => MapEntry(key, value as String)),
+              ),
             );
           })
           .toList(growable: false),

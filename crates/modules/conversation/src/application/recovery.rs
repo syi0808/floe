@@ -288,6 +288,7 @@ mod tests {
                 continuation_of: None,
                 continuation_executor_generation: None,
                 continuation_level: 0,
+                retry_of: None,
                 execution_profile: "test-local".into(),
             },
             transcript: vec![AgentMessage {

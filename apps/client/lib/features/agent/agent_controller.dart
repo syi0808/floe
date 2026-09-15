@@ -128,6 +128,7 @@ final class AgentController extends ChangeNotifier {
   AgentSession? _runSession;
   AgentFixturePrompt? _lastPrompt;
   String? _lastConversationText;
+  String? _lastConversationRunId;
   AgentConversationTurnRequest? _conversationRun;
   AgentVaultState? vaultState;
   bool _sealed = false;
@@ -389,7 +390,7 @@ final class AgentController extends ChangeNotifier {
       failure != null &&
       recoveryAction == 'retry_read' &&
       (isGeneralConversation
-          ? _lastConversationText != null
+          ? _lastConversationText != null && _lastConversationRunId != null
           : _lastPrompt != null);
 
   Future<void> load({bool newSession = false}) async {
@@ -399,6 +400,7 @@ final class AgentController extends ChangeNotifier {
     }
     if (busy || _disposed) return;
     _sealed = false;
+    _lastConversationRunId = null;
     _begin();
     progress = AgentProgress.loading;
     _notify();
@@ -487,7 +489,10 @@ final class AgentController extends ChangeNotifier {
   Future<void> retry() async {
     if (!canRetry) return;
     if (isGeneralConversation) {
-      await sendText(_lastConversationText!);
+      await _sendConversationText(
+        _lastConversationText!,
+        retryOf: _lastConversationRunId,
+      );
     } else {
       await send(_lastPrompt!);
     }
@@ -516,6 +521,7 @@ final class AgentController extends ChangeNotifier {
   Future<void> _sendConversationText(
     String text, {
     bool continuation = false,
+    String? retryOf,
   }) async {
     final normalized = text.trim();
     if (!canSend ||
@@ -531,6 +537,7 @@ final class AgentController extends ChangeNotifier {
       session: original,
       text: normalized,
       continuation: continuation,
+      retryOf: retryOf,
     );
     _conversationRun = request;
     _runSession = original;
@@ -562,6 +569,11 @@ final class AgentController extends ChangeNotifier {
       _runSession = null;
       if (!_disposed && !_sealed && session?.id == original.id) {
         _acceptSession(completion.session);
+        _lastConversationRunId = completion.run.runId;
+        final issue = completion.run.report?.issues.firstOrNull;
+        if (issue != null) {
+          _acceptConversationIssue(issue);
+        }
         needsReload = false;
       }
     } on Object catch (error, stackTrace) {
@@ -783,6 +795,7 @@ final class AgentController extends ChangeNotifier {
     session = null;
     messages = [];
     _lastPrompt = null;
+    _lastConversationRunId = null;
     vaultState = AgentVaultState.locked;
     _notify();
     await stop();
@@ -849,6 +862,18 @@ final class AgentController extends ChangeNotifier {
       incidentId: update.failureIncidentId,
       retryPolicy: update.failureRetryPolicy,
     );
+  }
+
+  void _acceptConversationIssue(AppWireIssue issue) {
+    _clearProposals();
+    failure = issue.metadata['reason_code'] ?? issue.code;
+    recoveryAction = issue.metadata['recovery_action'];
+    failureDomain = 'turn';
+    failureCategory = null;
+    failureSafeActions = const [];
+    failureAffectedRefs = const [];
+    failureIncidentId = null;
+    failureRetryPolicy = null;
   }
 
   void _fail(

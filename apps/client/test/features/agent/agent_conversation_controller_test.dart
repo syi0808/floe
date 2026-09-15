@@ -102,6 +102,50 @@ void main() {
     expect(gateway.runtime.cancellations, 1);
   });
 
+  test('product retry sends a new command with explicit Run lineage', () async {
+    final gateway = _ConversationGateway(failFirst: true);
+    final controller = AgentController(gateway: gateway, personId: 'person');
+    addTearDown(() {
+      controller.dispose();
+      gateway.runtime.readModel.dispose();
+    });
+    await controller.load();
+
+    await controller.sendText('Retry this read');
+    expect(controller.failure, 'server_model_unavailable');
+    expect(controller.recoveryAction, 'retry_read');
+    expect(controller.canRetry, isTrue);
+
+    await controller.retry();
+
+    expect(gateway.turns, hasLength(2));
+    expect(gateway.turns.last.retryOf, '00000000-0000-4000-8000-000000000403');
+    expect(controller.failure, isNull);
+  });
+
+  test(
+    'terminal runtime interruption does not clear the Vault session',
+    () async {
+      final gateway = _ConversationGateway(
+        failFirst: true,
+        failureReason: 'interrupted',
+      );
+      final controller = AgentController(gateway: gateway, personId: 'person');
+      addTearDown(() {
+        controller.dispose();
+        gateway.runtime.readModel.dispose();
+      });
+      await controller.load();
+
+      await controller.sendText('Observe interruption');
+
+      expect(controller.failure, 'interrupted');
+      expect(controller.session, isNotNull);
+      expect(controller.vaultState, AgentVaultState.ready);
+      expect(controller.needsReload, isFalse);
+    },
+  );
+
   test('disposing the view does not cancel the backend Run', () async {
     final gateway = _RuntimeConversationGateway();
     final controller = AgentController(gateway: gateway, personId: 'person');
@@ -153,10 +197,15 @@ void main() {
 
 final class _ConversationGateway extends TestVaultGateway
     implements AgentConversationGateway, ConversationRuntimeProvider {
-  _ConversationGateway() {
+  _ConversationGateway({
+    this.failFirst = false,
+    this.failureReason = 'server_model_unavailable',
+  }) {
     state = AgentVaultState.ready;
   }
 
+  final bool failFirst;
+  final String failureReason;
   late final _ImmediateConversationRuntime runtime =
       _ImmediateConversationRuntime(this);
   final turns = <AgentConversationTurnRequest>[];
@@ -229,18 +278,34 @@ final class _ImmediateConversationRuntime
   }) async {
     owner.active = request;
     owner.turns.add(request);
+    final shouldFail = owner.failFirst && owner.turns.length == 1;
+    final runId = owner.turns.length == 1
+        ? '00000000-0000-4000-8000-000000000403'
+        : '00000000-0000-4000-8000-000000000404';
     final run = AppRunSnapshot(
-      runId: '00000000-0000-4000-8000-000000000403',
+      runId: runId,
       sessionId: request.session.id,
       revision: 1,
       runtimeEpoch: 7,
       executorGeneration: 1,
       state: AppRunState.finished,
-      progress: 'completed',
-      report: const AppTurnReport(
-        execution: 'completed',
-        reply: 'generated',
-        issues: [],
+      progress: shouldFail ? 'failed' : 'completed',
+      report: AppTurnReport(
+        execution: shouldFail ? 'failed' : 'completed',
+        reply: shouldFail ? 'not_produced' : 'generated',
+        issues: shouldFail
+            ? [
+                AppWireIssue(
+                  'unavailable',
+                  'model unavailable',
+                  metadata: {
+                    'reason_code': owner.failureReason,
+                    if (owner.failureReason == 'server_model_unavailable')
+                      'recovery_action': 'retry_read',
+                  },
+                ),
+              ]
+            : const [],
         finalMessageRef: null,
       ),
     );
@@ -248,7 +313,9 @@ final class _ImmediateConversationRuntime
     onRun(run);
     return ConversationTurnCompletion(
       run: run,
-      session: AgentSession.fromJson(owner.session(revision: 1)),
+      session: AgentSession.fromJson(
+        owner.session(revision: owner.turns.length * 2),
+      ),
     );
   }
 

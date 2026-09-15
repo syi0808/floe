@@ -21,6 +21,7 @@ impl StartTurn {
             || self.text.trim().is_empty()
             || self.text.len() > MAX_TURN_TEXT_BYTES
             || self.retry_of.is_some_and(|id| id.is_nil())
+            || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
             return Err(ServiceError::InvalidInput);
         }
@@ -141,6 +142,14 @@ mod tests {
         invalid.mode = TurnMode::Continue(ContinuationRef {
             run_id: Uuid::new_v4(),
             executor_generation: 0,
+            level: 1,
+        });
+        assert_eq!(invalid.validate(), Err(ServiceError::InvalidInput));
+        let mut invalid = request();
+        invalid.retry_of = Some(Uuid::new_v4());
+        invalid.mode = TurnMode::Continue(ContinuationRef {
+            run_id: Uuid::new_v4(),
+            executor_generation: 1,
             level: 1,
         });
         assert_eq!(invalid.validate(), Err(ServiceError::InvalidInput));

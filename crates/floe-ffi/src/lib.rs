@@ -65,9 +65,6 @@ impl floe_app::ConversationCommands for LegacyComposition {
         request: floe_app::StartTurn,
     ) -> Result<floe_app::CommandReceipt, floe_app::ServiceError> {
         request.validate()?;
-        if request.retry_of.is_some() {
-            return Err(floe_app::ServiceError::Unavailable);
-        }
         let command_id = floe_kernel::CommandId::from_uuid(request.command_id)
             .ok_or(floe_app::ServiceError::InvalidInput)?;
         let person = floe_kernel::PersonId(caller.person_id());
@@ -117,6 +114,7 @@ impl floe_app::ConversationCommands for LegacyComposition {
                     text: request.text,
                     device_id: caller.device_id().to_owned(),
                     continuation,
+                    retry_of: request.retry_of,
                     remote_route: None,
                 },
             )

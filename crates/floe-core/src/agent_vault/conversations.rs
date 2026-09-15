@@ -7,7 +7,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -51,6 +51,7 @@ pub struct VaultConversationRunRecord {
     pub continuation_of: Option<RunId>,
     pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
+    pub retry_of: Option<RunId>,
     pub model_placement: ModelPlacement,
 }
 
@@ -73,6 +74,7 @@ impl VaultConversationRunRecord {
             || self.aggregate_revision == 0
             || self.executor_generation == 0
             || self.continuation_level > 3
+            || self.retry_of == Some(self.run_id)
             || self.journal_revision > MAX_JOURNAL_ENTRIES
             || self.coverage.validate().is_err()
             || self
@@ -150,6 +152,7 @@ impl VaultConversationRunRecord {
                     .map(|value| value.executor_generation)
             && self.continuation_level
                 == request.continuation.as_ref().map_or(0, |value| value.level)
+            && self.retry_of == request.retry_of
             && self.model_placement == request.model_placement
     }
 }
@@ -171,6 +174,7 @@ pub struct VaultConversationAdmissionRequest {
     pub request_digest: [u8; 32],
     pub text: String,
     pub continuation: Option<VaultConversationContinuationRef>,
+    pub retry_of: Option<RunId>,
     pub model_placement: ModelPlacement,
 }
 
@@ -189,6 +193,8 @@ impl VaultConversationAdmissionRequest {
                     || reference.level == 0
                     || reference.level > 3
             })
+            || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
+            || self.retry_of.is_some() && self.continuation.is_some()
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -516,6 +522,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::Conflict);
                 }
             }
+            if let Some(retry_of) = request.retry_of {
+                let source = self
+                    .conversation_run_on(&transaction, retry_of)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                if source.session_id != request.session_id
+                    || source.person_id != request.person_id
+                    || !source.state.terminal()
+                    || source.session_revision != request.expected_session_revision
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
             let mut count = transaction
                 .query("SELECT count(*) FROM agent_conversation_runs", ())
                 .await
@@ -590,6 +609,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .as_ref()
                     .map(|value| value.executor_generation),
                 continuation_level: request.continuation.as_ref().map_or(0, |value| value.level),
+                retry_of: request.retry_of,
                 model_placement: request.model_placement,
             };
             record.validate(self.person_id)?;
@@ -1109,7 +1129,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 6))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 7))",
                 (),
             )
             .await
@@ -1151,7 +1171,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 6)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 7)",
                 (),
             )
             .await

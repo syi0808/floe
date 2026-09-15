@@ -96,11 +96,13 @@ final class NativeConversationRuntimeGateway
       await synchronizeConversation(request.session);
       await _beforeStartTurn?.call();
       final continuation = await _continuationFor(request);
+      final retryOf = await _retryFor(request);
       final command = _client.prepareStartTurn(
         sessionId: request.session.id,
         expectedRevision: request.session.revision,
         text: request.text,
         continuation: continuation,
+        retryOf: retryOf,
       );
       active.commandId = command.commandId;
       readModel.markCommandPending(command.commandId);
@@ -234,6 +236,17 @@ final class NativeConversationRuntimeGateway
       executorGeneration: source.executorGeneration,
       level: reference.level + 1,
     );
+  }
+
+  Future<String?> _retryFor(AgentConversationTurnRequest request) async {
+    final retryOf = request.retryOf;
+    if (retryOf == null) return null;
+    final source = await _client.getRun(retryOf);
+    if (source.sessionId != request.session.id ||
+        source.state != AppRunState.finished) {
+      throw const FormatException('Conversation retry mismatch.');
+    }
+    return source.runId;
   }
 
   Future<void> _bootstrapAt(

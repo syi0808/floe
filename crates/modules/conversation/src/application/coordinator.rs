@@ -87,6 +87,21 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 Some(snapshot)
             }
         };
+        if let Some(retry_of) = request.retry_of {
+            let source = self
+                .repository
+                .load_receipt(retry_of)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            source.validate()?;
+            if source.principal != request.principal
+                || source.session_id != request.session_id
+                || !source.state.is_terminal()
+                || source.session_revision != request.expected_session_revision
+            {
+                return Err(AgentFailure::Conflict);
+            }
+        }
         let run_id = RunId::new();
         let admission = self
             .repository
@@ -98,6 +113,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 principal: request.principal.clone(),
                 request_digest,
                 mode: request.mode.clone(),
+                retry_of: request.retry_of,
                 execution_profile: request.execution_profile.clone(),
                 user_message: AgentMessage {
                     message_id: request.command_id.as_uuid(),
@@ -121,6 +137,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             || admitted.receipt.session_id != request.session_id
             || admitted.receipt.principal != request.principal
             || admitted.receipt.request_digest != request_digest
+            || admitted.receipt.retry_of != request.retry_of
             || admitted.receipt.state != RunState::Working
             || admitted.receipt.execution_profile != request.execution_profile
             || match &request.mode {
@@ -521,7 +538,7 @@ pub async fn continuation<Repository: ConversationRepository>(
 
 fn turn_digest(request: &TurnRequest) -> [u8; 32] {
     input_digest(&format!(
-        "{}\0{}\0{}\0{}\0{}\0{:?}\0{:?}\0{}",
+        "{}\0{}\0{}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{}",
         request.command_id,
         request.session_id,
         request.expected_session_revision,
@@ -529,6 +546,7 @@ fn turn_digest(request: &TurnRequest) -> [u8; 32] {
         request.prompt,
         request.request_context_digest,
         request.mode,
+        request.retry_of,
         request.execution_profile,
     ))
 }

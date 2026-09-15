@@ -293,6 +293,7 @@ fn request(
         prompt: "hello".into(),
         request_context_digest: [1; 32],
         mode: TurnMode::New,
+        retry_of: None,
         execution_profile: "device_local".into(),
         bounded_context: BoundedContext {
             text: String::new(),
@@ -836,6 +837,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             request_digest: [9; 32],
             text: "continue safely".into(),
             continuation: None,
+            retry_of: None,
             model_placement: ModelPlacement::DeviceLocal,
         })
         .await
@@ -921,6 +923,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
                 executor_generation: continuation.reference.executor_generation,
                 level: continuation.reference.level,
             }),
+            retry_of: None,
             model_placement: ModelPlacement::DeviceLocal,
         })
         .await
@@ -1067,6 +1070,7 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
             request_digest: [9; 32],
             text: "unfinished".into(),
             continuation: None,
+            retry_of: None,
             model_placement: ModelPlacement::DeviceLocal,
         })
         .await

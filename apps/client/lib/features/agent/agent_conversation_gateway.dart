@@ -5,11 +5,13 @@ final class AgentConversationTurnRequest {
     required this.session,
     required this.text,
     this.continuation = false,
-  });
+    this.retryOf,
+  }) : assert(!continuation || retryOf == null);
 
   final AgentSession session;
   final String text;
   final bool continuation;
+  final String? retryOf;
 }
 
 abstract interface class AgentConversationGateway {
