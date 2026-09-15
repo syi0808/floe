@@ -1,9 +1,11 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../../infrastructure/diagnostics/app_diagnostics.dart';
+import '../../runtime_client/floe_client.dart';
+import '../../runtime_client/read_model/app_read_model.dart';
+import '../conversation/conversation_runtime_gateway.dart';
 import 'agent_calendar_experts.dart';
 import 'agent_connections.dart';
 import 'agent_conversation_gateway.dart';
@@ -694,19 +696,40 @@ final class NativeAgentVaultGateway
         AgentPersonalAccessGateway,
         AgentMemoryGateway,
         AgentMemoryReviewGateway,
-        RemotePairingGateway {
+        RemotePairingGateway,
+        ConversationRuntimeProvider {
   NativeAgentVaultGateway(
     this.request, {
     required this.deviceId,
-    this.resolveRemoteRoute,
-  });
+    FloeClient? runtimeClient,
+    AppReadModel? readModel,
+    Future<void> Function()? beforeConversationStart,
+  }) {
+    if ((runtimeClient == null) != (readModel == null)) {
+      throw ArgumentError('Runtime client and read model must be paired.');
+    }
+    if (beforeConversationStart != null && runtimeClient == null) {
+      throw ArgumentError(
+        'Conversation start guards require a runtime client.',
+      );
+    }
+    _conversationRuntime = runtimeClient == null
+        ? null
+        : NativeConversationRuntimeGateway(
+            client: runtimeClient,
+            readModel: readModel!,
+            loadSession: loadConversation,
+            beforeStartTurn: beforeConversationStart,
+          );
+  }
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
   final String deviceId;
-  final Future<Map<String, Object?>?> Function()? resolveRemoteRoute;
+  late final ConversationRuntimeGateway? _conversationRuntime;
+  @override
+  ConversationRuntimeGateway? get conversationRuntime => _conversationRuntime;
   _VaultJob? _pending;
   AgentSession? _run;
-  AgentConversationTurnRequest? _conversationRun;
 
   @override
   Future<RemoteOwnerPublicKey> prepareRemotePairing({
@@ -1036,101 +1059,6 @@ final class NativeAgentVaultGateway
     }
     return session;
   }
-
-  @override
-  Future<AgentRunUpdate> beginConversationTurn(
-    AgentConversationTurnRequest turn,
-  ) async {
-    if (_conversationRun != null &&
-        !_sameConversationTurn(_conversationRun!, turn)) {
-      throw const AgentVaultException('conflict');
-    }
-    Map<String, Object?>? remoteRoute;
-    if (resolveRemoteRoute != null) {
-      remoteRoute = await resolveRemoteRoute!();
-    }
-    if (_conversationRun != null &&
-        !_sameConversationTurn(_conversationRun!, turn)) {
-      throw const AgentVaultException('conflict');
-    }
-    if (_conversationRun == null) {
-      if (_pending != null) await _drain();
-      _pending = _VaultJob(
-        turn.session.personId,
-        newAgentRequestId(),
-        'conversation_turn',
-      );
-      _run = turn.session;
-      _conversationRun = turn;
-    }
-    final serialized = turn.toJson();
-    serialized['device_id'] = deviceId;
-    if (resolveRemoteRoute != null) serialized['remote_route'] = remoteRoute;
-    return _conversationUpdate(
-      turn,
-      await _call(_pending!, {
-        'kind': 'submit',
-        'action': {'kind': 'conversation_turn', 'request': serialized},
-      }),
-    );
-  }
-
-  @override
-  Future<AgentRunUpdate> pollConversationTurn(
-    AgentConversationTurnRequest turn,
-    int afterSequence,
-  ) => _conversationCall(turn, {
-    'kind': 'poll',
-    'after_sequence': afterSequence,
-  });
-
-  @override
-  Future<AgentRunUpdate> stopConversationTurn(
-    AgentConversationTurnRequest turn,
-  ) => _conversationCall(turn, {'kind': 'stop'});
-
-  @override
-  Future<AgentRunUpdate> releaseConversationTurn(
-    AgentConversationTurnRequest turn,
-  ) async {
-    final result = await _conversationCall(turn, {'kind': 'release'});
-    _pending = null;
-    _run = null;
-    _conversationRun = null;
-    return result;
-  }
-
-  Future<AgentRunUpdate> _conversationCall(
-    AgentConversationTurnRequest turn,
-    Map<String, Object?> operation,
-  ) async {
-    if (_conversationRun == null ||
-        !_sameConversationTurn(_conversationRun!, turn)) {
-      throw const AgentVaultException('conflict');
-    }
-    return _conversationUpdate(turn, await _call(_pending!, operation));
-  }
-
-  AgentRunUpdate _conversationUpdate(
-    AgentConversationTurnRequest turn,
-    Map<String, dynamic> result,
-  ) {
-    final failure = _failureUpdateFields(result['failure'], _pending!);
-    return AgentRunUpdate.fromJson({
-      ...result,
-      ...failure,
-      'session_id': turn.session.id,
-      'expected_revision': turn.session.revision,
-    });
-  }
-
-  bool _sameConversationTurn(
-    AgentConversationTurnRequest left,
-    AgentConversationTurnRequest right,
-  ) =>
-      identical(left, right) ||
-      left.session.personId == right.session.personId &&
-          jsonEncode(left.toJson()) == jsonEncode(right.toJson());
 
   @override
   Future<AgentProposalInspection> inspectProposal({
@@ -1609,7 +1537,6 @@ final class NativeAgentVaultGateway
       if (error.failure != 'not_found') rethrow;
       _pending = null;
       _run = null;
-      _conversationRun = null;
     }
   }
 
@@ -1667,7 +1594,6 @@ final class NativeAgentVaultGateway
     final result = await _runCall(session, {'kind': 'release'});
     _pending = null;
     _run = null;
-    _conversationRun = null;
     return result;
   }
 
@@ -1946,7 +1872,6 @@ final class NativeAgentVaultGateway
     await _call(job, {'kind': 'release'});
     _pending = null;
     _run = null;
-    _conversationRun = null;
   }
 
   Map<String, Object?> _turn(AgentSession session, AgentFixturePrompt prompt) =>

@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
 import '../../infrastructure/diagnostics/app_diagnostics.dart';
+import '../../runtime_client/floe_client.dart';
+import '../conversation/conversation_runtime_gateway.dart';
 import 'agent_calendar_experts.dart';
 import 'agent_connections.dart';
 import 'agent_conversation_gateway.dart';
@@ -101,6 +104,7 @@ final class AgentController extends ChangeNotifier {
           _locking == null,
       onFatalFailure: _fail,
     )..addListener(_notify);
+    _conversationRuntime?.readModel.addListener(_notify);
   }
 
   final AgentFixtureStreamingGateway gateway;
@@ -353,9 +357,27 @@ final class AgentController extends ChangeNotifier {
       connectionController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
-  bool get canStartConversation => !busy && !running;
+  ConversationRuntimeGateway? get _conversationRuntime =>
+      gateway is ConversationRuntimeProvider
+      ? (gateway as ConversationRuntimeProvider).conversationRuntime
+      : null;
+  bool get _conversationBusy =>
+      _busy ||
+      registryController.busy ||
+      memoryController.busy ||
+      calendarExpertController.busy;
+  bool get canStartConversation => !_conversationBusy && !_disposed && !running;
   bool get canSend =>
-      !busy && !needsReload && !needsRecovery && session != null;
+      !_conversationBusy &&
+      !_disposed &&
+      !_sealed &&
+      _locking == null &&
+      !needsReload &&
+      !needsRecovery &&
+      session != null &&
+      (!isGeneralConversation ||
+          (_conversationRuntime?.readModel.conversation.canSend(session!.id) ??
+              false));
   bool get canContinue =>
       canSend &&
       session?.continuation != null &&
@@ -405,6 +427,9 @@ final class AgentController extends ChangeNotifier {
                   .resumeConversation(personId)
                   .timeout(loadTimeout);
         _acceptSession(saved);
+        await _conversationRuntime
+            ?.synchronizeConversation(saved)
+            .timeout(loadTimeout);
       } else {
         final result = newSession
             ? await gateway.startAgentFixture(personId).timeout(loadTimeout)
@@ -414,7 +439,12 @@ final class AgentController extends ChangeNotifier {
       needsReload = false;
     } on Object catch (error, stackTrace) {
       _recordError('load', error, stackTrace);
-      _failFromError(error, 'storage_unavailable');
+      _failFromError(
+        error,
+        session != null && _conversationRuntime != null
+            ? 'transport_unavailable'
+            : 'storage_unavailable',
+      );
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -433,6 +463,7 @@ final class AgentController extends ChangeNotifier {
         final saved = await (gateway as AgentConversationGateway)
             .recoverConversation(original);
         _acceptSession(saved);
+        await _conversationRuntime?.synchronizeConversation(saved);
       } else {
         final result = await gateway.recoverAgentFixture(original);
         _acceptSession(result.session);
@@ -440,7 +471,12 @@ final class AgentController extends ChangeNotifier {
       needsReload = false;
     } on Object catch (error, stackTrace) {
       _recordError('recover', error, stackTrace, sessionId: session?.id);
-      _failFromError(error, 'storage_unavailable');
+      _failFromError(
+        error,
+        _conversationRuntime == null
+            ? 'storage_unavailable'
+            : 'transport_unavailable',
+      );
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -462,7 +498,20 @@ final class AgentController extends ChangeNotifier {
     await _sendConversationText(_lastConversationText!, continuation: true);
   }
 
-  Future<void> sendText(String text) => _sendConversationText(text);
+  bool acceptsConversationText(String text) {
+    final normalized = text.trim();
+    return normalized.isNotEmpty && utf8.encode(normalized).length <= 8192;
+  }
+
+  Future<void> sendText(String text) async {
+    if (!acceptsConversationText(text)) {
+      failure = 'invalid_input';
+      needsReload = false;
+      _notify();
+      return;
+    }
+    await _sendConversationText(text);
+  }
 
   Future<void> _sendConversationText(
     String text, {
@@ -473,8 +522,8 @@ final class AgentController extends ChangeNotifier {
         _disposed ||
         !isGeneralConversation ||
         gateway is! AgentConversationGateway ||
-        normalized.isEmpty ||
-        normalized.length > 8192) {
+        _conversationRuntime == null ||
+        !acceptsConversationText(normalized)) {
       return;
     }
     final original = session!;
@@ -491,86 +540,41 @@ final class AgentController extends ChangeNotifier {
     _clearFailure();
     progress = AgentProgress.model;
     _notify();
-    var done = false;
-    var started = false;
+    await _runConversationCommand(_conversationRuntime!, original, request);
+  }
+
+  Future<void> _runConversationCommand(
+    ConversationRuntimeGateway runtime,
+    AgentSession original,
+    AgentConversationTurnRequest request,
+  ) async {
     try {
-      var update = await (gateway as AgentConversationGateway)
-          .beginConversationTurn(request);
-      started = true;
-      var sequence = 0;
-      while (true) {
-        _validateUpdate(original, update, sequence);
-        _acceptEvents(update.events);
-        sequence = update.nextSequence;
-        if (_stopRequested) progress = AgentProgress.stopping;
-        _notify();
-        if (update.done) {
-          done = true;
-          _runSession = null;
-          if (update.session case final saved?) {
-            _acceptSession(saved);
-            if (update.failure == null) {
-              needsReload = false;
-            } else {
-              _failFromUpdate(update);
-            }
-          } else {
-            final resultError = AgentVaultException(
-              update.failure ?? 'storage_unavailable',
-              requestId: update.requestId,
-              stage: 'conversation_turn',
-              recoveryAction: update.recoveryAction,
-              domain: update.failureDomain,
-              category: update.failureCategory,
-              reasonCode: update.failureReasonCode,
-              safeActions: update.failureSafeActions,
-              affectedRefs: update.failureAffectedRefs,
-              incidentId: update.failureIncidentId,
-              retryPolicy: update.failureRetryPolicy,
-            );
-            _recordError(
-              'conversation_turn',
-              resultError,
-              StackTrace.current,
-              sessionId: original.id,
-            );
-            _failFromUpdate(update, fallback: 'storage_unavailable');
-          }
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        update = await (gateway as AgentConversationGateway)
-            .pollConversationTurn(request, sequence);
+      final completion = await runtime.runConversationTurn(
+        request,
+        onRun: (run) {
+          if (_disposed || _sealed || session?.id != original.id) return;
+          progress = run.state == AppRunState.cancelling || _stopRequested
+              ? AgentProgress.stopping
+              : AgentProgress.model;
+          _notify();
+        },
+      );
+      _runSession = null;
+      if (!_disposed && !_sealed && session?.id == original.id) {
+        _acceptSession(completion.session);
+        needsReload = false;
       }
     } on Object catch (error, stackTrace) {
-      _recordError(
-        'conversation_turn',
-        error,
-        stackTrace,
-        sessionId: original.id,
-      );
-      _failFromError(error, 'transport_unavailable');
-    } finally {
-      try {
-        if (!done && started) {
-          var update = await (gateway as AgentConversationGateway)
-              .stopConversationTurn(request);
-          for (var attempt = 0; !update.done && attempt < 25; attempt++) {
-            await Future<void>.delayed(const Duration(milliseconds: 80));
-            update = await (gateway as AgentConversationGateway)
-                .pollConversationTurn(request, 0);
-          }
-          done = update.done;
-        }
-        if (done && started) {
-          await (gateway as AgentConversationGateway).releaseConversationTurn(
-            request,
-          );
-        }
-      } on Object {
-        needsReload = true;
-        failure ??= 'transport_unavailable';
+      if (!_disposed && !_sealed) {
+        _recordError(
+          'conversation_turn',
+          error,
+          stackTrace,
+          sessionId: original.id,
+        );
+        _failFromError(error, 'transport_unavailable');
       }
+    } finally {
       _conversationRun = null;
       _runSession = null;
       _end();
@@ -652,9 +656,7 @@ final class AgentController extends ChangeNotifier {
     _notify();
     try {
       if (_conversationRun case final request?) {
-        await (gateway as AgentConversationGateway).stopConversationTurn(
-          request,
-        );
+        await _conversationRuntime?.cancelConversationTurn(request);
       } else {
         await gateway.stopAgentFixtureRun(original);
       }
@@ -892,11 +894,12 @@ final class AgentController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _conversationRuntime?.readModel.removeListener(_notify);
     registryController.removeListener(_notify);
     memoryController.removeListener(_notify);
     calendarExpertController.removeListener(_notify);
     connectionController.removeListener(_notify);
-    unawaited(stop());
+    if (_conversationRuntime == null) unawaited(stop());
     super.dispose();
   }
 

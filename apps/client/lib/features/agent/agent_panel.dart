@@ -439,10 +439,18 @@ class _AgentPanelState extends State<AgentPanel> {
 
   Future<void> _sendText(AgentController controller) async {
     final text = _composerText.text.trim();
-    if (text.isEmpty || !controller.canSend) return;
+    if (!controller.canSend) return;
+    if (!controller.acceptsConversationText(text)) {
+      await controller.sendText(text);
+      return;
+    }
     _composerText.clear();
     setState(() {});
     await controller.sendText(text);
+    if (mounted && controller.failure != null && _composerText.text.isEmpty) {
+      _composerText.text = text;
+      setState(() {});
+    }
   }
 
   String? _status(AppLocalizations strings, AgentController controller) {

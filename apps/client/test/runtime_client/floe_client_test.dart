@@ -114,6 +114,44 @@ void main() {
     },
   );
 
+  test('StartTurn serializes a bounded continuation reference', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000206',
+      '00000000-0000-4000-8000-000000000207',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000204',
+      expectedRevision: 4,
+      text: 'continue',
+      continuation: const AppContinuationRef(
+        runId: '00000000-0000-4000-8000-000000000205',
+        executorGeneration: 3,
+        level: 2,
+      ),
+    );
+    transport.command = (request) async => {
+      'kind': 'command_receipt',
+      'command_id': request['command_id'],
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000208',
+      'session_revision': 5,
+    };
+
+    await client.submitStartTurn(command);
+
+    expect((transport.commandRequests.single['command'] as Map)['mode'], {
+      'kind': 'continue',
+      'continuation_ref': {
+        'run_id': '00000000-0000-4000-8000-000000000205',
+        'executor_generation': 3,
+        'level': 2,
+      },
+    });
+  });
+
   test('CancelRun keeps command identity across transport retries', () async {
     final identifiers = Queue.of([
       '00000000-0000-4000-8000-000000000231',

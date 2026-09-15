@@ -16,6 +16,8 @@ import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/infrastructure/native_agent_fixture_gateway.dart';
 import '../../agent/agent_vault_gateway.dart';
 import '../../../infrastructure/native/native_transport.dart';
+import '../../../runtime_client/floe_client.dart';
+import '../../../runtime_client/read_model/app_read_model.dart';
 
 const localPersonId = defaultLocalPersonId;
 
@@ -68,22 +70,28 @@ final class FfiDayGateway
   late final NativeCalendarActionGateway _calendarActionGateway =
       NativeCalendarActionGateway(_request);
   Future<void> _calendarOperationTail = Future.value();
+  late final FloeClient _runtimeClient = FloeClient(_transport);
+  late final AppReadModel _readModel = AppReadModel();
   late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
     _vaultRequest,
     deviceId: _deviceId,
-    resolveRemoteRoute: _remoteRoute,
+    runtimeClient: _runtimeClient,
+    readModel: _readModel,
+    beforeConversationStart: _requireV2ConversationRoute,
   );
 
-  Future<Map<String, Object?>?> _remoteRoute() async {
-    try {
-      return await resolveRemoteInferenceRoute(serverClient);
-    } on RemoteInferenceRouteException catch (error) {
-      throw AgentVaultException(
-        error.agentFailure,
-        stage: 'remote_route',
-        metadata: {'route_status': error.status.name, 'route_code': error.code},
-      );
-    }
+  Future<void> _requireV2ConversationRoute() async {
+    final route = await observeRemoteInferenceRoute(serverClient);
+    if (route.isNotConfigured) return;
+    final failure = RemoteInferenceRouteException(
+      route.status,
+      route.code ?? 'app_wire_route_unavailable',
+    );
+    throw AgentVaultException(
+      failure.agentFailure,
+      stage: 'conversation_route',
+      metadata: {'route_status': route.status.name, 'route_code': failure.code},
+    );
   }
 
   Future<Map<String, dynamic>> _vaultRequest(
@@ -359,6 +367,7 @@ final class FfiDayGateway
 
   Future<void> close() async {
     await _calendarOperationTail;
+    _readModel.dispose();
     await _transport.close();
   }
 

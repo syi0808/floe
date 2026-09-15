@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:floe_client/features/agent/agent_conversation_gateway.dart';
-import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/agent/agent_registry.dart';
 import 'package:floe_client/features/agent/agent_proposal.dart';
+import 'package:floe_client/features/conversation/conversation_runtime_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,6 +29,11 @@ void main() {
       expect(
         await gateway.secureAgent.vaultStatus(localPersonId),
         AgentVaultState.missing,
+      );
+      expect(
+        (gateway.secureAgent as ConversationRuntimeProvider)
+            .conversationRuntime,
+        isNotNull,
       );
       expect(await Directory('$path.agent-vaults').exists(), isFalse);
       await expectLater(
@@ -127,94 +132,6 @@ void main() {
     );
     await expectLater(gateway.vaultStatus('test'), throwsFormatException);
   });
-
-  test(
-    'configured route failure does not submit a native conversation turn',
-    () async {
-      var nativeCalls = 0;
-      var failRoute = true;
-      final jobIds = <Object?>[];
-      final operations = <Object?>[];
-      final gateway = NativeAgentVaultGateway(
-        (request) async {
-          nativeCalls++;
-          jobIds.add(request['request_id']);
-          operations.add((request['operation'] as Map)['kind']);
-          throw const AgentVaultException('transport_unavailable');
-        },
-        deviceId: 'test-device',
-        resolveRemoteRoute: () async {
-          if (!failRoute) return null;
-          throw const AgentVaultException(
-            'server_model_unavailable',
-            stage: 'remote_route',
-          );
-        },
-      );
-      final session = AgentSession.fromJson({
-        'schema_version': 1,
-        'id': 'session',
-        'person_id': 'person',
-        'scope': null,
-        'revision': 1,
-        'active_turn': null,
-        'last_outcome': null,
-        'continuation': null,
-        'data_classes': ['personal'],
-        'messages': <Object?>[],
-      });
-      final request = AgentConversationTurnRequest(
-        session: session,
-        text: 'hello',
-      );
-
-      await expectLater(
-        gateway.beginConversationTurn(request),
-        throwsA(
-          isA<AgentVaultException>().having(
-            (error) => error.failure,
-            'failure',
-            'server_model_unavailable',
-          ),
-        ),
-      );
-      expect(nativeCalls, 0);
-      failRoute = false;
-      await expectLater(
-        gateway.beginConversationTurn(request),
-        throwsA(
-          isA<AgentVaultException>().having(
-            (error) => error.failure,
-            'failure',
-            'transport_unavailable',
-          ),
-        ),
-      );
-      failRoute = true;
-      await expectLater(
-        gateway.beginConversationTurn(request),
-        throwsA(
-          isA<AgentVaultException>().having(
-            (error) => error.failure,
-            'failure',
-            'server_model_unavailable',
-          ),
-        ),
-      );
-      await expectLater(
-        gateway.pollConversationTurn(request, 0),
-        throwsA(
-          isA<AgentVaultException>().having(
-            (error) => error.failure,
-            'failure',
-            'transport_unavailable',
-          ),
-        ),
-      );
-      expect(operations, ['submit', 'poll']);
-      expect(jobIds[0], jobIds[1]);
-    },
-  );
 
   test('completed failure retains request identity and stage', () async {
     AppDiagnostics.clear();

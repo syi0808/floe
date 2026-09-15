@@ -184,6 +184,8 @@ final class AppReadModel extends ChangeNotifier {
     return true;
   }
 
+  void sealForResync() => _sealForResync();
+
   void _sealForResync() {
     _commands.clear();
     _runs.clear();

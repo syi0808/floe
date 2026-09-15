@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'transport/app_wire_transport.dart';
@@ -9,12 +10,26 @@ final class PreparedStartTurn {
     required this.sessionId,
     required this.expectedRevision,
     required this.text,
+    this.continuation,
   });
 
   final String commandId;
   final String sessionId;
   final int expectedRevision;
   final String text;
+  final AppContinuationRef? continuation;
+}
+
+final class AppContinuationRef {
+  const AppContinuationRef({
+    required this.runId,
+    required this.executorGeneration,
+    required this.level,
+  });
+
+  final String runId;
+  final int executorGeneration;
+  final int level;
 }
 
 final class AppCommandReceipt {
@@ -178,9 +193,18 @@ final class FloeClient {
     required String sessionId,
     required int expectedRevision,
     required String text,
+    AppContinuationRef? continuation,
   }) {
     if (_closed) throw StateError('FloeClient is already closed.');
-    if (sessionId.isEmpty || expectedRevision < 0 || text.trim().isEmpty) {
+    if (sessionId.isEmpty ||
+        expectedRevision < 0 ||
+        text.trim().isEmpty ||
+        utf8.encode(text).length > 64 * 1024 ||
+        continuation != null &&
+            (continuation.runId.isEmpty ||
+                continuation.executorGeneration <= 0 ||
+                continuation.level < 1 ||
+                continuation.level > 3)) {
       throw const FormatException('Invalid conversation turn.');
     }
     return PreparedStartTurn(
@@ -188,6 +212,7 @@ final class FloeClient {
       sessionId: sessionId,
       expectedRevision: expectedRevision,
       text: text,
+      continuation: continuation,
     );
   }
 
@@ -207,7 +232,17 @@ final class FloeClient {
           'session_id': command.sessionId,
           'expected_revision': command.expectedRevision,
           'text': command.text,
-          'mode': {'kind': 'new_turn'},
+          'mode': switch (command.continuation) {
+            null => {'kind': 'new_turn'},
+            final continuation => {
+              'kind': 'continue',
+              'continuation_ref': {
+                'run_id': continuation.runId,
+                'executor_generation': continuation.executorGeneration,
+                'level': continuation.level,
+              },
+            },
+          },
         },
       }, timeout: timeout);
       return _commandReceipt(result, expectedCommandId: command.commandId);

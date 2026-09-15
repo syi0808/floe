@@ -65,22 +65,58 @@ impl floe_app::ConversationCommands for LegacyComposition {
         request: floe_app::StartTurn,
     ) -> Result<floe_app::CommandReceipt, floe_app::ServiceError> {
         request.validate()?;
-        if request.retry_of.is_some() || !matches!(request.mode, floe_app::TurnMode::New) {
+        if request.retry_of.is_some() {
             return Err(floe_app::ServiceError::Unavailable);
         }
         let command_id = floe_kernel::CommandId::from_uuid(request.command_id)
             .ok_or(floe_app::ServiceError::InvalidInput)?;
+        let person = floe_kernel::PersonId(caller.person_id());
+        let continuation = match &request.mode {
+            floe_app::TurnMode::New => false,
+            floe_app::TurnMode::Continue(reference) => {
+                let run_id = floe_kernel::RunId::from_uuid(reference.run_id)
+                    .ok_or(floe_app::ServiceError::InvalidInput)?;
+                let receipt = self
+                    .agent_vault
+                    .conversation_query(person, vault_host::ConversationQuery::Command(command_id))
+                    .map_err(service_failure)?;
+                if let Some(receipt) = receipt {
+                    if receipt.session_id != request.session_id
+                        || receipt.continuation_of != Some(run_id)
+                        || receipt.continuation_executor_generation
+                            != Some(reference.executor_generation)
+                        || receipt.continuation_level != reference.level
+                    {
+                        return Err(floe_app::ServiceError::Conflict);
+                    }
+                } else {
+                    let source = self
+                        .agent_vault
+                        .conversation_query(person, vault_host::ConversationQuery::Run(run_id))
+                        .map_err(service_failure)?
+                        .ok_or(floe_app::ServiceError::NotFound)?;
+                    if source.session_id != request.session_id
+                        || !source.state.is_terminal()
+                        || source.executor_generation != reference.executor_generation
+                        || source.continuation_level.checked_add(1) != Some(reference.level)
+                    {
+                        return Err(floe_app::ServiceError::Conflict);
+                    }
+                }
+                true
+            }
+        };
         let receipt = self
             .agent_vault
             .start_conversation(
-                floe_kernel::PersonId(caller.person_id()),
+                person,
                 command_id,
                 AgentConversationTurnRequestDto {
                     session_id: request.session_id.to_string(),
                     expected_revision: request.expected_revision,
                     text: request.text,
                     device_id: caller.device_id().to_owned(),
-                    continuation: false,
+                    continuation,
                     remote_route: None,
                 },
             )
