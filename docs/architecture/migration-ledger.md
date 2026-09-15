@@ -51,10 +51,10 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P13 | Pending |
 | P14 | Partial: verified native local identity adapter wired; model/source/control adapter split pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
-| P16 | Partial: AppHost, verified native identity and durable v2 StartTurn/query ABI wired; cancel/events, remote route and Flutter cutover pending |
-| P17 | Partial: typed correlated v2 command/query client and bounded Apple transport wired; read-model/product cutover, events and full worker-exit settlement pending |
-| P18 | Pending |
-| P19 | Pending |
+| P16 | Partial: AppHost, verified native identity, durable v2 conversation commands/query/events and host-owned remote route wired; typed Session and final adapter cutover pending |
+| P17 | Partial: typed correlated v2 client, bounded Apple transport, events, conversation product cutover and backend route ownership wired; Session and full worker-exit settlement pending |
+| P18 | Partial: app-lifetime conversation Run read model and reducer wired; remaining slices and full UI selector ownership pending |
+| P19 | Partial: product conversation commands, cancellation, retry and host-selected route wired; typed Session, Connect owner and remaining feature cutover pending |
 | P20 | Pending |
 | P21 | Pending |
 | P22 | Pending |
@@ -3850,3 +3850,51 @@ AppHost-owned inference-route snapshot with authority/consent validation and no
 credential fields in the Flutter command, followed by a real local and remote
 macOS StartTurn/retry flow. P16, P19, V1 and the broader migration remain
 partial.
+
+### P16/P17 host-owned inference route checkpoint (2026-09-15)
+
+Code checkpoint `2f8818c` moves product conversation route selection out of
+Flutter and into the AppHost composition. `HostInferenceRoutes` reads the
+existing macOS local-server credential from its Keychain service with an
+interaction-free Security.framework query only after the verified principal's
+Vault is available. The saved record is decoded strictly and bound to the
+AppHost caller's Person and device before any network request. The bearer token
+remains inside the native composition and is neither added to schema-2
+StartTurn nor exposed through `Debug` output.
+
+The provider adapter revalidates the loopback endpoint and token shape, fetches
+the authenticated `everyday_assistance` inventory, and uses the typed
+InferenceRouter to enforce model availability, placement, exact external
+recipient and saved recipient consent. Its bounded connector catalog projection
+accepts only the paired Person/device and current connected Google/Microsoft
+calendar identifiers. Catalog failure is optional source failure and therefore
+produces an empty source projection without deleting an otherwise authorized
+model route. Credential, consent and model-route failures remain typed and do
+not fall back to the Foundation model. The former Dart route builder, bearer
+map, catalog decision and pre-StartTurn fail-closed guard are deleted.
+
+Direct regression validation passed 11 focused remote-model adapter tests, all
+103 FFI library tests, 13 C-ABI tests and 18 focused Flutter native-gateway and
+typed-client tests against the rebuilt macOS dylib. Changed Dart files format
+and analyze cleanly. Workspace all-target checking and the migration boundary
+gate passed (23 nodes / 72 edges / no errors). A strict Clippy invocation also
+reached pre-existing `floe-protocol`/`floe-core` lint failures unrelated to this
+checkpoint; it was not counted as a pass.
+
+The actual debug macOS app was built and launched, the Floe-owned disposable
+database/Vault from the prior schema was quarantined, and only its exact obsolete
+Vault key slot was removed; the local-server credential and local device identity
+were preserved. Opening the conversation exercised the real create/unlock path,
+but it still ended in `VaultUnavailable` (`8d3c0134-2422-4176-a035-756f5286891c`)
+before route selection. Consequently neither a successful Keychain-backed local
+nor remote StartTurn/retry is claimed.
+
+Blocker/remove-by: the configured-route-wide Flutter block is removed, but V0's
+macOS Vault key access remains the earliest product blocker on the ad-hoc debug
+app and prevents direct model validation. The next executable task is to add a
+safe key lookup/insert stage classification at the native Vault adapter, identify
+the exact sandbox/signing failure in the same app path, and fix that access
+without replacing existing keys or weakening integrity checks. After Vault
+create/unlock succeeds, run one real host-selected remote StartTurn and retry;
+then complete the typed v2 Session snapshot and remove the remaining legacy
+session bridge. P16, P17, P19, V0, V1 and the broader migration remain partial.
