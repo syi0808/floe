@@ -3712,3 +3712,41 @@ AppReadModel are not yet consuming events, so Submit/Poll/Release remains the
 product path. The next executable P18/P19 task is the single Flutter read-model
 reducer with snapshot/event bootstrap, stale-revision suppression and explicit
 resync, followed by controller cutover. P16, P17 and V1 remain partial.
+
+### P18 conversation read-model checkpoint (2026-09-15)
+
+Code checkpoint `0a77f54` adds the first immutable Flutter conversation
+projection over the typed v2 command, query and event contracts. Command
+receipts now carry the verified host runtime epoch through protocol, FFI and
+Dart so both synchronous acknowledgements and CommandUpdated events are fenced
+to the same runtime generation. Pending transport commands remain separate
+from durable backend command and Run state, preventing an in-flight request
+flag from becoming the authority for whether a session can send another turn.
+
+The reducer converges whether the command acknowledgement or event arrives
+first, retains only the highest Run revision, and rejects cursor gaps or epoch
+mismatches by sealing the projection for explicit resynchronization. A runtime
+epoch change clears the old command and Run projections. Projection snapshots
+copy their maps and sets before exposing unmodifiable views, and session-scoped
+send eligibility requires a synchronized projection with no unfinished Run for
+that session.
+
+Direct validation covered both acknowledgement/event orderings, immutable
+snapshots, pending-state convergence, stale Run suppression, cursor-gap
+recovery and late receipts from a replaced runtime epoch. All eight focused
+Dart runtime-client/read-model tests passed and the four changed Dart files
+format and analyze cleanly. Protocol golden tests, all 101 FFI library tests,
+13 C-ABI tests, the workspace all-target check, diff check and migration
+boundary gate passed (23 nodes / 72 edges / no errors). The actual macOS Dart
+isolate and dylib event bootstrap also passed after the runtime-epoch receipt
+change.
+
+Blocker/remove-by: AppReadModel is not yet app-lifetime wired and the visible
+conversation controller still owns the legacy Submit/Poll/Release lifecycle.
+Bootstrap currently requires known command and Run identifiers for durable
+GetCommand/GetRun reads, while session lifecycle remains on the legacy surface;
+the event buffer and terminal publication also retain the temporary limitations
+recorded above. The next executable P19 task is to integrate FloeClient and this
+reducer behind the product conversation gateway/controller, adding the minimum
+v2 session bridge needed to remove Submit/Poll/Release from the visible path.
+P18, P19 and V1 remain partial.
