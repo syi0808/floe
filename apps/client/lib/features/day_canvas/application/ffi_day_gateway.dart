@@ -11,7 +11,6 @@ import 'calendar_observation_publisher.dart';
 import 'calendar_action_gateway.dart';
 import '../infrastructure/native_calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
-import '../../server/remote_inference_route.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/infrastructure/native_agent_fixture_gateway.dart';
 import '../../agent/agent_vault_gateway.dart';
@@ -77,22 +76,7 @@ final class FfiDayGateway
     deviceId: _deviceId,
     runtimeClient: _runtimeClient,
     readModel: _readModel,
-    beforeConversationStart: _requireV2ConversationRoute,
   );
-
-  Future<void> _requireV2ConversationRoute() async {
-    final route = await observeRemoteInferenceRoute(serverClient);
-    if (route.isNotConfigured) return;
-    final failure = RemoteInferenceRouteException(
-      route.status,
-      route.code ?? 'app_wire_route_unavailable',
-    );
-    throw AgentVaultException(
-      failure.agentFailure,
-      stage: 'conversation_route',
-      metadata: {'route_status': route.status.name, 'route_code': failure.code},
-    );
-  }
 
   Future<Map<String, dynamic>> _vaultRequest(
     Map<String, Object?> request,

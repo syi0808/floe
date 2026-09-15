@@ -1006,6 +1006,8 @@ dependencies = [
  "floe-protocol",
  "jni",
  "ring",
+ "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2",

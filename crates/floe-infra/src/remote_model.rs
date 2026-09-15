@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, HashSet},
     sync::OnceLock,
     time::{Duration, SystemTime},
 };
@@ -12,10 +13,11 @@ use floe_inference::{
     DataRecipient, ExecutionLocation, InferenceRouter, ModelCapabilities, ModelConsumer,
     ModelProfile, ModelPurpose, RecipientConstraint, RouteRequest,
 };
-use floe_protocol::AgentRemoteRouteDto;
+use floe_protocol::{AgentRemoteCalendarConnectionDto, AgentRemotePairingDto, AgentRemoteRouteDto};
 use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 pub struct ServerModelRunner {
     route: ModelRouteConfig,
@@ -34,6 +36,42 @@ struct ModelRouteConfig {
 
 const LEGACY_INFERENCE_CONSUMER: &str = "legacy.inference";
 const MODEL_GENERATION_CAPABILITY: &str = "agent_steps";
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct RemoteModelConnection {
+    pub base_url: String,
+    pub bearer_token: String,
+    pub client_id: String,
+    pub person_id: String,
+    pub device_id: String,
+    pub allow_external: bool,
+    pub external_recipients: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PurposeInventory {
+    schema_version: u32,
+    purposes: BTreeMap<String, PurposeAvailability>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PurposeAvailability {
+    available: bool,
+    requires_external_consent: bool,
+    placement: Option<String>,
+    recipient: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectorCatalog {
+    schema_version: u32,
+    person_id: String,
+    device_id: String,
+    connectors: Vec<serde_json::Value>,
+}
 
 fn model_calls() -> &'static CallLimiter {
     static LIMIT: OnceLock<CallLimiter> = OnceLock::new();
@@ -134,6 +172,177 @@ impl ModelRouteConfig {
                 floe_inference::RoutePlanError::Denied => AgentFailure::PolicyDenied,
             })
     }
+}
+
+pub async fn resolve_remote_model_route(
+    connection: &RemoteModelConnection,
+) -> Result<AgentRemoteRouteDto, AgentFailure> {
+    let candidate = AgentRemoteRouteDto {
+        base_url: connection.base_url.clone(),
+        bearer_token: connection.bearer_token.clone(),
+        purpose: "everyday_assistance".into(),
+        external: false,
+        allow_external: false,
+        recipient: None,
+        calendar_connections: vec![],
+        pairing: Some(AgentRemotePairingDto {
+            client_id: connection.client_id.clone(),
+            person_id: connection.person_id.clone(),
+            device_id: connection.device_id.clone(),
+        }),
+    };
+    ModelRouteConfig::from_route(&candidate)?;
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|_| AgentFailure::ServerModelUnavailable)?;
+    let inventory: PurposeInventory = authenticated_json(
+        &client,
+        &candidate.base_url,
+        "/v1/inference-purposes",
+        &candidate.bearer_token,
+    )
+    .await?;
+    if inventory.schema_version != 1 {
+        return Err(AgentFailure::ServerModelInvalidOutput);
+    }
+    let availability = inventory
+        .purposes
+        .get("everyday_assistance")
+        .ok_or(AgentFailure::ServerModelInvalidOutput)?;
+    if !availability.available {
+        return Err(AgentFailure::ServerModelUnavailable);
+    }
+    let (external, recipient) = match (
+        availability.placement.as_deref(),
+        availability.requires_external_consent,
+        availability.recipient.as_deref(),
+    ) {
+        (Some("server_local"), false, None) => (false, None),
+        (Some("external"), true, Some(recipient)) if valid_external_recipient(recipient) => {
+            (true, Some(recipient.to_owned()))
+        }
+        _ => return Err(AgentFailure::ServerModelInvalidOutput),
+    };
+    let allow_external = if let Some(recipient) = recipient.as_deref() {
+        if !connection.allow_external
+            || !connection
+                .external_recipients
+                .iter()
+                .any(|allowed| allowed == recipient)
+        {
+            return Err(AgentFailure::ConsentRequired);
+        }
+        true
+    } else {
+        false
+    };
+
+    let mut route = AgentRemoteRouteDto {
+        external,
+        allow_external,
+        recipient,
+        ..candidate
+    };
+    route.calendar_connections = authenticated_json::<ConnectorCatalog>(
+        &client,
+        &route.base_url,
+        "/v1/connectors",
+        &route.bearer_token,
+    )
+    .await
+    .ok()
+    .and_then(|catalog| calendar_connections(catalog, connection))
+    .unwrap_or_default();
+    let model = ServerModelRunner::new_model_only(route.clone())?;
+    model.route.admit()?;
+    Ok(route)
+}
+
+async fn authenticated_json<Response: for<'de> Deserialize<'de>>(
+    client: &Client,
+    base_url: &str,
+    path: &str,
+    bearer_token: &str,
+) -> Result<Response, AgentFailure> {
+    let url = format!("{}{path}", base_url.trim_end_matches('/'));
+    let mut response = client
+        .get(url)
+        .bearer_auth(bearer_token)
+        .send()
+        .await
+        .map_err(|_| AgentFailure::ServerModelUnavailable)?;
+    match response.status() {
+        StatusCode::OK => {}
+        StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
+        StatusCode::FORBIDDEN => return Err(AgentFailure::PolicyDenied),
+        StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
+        _ => return Err(AgentFailure::ServerModelUnavailable),
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AgentFailure::ServerModelUnavailable)?
+    {
+        if body.len().saturating_add(chunk.len()) > 65_536 {
+            return Err(AgentFailure::ServerModelInvalidOutput);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| AgentFailure::ServerModelInvalidOutput)
+}
+
+fn valid_external_recipient(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 253
+        && !value.chars().any(char::is_control)
+}
+
+fn calendar_connections(
+    catalog: ConnectorCatalog,
+    connection: &RemoteModelConnection,
+) -> Option<Vec<AgentRemoteCalendarConnectionDto>> {
+    if catalog.schema_version != 1
+        || catalog.person_id != connection.person_id
+        || catalog.device_id != connection.device_id
+        || catalog.connectors.len() > 64
+    {
+        return None;
+    }
+    let mut identifiers = HashSet::new();
+    let mut calendar = Vec::new();
+    for raw in catalog.connectors {
+        let value = raw.as_object()?;
+        let identifier = value.get("id")?.as_str()?;
+        if !identifiers.insert(identifier.to_owned()) {
+            return None;
+        }
+        if value.get("status")?.as_str()? != "connected"
+            || !matches!(identifier, "calendar.google" | "calendar.microsoft")
+        {
+            continue;
+        }
+        let connection_id = value.get("connection_id")?.as_str()?;
+        if Uuid::parse_str(connection_id).is_err() {
+            return None;
+        }
+        let connection_revision = value.get("connection_revision")?.as_u64()?;
+        if connection_revision == 0 {
+            return None;
+        }
+        calendar.push(AgentRemoteCalendarConnectionDto {
+            connector_id: identifier.to_owned(),
+            connection_id: connection_id.to_owned(),
+            connection_revision,
+        });
+    }
+    Some(calendar)
 }
 
 impl ServerModelRunner {
@@ -729,6 +938,161 @@ mod tests {
             calendar_connections: vec![],
             pairing: None,
         }
+    }
+
+    async fn inventory_server(
+        responses: Vec<(&'static str, serde_json::Value)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (path, response) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0_u8; 1024];
+                    let count = socket.read(&mut chunk).await.unwrap();
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&chunk[..count]);
+                    if request.windows(4).any(|value| value == b"\r\n\r\n") {
+                        break;
+                    }
+                    assert!(request.len() <= 16_384);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n")
+                );
+                let response = response.to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response.len(),
+                            response
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        (address, server)
+    }
+
+    fn connection(base_url: String) -> RemoteModelConnection {
+        RemoteModelConnection {
+            base_url,
+            bearer_token: "a".repeat(32),
+            client_id: "paired-client".into(),
+            person_id: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "local-device".into(),
+            allow_external: false,
+            external_recipients: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn host_route_snapshot_uses_server_authority_and_scoped_catalog() {
+        let connection_id = Uuid::new_v4();
+        let (base_url, server) = inventory_server(vec![
+            (
+                "/v1/inference-purposes",
+                json!({
+                    "schema_version": 1,
+                    "purposes": {
+                        "everyday_assistance": {
+                            "available": true,
+                            "requires_external_consent": false,
+                            "placement": "server_local"
+                        }
+                    }
+                }),
+            ),
+            (
+                "/v1/connectors",
+                json!({
+                    "schema_version": 1,
+                    "person_id": "00000000-0000-4000-8000-000000000001",
+                    "device_id": "local-device",
+                    "connectors": [{
+                        "id": "calendar.google",
+                        "status": "connected",
+                        "connection_id": connection_id,
+                        "connection_revision": 4
+                    }]
+                }),
+            ),
+        ])
+        .await;
+        let route = resolve_remote_model_route(&connection(base_url))
+            .await
+            .unwrap();
+        assert!(!route.external);
+        assert!(!route.allow_external);
+        assert_eq!(route.recipient, None);
+        assert_eq!(route.calendar_connections.len(), 1);
+        assert_eq!(
+            route.calendar_connections[0].connection_id,
+            connection_id.to_string()
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_route_requires_saved_consent_for_exact_recipient() {
+        let (base_url, server) = inventory_server(vec![(
+            "/v1/inference-purposes",
+            json!({
+                "schema_version": 1,
+                "purposes": {
+                    "everyday_assistance": {
+                        "available": true,
+                        "requires_external_consent": true,
+                        "placement": "external",
+                        "recipient": "model.example"
+                    }
+                }
+            }),
+        )])
+        .await;
+        assert_eq!(
+            resolve_remote_model_route(&connection(base_url)).await,
+            Err(AgentFailure::ConsentRequired)
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn optional_catalog_failure_does_not_remove_the_model_route() {
+        let (base_url, server) = inventory_server(vec![
+            (
+                "/v1/inference-purposes",
+                json!({
+                    "schema_version": 1,
+                    "purposes": {
+                        "everyday_assistance": {
+                            "available": true,
+                            "requires_external_consent": false,
+                            "placement": "server_local"
+                        }
+                    }
+                }),
+            ),
+            (
+                "/v1/connectors",
+                json!({"schema_version": 1, "person_id": "wrong", "device_id": "wrong", "connectors": []}),
+            ),
+        ])
+        .await;
+        let route = resolve_remote_model_route(&connection(base_url))
+            .await
+            .unwrap();
+        assert!(route.calendar_connections.is_empty());
+        server.await.unwrap();
     }
 
     #[tokio::test]

@@ -38,6 +38,11 @@ uuid.workspace = true
 jni = "0.21.1"
 zeroize = "1.9.0"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"
+security-framework-sys = "2.17.0"
+zeroize = "1.9.0"
+
 [dev-dependencies]
 floe-inference = { path = "../modules/inference" }
 ring = "0.17.14"

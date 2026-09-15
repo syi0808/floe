@@ -88,6 +88,8 @@ pub unsafe extern "C" fn floe_core_open(
             local_context: local_context.clone(),
             #[cfg(unix)]
             agent_vault: vault_host::VaultBridge::new(path, core, local_context),
+            #[cfg(unix)]
+            inference_routes: inference_routes::HostInferenceRoutes,
         };
         let app = match identity {
             Some(identity) => AppHost::bootstrap_claim(services, identity).map_err(host_error)?,

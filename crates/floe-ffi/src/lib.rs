@@ -8,6 +8,8 @@ mod app_events;
 mod app_wire;
 mod conversion;
 mod diagnostics;
+#[cfg(unix)]
+mod inference_routes;
 
 pub use abi::*;
 mod local_context;
@@ -46,6 +48,8 @@ struct LegacyComposition {
     local_context: Arc<local_context::LocalContextStore>,
     #[cfg(unix)]
     agent_vault: vault_host::VaultBridge,
+    #[cfg(unix)]
+    inference_routes: inference_routes::HostInferenceRoutes,
 }
 
 impl HostServices for LegacyComposition {
@@ -68,16 +72,16 @@ impl floe_app::ConversationCommands for LegacyComposition {
         let command_id = floe_kernel::CommandId::from_uuid(request.command_id)
             .ok_or(floe_app::ServiceError::InvalidInput)?;
         let person = floe_kernel::PersonId(caller.person_id());
+        let existing = self
+            .agent_vault
+            .conversation_query(person, vault_host::ConversationQuery::Command(command_id))
+            .map_err(service_failure)?;
         let continuation = match &request.mode {
             floe_app::TurnMode::New => false,
             floe_app::TurnMode::Continue(reference) => {
                 let run_id = floe_kernel::RunId::from_uuid(reference.run_id)
                     .ok_or(floe_app::ServiceError::InvalidInput)?;
-                let receipt = self
-                    .agent_vault
-                    .conversation_query(person, vault_host::ConversationQuery::Command(command_id))
-                    .map_err(service_failure)?;
-                if let Some(receipt) = receipt {
+                if let Some(receipt) = existing.as_ref() {
                     if receipt.session_id != request.session_id
                         || receipt.continuation_of != Some(run_id)
                         || receipt.continuation_executor_generation
@@ -115,7 +119,10 @@ impl floe_app::ConversationCommands for LegacyComposition {
                     device_id: caller.device_id().to_owned(),
                     continuation,
                     retry_of: request.retry_of,
-                    remote_route: None,
+                    remote_route: self
+                        .inference_routes
+                        .resolve(&self.runtime, caller)
+                        .map_err(service_failure)?,
                 },
             )
             .map_err(service_failure)?;
