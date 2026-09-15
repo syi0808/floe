@@ -3750,3 +3750,56 @@ recorded above. The next executable P19 task is to integrate FloeClient and this
 reducer behind the product conversation gateway/controller, adding the minimum
 v2 session bridge needed to remove Submit/Poll/Release from the visible path.
 P18, P19 and V1 remain partial.
+
+### P19 product conversation command cutover checkpoint (2026-09-15)
+
+Code checkpoint `0c64488` replaces the visible general-conversation turn loop
+with the typed v2 StartTurn, ReadEvents, GetCommand/GetRun and CancelRun
+contracts. `FfiDayGateway` now owns one application-lifetime `FloeClient` and
+`AppReadModel` and injects them into the product gateway. The controller no
+longer calls the legacy conversation Submit/Poll/Stop/Release operations;
+explicit Stop sends CancelRun, while view disposal only detaches observation
+and never treats navigation as cancellation. Session start, resume, load and
+recovery remain on the legacy snapshot bridge.
+
+The runtime gateway bootstraps at an authoritative resync boundary, reduces
+bounded events, and rereads durable commands and Runs instead of inventing
+terminal state. StartTurn acknowledgement loss first queries the stable
+CommandId and then retries that same command if it was not admitted. CancelRun
+likewise retains one CommandId across an uncertain acknowledgement, including
+when cancellation is requested before StartTurn acknowledgement arrives.
+Continuation now resolves the durable source Run and sends its explicit RunId,
+executor generation and level. The temporary FFI composition validates those
+fields against the source or replayed command before mapping the request to the
+legacy executor; v2 `retry_of` remains unavailable.
+
+The composer rejects trimmed input above 8192 UTF-8 bytes without sending and
+preserves the text for correction, including multibyte emoji. Valid text is
+restored after a failed turn when the composer is still empty. Conversation
+send eligibility comes from the synchronized read model rather than the
+connection controller's unrelated busy flag, while registry, memory and
+calendar mutations continue to serialize with an active chat.
+
+Direct regression validation passed 33 focused Flutter conversation,
+controller, registry, calendar, runtime-client and read-model tests. All 101
+FFI library tests, 13 C-ABI tests, workspace all-target check and the migration
+boundary gate passed (23 nodes / 72 edges / no errors). The changed Dart files
+format and analyze cleanly. The current macOS dylib was built and exercised
+through the actual native transport for event bootstrap and product gateway
+composition. A successful Keychain-backed product conversation through the
+local Foundation model was not directly exercised. A broader pre-existing
+agent test run still has one unrelated memory JSON expectation and two tiny
+golden pixel differences.
+
+Blocker/remove-by: schema 2 does not yet carry an AppHost-owned typed inference
+route snapshot. To prevent a configured remote-model user from silently
+falling back to local execution, the Apple composition currently fails closed
+before StartTurn whenever the saved remote route is configured. Remote product
+conversation therefore remains unavailable until AppHost owns and validates
+that route/credential handle. Retry lineage is also not implemented, session
+lifecycle still uses the legacy bridge, and the runtime event buffer and
+best-effort terminal publication retain the temporary FFI limitations recorded
+above. The next executable P19 task is the AppHost inference-route snapshot and
+`retry_of` contract, followed by direct local and remote macOS turn validation
+and a typed v2 session snapshot that removes the remaining legacy bridge. P19,
+V1 and the broader product migration remain partial.
