@@ -1,0 +1,124 @@
+name: Temporary Step 1 contract repair
+on:
+  push:
+    branches: [chatgpt/step1-contract-fix-20260915]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE: 40d9397fe31c9dda42073e82dc04ef735a230806
+      TEMP_BRANCH: chatgpt/step1-contract-fix-20260915
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Read exact base and verified patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir source
+          cd source
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=$HEADER" fetch --depth=1 origin "$BASE" "$GITHUB_SHA"
+          git checkout --detach "$BASE"
+          python3 - <<'PY'
+          import os,json,urllib.request,base64,gzip,hashlib
+          url='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/git/blobs/e6a9de41b74929dfffad1dde72d7e71019f50e75'
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+          with urllib.request.urlopen(req,timeout=30) as response:
+              payload=json.load(response)
+          text=base64.b64decode(payload['content']).decode()
+          text=text.replace('Isohiwz7ug6','Isohiw7ug6').replace('voc3q3vpup','voc3qvpup')
+          code=gzip.decompress(base64.b64decode(text))
+          assert hashlib.sha256(code).hexdigest()=='ccd190de02520c22757c1b7327ba4f6822265aa7f7e89a2125b2c1ff25d162db'
+          open(os.environ['RUNNER_TEMP']+'/step1-patch.py','wb').write(code)
+          PY
+      - name: Apply exact contract edits
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          python3 "$RUNNER_TEMP/step1-patch.py"
+      - name: Prepare Rust toolchain
+        id: toolchain
+        continue-on-error: true
+        shell: bash
+        run: rustup toolchain install 1.93.0 --profile minimal --component rustfmt
+      - name: Focused structural and contract checks
+        if: steps.patch.outcome == 'success'
+        shell: bash
+        run: |
+          set +e
+          cd source
+          REPORT="$RUNNER_TEMP/step1-checks.txt"
+          : > "$REPORT"
+          check() {
+            local label="$1"
+            shift
+            "$@"
+            local code=$?
+            printf '%s: exit %s\n' "$label" "$code" | tee -a "$REPORT"
+          }
+          check new_rust_format rustup run 1.93.0 rustfmt --edition 2024 --config skip_children=true crates/floe-ffi/src/conversation_input.rs
+          check ffi_contract_tests cargo +1.93.0 test --locked -p floe-ffi --lib conversation_input::tests
+          check conversation_replay_test cargo +1.93.0 test --locked -p floe-conversation --lib explicit_profile_replay_conflicts_without_another_model_call
+          check ffi_type_check cargo +1.93.0 check --locked -p floe-ffi --tests
+          check module_boundaries python3 tools/architecture/check_boundaries.py . --mode migration
+          check whitespace git diff --check
+          printf 'Flutter tests: not_run (Flutter SDK not installed in this temporary runner)\nLive app/Keychain/OAuth/LLM: not_run\n' | tee -a "$REPORT"
+      - name: Record candidate and remove temporary branch
+        if: steps.patch.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          p=Path('docs/refactoring/migration-ledger.md')
+          text=p.read_text()
+          text=text.replace('`7eab97dcb53c705eb8d23408494adb2f22a6fcb5`; current dirty tree contains the R003 step 01 change set','`40d9397fe31c9dda42073e82dc04ef735a230806`; Step 01 follow-up input-contract repair')
+          text=text.replace('R003 step 01.1–01.4: canonical Conversation intent/archive contracts, owner-scoped command lookup, and app facade profile wiring','R003 01.2 follow-up: preserve explicit profile through host/worker/root and align normalized input; 01.4 facade/owner-port scope remains partial')
+          text=text.replace('R003 02.1: inspect `crates/modules/connections/src/api.rs` and introduce the concrete `ConnectionIntent`/`ConnectionObservation` owner boundary','Review the remaining R003 01.4 facade/error and atomic owner-port signatures; then continue 02.1 in `crates/modules/connections/src/api.rs`. Async inference selection and final ABI removal remain Steps 03/07.')
+          insertion='''## Step 01 follow-up: input contract preservation (2026-09-15)
+
+- Base source: `40d9397fe31c9dda42073e82dc04ef735a230806`. This repair does not revise the published R003 plan.
+- `conversation_input::turn_request` is the real app-to-worker conversion. It keeps the explicit profile preference and normalizes text with Conversation's function; the real root converts that same profile into its canonical intent instead of substituting Auto.
+- Protocol and app validation now inspect the trimmed text. Dart stores/transmits the normalized text and uses Unicode White_Space plus C0/C1 rules matching the Rust contract, including preserving U+FEFF as content.
+- Added focused host/worker/root conversion tests and a Conversation replay regression: changing only the explicit profile conflicts without another model call; equivalent normalized input returns the same receipt and stores/dispatches the same text. Flutter tests cover the actual client payload and normalization boundaries.
+- Model preparation still occurs through the existing synchronous host route. This change preserves the requested profile in command identity; it does not implement profile-driven asynchronous inference selection (Step 03), complete all 01.4 facades, or remove the current ABI (Step 07).
+- Schema values, keys, grants, external-provider contracts and published document editions are unchanged. No live application/provider validation is claimed.
+
+### Checks for this follow-up
+
+The following commands ran on the temporary Linux runner against the repaired base tree. An exit code of zero is a pass for that command only. Earlier Step 01 results below belong to `40d9397` and are not rerun claims.
+
+```text
+'''
+          report=Path(os.environ['RUNNER_TEMP']+'/step1-checks.txt')
+          insertion += (report.read_text() if report.exists() else 'not_run: check report unavailable\n') + '```\n\n'
+          marker='## R003 step 01 owner map\n'
+          assert text.count(marker)==1
+          text=text.replace(marker,insertion+marker)
+          text=text.replace('### R003 step 01 evidence','### Prior R003 step 01 evidence — 40d9397')
+          p.write_text(text)
+          PY
+          git add crates/floe-protocol/src/dto/agent.rs crates/floe-protocol/src/dto/commands.rs crates/app/src/services.rs crates/floe-ffi/src/conversation_input.rs crates/floe-ffi/src/lib.rs crates/floe-ffi/src/vault_host/conversation_turn.rs crates/floe-ffi/src/vault_host/tests/calendar_experts.rs crates/modules/conversation/src/application/tests.rs apps/client/lib/runtime_client/turn_input.dart apps/client/lib/runtime_client/floe_client.dart apps/client/test/runtime_client/floe_client_test.dart apps/client/test/runtime_client/turn_input_test.dart docs/refactoring/migration-ledger.md
+          git diff --cached --check
+          git diff --cached --stat
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          TREE=$(git write-tree)
+          CANDIDATE=$(printf '%s\n' 'Temporary checked Step 01 contract repair candidate' | git commit-tree "$TREE" -p "$GITHUB_SHA")
+          HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=$HEADER" push origin "$CANDIDATE:refs/heads/$TEMP_BRANCH"
+          printf 'STEP1_TREE=%s\nSTEP1_CANDIDATE=%s\n' "$TREE" "$CANDIDATE"
+          git -c "http.https://github.com/.extraheader=$HEADER" push origin --delete "$TEMP_BRANCH"
