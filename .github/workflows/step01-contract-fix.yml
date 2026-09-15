@@ -1,0 +1,80 @@
+name: step01-contract-fix
+
+on:
+  push:
+    branches: [chatgpt-step01-fix-20260915]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: rustfmt
+
+      - name: Apply reviewed correction
+        run: python3 .github/step01_contract_fix.py
+
+      - name: Format touched Rust
+        shell: bash
+        run: |
+          mapfile -t files < <(git diff --name-only -- '*.rs')
+          rustfmt --edition 2024 --config skip_children=true "${files[@]}"
+
+      - name: Rust contract checks
+        run: |
+          cargo check -p floe-ffi
+          cargo test -p floe-conversation canonical_
+          cargo test -p floe-conversation normalization_
+          cargo test -p floe-app turn_text_is_checked_after_normalization
+          cargo test -p floe-protocol --test turn_input_contract
+          cargo test -p floe-ffi start_turn_uses_verified_host_identity_and_returns_durable_receipt
+          cargo test -p floe-ffi production_conversation_replays_the_same_request_without_model_redispatch
+          python3 tools/architecture/check_boundaries.py . --mode migration
+          git diff --check
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter contract check
+        working-directory: apps/client
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib/runtime_client/floe_client.dart test/runtime_client/floe_client_test.dart
+          flutter test test/runtime_client/floe_client_test.dart
+
+      - name: Record validation
+        shell: bash
+        run: |
+          cat >> docs/refactoring/migration-ledger.md <<'EOF'
+
+### R003 Step 01 corrective follow-up
+
+- **Base:** `40d9397fe31c9dda42073e82dc04ef735a230806`.
+- **Structure:** explicit profile preference now survives app wire → app facade → current internal turn DTO → Conversation canonical intent; normalized text is prepared consistently across Dart/app/protocol/Conversation. App wire remains 2 and Conversation storage marker remains 7.
+- **Regression:** canonical profile changes alter command identity; the existing Worker-to-encrypted-record replay path verifies the stored explicit-profile digest and rejects changed profile/changed text under the same CommandId without model redispatch.
+- **Checks:** `cargo check -p floe-ffi`; focused Conversation/App/Protocol/FFI tests; migration boundary checker; `git diff --check`; Dart formatting; and `flutter test test/runtime_client/floe_client_test.dart` passed on the temporary macOS integration runner before this correction was promoted.
+- **Behavior:** broad/live product validation remains `not_run`; no Keychain, OAuth, external provider, or live-model acceptance is claimed.
+- **Remaining:** actual profile-to-model route planning and asynchronous network preparation stay in R003 Step 03. ABI/legacy removal stays in Step 07. Step 01.4 downstream owner/error/transaction contracts remain tracked by their later implementation stages rather than being treated as product acceptance.
+EOF
+          git diff --check
+
+      - name: Commit validated code
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates apps/client docs/refactoring/migration-ledger.md Cargo.lock
+          git commit -m 'fix(conversation): preserve profile intent and normalize turn text'
+          git push origin HEAD:${GITHUB_REF_NAME}
