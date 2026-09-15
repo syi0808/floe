@@ -552,6 +552,8 @@ pub enum AgentConversationSessionOperationDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConversationTurnRequestDto {
+    #[serde(default)]
+    pub profile: super::AppProfileSelectionDto,
     pub session_id: String,
     pub expected_revision: u64,
     pub text: String,
