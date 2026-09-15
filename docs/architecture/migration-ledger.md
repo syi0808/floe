@@ -3803,3 +3803,50 @@ above. The next executable P19 task is the AppHost inference-route snapshot and
 `retry_of` contract, followed by direct local and remote macOS turn validation
 and a typed v2 session snapshot that removes the remaining legacy bridge. P19,
 V1 and the broader product migration remain partial.
+
+### P18/P19 explicit retry lineage checkpoint (2026-09-15)
+
+Code checkpoint `0382c5b` completes the explicit `retry_of` path from the
+Flutter recovery action through schema-2 StartTurn, AppHost, the Conversation
+coordinator and encrypted Vault record. A retry creates a new CommandId and
+Run, keeps the prior terminal RunId as lineage, and includes that lineage in
+the canonical command digest. Exact command replay returns the same Run;
+changing or removing `retry_of` for that CommandId conflicts before another
+model dispatch. Retry and Continue are mutually exclusive at the Dart,
+protocol, AppHost, Conversation and storage boundaries.
+
+Both the Conversation service and the storage transaction verify that the
+referenced Run exists for the same principal and Session, is terminal, and has
+the current expected Session revision. The encrypted Conversation marker moves
+from schema 6 to schema 7 and the serialized Run record now persists
+`retry_of`. This is an intentional clean local-development schema cut rather
+than a compatibility migration; existing disposable Floe test Vault data must
+be reset.
+
+Terminal v2 Run issues now retain a bounded safe `reason_code` and only expose
+`recovery_action=retry_read` for the model-unavailable/invalid-output classes
+already classified as read-safe by the legacy boundary. The product controller
+stores the completed source RunId, enables Retry only when both that durable
+reference and the typed recovery action exist, and sends the new StartTurn with
+explicit lineage. Terminal interruption and cancellation remain local turn
+outcomes and no longer pass through the controller's Vault-wide fatal clear.
+
+Direct validation passed 12 Conversation tests, all 196 floe-core library
+tests, all 102 FFI library tests, six AppHost tests, 18 protocol tests and 13
+C-ABI tests. Twenty-two focused Flutter client/runtime/controller and actual
+macOS Dart-isolate/dylib tests passed; the latter admitted the `retry_of` wire
+field through the real schema-2 symbol before the intentionally locked test
+Vault rejected execution. Changed Dart files format and analyze cleanly,
+workspace all-target check and the migration boundary gate passed (23 nodes /
+72 edges / no errors).
+
+Blocker/remove-by: this checkpoint records retry lineage but does not make the
+configured remote inference route available to schema 2. The Apple composition
+still fails closed before StartTurn for every configured remote route because
+AppHost has no typed route/credential snapshot. Session lifecycle also remains
+on the legacy bridge, and no successful Keychain-backed Foundation-model
+product retry was directly exercised. The next executable P16/P19 task is an
+AppHost-owned inference-route snapshot with authority/consent validation and no
+credential fields in the Flutter command, followed by a real local and remote
+macOS StartTurn/retry flow. P16, P19, V1 and the broader migration remain
+partial.
