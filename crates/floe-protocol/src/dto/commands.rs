@@ -126,6 +126,7 @@ pub enum AppCancelRunReasonDto {
 #[serde(deny_unknown_fields)]
 pub struct AppCommandReceiptDto {
     pub command_id: Uuid,
+    pub runtime_epoch: u64,
     pub admission: AppCommandStatusDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<Uuid>,
@@ -158,6 +159,7 @@ pub enum AppCommandResultDto {
     CancelRunReceipt {
         command_id: Uuid,
         run_id: Uuid,
+        runtime_epoch: u64,
         outcome: AppCancelRunOutcomeDto,
     },
 }

@@ -5,6 +5,7 @@
   "result": {
     "kind": "command_receipt",
     "command_id": "00000000-0000-0000-0000-000000000002",
+    "runtime_epoch": 7,
     "admission": "accepted",
     "run_id": "00000000-0000-0000-0000-000000000004",
     "session_revision": 13

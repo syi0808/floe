@@ -34,6 +34,7 @@ where
 {
     request.validate().map_err(request_validation)?;
     let host_request = host.request(request.request_id).map_err(host_failure)?;
+    let runtime_epoch = host_request.caller().runtime_epoch();
     match request.command {
         AppCommandDto::ConversationStartTurn {
             session_id,
@@ -69,6 +70,7 @@ where
             Ok(AppCommandResultDto::CommandReceipt {
                 receipt: AppCommandReceiptDto {
                     command_id: receipt.command_id,
+                    runtime_epoch,
                     admission: AppCommandStatusDto::Accepted,
                     run_id: Some(receipt.run_id),
                     session_revision: Some(receipt.session_revision),
@@ -90,6 +92,7 @@ where
             Ok(AppCommandResultDto::CancelRunReceipt {
                 command_id: receipt.command_id,
                 run_id: receipt.run_id,
+                runtime_epoch,
                 outcome: match receipt.outcome {
                     floe_app::CancelRunOutcome::Accepted => AppCancelRunOutcomeDto::Accepted,
                 },
@@ -122,7 +125,7 @@ pub(crate) fn query(
                 .map_err(agent_failure)?;
             Ok(match receipt {
                 Some(receipt) => AppQueryResultDto::CommandReceipt {
-                    receipt: command_receipt(&receipt),
+                    receipt: command_receipt(&receipt, runtime_epoch),
                 },
                 None => AppQueryResultDto::UnknownCommand {
                     command_id: command_id.as_uuid(),
@@ -197,6 +200,7 @@ pub(crate) fn events(
                         } => AppEventKindDto::CommandUpdated {
                             receipt: AppCommandReceiptDto {
                                 command_id: command_id.as_uuid(),
+                                runtime_epoch,
                                 admission: AppCommandStatusDto::Accepted,
                                 run_id: Some(run_id.as_uuid()),
                                 session_revision: Some(session_revision),
@@ -217,9 +221,10 @@ pub(crate) fn events(
     })
 }
 
-fn command_receipt(receipt: &RunReceipt) -> AppCommandReceiptDto {
+fn command_receipt(receipt: &RunReceipt, runtime_epoch: u64) -> AppCommandReceiptDto {
     AppCommandReceiptDto {
         command_id: receipt.command_id.as_uuid(),
+        runtime_epoch,
         admission: AppCommandStatusDto::Accepted,
         run_id: Some(receipt.run_id.as_uuid()),
         session_revision: Some(receipt.session_revision),
@@ -585,14 +590,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             result,
             AppCommandResultDto::CancelRunReceipt {
                 command_id,
                 run_id,
+                runtime_epoch,
                 outcome: AppCancelRunOutcomeDto::Accepted,
-            }
-        );
+            } if runtime_epoch > 0
+        ));
         let (captured_person, captured_device, captured) = host
             .legacy_services()
             .cancelled

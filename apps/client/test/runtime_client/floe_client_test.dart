@@ -24,6 +24,7 @@ void main() {
       transport.command = (request) async => {
         'kind': 'command_receipt',
         'command_id': request['command_id'],
+        'runtime_epoch': 7,
         'admission': 'accepted',
         'run_id': '00000000-0000-4000-8000-000000000205',
         'session_revision': 4,
@@ -68,6 +69,7 @@ void main() {
           'conversation.get_command' => {
             'kind': 'command_receipt',
             'command_id': query['command_id'],
+            'runtime_epoch': 7,
             'admission': 'accepted',
             'run_id': '00000000-0000-4000-8000-000000000214',
             'session_revision': 8,
@@ -127,6 +129,7 @@ void main() {
       'kind': 'cancel_run_receipt',
       'command_id': request['command_id'],
       'run_id': (request['command'] as Map)['run_id'],
+      'runtime_epoch': 7,
       'outcome': 'accepted',
     };
 
@@ -161,6 +164,7 @@ void main() {
     response.complete({
       'kind': 'command_receipt',
       'command_id': command.commandId,
+      'runtime_epoch': 7,
       'admission': 'accepted',
       'run_id': '00000000-0000-4000-8000-000000000224',
       'session_revision': 1,

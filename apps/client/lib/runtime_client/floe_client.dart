@@ -22,11 +22,13 @@ final class AppCommandReceipt {
     required this.commandId,
     required this.runId,
     required this.sessionRevision,
+    required this.runtimeEpoch,
   });
 
   final String commandId;
   final String runId;
   final int sessionRevision;
+  final int runtimeEpoch;
 }
 
 final class PreparedCancelRun {
@@ -43,11 +45,13 @@ final class AppCancelRunReceipt {
     required this.commandId,
     required this.runId,
     required this.outcome,
+    required this.runtimeEpoch,
   });
 
   final String commandId;
   final String runId;
   final AppCancelRunOutcome outcome;
+  final int runtimeEpoch;
 }
 
 enum AppRunState { accepted, executing, finalizing, cancelling, finished }
@@ -238,12 +242,16 @@ final class FloeClient {
             'kind': 'cancel_run_receipt',
             'command_id': final String commandId,
             'run_id': final String runId,
+            'runtime_epoch': final int runtimeEpoch,
             'outcome': final String outcome,
           }
-          when commandId == command.commandId && runId == command.runId) {
+          when commandId == command.commandId &&
+              runId == command.runId &&
+              runtimeEpoch > 0) {
         return AppCancelRunReceipt(
           commandId: commandId,
           runId: runId,
+          runtimeEpoch: runtimeEpoch,
           outcome: switch (outcome) {
             'accepted' => AppCancelRunOutcome.accepted,
             _ => throw const FormatException('Invalid cancel Run outcome.'),
@@ -359,7 +367,8 @@ final class FloeClient {
           runtimeEpoch != after.runtimeEpoch ||
           nextCursor is! int ||
           nextCursor < after.cursor ||
-          rawEvents is! List) {
+          rawEvents is! List ||
+          rawEvents.length > limit) {
         throw const FormatException('Invalid event batch.');
       }
       var expectedCursor = after.cursor;
@@ -466,15 +475,17 @@ AppCommandReceipt _commandReceipt(
       case {
         'kind': 'command_receipt',
         'command_id': final String commandId,
+        'runtime_epoch': final int runtimeEpoch,
         'admission': 'accepted',
         'run_id': final String runId,
         'session_revision': final int sessionRevision,
       }
-      when commandId == expectedCommandId) {
+      when commandId == expectedCommandId && runtimeEpoch > 0) {
     return AppCommandReceipt(
       commandId: commandId,
       runId: runId,
       sessionRevision: sessionRevision,
+      runtimeEpoch: runtimeEpoch,
     );
   }
   throw const FormatException('Invalid app command receipt.');
