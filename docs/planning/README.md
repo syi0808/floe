@@ -1,7 +1,7 @@
 # Floe Planning Documents
 
-> Status: Working specification  
-> Purpose: Floe의 제품 기획과 기술 설계를 단일 거대 문서가 아니라 변경 가능한 작은 문서 단위로 유지한다.
+> Status: Product planning specification, not the active refactoring schedule.  
+> 현재 코드 리팩터링은 [단일 에이전트 실행 계획](../architecture/implementation-plan.md)과 [실행 프롬프트](../architecture/agent-prompt.md)를 따른다. 실제 진행 상태는 [migration-ledger.md](../architecture/migration-ledger.md) 한 곳에서 관리한다. 이 디렉터리의 slice/PoC 순서는 현재 구조 우선 작업의 선행 gate가 아니다.
 
 ## Floe in one sentence
 
@@ -21,160 +21,48 @@ Expert는 provider가 아니라 삶의 판단 domain을 담당한다.
 
 LLM, Agent Runtime, MCP, 특정 inference provider는 이 위에서 교체 가능한 구현 요소로 취급한다.
 
----
+## 제품 문서 읽기
 
-## 문서 구조
+| 관심 영역 | 시작 문서 |
+|---|---|
+| 제품 비전·원칙·범위 | [Vision](00-overview/product-vision.md), [principles](00-overview/product-principles.md), [boundaries](00-overview/product-boundaries.md), [roadmap](00-overview/roadmap.md) |
+| Day Canvas와 사용자 경험 | [Day Canvas](01-experience/day-canvas.md), [voice and presence](01-experience/voice-and-presence.md), [review and authority](01-experience/review-authority-and-activity.md) |
+| 개인 데이터의 의미 | [Timeline](02-domain/personal-timeline.md), [state](02-domain/personal-state.md), [memory](02-domain/personal-memory.md), [relationships](02-domain/people-and-relationships.md) |
+| Agent·Expert·학습 | [Manager and Experts](03-intelligence/manager-and-experts.md), [runtime and learning](03-intelligence/agent-runtime-and-learning.md), [extension model](03-intelligence/expert-extension-model.md), [model layer](03-intelligence/model-layer.md) |
+| 기기·플랫폼 | [Device agent](04-platform/device-agent.md), [Apple](04-platform/apple-platforms.md), [other platforms](04-platform/android-and-windows.md) |
+| 연결·source | [Integration fabric](05-integrations/integration-fabric.md), [connector contract](05-integrations/connector-contract.md), [context portfolio](05-integrations/assistant-context-portfolio.md), [initial set](05-integrations/initial-connector-set.md) |
+| privacy·격리 | [Data classification](06-security/privacy-and-data-classification.md), [local compute](06-security/sensitive-local-compute.md), [Expert permissions](06-security/expert-permissions-and-sandbox.md) |
+| 서버·다중 기기 | [Self-hosting](07-server/server-and-self-hosting.md), [Person/membership](07-server/account-person-membership.md), [sync](07-server/sync-and-multi-device.md) |
+| 기술 선택·미확정 위험 | [Architecture map](08-engineering/architecture-map.md), [risks](08-engineering/technical-risks.md), [decisions](08-engineering/decisions.md), [open questions](08-engineering/open-questions.md) |
+| 구현 배경 | [Technology selection](09-implementation/technology-selection.md), [client](09-implementation/client-architecture.md), [Rust](09-implementation/rust-core.md), [repository layout](09-implementation/repository-layout.md) |
+| Expert 생태계 | [Package](10-ecosystem/expert-package.md), [marketplace](10-ecosystem/expert-marketplace.md), [development](10-ecosystem/expert-development.md) |
 
-```text
-floe-planning/
-├── 00-overview/
-│   ├── product-vision.md
-│   ├── product-principles.md
-│   ├── product-boundaries.md
-│   └── roadmap.md
-│
-├── 01-experience/
-│   ├── day-canvas.md
-│   ├── calendar-direct-manipulation.md
-│   ├── capture-and-transcription.md
-│   ├── voice-and-presence.md
-│   ├── interventions.md
-│   ├── review-authority-and-activity.md
-│   └── platform-experience.md
-│
-├── 02-domain/
-│   ├── personal-timeline.md
-│   ├── personal-state.md
-│   ├── personal-memory.md
-│   └── people-and-relationships.md
-│
-├── 03-intelligence/
-│   ├── agent-runtime-and-learning.md
-│   ├── manager-and-experts.md
-│   ├── skills-and-actions.md
-│   ├── model-layer.md
-│   └── health-intelligence.md
-│
-├── 04-platform/
-│   ├── device-agent.md
-│   ├── apple-platforms.md
-│   └── android-and-windows.md
-│
-├── 05-integrations/
-│   ├── assistant-context-portfolio.md
-│   ├── integration-fabric.md
-│   ├── connector-contract.md
-│   ├── connection-access-and-observation.md
-│   └── connector-sources.md
-│
-├── 06-security/
-│   ├── privacy-and-data-classification.md
-│   └── sensitive-local-compute.md
-│
-├── 07-server/
-│   ├── server-and-self-hosting.md
-│   ├── account-person-membership.md
-│   └── sync-and-multi-device.md
-│
-└── 08-engineering/
-    ├── architecture-map.md
-    ├── technical-risks.md
-    ├── poc-plan.md
-    ├── decisions.md
-    └── open-questions.md
-│
-└── 09-implementation/
-    ├── technology-selection.md
-    ├── client-architecture.md
-    ├── rust-core.md
-    ├── native-platform-bridges.md
-    ├── server-stack.md
-    ├── turso-storage.md
-    ├── connector-runtime.md
-    ├── connection-authorization-runtime.md
-    ├── local-ai-runtime.md
-    ├── performance-design.md
-    └── repository-layout.md
+## 현재 리팩터링을 시작하는 경우
 
-├── 10-ecosystem/
-│   ├── expert-package.md
-│   ├── expert-marketplace.md
-│   └── expert-development.md
-```
+[실행 지침](../architecture/agent-prompt.md) → [현행 원장](../architecture/migration-ledger.md) → [계획서의 현재 단계](../architecture/implementation-plan.md) → 실제 코드·직접 호출자 순서로 읽는다. 과거 전체 planning bundle이나 모든 PoC를 다시 수행하지 않는다.
+
+1차는 실제 모듈·상태 소유권·adapter·caller·구형 제거와 구조 검사다. 일반 앱·Keychain·OAuth·실제 LLM·넓은 기능 회귀는 구조 완료 후 2차에 검증한다. 설계 성립을 좌우하는 가정과 변경한 고위험 불변식은 필요한 최소 범위만 앞서 확인한다.
+
+[Vertical Slice Delivery](08-engineering/vertical-slice-delivery.md)와 기존 slice/ADR은 제품 시나리오·인수 조건·과거 결정의 근거로 보존한다. 현재 리팩터링의 작업 순서와 상태 원본은 아니며, 이 문서 변경이 이전 acceptance를 통과시키지도 않는다.
+
+## Connection 권한·관측 배경
+
+1. [공통 의미와 불변 조건](05-integrations/connection-access-and-observation.md)
+2. [런타임 검증·인수 기준의 배경](09-implementation/connection-authorization-runtime.md)
+3. [ADR 0027](../decisions/0027-connection-authority-and-observation.md)
+4. [ADR 0028](../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
+5. [페어링·connection permission 배경 계획](09-implementation/pairing-and-connection-permissions.md)
+
+각 문서의 결정/제안 상태와 당시 근거를 구별한다. 설계에 적혀 있다는 이유로 현재 runtime 구현·검증을 완료로 표시하지 않는다. 현행 구현 상태는 원장을 확인한다.
 
 ## 문서 관리 규칙
 
-- 제품 의미와 기술 구현을 한 문서에 섞지 않는다.
-- 공통 abstraction은 하위 도메인 세부 구현을 숨길 만큼만 둔다.
-- 아직 결정되지 않은 것은 `Open Questions`에 남기고 확정된 것처럼 쓰지 않는다.
-- 중요한 설계 변경은 `08-engineering/decisions.md`에도 기록한다.
-- 플랫폼별 feature parity가 아니라 **experience parity**를 목표로 한다.
-- 보안과 privacy는 사후 제약이 아니라 제품 요구사항이다.
+- 제품 의미, 현재 기술 실행 계획, 진행 상태, 과거 검증을 구별한다. 현재 구조 이관의 세부 지시를 이 디렉터리에 복제하지 않는다.
+- 공통 abstraction은 하위 도메인 세부 구현을 숨길 만큼만 둔다. 미확정 사항을 구현된 것으로 쓰지 않는다.
+- 중요한 제품 설계 변경은 관련 결정에 기록하되 실행 상태는 현행 원장 한 곳에 둔다.
+- 플랫폼의 장기 experience parity와 현재 Apple 우선 범위를 혼동하지 않는다. Android parity는 현재 리팩터링 gate가 아니다.
+- 보안·privacy·원자성·복구 불변식은 유지한다. 과거 migration/버전 계획보다 현재 하위호환 없음·스키마 추가 증가 없음 방침이 우선한다.
 
-## 추천 읽기 순서
+## Runtime note
 
-처음 보는 경우:
-
-1. `00-overview/product-vision.md`
-2. `00-overview/product-principles.md`
-3. `01-experience/day-canvas.md`
-4. `02-domain/personal-memory.md`
-5. `03-intelligence/manager-and-experts.md`
-6. `05-integrations/integration-fabric.md`
-7. `06-security/privacy-and-data-classification.md`
-8. `08-engineering/architecture-map.md`
-
-구현을 시작하는 경우:
-
-먼저 [Vertical Slice Delivery](08-engineering/vertical-slice-delivery.md)의
-구현 단위와 인수 조건, [PROGRESS.md](../../PROGRESS.md)의 현재 상태를 확인한다.
-Phase 순서는 구현 gate가 아니며 필요한 PoC를 해당 slice 착수 전에 수행한다.
-
-1. `08-engineering/poc-plan.md`
-2. `04-platform/device-agent.md`
-3. `05-integrations/connector-contract.md`
-4. `07-server/account-person-membership.md`
-5. `03-intelligence/model-layer.md`
-6. `08-engineering/technical-risks.md`
-
-Agent, Memory, connected Expert와 voice slice를 구현하는 경우:
-
-1. `03-intelligence/agent-runtime-and-learning.md`
-2. `03-intelligence/manager-and-experts.md`
-3. `03-intelligence/expert-extension-model.md`
-4. `02-domain/personal-memory.md`
-5. `05-integrations/assistant-context-portfolio.md`
-6. `05-integrations/initial-connector-set.md`
-7. `01-experience/voice-and-presence.md`
-8. `08-engineering/poc-plan.md`
-
-초기 connector 우선순위를 결정하는 경우:
-
-1. `05-integrations/assistant-context-portfolio.md`
-2. `05-integrations/initial-connector-set.md`
-3. `05-integrations/connector-data-policy.md`
-4. `05-integrations/connector-contract.md`
-
-Connection의 권한·동기화·AI 접근 경계를 구현하는 경우:
-
-1. [공통 의미와 불변 조건](05-integrations/connection-access-and-observation.md)
-2. [런타임 검증·마이그레이션·인수 기준](09-implementation/connection-authorization-runtime.md)
-3. [ADR 0027 — 제안된 설계 결정](../decisions/0027-connection-authority-and-observation.md)
-4. [ADR 0028 — 페어링과 connection별 permission UX](../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
-5. [ADR 0028 구현 계획](09-implementation/pairing-and-connection-permissions.md)
-
-위 설계는 제안 상태이며 현재 런타임에 구현됐다는 의미가 아니다.
-
-## Runtime Note
-
-Default Floe runtime does not require Node.js. Third-party TypeScript connector ecosystems are treated as port/import sources; connector execution is native Rust/Go or declarative ConnectorSpec.
-
-
-## Expert Ecosystem Reading
-
-1. `03-intelligence/expert-extension-model.md`
-2. `06-security/expert-permissions-and-sandbox.md`
-3. `09-implementation/expert-runtime.md`
-4. `10-ecosystem/expert-package.md`
-5. `10-ecosystem/expert-marketplace.md`
-6. `10-ecosystem/expert-development.md`
+Default Floe runtime does not require Node.js. Third-party TypeScript connector ecosystems are treated as port/import sources; connector execution is native Rust/Go or declarative ConnectorSpec. Product roadmap breadth is not permission to add new runtime platforms during the current refactor.

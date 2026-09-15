@@ -10,16 +10,34 @@
 - Android is out of scope for current implementation work. Do not spend time extending Android support, maintaining platform parity, or running Android builds/tests unless explicitly requested.
 - Existing Android code may remain dormant; Apple delivery must not be blocked by Android compatibility or validation.
 
-# Local development data and compatibility
+# Active refactoring instructions
 
-- Floe is currently used only for local testing. Local Floe application data is disposable and may be reset or deleted when needed for development or validation.
-- Backward compatibility is not required. Prefer a clean current implementation over compatibility shims or migrations that exist solely to preserve old local test data, schemas, or APIs.
-- Limit any reset to Floe-owned local test data. This permission does not cover source code, unrelated files, or data in connected external accounts and providers.
+- The active technical plan is [docs/architecture/implementation-plan.md](docs/architecture/implementation-plan.md). The execution prompt is [docs/architecture/agent-prompt.md](docs/architecture/agent-prompt.md).
+- [docs/architecture/migration-ledger.md](docs/architecture/migration-ledger.md) is the only mutable progress record. Read its current checkpoint, then the relevant plan section and actual callers. Do not repeatedly reread historical bundles or create another STATUS file.
+- One coding agent performs the refactoring sequentially, including investigation, implementation, review, integration and validation. Do not spawn subagents or delegate reviews. Keep one active change set in one workspace; build-tool parallelism is allowed.
+- This workflow does not change Floe's product architecture: the Manager still selects Experts through A2A, and product Run/Task concurrency and cancellation scopes remain independent.
+- Preserve current user changes. Check the actual HEAD and working tree before editing; do not reset to the plan's historical source anchor.
 
-# Development and validation workflow
+# Structure first, behavior validation second
 
-- Prioritize completing usable, end-to-end features during active development. Implement the feature first, then run it and directly exercise the relevant user flow.
-- Add focused regression tests after validating behavior, targeting bugs actually found and important behavior that must not break. Do not write exhaustive tests for every component or edge case as a prerequisite to implementation.
-- Keep validation proportional to the change: use relevant build checks and targeted tests while iterating. Avoid repeatedly running broad suites before the feature is integrated.
-- Preserve essential authorization and data-loss protections. Do not weaken safety checks or existing regression assertions merely to accelerate development or make tests pass.
-- Report what was directly exercised, what regression coverage was added, and any unverified behavior. If direct validation is unavailable, state the limitation rather than treating additional test scaffolding as feature completion.
+- Stage A implements the approved module boundaries, single state owners, concrete repositories/adapters and actual callers, then removes the corresponding old paths. Empty traits, mock-only composition, fake success and disabling supported features do not complete Stage A.
+- During Stage A, use relevant type/compile, dependency, public-boundary and old-reference checks. Do not require live app, Keychain, OAuth, real LLM or full-suite success after every structural change.
+- Run a narrow controlled check early only when a feasibility assumption could invalidate the design, or when changing a high-risk invariant such as authority, keys, transaction atomicity, duplicate external writes or child cancellation. Reuse existing focused regressions; do not build exhaustive scaffolding as a prerequisite.
+- Stage B follows the structure review and exercises regression, integration, the actual Apple app and model/provider behavior. Diagnose the normal-app Vault failure there; preserve safe key/Vault incident classification in Stage A.
+- A short compile break may be resolved within the same contract change set. Do not accumulate unrelated broken targets or add compatibility wrappers just to keep the old app running.
+- Record structure, wiring/removal, actual checks and behavior evidence separately. Structure complete with behavior `not_run` is not product acceptance. Do not copy an old pass to a new source snapshot.
+
+# Local development data, schemas and compatibility
+
+- Floe is currently used only for local testing. Backward compatibility for old local APIs and data is not required. Replace the current implementation directly; do not add v3/next paths, old decoders, migration chains or permanent Legacy bridges.
+- Do not increase schema numbers during this refactor. The reviewed source has app wire 2 and Conversation storage 7. If the checkout has already changed, record it rather than rolling numbers back. Authority revisions, executor generations and runtime epochs must still advance normally.
+- A fixed schema number does not make an old binary or database compatible. Build Flutter, bindings and the bundled dylib from the same source snapshot; use an explicitly selected fresh Floe development profile when stored format or meaning changes.
+- Do not automatically delete a database or replace an existing key after an open/access error. Any explicit reset is limited to identified Floe-owned local test data and exact key slots; preserve uncertain external-operation records. It never authorizes deleting source, unrelated files or connected-provider data.
+- Do not globally rename external provider/A2A/OAuth versions, signed challenge fields or credential namespaces when removing app `_v2` aliases.
+
+# Safety and scope
+
+- Preserve authorization, exact-recipient consent, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery. Do not weaken checks or regression assertions to make a build pass.
+- Query, preview, observer timeout and screen disposal are not implicit Run cancellation. Do not hold a global Vault transaction while waiting for model or provider I/O.
+- Refactoring instructions alone do not authorize push, deployment or external-account changes; follow the user's explicit scope for the current task.
+- Keep product requirements, execution policy, current state and historical evidence separate. Start at [docs/architecture/README.md](docs/architecture/README.md); archived plans and old slice next-demo lists do not override the active plan.
