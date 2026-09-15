@@ -6,17 +6,31 @@ This is the only mutable refactoring progress record. The [active document editi
 
 | Field | State |
 |---|---|
-| Source reviewed for this documentation edition | `cfde8e24387454d519c9e3308606a7cc6bb7f6c9`; product trees unchanged from `89452eb5523ef6b1c76b7fe857095748d76de22d` |
+| Source reviewed for this documentation edition | `7eab97dcb53c705eb8d23408494adb2f22a6fcb5`; current dirty tree contains the R003 step 01 change set |
 | Active plan | **R003**, [PLAN](versions/r003-structure-first/PLAN.md) / [execution](versions/r003-structure-first/EXECUTION_PLAN.md) |
 | Current stage | **A — structural refactoring; not complete** |
 | Execution | One coding agent, one sequential change set; product Manager/Expert A2A retained |
-| Current change | Separate refactoring history from architecture, preserve R001/R002, publish the all-stage R003 execution instructions |
-| Runtime changes in this refresh | None; no product sources, schemas, dependencies, runtime APIs or active tests changed |
-| Product validation in this refresh | `not_run`; documentation checks do not establish application/model/provider success |
+| Current change | R003 step 01.1–01.4: canonical Conversation intent/archive contracts, owner-scoped command lookup, and app facade profile wiring |
+| Runtime changes in this refresh | Canonical turn digest and normalized text are wired through Conversation admission; archive values now belong to `floe-agent-contract`; app wire schema remains 2 |
+| Product validation in this refresh | `not_run`; focused Rust contract, Conversation, FFI, Core, protocol, and app tests pass, but no live Apple app/model/provider behavior was exercised |
 | Latest recorded app observation | Normal macOS debug app ended in VaultUnavailable before route selection; cause not confirmed |
-| Next code task | R003 01.1–01.4: inspect actual contracts/callers, fix canonical intent and shared archive type ownership; then continue with 02 |
+| Next code task | R003 02.1: inspect `crates/modules/connections/src/api.rs` and introduce the concrete `ConnectionIntent`/`ConnectionObservation` owner boundary |
 
 The SHA is a fixed review anchor. A later implementation session must inspect its actual HEAD and dirty diff. Document publication is not completion of the contract work.
+
+## R003 step 01 owner map
+
+| Existing feature | Owner and implementation location | Current caller / new public boundary | Remaining removal |
+|---|---|---|---|
+| create/unlock/lock, permission review and revocation | Access; existing `floe-app` host and native/Vault ports | `AppHost` caller context and Access service ports | Move remaining direct Vault access behind Access owners |
+| Session, conversation, Continue, Retry, Cancel, archive | Conversation; `crates/modules/conversation` and `floe_conversation` ports | `FloeClient` → app wire → `ConversationCommands`; canonical `StartTurn`, `CanonicalTurnIntent`, `ArchiveReadRequest` | Remove legacy Session/management gateways in later steps |
+| Registry, Expert configuration and A2A Task | Experts; `crates/modules/experts` | existing typed Expert/Task ports and A2A adapters | Complete owner repository composition |
+| Pairing/OAuth, connection lookup, refresh and disconnect | Connections; `crates/modules/connections` and provider adapters | existing connection service/provider callers | Add durable Operations and reconciliation boundaries |
+| model profile, attempt, receipt and usage | Inference; current model/runtime ports and execution records | Conversation model port and runtime receipts | Extract durable Inference owner and attempt accounting |
+| Memory/Playbook review and learner | Knowledge; `crates/modules/knowledge` | existing review/learner services and repositories | Finish concrete stores and transaction-bound evidence |
+| Calendar/Task/Note reads, capture and mirror | Day; `crates/modules/day` | existing Day queries and action/context callers | Remove remaining staging and builtin dispatch paths |
+| proposal, approval, execution and uncertain-result reread | Actions; current Core/Vault action repositories | existing action command/query callers | Move behavior from legacy Core/Vault composition |
+| OS authorization UI and acquisition callback | Native driver; native adapters | `floe-ffi` native action/context bridges | Complete owner-specific request lifetimes |
 
 ## Current implementation and remaining structure
 
@@ -51,6 +65,14 @@ These are source and prior checkpoint summaries, not new passes. R003 source win
 5. Current `_v2` exports and legacy Session/management paths have not been removed by this documentation commit. Their replacement is work specified in R003, not accomplished evidence.
 
 ## Evidence and history
+
+### R003 step 01 evidence
+
+- **Structure:** `StartTurn`/`CanonicalTurnIntent` owns normalized text, retry/Continue validation, profile preference, and principal-bound fixed-field digest; canonical archive values and `ArchiveReader` live in `floe-agent-contract`; `CommandQuery` scopes command lookup to the principal.
+- **Wiring/removal:** Conversation, Context, Vault/FFI, app facade, app wire, and Flutter client use the new contracts; Context-owned archive value definitions and `request_context_digest` callers are removed. ABI `_v2` names remain until the prescribed Stage 07 consumer replacement.
+- **Checks:** `cargo check -p floe-ffi` passed; `cargo test -p floe-agent-contract -p floe-context -p floe-conversation -p floe-app -p floe-protocol` passed; `cargo test -p floe-ffi` passed; `cargo test -p floe-core` passed; `flutter test test/runtime_client/floe_client_test.dart` passed; `python3 tools/architecture/check_boundaries.py . --mode migration` passed with only expected migration warnings; `git diff --check` passed. The combined Flutter command is environment-blocked by the existing missing `floe_core_query_v2` native symbol in `app_wire_transport_test.dart`. `cargo fmt --all -- --check` remains not clean because of unrelated pre-existing repository formatting outside this change set; changed Rust files pass targeted `rustfmt --check`.
+- **Behavior:** `not_run`; no live macOS app, Keychain/Vault diagnosis, OAuth, provider, or model behavior was exercised.
+- **Unfinished:** Stage 01 does not remove final ABI aliases or legacy composition; those require the later caller replacement. No data regeneration is indicated by the archive type-path move.
 
 [Full ledger through 89452eb](history/migration-ledger-through-89452eb.md) preserves the original inventory/P/T/code/test records. [R002 snapshot](versions/r002-sequential/MIGRATION_SNAPSHOT.md) preserves the previous concise current ledger without changes. Both are historical, not competing mutable records.
 

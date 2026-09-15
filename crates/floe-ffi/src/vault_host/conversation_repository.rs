@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use floe_agent::{A2AArtifact, A2APart, A2ATask, A2ATaskState, AgentMessage, ModelPlacement};
 use floe_agent_contract::{
-    AgentFailure, AgentMessage as ContractMessage, Artifact as ContractArtifact,
+    AgentFailure, AgentMessage as ContractMessage, ArchivePointer, ArchiveReadRequest,
+    ArchiveSnapshot, ArchivedMessage, Artifact as ContractArtifact,
     ArtifactPart as ContractArtifactPart, BoxFuture, DependencyCoverage, EngineStep,
     ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId, TaskReceipt, TaskState,
 };
@@ -108,8 +109,8 @@ impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
 
     fn read_archive<'a>(
         &'a self,
-        request: &'a floe_context::ArchiveReadRequest,
-    ) -> BoxFuture<'a, Result<floe_context::ArchiveSnapshot, AgentFailure>> {
+        request: &'a ArchiveReadRequest,
+    ) -> BoxFuture<'a, Result<ArchiveSnapshot, AgentFailure>> {
         Box::pin(async move {
             request.validate()?;
             if request.person_id != self.vault.person_id() {
@@ -144,13 +145,13 @@ impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
                             .map_err(|_| AgentFailure::StorageUnavailable)?
                             .to_be_bytes(),
                     );
-                    Ok(floe_context::ArchivedMessage {
+                    Ok(ArchivedMessage {
                         turn_id,
                         message: contract_message(message, message_id, coverage)?,
                     })
                 })
                 .collect::<Result<Vec<_>, AgentFailure>>()?;
-            Ok(floe_context::ArchiveSnapshot {
+            Ok(ArchiveSnapshot {
                 person_id: request.person_id,
                 session_id: request.session_id,
                 pointer: request.pointer.clone(),
@@ -236,11 +237,13 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
 
     fn find_command<'a>(
         &'a self,
-        command_id: floe_agent_contract::CommandId,
+        query: floe_conversation::CommandQuery,
     ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>> {
         Box::pin(async move {
+            query.validate()?;
+            self.verify_principal(&query.principal)?;
             self.vault
-                .conversation_run_by_command(command_id)
+                .conversation_run_by_command(query.command_id)
                 .await?
                 .map(run_receipt)
                 .transpose()
@@ -613,8 +616,8 @@ fn contract_message(
     Ok(message)
 }
 
-fn archive_pointer(recovery: &floe_agent::SessionRecoveryPointer) -> floe_context::ArchivePointer {
-    floe_context::ArchivePointer {
+fn archive_pointer(recovery: &floe_agent::SessionRecoveryPointer) -> ArchivePointer {
+    ArchivePointer {
         archive_id: recovery.archive_id,
         source_revision: recovery.source_revision,
         through_turn_id: recovery.through_turn_id,
@@ -622,9 +625,7 @@ fn archive_pointer(recovery: &floe_agent::SessionRecoveryPointer) -> floe_contex
     }
 }
 
-fn legacy_recovery_pointer(
-    pointer: &floe_context::ArchivePointer,
-) -> floe_agent::SessionRecoveryPointer {
+fn legacy_recovery_pointer(pointer: &ArchivePointer) -> floe_agent::SessionRecoveryPointer {
     floe_agent::SessionRecoveryPointer {
         archive_id: pointer.archive_id,
         source_revision: pointer.source_revision,

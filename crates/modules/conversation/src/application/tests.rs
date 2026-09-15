@@ -66,13 +66,13 @@ impl MemoryRepository {
 impl ConversationRepository for MemoryRepository {
     fn find_command<'a>(
         &'a self,
-        command_id: CommandId,
+        query: crate::CommandQuery,
     ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>> {
         Box::pin(async move {
             let state = self.state.lock().unwrap();
             Ok(state
                 .commands
-                .get(&command_id)
+                .get(&query.command_id)
                 .and_then(|run_id| state.runs.get(run_id))
                 .map(|stored| stored.admitted.receipt.clone()))
         })
@@ -98,7 +98,6 @@ impl ConversationRepository for MemoryRepository {
                         .ok_or(AgentFailure::Conflict)?;
                     if source.admitted.receipt.continuation().as_ref() != Some(reference)
                         || source.admitted.receipt.session_id != request.session_id
-                        || source.admitted.receipt.execution_profile != request.execution_profile
                     {
                         return Err(AgentFailure::Conflict);
                     }
@@ -637,9 +636,9 @@ fn request(
         expected_session_revision,
         principal: "person-a".into(),
         prompt: prompt.into(),
-        request_context_digest: [1; 32],
         mode: crate::TurnMode::New,
         retry_of: None,
+        profile: crate::ProfileSelection::Auto,
         execution_profile: "test-local".into(),
         bounded_context: BoundedContext {
             text: String::new(),

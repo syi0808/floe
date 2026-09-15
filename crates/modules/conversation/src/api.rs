@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::TurnMode;
+use crate::{CanonicalTurnIntent, ProfileSelection, TurnMode};
 
 pub const FINALIZATION_ROLE_PROMPT: &str = "Produce one final answer using only the supplied settled observations. Do not call tools or delegate.";
 pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing answer. State that the requested execution did not complete; do not claim that a failed action succeeded.";
@@ -50,9 +50,9 @@ pub struct TurnRequest {
     pub expected_session_revision: u64,
     pub principal: String,
     pub prompt: String,
-    pub request_context_digest: [u8; 32],
     pub mode: TurnMode,
     pub retry_of: Option<RunId>,
+    pub profile: ProfileSelection,
     pub execution_profile: String,
     pub bounded_context: BoundedContext,
     pub allowed_catalog: AllowedCatalog,
@@ -70,18 +70,25 @@ impl TurnRequest {
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
             || self.prompt.trim().is_empty()
-            || self.request_context_digest == [0; 32]
             || self.execution_profile.trim() != self.execution_profile
             || self.execution_profile.is_empty()
             || self.execution_profile.len() > 64
             || self.execution_profile.chars().any(char::is_control)
-            || self.prompt.len() > floe_agent_contract::MAX_OUTPUT_BYTES
             || self.replay.len() > 128
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
             return Err(AgentFailure::InvalidInput);
         }
+        let normalized = self.prompt.trim();
+        if normalized.len() > crate::MAX_TURN_TEXT_BYTES
+            || normalized
+                .chars()
+                .any(|character| character.is_control() && character != '\n')
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.profile.validate()?;
         if let TurnMode::Continue(reference) = &self.mode {
             reference.validate()?;
         }
@@ -97,6 +104,19 @@ impl TurnRequest {
             .tools
             .iter()
             .try_for_each(floe_agent_contract::ToolDescriptor::validate)
+    }
+
+    pub(crate) fn canonical_intent(&self) -> Result<CanonicalTurnIntent, AgentFailure> {
+        let mut turn = crate::StartTurn {
+            command_id: self.command_id,
+            session_id: self.session_id,
+            expected_revision: self.expected_session_revision,
+            text: self.prompt.clone(),
+            mode: self.mode.clone(),
+            retry_of: self.retry_of,
+            profile: self.profile.clone(),
+        };
+        CanonicalTurnIntent::from_start_turn(&mut turn)
     }
 }
 

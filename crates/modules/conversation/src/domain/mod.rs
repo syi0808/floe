@@ -4,6 +4,13 @@ use floe_agent_contract::{
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
+mod intent;
+
+pub use intent::{
+    AdmittedExecution, CanonicalTurnIntent, MAX_TURN_TEXT_BYTES, ProfileSelection, StartTurn,
+    normalize_turn_text,
+};
+
 pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -408,7 +415,7 @@ impl CompactionRequest {
 pub struct CompactionReceipt {
     pub session_id: Uuid,
     pub session_revision: u64,
-    pub pointer: floe_context::ArchivePointer,
+    pub pointer: floe_agent_contract::ArchivePointer,
     pub summary: AgentMessage,
 }
 

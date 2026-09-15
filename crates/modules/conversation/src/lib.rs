@@ -17,10 +17,15 @@ pub use application::{
     resume_session, start_session,
 };
 pub use domain::{
-    AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest, ContinuationRef,
-    ContinuationSnapshot, JournalEntry, MAX_COMPACTION_SUMMARY_BYTES, RecoveryReceipt,
-    RecoveryRequest, RunQuery, RunReceipt, RunState, RunTerminal, SessionReadRequest,
-    SessionReceipt, SessionRequest, TurnAdmission, TurnAdmissionRequest, TurnMode,
+    AdmittedExecution, AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest,
+    ContinuationRef, ContinuationSnapshot, JournalEntry, MAX_COMPACTION_SUMMARY_BYTES,
+    MAX_TURN_TEXT_BYTES, ProfileSelection, RecoveryReceipt, RecoveryRequest, RunQuery, RunReceipt,
+    RunState, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, StartTurn,
+    TurnAdmission, TurnAdmissionRequest, TurnMode,
+};
+pub use domain::{CanonicalTurnIntent, normalize_turn_text};
+pub use floe_agent_contract::{
+    ArchivePointer, ArchiveReadRequest, ArchiveSnapshot, ArchivedMessage,
 };
 pub use floe_agent_runtime::FinalPayloadValidator;
 pub use ports::{ConversationRepository, SessionArchiveRepository, SessionRepository};

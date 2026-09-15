@@ -12,6 +12,7 @@ final class PreparedStartTurn {
     required this.text,
     this.continuation,
     this.retryOf,
+    this.profileId,
   });
 
   final String commandId;
@@ -20,6 +21,7 @@ final class PreparedStartTurn {
   final String text;
   final AppContinuationRef? continuation;
   final String? retryOf;
+  final String? profileId;
 }
 
 final class AppContinuationRef {
@@ -198,12 +200,20 @@ final class FloeClient {
     required String text,
     AppContinuationRef? continuation,
     String? retryOf,
+    String? profileId,
   }) {
     if (_closed) throw StateError('FloeClient is already closed.');
     if (sessionId.isEmpty ||
         expectedRevision < 0 ||
         text.trim().isEmpty ||
-        utf8.encode(text).length > 64 * 1024 ||
+        utf8.encode(text.trim()).length > 8 * 1024 ||
+        profileId != null &&
+            (profileId.isEmpty ||
+                profileId.trim() != profileId ||
+                utf8.encode(profileId).length > 128 ||
+                profileId.codeUnits.any(
+                  (value) => value < 32 || value == 127,
+                )) ||
         continuation != null &&
             (continuation.runId.isEmpty ||
                 continuation.executorGeneration <= 0 ||
@@ -221,6 +231,7 @@ final class FloeClient {
       text: text,
       continuation: continuation,
       retryOf: retryOf,
+      profileId: profileId,
     );
   }
 
@@ -252,6 +263,11 @@ final class FloeClient {
             },
           },
           'retry_of': ?command.retryOf,
+          if (command.profileId != null)
+            'profile': {
+              'kind': 'explicit',
+              'profile_id': command.profileId,
+            },
         },
       }, timeout: timeout);
       return _commandReceipt(result, expectedCommandId: command.commandId);

@@ -9,7 +9,7 @@ pub async fn get_command<Repository: ConversationRepository>(
     query.validate()?;
     authorize(
         &query.principal,
-        repository.find_command(query.command_id).await?,
+        repository.find_command(query.clone()).await?,
     )
 }
 

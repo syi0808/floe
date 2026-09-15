@@ -888,6 +888,7 @@ dependencies = [
  "floe-context",
  "floe-execution",
  "floe-kernel",
+ "sha2",
  "tokio",
  "uuid",
 ]

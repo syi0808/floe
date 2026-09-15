@@ -117,3 +117,15 @@ fn app_wire_validates_continuation_and_event_bounds() {
     .unwrap();
     assert_eq!(request.validate(), Err("cursor"));
 }
+
+#[test]
+fn app_wire_preserves_explicit_profile_selection() {
+    let mut request = fixture("start_turn");
+    request["command"]["profile"] = json!({
+        "kind": "explicit",
+        "profile_id": "local-fast",
+    });
+    let decoded: AppCommandRequestDto = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(decoded.validate(), Ok(()));
+    assert_eq!(serde_json::to_value(decoded).unwrap(), request);
+}

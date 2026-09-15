@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::CallerContext;
 
-const MAX_TURN_TEXT_BYTES: usize = 64 * 1024;
+const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartTurn {
@@ -12,6 +12,7 @@ pub struct StartTurn {
     pub text: String,
     pub mode: TurnMode,
     pub retry_of: Option<Uuid>,
+    pub profile: ProfileSelection,
 }
 
 impl StartTurn {
@@ -19,12 +20,17 @@ impl StartTurn {
         if self.command_id.is_nil()
             || self.session_id.is_nil()
             || self.text.trim().is_empty()
-            || self.text.len() > MAX_TURN_TEXT_BYTES
+            || self.text.trim().len() > MAX_TURN_TEXT_BYTES
+            || self
+                .text
+                .chars()
+                .any(|character| character.is_control() && character != '\n')
             || self.retry_of.is_some_and(|id| id.is_nil())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
             return Err(ServiceError::InvalidInput);
         }
+        self.profile.validate()?;
         match &self.mode {
             TurnMode::New => Ok(()),
             TurnMode::Continue(reference) => reference.validate(),
@@ -36,6 +42,26 @@ impl StartTurn {
 pub enum TurnMode {
     New,
     Continue(ContinuationRef),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProfileSelection {
+    Auto,
+    Explicit(String),
+}
+
+impl ProfileSelection {
+    fn validate(&self) -> Result<(), ServiceError> {
+        if let Self::Explicit(profile_id) = self
+            && (profile_id.trim() != profile_id
+                || profile_id.is_empty()
+                || profile_id.len() > 128
+                || profile_id.chars().any(char::is_control))
+        {
+            return Err(ServiceError::InvalidInput);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +152,7 @@ mod tests {
             text: "hello".into(),
             mode: TurnMode::New,
             retry_of: None,
+            profile: ProfileSelection::Auto,
         }
     }
 

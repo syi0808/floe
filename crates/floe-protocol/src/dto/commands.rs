@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::{APP_WIRE_VERSION, AppWireErrorDto};
 
-const MAX_TURN_TEXT_BYTES: usize = 64 * 1024;
+const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +38,8 @@ pub enum AppCommandDto {
         expected_revision: u64,
         text: String,
         mode: AppTurnModeDto,
+        #[serde(default, skip_serializing_if = "AppProfileSelectionDto::is_auto")]
+        profile: AppProfileSelectionDto,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_of: Option<Uuid>,
     },
@@ -55,13 +57,19 @@ impl AppCommandDto {
                 session_id,
                 text,
                 mode,
+                profile,
                 retry_of,
                 ..
             } => {
                 if session_id.is_nil() {
                     return Err("command.session_id");
                 }
-                if text.trim().is_empty() || text.len() > MAX_TURN_TEXT_BYTES {
+                if text.trim().is_empty()
+                    || text.trim().len() > MAX_TURN_TEXT_BYTES
+                    || text
+                        .chars()
+                        .any(|character| character.is_control() && character != '\n')
+                {
                     return Err("command.text");
                 }
                 if retry_of.is_some_and(|id| id.is_nil()) {
@@ -70,11 +78,45 @@ impl AppCommandDto {
                 if retry_of.is_some() && !matches!(mode, AppTurnModeDto::NewTurn {}) {
                     return Err("command.retry_of");
                 }
-                mode.validate()
+                mode.validate()?;
+                profile.validate()
             }
             Self::ConversationCancelRun { run_id, .. } => {
                 if run_id.is_nil() {
                     Err("command.run_id")
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AppProfileSelectionDto {
+    #[default]
+    Auto,
+    Explicit {
+        profile_id: String,
+    },
+}
+
+impl AppProfileSelectionDto {
+    fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Auto => Ok(()),
+            Self::Explicit { profile_id } => {
+                if profile_id.trim() != profile_id
+                    || profile_id.is_empty()
+                    || profile_id.len() > 128
+                    || profile_id.chars().any(char::is_control)
+                {
+                    Err("command.profile")
                 } else {
                     Ok(())
                 }

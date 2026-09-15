@@ -13,3 +13,4 @@ floe-execution = { path = "../../runtime/execution" }
 floe-kernel = { path = "../../contracts/kernel" }
 tokio.workspace = true
 uuid.workspace = true
+sha2.workspace = true

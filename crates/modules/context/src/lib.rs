@@ -31,8 +31,8 @@ pub use application::service::{ContextService, PreparedContext};
 pub use application::source_view::SourceView;
 pub use floe_context_contract::ContextDependency;
 pub use ports::archive_reader::{
-    ArchivePointer, ArchiveProjection, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot,
-    ArchivedMessage, MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
+    ArchiveProjection, ArchiveReader, MAX_ARCHIVE_PROJECTION_BYTES,
+    MAX_ARCHIVE_PROJECTION_MESSAGES,
 };
 pub use ports::evidence_reader::EvidenceReader;
 pub use ports::source_reader::{SourceKey, SourceRead, SourceReadRequest, SourceReader};

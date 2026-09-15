@@ -1,4 +1,6 @@
-use floe_agent_contract::{AgentFailure, BoxFuture};
+use floe_agent_contract::{
+    AgentFailure, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, BoxFuture,
+};
 
 use crate::SessionArchiveRepository;
 
@@ -12,13 +14,13 @@ impl<'a, Repository> ConversationArchiveReader<'a, Repository> {
     }
 }
 
-impl<Repository: SessionArchiveRepository> floe_context::ArchiveReader
+impl<Repository: SessionArchiveRepository> ArchiveReader
     for ConversationArchiveReader<'_, Repository>
 {
     fn read_archive<'a>(
         &'a self,
-        request: &'a floe_context::ArchiveReadRequest,
-    ) -> BoxFuture<'a, Result<floe_context::ArchiveSnapshot, AgentFailure>> {
+        request: &'a ArchiveReadRequest,
+    ) -> BoxFuture<'a, Result<ArchiveSnapshot, AgentFailure>> {
         self.repository.read_archive(request)
     }
 }

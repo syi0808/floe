@@ -5,9 +5,9 @@ use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 use floe_protocol::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
     AppCommandResultDto, AppCommandStatusDto, AppEventDto, AppEventKindDto, AppEventsRequestDto,
-    AppEventsResultDto, AppMessageDto, AppMessageRoleDto, AppQueryDto, AppQueryRequestDto,
-    AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto,
-    AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
+    AppEventsResultDto, AppMessageDto, AppMessageRoleDto, AppProfileSelectionDto, AppQueryDto,
+    AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto,
+    AppTurnExecutionDto, AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
 };
 
 use crate::{
@@ -41,6 +41,7 @@ where
             expected_revision,
             text,
             mode,
+            profile,
             retry_of,
         } => {
             let mode = match mode {
@@ -51,6 +52,12 @@ where
                         executor_generation: continuation_ref.executor_generation,
                         level: continuation_ref.level,
                     })
+                }
+            };
+            let profile = match profile {
+                AppProfileSelectionDto::Auto => floe_app::ProfileSelection::Auto,
+                AppProfileSelectionDto::Explicit { profile_id } => {
+                    floe_app::ProfileSelection::Explicit(profile_id)
                 }
             };
             let receipt = host_request
@@ -64,6 +71,7 @@ where
                         text,
                         mode,
                         retry_of,
+                        profile,
                     },
                 )
                 .map_err(service_error)?;
@@ -558,6 +566,7 @@ mod tests {
                     expected_revision: 7,
                     text: "hello".into(),
                     mode: AppTurnModeDto::NewTurn {},
+                    profile: AppProfileSelectionDto::Auto,
                     retry_of: Some(retry_of),
                 },
             },

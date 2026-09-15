@@ -3,6 +3,7 @@
 //! This crate contains no session, task, provider, or product-domain owner.
 //! Owners admit a request and supply an [`ExecutionJournal`] to the runtime.
 
+mod archive;
 mod delegation;
 mod endpoint;
 mod message;
@@ -10,6 +11,10 @@ mod model;
 mod ports;
 mod replay;
 
+pub use archive::{
+    ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
+    MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
+};
 pub use delegation::{DelegationRequest, TaskReceipt, TaskSnapshot, TaskState};
 pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,

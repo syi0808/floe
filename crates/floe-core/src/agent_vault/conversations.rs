@@ -153,7 +153,6 @@ impl VaultConversationRunRecord {
             && self.continuation_level
                 == request.continuation.as_ref().map_or(0, |value| value.level)
             && self.retry_of == request.retry_of
-            && self.model_placement == request.model_placement
     }
 }
 
@@ -512,7 +511,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     || source.person_id != request.person_id
                     || source.session_revision != request.expected_session_revision
                     || source.executor_generation != reference.executor_generation
-                    || source.model_placement != request.model_placement
                     || source
                         .continuation_level
                         .checked_add(1)

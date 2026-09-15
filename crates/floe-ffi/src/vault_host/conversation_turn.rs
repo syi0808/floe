@@ -373,8 +373,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             session_id,
             max_output_bytes: budget.max_output_bytes,
         };
-        let request_context =
-            serde_json::to_string(request).map_err(|_| AgentFailure::InvalidInput)?;
         let execution_profile =
             crate::vault_host::conversation_repository::execution_profile(model.placement());
         let mode = if request.continuation {
@@ -388,9 +386,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             .await?
             {
                 let source_run_id = existing.continuation_of.ok_or(AgentFailure::Conflict)?;
-                if existing.execution_profile != execution_profile {
-                    return Err(AgentFailure::Conflict);
-                }
                 floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {
                     run_id: source_run_id,
                     executor_generation: existing
@@ -401,9 +396,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             } else {
                 let session = vault.load(person_id, session_id).await?;
                 let legacy_reference = session.continuation.ok_or(AgentFailure::Conflict)?;
-                if legacy_reference.placement != model.placement() {
-                    return Err(AgentFailure::Conflict);
-                }
                 let snapshot = floe_conversation::continuation(
                     inputs.conversation_repository.as_ref(),
                     floe_agent_contract::RunId::from_uuid(legacy_reference.turn_id)
@@ -412,7 +404,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 )
                 .await?;
                 if legacy_reference.level.checked_add(1) != Some(snapshot.reference.level)
-                    || snapshot.execution_profile != execution_profile
                 {
                     return Err(AgentFailure::Conflict);
                 }
@@ -434,10 +425,10 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     session_id,
                     expected_session_revision: request.expected_revision,
                     principal: person_id.to_string(),
-                    prompt: request.text.trim().into(),
-                    request_context_digest: floe_agent_contract::input_digest(&request_context),
+                    prompt: request.text.clone(),
                     mode,
                     retry_of,
+                    profile: floe_conversation::ProfileSelection::Auto,
                     execution_profile: execution_profile.into(),
                     bounded_context: floe_agent_contract::BoundedContext {
                         text: String::new(),

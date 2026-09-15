@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use floe_agent_contract::{
-    AgentMessage, DependencyCoverage, EngineRequest, EngineStep, MessageRole, input_digest,
+    AgentMessage, DependencyCoverage, EngineRequest, EngineStep, MessageRole,
 };
 use floe_agent_runtime::{Engine, EnginePorts};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
@@ -62,8 +62,13 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         mut on_admitted: impl FnMut(&RunReceipt),
     ) -> Result<RunReceipt, AgentFailure> {
         request.validate()?;
-        let request_digest = turn_digest(&request);
-        if let Some(receipt) = self.repository.find_command(request.command_id).await? {
+        let intent = request.canonical_intent()?;
+        let request_digest = intent.digest(&request.principal)?;
+        let command_query = CommandQuery {
+            principal: request.principal.clone(),
+            command_id: request.command_id,
+        };
+        if let Some(receipt) = self.repository.find_command(command_query).await? {
             verify_existing(&request, request_digest, &receipt)?;
             on_admitted(&receipt);
             return Ok(receipt);
@@ -80,7 +85,6 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 if snapshot.reference != *reference
                     || snapshot.session_id != request.session_id
                     || snapshot.session_revision != request.expected_session_revision
-                    || snapshot.execution_profile != request.execution_profile
                 {
                     return Err(AgentFailure::Conflict);
                 }
@@ -118,7 +122,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 user_message: AgentMessage {
                     message_id: request.command_id.as_uuid(),
                     role: MessageRole::User,
-                    text: request.prompt.clone(),
+                    text: intent.text.clone(),
                     call_id: None,
                     coverage: DependencyCoverage::Independent,
                 },
@@ -139,7 +143,6 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             || admitted.receipt.request_digest != request_digest
             || admitted.receipt.retry_of != request.retry_of
             || admitted.receipt.state != RunState::Working
-            || admitted.receipt.execution_profile != request.execution_profile
             || match &request.mode {
                 TurnMode::New => {
                     admitted.receipt.continuation_of.is_some()
@@ -249,7 +252,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         let engine_request = EngineRequest {
             principal: request.principal,
             role_spec: self.config.role_spec.clone(),
-            prompt: request.prompt,
+            prompt: intent.text,
             scope,
             bounded_context: request.bounded_context,
             messages,
@@ -396,7 +399,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
 
     pub async fn read_archive<Authorize, AuthorizationFuture>(
         &self,
-        request: &floe_context::ArchiveReadRequest,
+        request: &floe_agent_contract::ArchiveReadRequest,
         authorize: Authorize,
     ) -> Result<floe_context::ArchiveProjection, AgentFailure>
     where
@@ -534,21 +537,6 @@ pub async fn continuation<Repository: ConversationRepository>(
         completed_iterations,
         usage,
     })
-}
-
-fn turn_digest(request: &TurnRequest) -> [u8; 32] {
-    input_digest(&format!(
-        "{}\0{}\0{}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{}",
-        request.command_id,
-        request.session_id,
-        request.expected_session_revision,
-        request.principal,
-        request.prompt,
-        request.request_context_digest,
-        request.mode,
-        request.retry_of,
-        request.execution_profile,
-    ))
 }
 
 fn verify_existing(

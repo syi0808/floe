@@ -291,9 +291,9 @@ fn request(
         expected_session_revision: 0,
         principal: String::new(),
         prompt: "hello".into(),
-        request_context_digest: [1; 32],
         mode: TurnMode::New,
         retry_of: None,
+        profile: floe_conversation::ProfileSelection::Auto,
         execution_profile: "device_local".into(),
         bounded_context: BoundedContext {
             text: String::new(),
@@ -647,7 +647,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
         journal_before
     );
 
-    let archive_request = floe_context::ArchiveReadRequest {
+    let archive_request = floe_agent_contract::ArchiveReadRequest {
         person_id,
         session_id: session.id,
         pointer: compacted.pointer.clone(),

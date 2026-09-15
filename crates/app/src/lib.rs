@@ -8,5 +8,5 @@ pub use bootstrap::local_identity_for_database;
 pub use host::{AppHost, HostRequest};
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
-    ConversationCommands, ServiceError, StartTurn, TurnMode,
+    ConversationCommands, ProfileSelection, ServiceError, StartTurn, TurnMode,
 };

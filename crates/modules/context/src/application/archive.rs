@@ -1,13 +1,10 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use floe_agent_contract::{AgentFailure, DependencyCoverage};
+use floe_agent_contract::{AgentFailure, ArchiveReadRequest, ArchivedMessage, DependencyCoverage};
 use uuid::Uuid;
 
-use crate::{
-    ArchiveProjection, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
-    project_coverage,
-};
+use crate::{ArchiveProjection, ArchiveReader, project_coverage};
 
 pub async fn read_authorized_archive<Authorize, AuthorizationFuture>(
     reader: &dyn ArchiveReader,
@@ -20,7 +17,7 @@ where
 {
     request.validate()?;
     let mut snapshot = reader.read_archive(request).await?;
-    validate_snapshot(request, &snapshot)?;
+    snapshot.validate(request)?;
 
     let mut coverage_by_turn = Vec::<(Uuid, DependencyCoverage)>::new();
     for archived in &snapshot.messages {
@@ -51,40 +48,6 @@ where
         pointer: snapshot.pointer,
         messages,
     })
-}
-
-fn validate_snapshot(
-    request: &ArchiveReadRequest,
-    snapshot: &ArchiveSnapshot,
-) -> Result<(), AgentFailure> {
-    if snapshot.person_id != request.person_id
-        || snapshot.session_id != request.session_id
-        || snapshot.pointer != request.pointer
-        || snapshot.messages.len() != request.pointer.archived_message_count
-        || snapshot.messages.is_empty()
-        || snapshot
-            .messages
-            .iter()
-            .any(|message| message.turn_id.is_nil() || message.message.validate().is_err())
-    {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    let mut completed = HashSet::new();
-    let mut previous = None;
-    for message in &snapshot.messages {
-        if previous != Some(message.turn_id) {
-            if !completed.insert(message.turn_id) {
-                return Err(AgentFailure::StorageUnavailable);
-            }
-            previous = Some(message.turn_id);
-        }
-    }
-    if snapshot.messages.last().map(|message| message.turn_id)
-        != Some(request.pointer.through_turn_id)
-    {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    Ok(())
 }
 
 fn bounded_tail(
@@ -128,12 +91,12 @@ fn bounded_tail(
 
 #[cfg(test)]
 mod tests {
-    use floe_agent_contract::{AgentMessage, BoxFuture, MessageRole};
+    use floe_agent_contract::{
+        AgentMessage, ArchivePointer, ArchiveReader, ArchiveSnapshot, BoxFuture, MessageRole,
+    };
     use floe_context_contract::PersonId;
 
     use super::*;
-    use crate::{ArchivePointer, ArchiveReader};
-
     struct Reader(ArchiveSnapshot);
 
     impl ArchiveReader for Reader {
