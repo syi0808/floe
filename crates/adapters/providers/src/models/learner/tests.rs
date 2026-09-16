@@ -249,7 +249,7 @@ async fn structured_learner_uses_a_local_restricted_request() {
     assert_eq!(output, expected);
     let requests = runner.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].prompt.role, floe_knowledge::PromptRole::Learner);
+    assert_eq!(requests[0].prompt.role, floe_knowledge::prompts::PromptRole::Learner);
     assert!(requests[0].prompt.render().len() <= 4096);
     assert!(
         requests[0]

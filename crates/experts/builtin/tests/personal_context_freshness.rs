@@ -1,6 +1,7 @@
 use floe_agent_contract::{AgentFailure};
 use floe_kernel::AGENT_VERSION;
-use floe_experts_builtin::{AttentionState, AttentionView, CapacityState, FeasibilityView, RecoveryState, WellbeingView, validate_attention_view, validate_feasibility_view, validate_wellbeing_view};
+use floe_context::{AttentionState, AttentionView, CapacityState, FeasibilityView, RecoveryState, WellbeingView, validate_attention_view, validate_wellbeing_view};
+use floe_context::{validate_feasibility_view};
 
 const NOW: i64 = 1_789_000_000_000;
 

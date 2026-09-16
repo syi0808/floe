@@ -7,9 +7,30 @@ use std::{
 };
 
 use chrono::{TimeZone, Utc};
-// FIXME(stage-2): glob import of the retired floe-agent crate
-use floe_kernel::PersonId;
 use tokio::{sync::Notify, time::Instant};
+
+use floe_agent_contract::{
+    AgentFailure, CapabilityExecution, CapabilityJournal, DataClass, ModelPlacement,
+    TransferConsent,
+};
+use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_conversation::{
+    AgentMessage, CapabilityDescriptor, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+};
+use floe_execution::Cancellation;
+use floe_experts::{
+    AgentId, AgentPackage, AgentRegistry, ExpertBudget, ExpertFocusProposal, ExpertInput,
+    ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertPrivateState, ExpertResult, ExpertRule,
+    PackageAssignment, PackageImplementation, PackageInstallation, PackageKind, PackageRef,
+    CalendarViewBinding, RegistrySnapshot,
+};
+use floe_experts_builtin::BuiltinExpertKind;
+use floe_experts_builtin::schedule::{
+    ExpertHost, ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
+    MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
+};
+use floe_knowledge::prompts::{PromptComponentKind, PromptRole};
+use floe_kernel::{AGENT_VERSION, PersonId};
 use uuid::Uuid;
 
 struct Fixture {
@@ -346,13 +367,17 @@ impl Fixture {
                 },
                 publisher: "floe".into(),
                 implementation: PackageImplementation::Builtin {
-                    expert: BuiltinExpertKind::Schedule,
+                    expert: AgentId::try_new(BuiltinExpertKind::Schedule.package_id())
+                        .expect("builtin ids are valid"),
                 },
                 expert_metadata: Some(ExpertMetadata {
                     name: "Schedule Expert".into(),
                     description: "Reviews schedules".into(),
                     domain_tags: vec!["schedule".into(), "calendar".into()],
                     skills: vec!["Provide independent scheduling judgment".into()],
+                    supported_placements: BuiltinExpertKind::Schedule
+                        .declaration()
+                        .supported_placements,
                 }),
                 required_tools: vec![tool_reference.clone()],
                 state_schema_version: 1,
@@ -381,6 +406,9 @@ impl Fixture {
                     description: "Applies fixture rules".into(),
                     domain_tags: vec!["custom".into()],
                     skills: vec!["Apply fixture guidance".into()],
+                    supported_placements: BuiltinExpertKind::Schedule
+                        .declaration()
+                        .supported_placements,
                 }),
                 required_tools: vec![tool_reference],
                 state_schema_version: 1,
@@ -419,6 +447,7 @@ impl Fixture {
 
     fn invocation(&self, assignment_id: Uuid) -> ExpertInvocation {
         ExpertInvocation {
+            capabilities: std::sync::Arc::new(NoJournal),
             usage: Default::default(),
             context: AgentContext {
                 projection_version: 1,
@@ -513,7 +542,8 @@ fn builtin_card_rejects_a_declarative_package_with_the_builtin_id() {
             fixture.declarative,
             revision,
             fixture.view.handle,
-            BuiltinExpertKind::Schedule,
+            AgentId::try_new(BuiltinExpertKind::Schedule.package_id())
+                .expect("builtin ids are valid"),
         ),
         Err(AgentFailure::CapabilityDenied)
     );
@@ -1339,4 +1369,17 @@ async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_wi
             !matches!(message, AgentMessage::Capability { capability_id, .. } if capability_id == "schedule.find_free_windows")
         })
     }));
+}
+
+/// The regression records nothing: it checks what the Expert decides, not what
+/// its caller keeps.
+struct NoJournal;
+
+impl CapabilityJournal for NoJournal {
+    fn record<'a>(
+        &'a self,
+        _record: CapabilityExecution,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Ok(()) })
+    }
 }

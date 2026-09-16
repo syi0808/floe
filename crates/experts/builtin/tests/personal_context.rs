@@ -1,6 +1,7 @@
 use floe_agent_contract::{AgentFailure};
 use floe_kernel::AGENT_VERSION;
-use floe_experts_builtin::{AttentionState, AttentionView, CapacityState, FeasibilityItem, FeasibilityView, PeopleIdentity, PeopleView, RecoveryState, WeatherImpact, WellbeingView, personal_context_evidence, validate_attention_view, validate_feasibility_view, validate_people_view, validate_wellbeing_view};
+use floe_context::{AttentionState, AttentionView, CapacityState, FeasibilityView, PeopleIdentity, PeopleView, RecoveryState, WellbeingView, personal_context_evidence, validate_attention_view, validate_people_view, validate_wellbeing_view};
+use floe_context::{FeasibilityItem, WeatherImpact, validate_feasibility_view};
 
 const NOW: i64 = 1_789_000_000_000;
 
@@ -25,7 +26,7 @@ fn people() -> PeopleView {
 #[test]
 fn android_people_fixture_crosses_the_shared_identity_boundary() {
     let view: PeopleView = serde_json::from_str(include_str!(
-        "../../../apps/client/android/fixtures/people_view.json"
+        "../../../../apps/client/android/fixtures/people_view.json"
     ))
     .unwrap();
     validate_people_view(&view, 1_789_128_000_000).unwrap();
@@ -37,7 +38,7 @@ fn android_people_fixture_crosses_the_shared_identity_boundary() {
 #[test]
 fn health_connect_fixture_crosses_the_derived_wellbeing_boundary() {
     let view: WellbeingView = serde_json::from_str(include_str!(
-        "../../../apps/client/android/fixtures/wellbeing_view.json"
+        "../../../../apps/client/android/fixtures/wellbeing_view.json"
     ))
     .unwrap();
     validate_wellbeing_view(&view, 1_789_128_000_000).unwrap();
@@ -50,10 +51,10 @@ fn health_connect_fixture_crosses_the_derived_wellbeing_boundary() {
 fn apple_screen_time_fixture_crosses_the_strict_attention_boundary() {
     for fixture in [
         include_str!(
-            "../../../apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/supported_attention.json"
+            "../../../../apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/supported_attention.json"
         ),
         include_str!(
-            "../../../apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/unknown_attention.json"
+            "../../../../apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/unknown_attention.json"
         ),
     ] {
         let export: serde_json::Value = serde_json::from_str(fixture).unwrap();

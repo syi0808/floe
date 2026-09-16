@@ -411,7 +411,7 @@ impl AgentRegistry {
         Ok(())
     }
 
-    pub(in crate::registry) fn validate_calendar_setups(&self) -> Result<(), AgentFailure> {
+    pub(super) fn validate_calendar_setups(&self) -> Result<(), AgentFailure> {
         for (index, receipt) in self.snapshot.calendar_setups.iter().enumerate() {
             if receipt.setup_id.is_nil()
                 || receipt.tool_installation_id.is_nil()

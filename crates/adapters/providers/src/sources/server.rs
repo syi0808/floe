@@ -471,7 +471,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::remote_model::ServerModelRunner;
+    use crate::models::server::ServerModelRunner;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn route() -> AgentRemoteRouteDto {

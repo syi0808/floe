@@ -5,9 +5,14 @@ use floe_context::{AgentContext, InferencePolicyDecision, NativeContextItem, Nat
 use floe_kernel::AGENT_VERSION;
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_execution::{Cancellation};
-use floe_experts_builtin::{CalendarContextItem, CalendarContextView, CommitmentEvidenceSource, CommitmentsContextViews, CommunicationItem, CommunicationResultKind, CommunicationView, FindingEpistemicStatus, MailExpertInvocation, run_commitments_expert_with_views, run_communication_expert};
+use floe_context::{CalendarContextItem, CalendarContextView, CommunicationView};
+use floe_experts_builtin::commitments::{CommitmentEvidenceSource, CommitmentsContextViews, FindingEpistemicStatus, run_commitments_expert_with_views};
+use floe_experts_builtin::communication::{CommunicationResultKind, run_communication_expert};
+use floe_experts_builtin::{MailExpertInvocation};
+use floe_context::{CommunicationItem};
 use floe_inference::{UsageLedger};
-use floe_knowledge::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind, PromptRole};
+use floe_knowledge::prompts::PromptRole;
+use floe_knowledge::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind};
 use floe_kernel::PersonId;
 use serde::Deserialize;
 use serde_json::Value;
@@ -267,7 +272,7 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
     );
     assert_eq!(result.findings[1].source_handle, "calendar:primary");
     assert!(result.source_handles.contains(&"mail:corpus".into()));
-    let round_trip: floe_experts_builtin::CommitmentsExpertResult =
+    let round_trip: floe_experts_builtin::commitments::CommitmentsExpertResult =
         serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
     assert_eq!(round_trip, result);
     let requests = model.requests.lock().unwrap();
@@ -405,7 +410,7 @@ async fn expert_outputs_cannot_invent_evidence_or_blur_inference() {
 fn corpus_uses_observed_only_for_explicit_evidence() {
     let scenarios: Vec<Scenario> =
         serde_json::from_str(include_str!("fixtures/mail_expert_corpus.json")).unwrap();
-    let output: Vec<floe_experts_builtin::CommitmentFinding> =
+    let output: Vec<floe_experts_builtin::commitments::CommitmentFinding> =
         serde_json::from_value(scenarios[0].commitments_output["findings"].clone()).unwrap();
     assert_eq!(output[0].epistemic_status, FindingEpistemicStatus::Observed);
     assert_eq!(output[0].confidence_millis, 1000);

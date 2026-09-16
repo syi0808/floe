@@ -1,25 +1,25 @@
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_experts_builtin::{CalendarContextView, calendar_context_evidence, validate_calendar_context_view};
+use floe_context::{CalendarContextView, calendar_context_evidence, validate_calendar_context_view};
 
 const NOW: i64 = 1_789_128_000_000;
 
 fn fixture() -> CalendarContextView {
     serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/googlecalendar/testdata/calendar_view.json"
+        "../../../../server/internal/connectors/googlecalendar/testdata/calendar_view.json"
     ))
     .unwrap()
 }
 
 fn microsoft_fixture() -> CalendarContextView {
     serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/microsoftcalendar/testdata/calendar_view.json"
+        "../../../../server/internal/connectors/microsoftcalendar/testdata/calendar_view.json"
     ))
     .unwrap()
 }
 
 fn android_fixture() -> CalendarContextView {
     serde_json::from_str(include_str!(
-        "../../../apps/client/android/fixtures/calendar_view.json"
+        "../../../../apps/client/android/fixtures/calendar_view.json"
     ))
     .unwrap()
 }

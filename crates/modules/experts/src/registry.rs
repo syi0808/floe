@@ -523,6 +523,10 @@ impl AgentRegistry {
                 return Err(AgentFailure::InvalidInput);
             }
         }
+        // The registry keeps these records, so it validates them itself; the
+        // port is for setup an owner outside this crate adds on top.
+        registry.validate_calendar_setups()?;
+        registry.validate_builtin_setups()?;
         setups.validate_setups(&registry)?;
         for (index, setup_id) in registry.snapshot.revoked_calendar_setups.iter().enumerate() {
             if setup_id.is_nil()

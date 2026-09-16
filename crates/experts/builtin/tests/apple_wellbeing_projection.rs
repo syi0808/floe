@@ -1,9 +1,9 @@
-use floe_experts_builtin::{CapacityState, RecoveryState, WellbeingView, personal_context_evidence, validate_wellbeing_view};
+use floe_context::{CapacityState, RecoveryState, WellbeingView, personal_context_evidence, validate_wellbeing_view};
 
 #[test]
 fn apple_fixture_crosses_the_derived_wellbeing_boundary() {
     let view: WellbeingView = serde_json::from_str(include_str!(
-        "../../../apps/client/apple/FloeAppleHealth/Tests/FloeAppleHealthTests/Fixtures/wellbeing_view.json"
+        "../../../../apps/client/apple/FloeAppleHealth/Tests/FloeAppleHealthTests/Fixtures/wellbeing_view.json"
     ))
     .unwrap();
 

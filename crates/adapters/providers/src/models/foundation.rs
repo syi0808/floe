@@ -331,7 +331,8 @@ mod tests {
 
     use floe_agent_contract::{DataClass, TransferConsent};
 use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
-use floe_conversation::{AgentMessage, CapabilityDescriptor, manager_prompt};
+use floe_conversation::prompts::manager_prompt;
+use floe_conversation::{AgentMessage, CapabilityDescriptor};
 use floe_execution::{Cancellation};
     use floe_kernel::PersonId;
 

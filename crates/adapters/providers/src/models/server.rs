@@ -1053,7 +1053,7 @@ mod tests {
             usage: Default::default(),
             replay: vec![],
             schema_version: 1,
-            prompt: floe_conversation::manager_prompt(None).unwrap(),
+            prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
             person_id: floe_kernel::PersonId::new(),
             session_id: uuid::Uuid::new_v4(),
             turn_id,

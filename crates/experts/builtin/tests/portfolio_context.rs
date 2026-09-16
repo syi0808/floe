@@ -1,6 +1,7 @@
 use floe_agent_contract::{AgentFailure};
 use floe_kernel::AGENT_VERSION;
-use floe_experts_builtin::{LogisticsItem, LogisticsItemKind, LogisticsView, WorkContextItem, WorkContextView, WorkItemKind, logistics_context_evidence, validate_logistics_view, validate_work_context_view, work_context_evidence};
+use floe_context::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind, logistics_context_evidence, validate_logistics_view, validate_work_context_view, work_context_evidence};
+use floe_context::{LogisticsItem, LogisticsItemKind};
 
 const NOW: i64 = 1_789_000_000_000;
 
@@ -88,7 +89,7 @@ fn unrestricted_or_high_authority_payload_fields_fail_closed() {
 #[test]
 fn github_work_view_crosses_the_go_rust_contract() {
     let view: WorkContextView = serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/github/testdata/work_context.json"
+        "../../../../server/internal/connectors/github/testdata/work_context.json"
     ))
     .unwrap();
     validate_work_context_view(&view, 1_789_012_800_000).unwrap();
@@ -99,7 +100,7 @@ fn github_work_view_crosses_the_go_rust_contract() {
 #[test]
 fn home_assistant_logistics_view_crosses_the_go_rust_contract() {
     let view: LogisticsView = serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/homeassistant/testdata/logistics_view.json"
+        "../../../../server/internal/connectors/homeassistant/testdata/logistics_view.json"
     ))
     .unwrap();
     validate_logistics_view(&view, 1_789_012_800_000).unwrap();
@@ -110,7 +111,7 @@ fn home_assistant_logistics_view_crosses_the_go_rust_contract() {
 #[test]
 fn slack_work_view_crosses_the_go_rust_contract() {
     let view: WorkContextView = serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/slack/testdata/work_context.json"
+        "../../../../server/internal/connectors/slack/testdata/work_context.json"
     ))
     .unwrap();
     validate_work_context_view(&view, 1_789_128_000_000).unwrap();
@@ -121,7 +122,7 @@ fn slack_work_view_crosses_the_go_rust_contract() {
 #[test]
 fn google_drive_work_view_crosses_the_go_rust_contract() {
     let view: WorkContextView = serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/googledrive/testdata/work_context.json"
+        "../../../../server/internal/connectors/googledrive/testdata/work_context.json"
     ))
     .unwrap();
     validate_work_context_view(&view, 1_789_128_000_000).unwrap();
@@ -132,7 +133,7 @@ fn google_drive_work_view_crosses_the_go_rust_contract() {
 #[test]
 fn microsoft_teams_work_view_crosses_the_go_rust_contract() {
     let view: WorkContextView = serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/microsoftteams/testdata/work_context.json"
+        "../../../../server/internal/connectors/microsoftteams/testdata/work_context.json"
     ))
     .unwrap();
     validate_work_context_view(&view, 1_789_128_000_000).unwrap();
@@ -143,7 +144,7 @@ fn microsoft_teams_work_view_crosses_the_go_rust_contract() {
 #[test]
 fn gmail_logistics_view_crosses_the_go_rust_contract() {
     let view: LogisticsView = serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/gmail/testdata/logistics_view.json"
+        "../../../../server/internal/connectors/gmail/testdata/logistics_view.json"
     ))
     .unwrap();
     validate_logistics_view(&view, 1_789_128_000_000).unwrap();

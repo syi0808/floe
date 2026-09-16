@@ -1,0 +1,77 @@
+[
+  {
+    "id": "explicit_review_request",
+    "assignment": "Find obligations and decide whether I should reply.",
+    "item": {
+      "evidence_handle": "mail:review-request",
+      "thread_handle": "mail:review-thread",
+      "received_unix_ms": 1788999900000,
+      "from": "Alex <alex@example.com>",
+      "to": "person@example.com",
+      "subject": "Please confirm the launch review by Friday",
+      "snippet": "Can you confirm that you will send the review notes by Friday?",
+      "labels": ["INBOX", "IMPORTANT"]
+    },
+    "commitments_output": {
+      "summary": "Alex requested confirmation of a Friday deliverable.",
+      "findings": [
+        {
+          "evidence_handle": "mail:review-request",
+          "kind": "request_to_user",
+          "statement": "Confirm and send the launch review notes by Friday.",
+          "epistemic_status": "observed",
+          "confidence_millis": 1000,
+          "deadline_unix_ms": 1789257600000
+        }
+      ]
+    },
+    "communication_output": {
+      "summary": "A concise confirmation is appropriate.",
+      "assessments": [
+        {
+          "evidence_handle": "mail:review-request",
+          "needs_reply": true,
+          "rationale": "The sender asks for explicit confirmation.",
+          "channel": "email",
+          "tone": "concise and accountable",
+          "draft": "Hi Alex, confirmed — I’ll send the launch review notes by Friday."
+        }
+      ]
+    },
+    "expected_commitments": 1,
+    "expected_reply": true
+  },
+  {
+    "id": "informational_newsletter",
+    "assignment": "Check this message for commitments and reply needs.",
+    "item": {
+      "evidence_handle": "mail:newsletter",
+      "thread_handle": "mail:newsletter-thread",
+      "received_unix_ms": 1788999800000,
+      "from": "Updates <news@example.com>",
+      "to": "person@example.com",
+      "subject": "September product update",
+      "snippet": "Here are this month’s release highlights.",
+      "labels": ["INBOX"]
+    },
+    "commitments_output": {
+      "summary": "No commitment is evidenced.",
+      "findings": []
+    },
+    "communication_output": {
+      "summary": "This informational update does not need a reply.",
+      "assessments": [
+        {
+          "evidence_handle": "mail:newsletter",
+          "needs_reply": false,
+          "rationale": "The message is informational and asks no question.",
+          "channel": "email",
+          "tone": "neutral",
+          "draft": null
+        }
+      ]
+    },
+    "expected_commitments": 0,
+    "expected_reply": false
+  }
+]

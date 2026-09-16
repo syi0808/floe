@@ -1,19 +1,19 @@
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_kernel::AGENT_VERSION;
-use floe_experts_builtin::{CommunicationView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, communication_context_evidence, validate_communication_view};
+use floe_context::{CommunicationView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, communication_context_evidence, validate_communication_view};
 
 const NOW: i64 = 1_789_000_000_000;
 
 fn fixture() -> CommunicationView {
     serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/gmail/testdata/communication_view.json"
+        "../../../../server/internal/connectors/gmail/testdata/communication_view.json"
     ))
     .unwrap()
 }
 
 fn microsoft_fixture() -> CommunicationView {
     serde_json::from_str(include_str!(
-        "../../../server/internal/connectors/microsoftmail/testdata/communication_view.json"
+        "../../../../server/internal/connectors/microsoftmail/testdata/communication_view.json"
     ))
     .unwrap()
 }
