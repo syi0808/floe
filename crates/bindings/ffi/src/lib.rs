@@ -1,13 +1,16 @@
 //! C ABI boundary: raw pointers, JSON envelopes, DTO conversion, memory
 //! release and the panic barrier.
 //!
-//! No product judgment lives here. Every request is handed to `floe-app`.
+//! No product judgment lives here. Every request is parsed into the app's own
+//! command and handed to `floe-app`.
 
 mod abi;
 mod app_wire;
+mod bridge;
 mod diagnostics;
 
 pub use abi::*;
+pub use bridge::FloeHandle;
 
 use std::{
     ffi::{CStr, CString, c_char},
@@ -15,25 +18,22 @@ use std::{
     ptr,
 };
 
-use chrono::{DateTime, Utc};
-use floe_app::modules::day::{Classification, DomainRef, Revision, TimelineItem};
-use floe_app::modules::kernel::PersonId;
-use uuid::Uuid;
+use chrono::Utc;
 
-use floe_app::{
-    AppComposition, AppOpenError, BridgeResult, FloeHandle, agent_failure, check_version, conversion_error, core_error, error,
-    host_error, invalid, action_error, parse_date, parse_id, parse_person, parse_time, protocol_payload,
-    unsupported_version,
+use bridge::core_error;
+use floe_app::{AppComposition, CalendarActionCommand, CalendarActionsResult};
+use floe_protocol::wire::{
+    WireResult, agent_failure, check_version, conversion_error, invalid, parse_date, parse_id,
+    parse_person, parse_time, protocol_payload,
 };
 use floe_protocol::*;
 use serde::Serialize;
 use serde_json::Value;
 
-
 pub fn local_context(
     handle: &FloeHandle,
     request: LocalContextRequestDto,
-) -> BridgeResult<LocalContextResultDto> {
+) -> WireResult<LocalContextResultDto> {
     let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
@@ -46,7 +46,7 @@ pub fn local_context(
                 .runtime()
                 .block_on(handle.core().calendar_connection(person_id))
                 .map_err(core_error)?
-                .ok_or_else(|| agent_failure(floe_app::modules::agent_contract::AgentFailure::CapabilityUnavailable))?,
+                .ok_or_else(|| agent_failure(AgentFailure::CapabilityUnavailable))?,
         )
     } else {
         None
@@ -56,7 +56,7 @@ pub fn local_context(
         .request_bound(person_id, request.operation, connection.as_ref())
 }
 
-fn c_input<'a>(value: *const c_char, field: &'static str) -> BridgeResult<&'a str> {
+fn c_input<'a>(value: *const c_char, field: &'static str) -> WireResult<&'a str> {
     if value.is_null() {
         return Err(invalid(field, "must not be null"));
     }
@@ -74,14 +74,14 @@ fn c_output(value: impl Serialize) -> *mut c_char {
         .into_raw()
 }
 
-fn envelope<T: Serialize>(value: BridgeResult<T>) -> *mut c_char {
+fn envelope<T: Serialize>(value: WireResult<T>) -> *mut c_char {
     match value {
         Ok(value) => c_output(ResponseEnvelopeDto::ok(value)),
         Err(value) => c_output(ResponseEnvelopeDto::<Value>::error(value)),
     }
 }
 
-fn guarded<T: Serialize>(operation: impl FnOnce() -> BridgeResult<T>) -> *mut c_char {
+fn guarded<T: Serialize>(operation: impl FnOnce() -> WireResult<T>) -> *mut c_char {
     diagnostics::initialize();
     match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(value) => envelope(value),
@@ -89,7 +89,7 @@ fn guarded<T: Serialize>(operation: impl FnOnce() -> BridgeResult<T>) -> *mut c_
     }
 }
 
-fn handle<'a>(value: *mut FloeHandle) -> BridgeResult<&'a FloeHandle> {
+fn handle<'a>(value: *mut FloeHandle) -> WireResult<&'a FloeHandle> {
     unsafe { value.as_ref() }.ok_or_else(|| invalid("handle", "must not be null"))
 }
 
@@ -97,7 +97,7 @@ fn snapshot(
     handle: &AppComposition,
     person_id: PersonId,
     day: &DayQueryDto,
-) -> BridgeResult<DaySnapshotDto> {
+) -> WireResult<DaySnapshotDto> {
     let date = parse_date(&day.date)?;
     let now = parse_time(&day.now, "day.now")?;
     let value = handle
@@ -113,7 +113,7 @@ fn snapshot(
     conversion::day_snapshot_to_dto(value).map_err(conversion_error)
 }
 
-pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult<DaySnapshotDto> {
+pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> WireResult<DaySnapshotDto> {
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     snapshot(handle.services(), person_id, &request.day)
@@ -122,7 +122,7 @@ pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult
 pub fn agent_fixture(
     handle: &FloeHandle,
     request: AgentFixtureRequestDto,
-) -> BridgeResult<AgentFixtureResultDto> {
+) -> WireResult<AgentFixtureResultDto> {
     let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
@@ -185,152 +185,47 @@ pub fn agent_fixture(
     })
 }
 
-#[derive(Serialize)]
-pub struct CalendarActionsResult {
-    pub actions: Vec<floe_app::modules::actions::CalendarAction>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub writes_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authority: Option<floe_app::modules::actions::ActionAuthority>,
-}
-
+/// Read one calendar-action request off the wire and hand the app the command
+/// it states. Which provider carries it out is the app's to resolve.
 pub fn calendar_actions(
     handle: &FloeHandle,
     request: CalendarActionRequestDto,
-) -> BridgeResult<CalendarActionsResult> {
+) -> WireResult<CalendarActionsResult> {
     let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
-    let recover = matches!(
-        &request.operation,
-        CalendarActionOperationDto::Recover { .. }
-    );
-    let action = match request.operation {
-        CalendarActionOperationDto::Capabilities {} => {
-            return Ok(CalendarActionsResult {
-                actions: vec![],
-                writes_enabled: Some(
-                    person_id.to_string() == floe_app::modules::native_calendar::LOCAL_PERSON
-                        && floe_app::modules::native_calendar::NativeCalendar::enabled(),
-                ),
-                authority: None,
-            });
-        }
-        CalendarActionOperationDto::GetAuthority {} => {
-            let authority = handle
-                .runtime()
-                .block_on(handle.core().actions()
-                .action_authority(person_id))
-                .map_err(action_error)?;
-            return Ok(CalendarActionsResult {
-                actions: vec![],
-                writes_enabled: None,
-                authority: Some(authority),
-            });
-        }
-        CalendarActionOperationDto::SetAuthority { .. } => {
-            return Err(agent_failure(floe_app::modules::agent_contract::AgentFailure::PolicyDenied));
-        }
-        CalendarActionOperationDto::Execute { action_id }
-        | CalendarActionOperationDto::Recover { action_id } => {
-            let id = parse_id(&action_id, "action_id", |value| value)?;
-            if person_id.to_string() != floe_app::modules::native_calendar::LOCAL_PERSON {
-                return Err(invalid(
-                    "person_id",
-                    "native Calendar is bound to this device's Person",
-                ));
-            }
-            let connection = handle
-                .runtime()
-                .block_on(handle.core().calendar_connection(person_id))
-                .map_err(core_error)?;
-            let calendar_ids = connection
-                .as_ref()
-                .map(|connection| {
-                    connection
-                        .calendars
-                        .iter()
-                        .map(|calendar| calendar.calendar_id.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let provider = floe_app::modules::native_calendar::NativeCalendar::new(calendar_ids);
-            if recover {
-                handle.runtime().block_on(
-                    handle
-                        .core()
-                        .actions()
-                .recover_calendar_action(person_id, id, &provider),
-                )
-            } else {
-                let authority = handle
-                    .runtime()
-                    .block_on(handle.core().actions()
-                .action_authority(person_id))
-                    .map_err(action_error)?;
-                let policy = floe_app::modules::actions::CalendarActionPolicy {
-                    person_id,
-                    provider: floe_app::modules::day::CalendarProvider::EventKit,
-                    allowed_calendar_ids: provider.calendar_ids.clone(),
-                    allow_create: floe_app::modules::native_calendar::NativeCalendar::enabled()
-                        && (handle
-                            .runtime()
-                            .block_on(handle.core().actions()
-                .calendar_action(person_id, id))
-                            .map_err(action_error)?
-                            .direct
-                            || authority.calendar_create != floe_app::modules::actions::ActionAuthorityMode::Deny),
-                };
-                handle.runtime().block_on(handle.core().actions()
-                .execute_calendar_action(
-                    person_id,
-                    id,
-                    &policy,
-                    &provider,
-                    Utc::now,
-                ))
-            }
-        }
-        CalendarActionOperationDto::List {} => {
-            return handle
-                .runtime()
-                .block_on(handle.core().actions()
-                .calendar_actions(person_id))
-                .map(|actions| CalendarActionsResult {
-                    actions,
-                    writes_enabled: None,
-                    authority: None,
-                })
-                .map_err(action_error);
-        }
-        CalendarActionOperationDto::Get { action_id } => handle.runtime().block_on(
-            handle
-                .core()
-                .actions()
-                .calendar_action(person_id, parse_id(&action_id, "action_id", |value| value)?),
-        ),
+    let command = match request.operation {
+        CalendarActionOperationDto::Capabilities {} => CalendarActionCommand::Capabilities,
+        CalendarActionOperationDto::GetAuthority {} => CalendarActionCommand::GetAuthority,
+        CalendarActionOperationDto::SetAuthority { .. } => CalendarActionCommand::SetAuthority,
+        CalendarActionOperationDto::List {} => CalendarActionCommand::List,
+        CalendarActionOperationDto::Get { action_id } => CalendarActionCommand::Get {
+            action_id: parse_id(&action_id, "action_id", |value| value)?,
+        },
+        CalendarActionOperationDto::Execute { action_id } => CalendarActionCommand::Execute {
+            action_id: parse_id(&action_id, "action_id", |value| value)?,
+        },
+        CalendarActionOperationDto::Recover { action_id } => CalendarActionCommand::Recover {
+            action_id: parse_id(&action_id, "action_id", |value| value)?,
+        },
+        CalendarActionOperationDto::Decide {
+            action_id,
+            decision,
+        } => CalendarActionCommand::Decide {
+            action_id: parse_id(&action_id, "action_id", |value| value)?,
+            approve: decision == CalendarActionDecisionDto::Approve,
+        },
         CalendarActionOperationDto::Propose {
             calendar_id,
             title,
             starts_at,
             ends_at,
             timezone,
-        } => {
-            let schedule = floe_app::modules::day::TimedSchedule::new(
-                parse_time(&starts_at, "starts_at")?,
-                parse_time(&ends_at, "ends_at")?,
-                &timezone,
-            )
-            .map_err(|value| invalid("schedule", value.to_string()))?;
-            handle.runtime().block_on(handle.core().actions()
-                .propose_calendar_action(
-                person_id,
-                calendar_id,
-                title,
-                schedule,
-                Utc::now(),
-            ))
-        }
+        } => CalendarActionCommand::Propose {
+            calendar_id,
+            title,
+            schedule: timed_schedule(&starts_at, &ends_at, &timezone)?,
+        },
         CalendarActionOperationDto::Direct {
             calendar_id,
             title,
@@ -341,23 +236,11 @@ pub fn calendar_actions(
             event_revision,
             delete,
         } => {
-            if person_id.to_string() != floe_app::modules::native_calendar::LOCAL_PERSON {
-                return Err(invalid(
-                    "person_id",
-                    "direct Calendar is bound to this device's Person",
-                ));
-            }
-            let schedule = floe_app::modules::day::TimedSchedule::new(
-                parse_time(&starts_at, "starts_at")?,
-                parse_time(&ends_at, "ends_at")?,
-                &timezone,
-            )
-            .map_err(|value| invalid("schedule", value.to_string()))?;
             let event_id = event_id
-                .map(|value| parse_id(&value, "event_id", floe_app::modules::kernel::EventId))
+                .map(|value| parse_id(&value, "event_id", EventId))
                 .transpose()?;
             let target = match (event_id, event_revision) {
-                (Some(id), Some(revision)) => Some((id, floe_app::modules::kernel::Revision(revision))),
+                (Some(id), Some(revision)) => Some((id, Revision(revision))),
                 (None, None) => None,
                 _ => {
                     return Err(invalid(
@@ -366,36 +249,39 @@ pub fn calendar_actions(
                     ));
                 }
             };
-            handle.runtime().block_on(handle.core().actions().direct_calendar_action(
-                person_id,
+            CalendarActionCommand::Direct {
                 calendar_id,
                 title,
-                schedule,
+                schedule: timed_schedule(&starts_at, &ends_at, &timezone)?,
                 target,
                 delete,
-                Utc::now(),
-            ))
+            }
         }
-        CalendarActionOperationDto::Decide {
-            action_id,
-            decision,
-        } => handle.runtime().block_on(handle.core().actions()
-                .decide_calendar_action(
-            person_id,
-            parse_id(&action_id, "action_id", |value| value)?,
-            decision == CalendarActionDecisionDto::Approve,
-            Utc::now(),
-        )),
-    }
-    .map_err(action_error)?;
-    Ok(CalendarActionsResult {
-        actions: vec![action],
-        writes_enabled: None,
-        authority: None,
-    })
+    };
+    handle
+        .runtime()
+        .block_on(
+            handle
+                .core()
+                .calendar_action_command(person_id, command, Utc::now()),
+        )
+        .map_err(core_error)
 }
 
-pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<MutationResultDto> {
+fn timed_schedule(
+    starts_at: &str,
+    ends_at: &str,
+    timezone: &str,
+) -> WireResult<floe_protocol::TimedSchedule> {
+    floe_protocol::TimedSchedule::new(
+        parse_time(starts_at, "starts_at")?,
+        parse_time(ends_at, "ends_at")?,
+        timezone,
+    )
+    .map_err(|value| invalid("schedule", value.to_string()))
+}
+
+pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> WireResult<MutationResultDto> {
     let handle = handle.services();
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
@@ -467,34 +353,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
         } => {
             let batches = batches
                 .into_iter()
-                .map(|batch| {
-                    let records = batch
-                        .records
-                        .into_iter()
-                        .map(|record| {
-                            Ok(floe_app::modules::day::CalendarRecord {
-                                can_modify: record.can_modify,
-                                calendar_id: record.calendar_id,
-                                external_id: record.external_id,
-                                external_revision: record.external_revision,
-                                title: record.title,
-                                schedule: conversion::event_schedule_from_dto(record.schedule)?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, conversion::ProtocolConversionError>>();
-                    match records {
-                        Ok(records) => floe_app::modules::day::CalendarBatch {
-                            calendar_id: batch.calendar_id,
-                            records,
-                            failure: batch.failure.map(conversion::calendar_failure_from_dto),
-                        },
-                        Err(_) => floe_app::modules::day::CalendarBatch {
-                            calendar_id: batch.calendar_id,
-                            records: vec![],
-                            failure: Some(floe_app::modules::day::CalendarFailure::ProviderUnavailable),
-                        },
-                    }
-                })
+                .map(conversion::calendar_batch_from_dto)
                 .collect();
             handle
                 .runtime()
@@ -515,18 +374,9 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
         } => {
             let records = records
                 .into_iter()
-                .map(|record| {
-                    Ok(floe_app::modules::day::CalendarRecord {
-                        can_modify: record.can_modify,
-                        calendar_id: record.calendar_id,
-                        external_id: record.external_id,
-                        external_revision: record.external_revision,
-                        title: record.title,
-                        schedule: conversion::event_schedule_from_dto(record.schedule)
-                            .map_err(conversion_error)?,
-                    })
-                })
-                .collect::<BridgeResult<Vec<_>>>()?;
+                .map(conversion::calendar_record_from_dto)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(conversion_error)?;
             handle
                 .runtime()
                 .block_on(handle.core().import_calendar(
@@ -566,27 +416,9 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
             classification,
             occurred_at,
         } => {
-            let capture_id = parse_id(&capture_id, "capture_id", floe_app::modules::kernel::CaptureId)?;
-            let classification = match classification {
-                ClassificationDto::Event { title, schedule } => Classification::Event {
-                    title,
-                    schedule: conversion::event_schedule_from_dto(schedule)
-                        .map_err(conversion_error)?,
-                },
-                ClassificationDto::Task {
-                    title,
-                    deadline,
-                    priority,
-                } => Classification::Task {
-                    title,
-                    deadline: deadline
-                        .as_deref()
-                        .map(|value| parse_time(value, "deadline"))
-                        .transpose()?,
-                    priority: conversion::priority_from_dto(priority),
-                },
-                ClassificationDto::Note { content } => Classification::Note { content },
-            };
+            let capture_id = parse_id(&capture_id, "capture_id", CaptureId)?;
+            let classification =
+                conversion::classification_from_dto(classification).map_err(conversion_error)?;
             let value = handle
                 .runtime()
                 .block_on(handle.core().classify_capture(
@@ -661,7 +493,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
             let value = handle
                 .runtime()
                 .block_on(handle.core().update_event(
-                    parse_id(&event_id, "event_id", floe_app::modules::kernel::EventId)?,
+                    parse_id(&event_id, "event_id", EventId)?,
                     Revision(expected_revision),
                     title,
                     conversion::event_schedule_from_dto(schedule).map_err(conversion_error)?,
@@ -682,7 +514,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .runtime()
                 .block_on(
                     handle.core().update_task(
-                        parse_id(&task_id, "task_id", floe_app::modules::kernel::TaskId)?,
+                        parse_id(&task_id, "task_id", TaskId)?,
                         Revision(expected_revision),
                         title,
                         deadline
@@ -705,7 +537,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
             let value = handle
                 .runtime()
                 .block_on(handle.core().update_note(
-                    parse_id(&note_id, "note_id", floe_app::modules::kernel::NoteId)?,
+                    parse_id(&note_id, "note_id", NoteId)?,
                     Revision(expected_revision),
                     content,
                     parse_time(&occurred_at, "occurred_at")?,
@@ -722,7 +554,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
             let value = handle
                 .runtime()
                 .block_on(handle.core().set_task_completed(
-                    parse_id(&task_id, "task_id", floe_app::modules::kernel::TaskId)?,
+                    parse_id(&task_id, "task_id", TaskId)?,
                     Revision(expected_revision),
                     completed,
                     parse_time(&occurred_at, "occurred_at")?,

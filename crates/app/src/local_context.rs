@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::bridge::{BridgeResult, agent_failure, invalid};
+use floe_protocol::wire::{WireResult, agent_failure, invalid};
 
 const ALLOWED_VIEW_IDS: [&str; 5] = [
     "people.identity",
@@ -245,7 +245,7 @@ impl LocalContextStore {
         &self,
         person_id: PersonId,
         operation: LocalContextOperationDto,
-    ) -> BridgeResult<LocalContextResultDto> {
+    ) -> WireResult<LocalContextResultDto> {
         self.request_bound(person_id, operation, None)
     }
 
@@ -254,7 +254,7 @@ impl LocalContextStore {
         person_id: PersonId,
         operation: LocalContextOperationDto,
         connection: Option<&floe_day::CalendarConnection>,
-    ) -> BridgeResult<LocalContextResultDto> {
+    ) -> WireResult<LocalContextResultDto> {
         match operation {
             LocalContextOperationDto::RegisterAcquisitionHost { host_epoch } => {
                 validate_host_epoch(&host_epoch)?;
@@ -980,7 +980,7 @@ impl LocalContextStore {
             .ok_or(AgentFailure::AccessReviewRequired)
     }
 
-    fn register_attention_host(&self, person_id: PersonId, host_epoch: String) -> BridgeResult<()> {
+    fn register_attention_host(&self, person_id: PersonId, host_epoch: String) -> WireResult<()> {
         let mut state = self
             .attention_acquisition
             .lock()
@@ -1009,7 +1009,7 @@ impl LocalContextStore {
         &self,
         person_id: PersonId,
         host_epoch: &str,
-    ) -> BridgeResult<Vec<LocalContextAttentionAcquisitionRequestDto>> {
+    ) -> WireResult<Vec<LocalContextAttentionAcquisitionRequestDto>> {
         let mut state = self
             .attention_acquisition
             .lock()
@@ -1046,7 +1046,7 @@ impl LocalContextStore {
         person_id: PersonId,
         host_epoch: &str,
         result: LocalContextAttentionAcquisitionResultDto,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         validate_attention_acquisition_result(&result)
             .map_err(|_| invalid("operation.result", "invalid attention result"))?;
         let mut state = self
@@ -1107,7 +1107,7 @@ impl LocalContextStore {
         host_epoch: &str,
         request_id: &str,
         failure: &str,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         let failure = match failure {
             "permission_denied" => AgentFailure::PolicyDenied,
             "attention_unavailable" => AgentFailure::CapabilityUnavailable,
@@ -1149,7 +1149,7 @@ impl LocalContextStore {
         }
     }
 
-    fn dispose_attention_host(&self, person_id: PersonId, host_epoch: &str) -> BridgeResult<()> {
+    fn dispose_attention_host(&self, person_id: PersonId, host_epoch: &str) -> WireResult<()> {
         let mut state = self
             .attention_acquisition
             .lock()
@@ -1238,7 +1238,7 @@ impl LocalContextStore {
         }
     }
 
-    fn register_personal_host(&self, person_id: PersonId, host_epoch: String) -> BridgeResult<()> {
+    fn register_personal_host(&self, person_id: PersonId, host_epoch: String) -> WireResult<()> {
         let mut state = self
             .personal_acquisition
             .lock()
@@ -1265,7 +1265,7 @@ impl LocalContextStore {
         &self,
         person_id: PersonId,
         host_epoch: &str,
-    ) -> BridgeResult<Vec<LocalContextPersonalAcquisitionRequestDto>> {
+    ) -> WireResult<Vec<LocalContextPersonalAcquisitionRequestDto>> {
         let mut state = self
             .personal_acquisition
             .lock()
@@ -1302,7 +1302,7 @@ impl LocalContextStore {
         person_id: PersonId,
         host_epoch: &str,
         result: LocalContextPersonalAcquisitionResultDto,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         validate_personal_acquisition_result(&result)?;
         let mut state = self
             .personal_acquisition
@@ -1363,7 +1363,7 @@ impl LocalContextStore {
         host_epoch: &str,
         request_id: &str,
         failure: &str,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         let mut state = self
             .personal_acquisition
             .lock()
@@ -1411,7 +1411,7 @@ impl LocalContextStore {
         }
     }
 
-    fn dispose_personal_host(&self, person_id: PersonId, host_epoch: &str) -> BridgeResult<()> {
+    fn dispose_personal_host(&self, person_id: PersonId, host_epoch: &str) -> WireResult<()> {
         let mut state = self
             .personal_acquisition
             .lock()
@@ -1466,7 +1466,7 @@ impl LocalContextStore {
         &self,
         person_id: PersonId,
         host_epoch: String,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         let mut state = self
             .acquisition
             .lock()
@@ -1498,7 +1498,7 @@ impl LocalContextStore {
         &self,
         person_id: PersonId,
         host_epoch: &str,
-    ) -> BridgeResult<Vec<LocalContextAcquisitionRequestDto>> {
+    ) -> WireResult<Vec<LocalContextAcquisitionRequestDto>> {
         let mut state = self
             .acquisition
             .lock()
@@ -1535,7 +1535,7 @@ impl LocalContextStore {
         person_id: PersonId,
         host_epoch: &str,
         result: LocalContextAcquisitionResultDto,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         if validate_acquisition_result(&result).is_err() {
             self.reject_acquisition(
                 person_id,
@@ -1645,7 +1645,7 @@ impl LocalContextStore {
         host_epoch: &str,
         request_id: &str,
         failure: CalendarFailure,
-    ) -> BridgeResult<()> {
+    ) -> WireResult<()> {
         let failure_kind = match failure {
             CalendarFailure::PermissionDenied => AgentFailure::CapabilityDenied,
             CalendarFailure::CalendarUnavailable | CalendarFailure::ProviderUnavailable => {
@@ -1685,7 +1685,7 @@ impl LocalContextStore {
         }
     }
 
-    fn dispose_acquisition_host(&self, person_id: PersonId, host_epoch: &str) -> BridgeResult<()> {
+    fn dispose_acquisition_host(&self, person_id: PersonId, host_epoch: &str) -> WireResult<()> {
         let mut state = self
             .acquisition
             .lock()
@@ -1816,7 +1816,7 @@ fn validate_view(
     })
 }
 
-fn validate_view_id(view_id: &str) -> BridgeResult<()> {
+fn validate_view_id(view_id: &str) -> WireResult<()> {
     if ALLOWED_VIEW_IDS.contains(&view_id) {
         Ok(())
     } else {
@@ -1888,7 +1888,7 @@ fn validate_calendar_observation(
     Ok(())
 }
 
-fn validate_handle(value: &str, field: &'static str) -> BridgeResult<()> {
+fn validate_handle(value: &str, field: &'static str) -> WireResult<()> {
     if !value.trim().is_empty() && value.len() <= 128 {
         Ok(())
     } else {
@@ -1896,7 +1896,7 @@ fn validate_handle(value: &str, field: &'static str) -> BridgeResult<()> {
     }
 }
 
-fn now_unix_ms() -> BridgeResult<i64> {
+fn now_unix_ms() -> WireResult<i64> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| agent_failure(AgentFailure::StaleContext))?;
@@ -1970,7 +1970,7 @@ fn result_with_personal_acquisitions(
     }
 }
 
-fn validate_host_epoch(value: &str) -> BridgeResult<()> {
+fn validate_host_epoch(value: &str) -> WireResult<()> {
     if value.trim().is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
         return Err(invalid("operation.host_epoch", "invalid host epoch"));
     }
@@ -1979,7 +1979,7 @@ fn validate_host_epoch(value: &str) -> BridgeResult<()> {
 
 fn validate_attention_acquisition_request(
     request: &LocalContextAttentionAcquisitionRequestDto,
-) -> BridgeResult<()> {
+) -> WireResult<()> {
     validate_host_epoch(&request.host_epoch)?;
     validate_handle(&request.request_id, "operation.request_id")?;
     validate_handle(&request.device_id, "operation.device_id")?;
@@ -2001,7 +2001,7 @@ fn validate_attention_acquisition_request(
 
 fn validate_attention_acquisition_result(
     result: &LocalContextAttentionAcquisitionResultDto,
-) -> BridgeResult<()> {
+) -> WireResult<()> {
     validate_host_epoch(&result.host_epoch)?;
     validate_handle(&result.request_id, "operation.result.request_id")?;
     validate_handle(&result.device_id, "operation.result.device_id")?;
@@ -2040,7 +2040,7 @@ fn validate_attention_acquisition_result(
 
 fn validate_personal_acquisition_request(
     request: &LocalContextPersonalAcquisitionRequestDto,
-) -> BridgeResult<()> {
+) -> WireResult<()> {
     validate_host_epoch(&request.host_epoch)?;
     validate_handle(&request.request_id, "operation.request_id")?;
     validate_handle(&request.device_id, "operation.device_id")?;
@@ -2143,7 +2143,7 @@ fn validate_personal_acquisition_request(
 
 fn validate_personal_acquisition_result(
     result: &LocalContextPersonalAcquisitionResultDto,
-) -> BridgeResult<()> {
+) -> WireResult<()> {
     validate_host_epoch(&result.host_epoch)?;
     validate_handle(&result.request_id, "operation.result.request_id")?;
     validate_handle(&result.device_id, "operation.result.device_id")?;
@@ -2180,7 +2180,7 @@ fn validate_personal_acquisition_result(
     Ok(())
 }
 
-fn validate_fingerprint(value: &str, field: &'static str) -> BridgeResult<()> {
+fn validate_fingerprint(value: &str, field: &'static str) -> WireResult<()> {
     if valid_native_subject_fingerprint(value) {
         Ok(())
     } else {
@@ -2188,7 +2188,7 @@ fn validate_fingerprint(value: &str, field: &'static str) -> BridgeResult<()> {
     }
 }
 
-fn validate_acquisition_request(request: &LocalContextAcquisitionRequestDto) -> BridgeResult<()> {
+fn validate_acquisition_request(request: &LocalContextAcquisitionRequestDto) -> WireResult<()> {
     validate_host_epoch(&request.host_epoch)?;
     validate_handle(&request.request_id, "operation.request_id")?;
     validate_handle(&request.person_id, "operation.person_id")?;
@@ -2249,7 +2249,7 @@ fn acquisition_identity_matches(
         && request.range_end_unix_ms == result.range_end_unix_ms
 }
 
-fn validate_acquisition_result(result: &LocalContextAcquisitionResultDto) -> BridgeResult<()> {
+fn validate_acquisition_result(result: &LocalContextAcquisitionResultDto) -> WireResult<()> {
     if !valid_native_subject_fingerprint(&result.native_subject_fingerprint_before)
         || !valid_native_subject_fingerprint(&result.native_subject_fingerprint_after)
         || result.native_subject_fingerprint_before != result.native_subject_fingerprint_after

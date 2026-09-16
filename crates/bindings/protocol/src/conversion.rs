@@ -485,6 +485,69 @@ pub fn note_from_dto(value: NoteDto) -> Result<Note, ProtocolConversionError> {
     Ok(note)
 }
 
+/// The classification a caller chose for one capture.
+pub fn classification_from_dto(
+    value: crate::ClassificationDto,
+) -> Result<floe_day::Classification, ProtocolConversionError> {
+    Ok(match value {
+        crate::ClassificationDto::Event { title, schedule } => floe_day::Classification::Event {
+            title,
+            schedule: event_schedule_from_dto(schedule)?,
+        },
+        crate::ClassificationDto::Task {
+            title,
+            deadline,
+            priority,
+        } => floe_day::Classification::Task {
+            title,
+            deadline: deadline
+                .as_deref()
+                .map(|value| parse_timestamp(value, "deadline"))
+                .transpose()?,
+            priority: priority_from_dto(priority),
+        },
+        crate::ClassificationDto::Note { content } => floe_day::Classification::Note { content },
+    })
+}
+
+/// One source record as the calendar mirror stores it.
+pub fn calendar_record_from_dto(
+    value: crate::CalendarRecordDto,
+) -> Result<floe_day::CalendarRecord, ProtocolConversionError> {
+    Ok(floe_day::CalendarRecord {
+        can_modify: value.can_modify,
+        calendar_id: value.calendar_id,
+        external_id: value.external_id,
+        external_revision: value.external_revision,
+        title: value.title,
+        schedule: event_schedule_from_dto(value.schedule)?,
+    })
+}
+
+/// One source batch. A batch whose records do not convert is reported as a
+/// provider failure rather than a partially imported calendar.
+pub fn calendar_batch_from_dto(value: crate::CalendarBatchDto) -> floe_day::CalendarBatch {
+    let calendar_id = value.calendar_id;
+    let failure = value.failure.map(calendar_failure_from_dto);
+    match value
+        .records
+        .into_iter()
+        .map(calendar_record_from_dto)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(records) => floe_day::CalendarBatch {
+            calendar_id,
+            records,
+            failure,
+        },
+        Err(_) => floe_day::CalendarBatch {
+            calendar_id,
+            records: vec![],
+            failure: Some(CalendarFailure::ProviderUnavailable),
+        },
+    }
+}
+
 pub fn timeline_item_to_dto(value: TimelineItem) -> TimelineItemDto {
     match value {
         TimelineItem::Event(value) => TimelineItemDto::Event(event_to_dto(value)),

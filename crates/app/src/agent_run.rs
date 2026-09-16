@@ -14,9 +14,8 @@ use floe_protocol::*;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::bridge::{
-    BridgeResult, FloeHandle, agent_failure, check_version, parse_id, parse_person,
-    protocol_payload,
+use floe_protocol::wire::{
+    WireResult, agent_failure, check_version, parse_id, parse_person, protocol_payload,
 };
 
 #[derive(Default)]
@@ -34,7 +33,7 @@ struct AgentRun {
 }
 
 impl AgentRuns {
-    pub fn ensure_idle(&self, person_id: PersonId, session_id: Uuid) -> BridgeResult<()> {
+    pub fn ensure_idle(&self, person_id: PersonId, session_id: Uuid) -> WireResult<()> {
         if self.0.borrow().as_ref().is_some_and(|run| {
             run.person_id == person_id && run.session_id == session_id && run.result.is_none()
         }) {
@@ -59,10 +58,9 @@ impl AgentRuns {
 }
 
 pub fn run(
-    handle: &FloeHandle,
+    handle: &crate::AppComposition,
     request: AgentFixtureRunRequestDto,
-) -> BridgeResult<AgentFixtureRunDto> {
-    let handle = handle.services();
+) -> WireResult<AgentFixtureRunDto> {
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     let session_id = parse_id(&request.session_id, "session_id", |value| value)?;
@@ -162,7 +160,7 @@ pub fn run(
     Ok(result)
 }
 
-fn snapshot(run: &AgentRun, after_sequence: usize) -> BridgeResult<AgentFixtureRunDto> {
+fn snapshot(run: &AgentRun, after_sequence: usize) -> WireResult<AgentFixtureRunDto> {
     let events = run
         .events
         .lock()

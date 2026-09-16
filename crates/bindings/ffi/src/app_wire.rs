@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
-use floe_app::modules::conversation::{RunReceipt, RunState};
-use floe_app::modules::kernel::{AgentFailure, CommandId, PersonId, RunId};
+use floe_app::{AgentFailure, CommandId, PersonId, RunId, RunReceipt, RunState};
 use floe_protocol::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
     AppCommandResultDto, AppCommandStatusDto, AppEventDto, AppEventKindDto, AppEventsRequestDto,
@@ -11,9 +10,11 @@ use floe_protocol::{
 };
 
 use floe_app::{
-    ConversationQuery, FloeHandle,
+    ConversationQuery,
     events::{EventPayload, EventRead, RunEventRecord},
 };
+
+use crate::bridge::FloeHandle;
 
 pub(crate) type AppWireResult<T> = Result<T, AppWireErrorDto>;
 

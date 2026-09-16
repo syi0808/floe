@@ -8,7 +8,6 @@ mod agent_fixture;
 pub mod agent_run;
 mod api;
 mod bootstrap;
-mod bridge;
 mod calendar_facade;
 #[cfg(unix)]
 mod composition;
@@ -24,30 +23,18 @@ mod services;
 #[cfg(unix)]
 mod vault_host;
 
-/// The module values this host hands across its own boundary.
+/// The values this host's own API names at its boundary.
 ///
-/// A binding talks to the app, not to the modules behind it: everything it
-/// needs to name is re-exported here, so the ABI never depends on which module
-/// owns a value today.
-pub mod modules {
-    pub use floe_actions as actions;
-    pub use floe_agent_contract as agent_contract;
-    pub use floe_diagnostics as diagnostics;
-    pub use floe_kernel as kernel;
-    pub use floe_conversation as conversation;
-    pub use floe_day as day;
-    pub use floe_knowledge as knowledge;
-    pub use floe_provider_adapters::sources::native_calendar;
-}
+/// A binding reads a receipt and reports a failure; it does not reach past the
+/// app into the modules behind it, so only the values these signatures carry
+/// are named here — never a module, and never a concrete adapter.
+pub use floe_conversation::{RunReceipt, RunState};
+pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
+pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 
+pub use action_facade::CalendarActionCommand;
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 pub use bootstrap::local_identity_for_database;
-pub use bridge::{
-    BridgeResult, FloeHandle, action_error, agent_failure, check_version, conversion_error,
-    core_error, error,
-    host_error, invalid, parse_date, parse_id, parse_person, parse_time, protocol_payload,
-    unsupported_version,
-};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
 pub use agent_fixture::{

@@ -1,6 +1,7 @@
 use uuid::Uuid;
 
 use super::*;
+use crate::bridge::open_error;
 use serde::de::DeserializeOwned;
 
 #[cfg(unix)]
@@ -49,7 +50,7 @@ where
 fn invoke_json<Request, Response>(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
-    operation: impl FnOnce(&FloeHandle, Request) -> BridgeResult<Response>,
+    operation: impl FnOnce(&FloeHandle, Request) -> WireResult<Response>,
 ) -> *mut c_char
 where
     Request: DeserializeOwned,
@@ -73,7 +74,7 @@ pub unsafe extern "C" fn floe_core_open(
     if !error_json_out.is_null() {
         unsafe { *error_json_out = ptr::null_mut() };
     }
-    let operation = || -> BridgeResult<*mut FloeHandle> {
+    let operation = || -> WireResult<*mut FloeHandle> {
         let path = c_input(path, "path")?;
         let app = floe_app::open(path).map_err(open_error)?;
         Ok(Box::into_raw(Box::new(FloeHandle::new(app))))
@@ -182,7 +183,9 @@ pub unsafe extern "C" fn floe_core_agent_fixture_run(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, floe_app::agent_run::run)
+    invoke_json(handle_ptr, request_json, |handle: &FloeHandle, request| {
+        floe_app::agent_run::run(handle.services(), request)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -204,7 +207,7 @@ pub unsafe extern "C" fn floe_core_agent_vault(
         #[cfg(not(unix))]
         {
             let _ = (handle, request);
-            Err::<AgentVaultResultDto, _>(agent_failure(floe_app::modules::agent_contract::AgentFailure::VaultUnavailable))
+            Err::<AgentVaultResultDto, _>(agent_failure(AgentFailure::VaultUnavailable))
         }
     })
 }
@@ -222,14 +225,5 @@ pub unsafe extern "C" fn floe_string_free(value: *mut c_char) {
 pub unsafe extern "C" fn floe_core_free(handle: *mut FloeHandle) {
     if !handle.is_null() {
         unsafe { drop(Box::from_raw(handle)) };
-    }
-}
-
-fn open_error(value: AppOpenError) -> ErrorDto {
-    match value {
-        AppOpenError::Host(host) => host_error(host),
-        AppOpenError::Runtime(message) | AppOpenError::Store(message) => {
-            error(ErrorCodeDto::Internal, message)
-        }
     }
 }

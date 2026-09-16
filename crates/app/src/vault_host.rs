@@ -41,7 +41,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::bridge::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
+use floe_protocol::wire::{WireResult, agent_failure, check_version, parse_id, parse_person};
 use crate::local_context::LocalContextStore;
 use crate::{FloeCore, diagnostics};
 
@@ -180,7 +180,7 @@ impl VaultBridge {
     pub fn request(
         &self,
         request: AgentVaultRequestDto,
-    ) -> BridgeResult<AgentVaultResultDto> {
+    ) -> WireResult<AgentVaultResultDto> {
         check_version(request.schema_version)?;
         let person = parse_person(&request.person_id)?;
         let id = parse_id(&request.request_id, "request_id", |id| id)?;

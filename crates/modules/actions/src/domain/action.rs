@@ -3,7 +3,7 @@ use floe_day::{CalendarProvider, Event, PersonId, SourceRef, TimedSchedule};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::AgentActionOrigin;
+use crate::domain::{ActionAuthority, ActionAuthorityMode, AgentActionOrigin};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarAction {
@@ -73,6 +73,30 @@ pub struct CalendarActionPolicy {
     pub provider: CalendarProvider,
     pub allowed_calendar_ids: Vec<String>,
     pub allow_create: bool,
+}
+
+impl CalendarActionPolicy {
+    /// The policy one action executes under.
+    ///
+    /// Creating on the Person's calendar needs a provider that can write at
+    /// all, and then either the Person's standing authority or their own direct
+    /// instruction for this very action. A proposal an Expert raised carries no
+    /// such instruction, so it stands or falls on the standing authority alone.
+    pub fn for_execution(
+        action: &CalendarAction,
+        authority: &ActionAuthority,
+        provider: CalendarProvider,
+        allowed_calendar_ids: Vec<String>,
+        provider_can_write: bool,
+    ) -> Self {
+        Self {
+            person_id: action.person_id,
+            provider,
+            allowed_calendar_ids,
+            allow_create: provider_can_write
+                && (action.direct || authority.calendar_create != ActionAuthorityMode::Deny),
+        }
+    }
 }
 
 #[derive(Deserialize)]
