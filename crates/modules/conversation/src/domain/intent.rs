@@ -136,7 +136,7 @@ impl AdmittedExecution {
 }
 
 pub fn normalize_turn_text(text: &str) -> Result<String, AgentFailure> {
-    let normalized = text.trim();
+    let normalized = text.trim_matches(char::is_whitespace);
     if normalized.is_empty()
         || normalized.len() > MAX_TURN_TEXT_BYTES
         || normalized
@@ -201,15 +201,14 @@ mod tests {
         let mut first = turn("  hello  ");
         let mut second = first.clone();
         second.command_id = CommandId::new();
-        let first = CanonicalTurnIntent::from_start_turn(&mut first)
-            .unwrap()
-            .digest("person")
-            .unwrap();
-        let second = CanonicalTurnIntent::from_start_turn(&mut second)
-            .unwrap()
-            .digest("person")
-            .unwrap();
-        assert_eq!(first, second);
+        let first_intent = CanonicalTurnIntent::from_start_turn(&mut first).unwrap();
+        let second_intent = CanonicalTurnIntent::from_start_turn(&mut second).unwrap();
+        assert_eq!(first_intent.text, "hello");
+        assert_eq!(second_intent.text, "hello");
+        assert_eq!(
+            first_intent.digest("person"),
+            second_intent.digest("person")
+        );
     }
 
     #[test]
@@ -239,6 +238,17 @@ mod tests {
     #[test]
     fn normalization_uses_utf8_byte_limit() {
         assert!(normalize_turn_text(&"한".repeat(MAX_TURN_TEXT_BYTES / 3 + 1)).is_err());
-        assert_eq!(normalize_turn_text("  hello\n").unwrap(), "hello");
+        assert_eq!(
+            normalize_turn_text("\u{0085}\thello\t\u{0085}").unwrap(),
+            "hello"
+        );
+        assert_eq!(normalize_turn_text("hello\nworld").unwrap(), "hello\nworld");
+        assert!(normalize_turn_text("hello\tworld").is_err());
+        assert!(normalize_turn_text("hello\rworld").is_err());
+
+        let exact = "한".repeat(2_730) + "ab";
+        assert_eq!(exact.len(), MAX_TURN_TEXT_BYTES);
+        assert_eq!(normalize_turn_text(&exact).unwrap(), exact);
+        assert!(normalize_turn_text(&(exact + "c")).is_err());
     }
 }

@@ -60,20 +60,19 @@ where
                     floe_app::ProfileSelection::Explicit(profile_id)
                 }
             };
+            let mut service_request = floe_app::StartTurn {
+                command_id: request.command_id,
+                session_id,
+                expected_revision,
+                text,
+                mode,
+                retry_of,
+                profile,
+            };
+            service_request.normalize_text().map_err(service_error)?;
             let receipt = host_request
                 .services()
-                .start_turn(
-                    host_request.caller(),
-                    floe_app::StartTurn {
-                        command_id: request.command_id,
-                        session_id,
-                        expected_revision,
-                        text,
-                        mode,
-                        retry_of,
-                        profile,
-                    },
-                )
+                .start_turn(host_request.caller(), service_request)
                 .map_err(service_error)?;
             Ok(AppCommandResultDto::CommandReceipt {
                 receipt: AppCommandReceiptDto {
@@ -564,7 +563,7 @@ mod tests {
                 command: AppCommandDto::ConversationStartTurn {
                     session_id,
                     expected_revision: 7,
-                    text: "hello".into(),
+                    text: "\thello\t".into(),
                     mode: AppTurnModeDto::NewTurn {},
                     profile: AppProfileSelectionDto::Explicit {
                         profile_id: "local-fast".into(),
@@ -590,6 +589,7 @@ mod tests {
         assert_eq!(captured_person, person_id);
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.session_id, session_id);
+        assert_eq!(captured.text, "hello");
         assert_eq!(captured.retry_of, Some(retry_of));
         assert_eq!(
             captured.profile,

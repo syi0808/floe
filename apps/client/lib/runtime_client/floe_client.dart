@@ -4,6 +4,9 @@ import 'dart:math';
 
 import 'transport/app_wire_transport.dart';
 
+const _maxTurnTextBytes = 8 * 1024;
+const _maxTurnPayloadBytes = 64 * 1024;
+
 final class PreparedStartTurn {
   const PreparedStartTurn({
     required this.commandId,
@@ -203,10 +206,9 @@ final class FloeClient {
     String? profileId,
   }) {
     if (_closed) throw StateError('FloeClient is already closed.');
+    final normalizedText = _normalizeTurnText(text);
     if (sessionId.isEmpty ||
         expectedRevision < 0 ||
-        text.trim().isEmpty ||
-        utf8.encode(text.trim()).length > 8 * 1024 ||
         profileId != null &&
             (profileId.isEmpty ||
                 profileId.trim() != profileId ||
@@ -228,7 +230,7 @@ final class FloeClient {
       commandId: _newId(),
       sessionId: sessionId,
       expectedRevision: expectedRevision,
-      text: text,
+      text: normalizedText,
       continuation: continuation,
       retryOf: retryOf,
       profileId: profileId,
@@ -242,6 +244,7 @@ final class FloeClient {
     if (_closed) return Future.error(StateError('FloeClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
+      final normalizedText = _normalizeTurnText(command.text);
       final result = await _transport.commandV2({
         'schema_version': appWireProtocolVersion,
         'request_id': requestId,
@@ -250,7 +253,7 @@ final class FloeClient {
           'kind': 'conversation.start_turn',
           'session_id': command.sessionId,
           'expected_revision': command.expectedRevision,
-          'text': command.text,
+          'text': normalizedText,
           'mode': switch (command.continuation) {
             null => {'kind': 'new_turn'},
             final continuation => {
@@ -264,10 +267,7 @@ final class FloeClient {
           },
           'retry_of': ?command.retryOf,
           if (command.profileId != null)
-            'profile': {
-              'kind': 'explicit',
-              'profile_id': command.profileId,
-            },
+            'profile': {'kind': 'explicit', 'profile_id': command.profileId},
         },
       }, timeout: timeout);
       return _commandReceipt(result, expectedCommandId: command.commandId);
@@ -526,6 +526,50 @@ final class FloeClient {
     return completer.future;
   }
 }
+
+String _normalizeTurnText(String text) {
+  if (utf8.encode(text).length > _maxTurnPayloadBytes) {
+    throw const FormatException('Invalid conversation turn.');
+  }
+  final codePoints = text.runes.toList(growable: false);
+  var first = 0;
+  while (first < codePoints.length && _isRustWhitespace(codePoints[first])) {
+    first++;
+  }
+  var last = codePoints.length;
+  while (last > first && _isRustWhitespace(codePoints[last - 1])) {
+    last--;
+  }
+  final normalized = String.fromCharCodes(codePoints.sublist(first, last));
+  if (normalized.isEmpty ||
+      utf8.encode(normalized).length > _maxTurnTextBytes ||
+      normalized.runes.any(
+        (value) => _isRustControl(value) && value != 0x000A,
+      )) {
+    throw const FormatException('Invalid conversation turn.');
+  }
+  return normalized;
+}
+
+bool _isRustWhitespace(int value) =>
+    value == 0x0009 ||
+    value == 0x000A ||
+    value == 0x000B ||
+    value == 0x000C ||
+    value == 0x000D ||
+    value == 0x0020 ||
+    value == 0x0085 ||
+    value == 0x00A0 ||
+    value == 0x1680 ||
+    value >= 0x2000 && value <= 0x200A ||
+    value == 0x2028 ||
+    value == 0x2029 ||
+    value == 0x202F ||
+    value == 0x205F ||
+    value == 0x3000;
+
+bool _isRustControl(int value) =>
+    value <= 0x001F || value >= 0x007F && value <= 0x009F;
 
 AppCommandReceipt _commandReceipt(
   Map<String, dynamic> result, {

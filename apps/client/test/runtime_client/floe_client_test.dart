@@ -7,6 +7,94 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'StartTurn uses Rust whitespace and transmits normalized text',
+    () async {
+      final transport = FakeTransport();
+      final client = FloeClient(transport, newId: _unusedId);
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: '\u{0085}\thello\t\u{0085}',
+      );
+      expect(command.text, 'hello');
+      transport.command = (request) async => {
+        'kind': 'command_receipt',
+        'command_id': request['command_id'],
+        'runtime_epoch': 7,
+        'admission': 'accepted',
+        'run_id': '00000000-0000-4000-8000-000000000205',
+        'session_revision': 4,
+      };
+
+      await client.submitStartTurn(command);
+
+      expect(
+        (transport.commandRequests.single['command'] as Map)['text'],
+        'hello',
+      );
+    },
+  );
+
+  test(
+    'StartTurn preserves line feeds and rejects other internal controls',
+    () {
+      final client = FloeClient(FakeTransport(), newId: _unusedId);
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: 'hello\nworld',
+      );
+      expect(command.text, 'hello\nworld');
+
+      for (final text in [
+        'hello\tworld',
+        'hello\rworld',
+        'hello\u{000B}world',
+      ]) {
+        expect(
+          () => client.prepareStartTurn(
+            sessionId: '00000000-0000-4000-8000-000000000204',
+            expectedRevision: 3,
+            text: text,
+          ),
+          throwsFormatException,
+        );
+      }
+    },
+  );
+
+  test('StartTurn applies the normalized UTF-8 byte limit', () {
+    final client = FloeClient(FakeTransport(), newId: _unusedId);
+    final exact = '${List.filled(2730, '한').join()}ab';
+    expect(
+      client
+          .prepareStartTurn(
+            sessionId: '00000000-0000-4000-8000-000000000204',
+            expectedRevision: 3,
+            text: exact,
+          )
+          .text,
+      exact,
+    );
+    expect(
+      () => client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: '${exact}c',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: '   ',
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test(
     'StartTurn keeps its command identity across transport retries',
     () async {
       final transport = FakeTransport();

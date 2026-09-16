@@ -69,7 +69,6 @@ impl TurnRequest {
             || self.principal.is_empty()
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
-            || self.prompt.trim().is_empty()
             || self.execution_profile.trim() != self.execution_profile
             || self.execution_profile.is_empty()
             || self.execution_profile.len() > 64
@@ -80,14 +79,7 @@ impl TurnRequest {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        let normalized = self.prompt.trim();
-        if normalized.len() > crate::MAX_TURN_TEXT_BYTES
-            || normalized
-                .chars()
-                .any(|character| character.is_control() && character != '\n')
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
+        crate::normalize_turn_text(&self.prompt)?;
         self.profile.validate()?;
         if let TurnMode::Continue(reference) = &self.mode {
             reference.validate()?;

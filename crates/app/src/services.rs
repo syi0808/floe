@@ -3,6 +3,7 @@ use uuid::Uuid;
 use crate::CallerContext;
 
 const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
+const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartTurn {
@@ -16,15 +17,16 @@ pub struct StartTurn {
 }
 
 impl StartTurn {
+    pub fn normalize_text(&mut self) -> Result<(), ServiceError> {
+        self.text = normalize_turn_text(&self.text)?;
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), ServiceError> {
         if self.command_id.is_nil()
             || self.session_id.is_nil()
-            || self.text.trim().is_empty()
-            || self.text.trim().len() > MAX_TURN_TEXT_BYTES
-            || self
-                .text
-                .chars()
-                .any(|character| character.is_control() && character != '\n')
+            || self.text.len() > MAX_TURN_PAYLOAD_BYTES
+            || normalize_turn_text(&self.text).is_err()
             || self.retry_of.is_some_and(|id| id.is_nil())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
         {
@@ -36,6 +38,20 @@ impl StartTurn {
             TurnMode::Continue(reference) => reference.validate(),
         }
     }
+}
+
+fn normalize_turn_text(text: &str) -> Result<String, ServiceError> {
+    let normalized = text.trim();
+    if text.len() > MAX_TURN_PAYLOAD_BYTES
+        || normalized.is_empty()
+        || normalized.len() > MAX_TURN_TEXT_BYTES
+        || normalized
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    {
+        return Err(ServiceError::InvalidInput);
+    }
+    Ok(normalized.to_owned())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,6 +196,23 @@ mod tests {
             level: 1,
         });
         assert_eq!(invalid.validate(), Err(ServiceError::InvalidInput));
+    }
+
+    #[test]
+    fn start_turn_normalizes_canonical_text_before_forwarding() {
+        let mut request = request();
+        request.text = "\thello\t".into();
+        assert_eq!(request.validate(), Ok(()));
+        request.normalize_text().unwrap();
+        assert_eq!(request.text, "hello");
+
+        request.text = "hello\tworld".into();
+        assert_eq!(request.validate(), Err(ServiceError::InvalidInput));
+
+        request.text = "한".repeat(2_730) + "ab";
+        assert_eq!(request.validate(), Ok(()));
+        request.text.push('c');
+        assert_eq!(request.validate(), Err(ServiceError::InvalidInput));
     }
 
     #[test]

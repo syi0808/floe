@@ -75,6 +75,36 @@ fn app_wire_rejects_invalid_identity_and_unknown_fields() {
 }
 
 #[test]
+fn app_wire_text_validation_uses_normalized_text_and_keeps_payload_defense() {
+    let mut padded = fixture("start_turn");
+    padded["command"]["text"] = json!("\u{0085}\thello\t\u{0085}");
+    let request: AppCommandRequestDto = serde_json::from_value(padded).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+
+    for text in ["hello\tworld", "hello\rworld", "hello\u{000B}world"] {
+        let mut invalid = fixture("start_turn");
+        invalid["command"]["text"] = json!(text);
+        let request: AppCommandRequestDto = serde_json::from_value(invalid).unwrap();
+        assert_eq!(request.validate(), Err("command.text"));
+    }
+
+    let mut exact = fixture("start_turn");
+    exact["command"]["text"] = json!("한".repeat(2_730) + "ab");
+    let request: AppCommandRequestDto = serde_json::from_value(exact).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+
+    let mut over = fixture("start_turn");
+    over["command"]["text"] = json!("한".repeat(2_730) + "abc");
+    let request: AppCommandRequestDto = serde_json::from_value(over).unwrap();
+    assert_eq!(request.validate(), Err("command.text"));
+
+    let mut oversized_payload = fixture("start_turn");
+    oversized_payload["command"]["text"] = json!(format!("a{}", " ".repeat(64 * 1024)));
+    let request: AppCommandRequestDto = serde_json::from_value(oversized_payload).unwrap();
+    assert_eq!(request.validate(), Err("command.text"));
+}
+
+#[test]
 fn app_wire_validates_continuation_and_event_bounds() {
     let mut continuation = fixture("start_turn");
     continuation["command"]["mode"] = json!({

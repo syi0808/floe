@@ -668,16 +668,23 @@ async fn exact_command_replay_does_not_dispatch_again_and_release_is_not_require
     let service = service(Arc::clone(&repository));
     let model = AnswerModel::default();
     let command_id = CommandId::new();
-    let first_request = request(command_id, session_id, 0, "hello");
+    let first_request = request(command_id, session_id, 0, "\thello\t");
     let first = service
-        .run_turn(first_request.clone(), ports(&model))
+        .run_turn(first_request, ports(&model))
         .await
         .unwrap();
     assert_eq!(first.state, RunState::Completed);
     assert_eq!(first.coverage, DependencyCoverage::Independent);
     assert_eq!(first.session_revision, 2);
+    assert_eq!(first.output.as_deref(), Some("answered: hello"));
 
-    let mut replay_request = first_request;
+    {
+        let state = repository.state.lock().unwrap();
+        let session = state.sessions.get(&session_id).unwrap();
+        assert_eq!(session.transcript[0].text, "hello");
+    }
+
+    let mut replay_request = request(command_id, session_id, 0, "hello");
     replay_request.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
     let replay = service
         .run_turn(replay_request, ports(&model))

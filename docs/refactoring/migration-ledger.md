@@ -10,9 +10,9 @@ This is the only mutable refactoring progress record. The [active document editi
 | Active plan | **R003**, [PLAN](versions/r003-structure-first/PLAN.md) / [execution](versions/r003-structure-first/EXECUTION_PLAN.md) |
 | Current stage | **A — structural refactoring; not complete** |
 | Execution | One coding agent, one sequential change set; product Manager/Expert A2A retained |
-| Current change | R003 step 01: preserve explicit profile from the app conversation request through the vault turn DTO into Conversation canonical intent/digest |
-| Runtime changes in this refresh | Canonical turn digest and normalized text are wired through Conversation admission; the app, queued conversation request, and Conversation turn now retain profile selection; archive values now belong to `floe-agent-contract`; app wire schema remains 2 |
-| Contract validation in this refresh | Focused Rust type/tests, FFI app-wire tests, Flutter client/gateway tests, architecture boundary check, and `git diff --check` pass; no live Apple app/model/provider behavior was exercised |
+| Current change | R003 step 01.2: align turn text normalization and boundary validation; preserve the existing explicit profile forwarding path |
+| Runtime changes in this refresh | Rust canonical turn text normalization now drives the Dart precheck, app-wire admission, App service forwarding, Conversation intent/digest, stored user message and Engine prompt; explicit profile selection remains preserved; app wire schema remains 2 |
+| Contract validation in this refresh | `cargo test -p floe-app`, `cargo test -p floe-protocol --test app_wire_v2`, `cargo test -p floe-conversation`, `cargo test -p floe-ffi --lib app_wire::tests`, `flutter test test/runtime_client/floe_client_test.dart`, and `git diff --check` pass; no live Apple app/model/provider behavior was exercised |
 | Product validation in this refresh | `not_run` |
 | Latest recorded app observation | Normal macOS debug app ended in VaultUnavailable before route selection; cause not confirmed |
 | Next code task | R003 02.1: inspect `crates/modules/connections/src/api.rs` and introduce the concrete `ConnectionIntent`/`ConnectionObservation` owner boundary |
@@ -74,6 +74,14 @@ These are source and prior checkpoint summaries, not new passes. R003 source win
 - **Checks:** `cargo check -p floe-ffi -p floe-conversation -p floe-protocol` passed; `cargo test -p floe-protocol -p floe-conversation` passed (6 app-wire, 16 Conversation, 14 protocol tests); `cargo test -p floe-ffi --lib app_wire::tests` passed (3 tests); `flutter test test/runtime_client/floe_client_test.dart test/features/conversation/conversation_runtime_gateway_test.dart` passed (15 tests); `python3 tools/architecture/check_boundaries.py . --mode migration` passed with only expected migration warnings; `git diff --check` passed. `rustfmt --check` remains not clean because of unrelated pre-existing formatting in the touched legacy FFI test/source files; no formatter-only changes were applied.
 - **Behavior:** `not_run`; no live macOS app, Keychain/Vault diagnosis, OAuth, provider, or model behavior was exercised.
 - **Unfinished:** Stage 01 does not remove final ABI aliases or legacy composition; those require the later caller replacement. No data regeneration is indicated by the archive type-path move.
+
+### R003 step 01.2 text contract evidence
+
+- **Completed scope:** Rust `char::is_whitespace`-based trimming is the canonical definition; Dart uses the matching explicit code-point set. Normalized text must be non-empty, no more than 8192 UTF-8 bytes, and may retain only LF among control characters. The 64 KiB raw wire payload defense remains at the Dart/Protocol/App boundaries.
+- **Wiring:** Dart stores and transmits normalized text; Protocol and App validate the normalized candidate without rejecting trim-eligible raw whitespace first; the app-wire caller forwards the App-normalized value; Conversation authoritative admission uses one canonical text for the intent, principal-bound digest, user-message storage, and Engine prompt. Existing retry/Continue and explicit profile semantics are unchanged.
+- **Checks:** The focused Rust, FFI app-wire, Flutter client, and diff checks recorded above pass. The boundary cases cover `\thello\t`, preserved `hello\\nworld`, rejection of internal tab/CR/other controls, empty input, and the 8192-byte exact/overflow cases.
+- **Behavior:** `not_run`; no live macOS app, Keychain/Vault diagnosis, OAuth, provider, or model behavior was exercised.
+- **Remaining Step 01:** This entry completes only the 01.2 text contract. It does not mark R003 Step 01 or product stability complete; the final ABI alias/legacy-composition removal and the remaining caller replacement work stay unfinished as recorded above and in later R003 steps.
 
 [Full ledger through 89452eb](history/migration-ledger-through-89452eb.md) preserves the original inventory/P/T/code/test records. [R002 snapshot](versions/r002-sequential/MIGRATION_SNAPSHOT.md) preserves the previous concise current ledger without changes. Both are historical, not competing mutable records.
 

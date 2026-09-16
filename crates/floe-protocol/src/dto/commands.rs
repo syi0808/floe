@@ -4,6 +4,7 @@ use uuid::Uuid;
 use super::{APP_WIRE_VERSION, AppWireErrorDto};
 
 const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
+const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -64,9 +65,11 @@ impl AppCommandDto {
                 if session_id.is_nil() {
                     return Err("command.session_id");
                 }
-                if text.trim().is_empty()
-                    || text.trim().len() > MAX_TURN_TEXT_BYTES
-                    || text
+                let normalized = text.trim();
+                if text.len() > MAX_TURN_PAYLOAD_BYTES
+                    || normalized.is_empty()
+                    || normalized.len() > MAX_TURN_TEXT_BYTES
+                    || normalized
                         .chars()
                         .any(|character| character.is_control() && character != '\n')
                 {
