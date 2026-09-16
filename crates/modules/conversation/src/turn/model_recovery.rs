@@ -33,7 +33,7 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             &mut request.remaining_tokens,
             &mut request.remaining_cost_micros,
         )?;
-        let mut recorded_usage = floe_inference::ModelUsage {
+        let mut recorded_usage = floe_execution::budget::ModelUsage {
             attempts: 1,
             tokens: accounting.estimated_tokens(),
             estimated_tokens: accounting.estimated_tokens(),

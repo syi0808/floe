@@ -5,10 +5,10 @@ use tokio::time::Instant;
 use crate::{CapabilityExecution, CapabilityExecutionState};
 use floe_agent_contract::{AgentFailure};
 use floe_execution::{Cancellation};
-use crate::turn::UsageLedger;
+use crate::turn::journal::CapabilityJournal;
 
 pub(crate) async fn execute_recorded(
-    ledger: &UsageLedger,
+    journal: &CapabilityJournal,
     mut record: CapabilityExecution,
     deadline: Instant,
     cancellation: &Cancellation,
@@ -16,7 +16,7 @@ pub(crate) async fn execute_recorded(
     execute: Pin<Box<impl Future<Output = Result<String, AgentFailure>>>>,
 ) -> Result<Result<String, AgentFailure>, AgentFailure> {
     check_running(deadline, cancellation)?;
-    ledger.record_capability(record.clone()).await?;
+    journal.record(record.clone()).await?;
     check_running(deadline, cancellation)?;
     let result = tokio::select! {
         biased;
@@ -39,7 +39,7 @@ pub(crate) async fn execute_recorded(
         CapabilityExecutionState::Settled
     };
     record.result = Some(result.clone());
-    ledger.record_capability(record).await?;
+    journal.record(record).await?;
     Ok(result)
 }
 
@@ -64,7 +64,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::turn::journal::{JournalRecord, JournalUpdate};
+    use crate::turn::journal::CapabilityUpdate;
 
     fn record() -> CapabilityExecution {
         CapabilityExecution {
@@ -79,25 +79,22 @@ mod tests {
         }
     }
 
-    fn execution(update: &JournalUpdate) -> &CapabilityExecution {
-        let JournalRecord::Capability(record) = &update.record else {
-            panic!("expected capability execution");
-        };
-        record
+    fn execution(update: &CapabilityUpdate) -> &CapabilityExecution {
+        &update.record
     }
 
     #[tokio::test]
     async fn dispatch_and_result_wait_for_durable_acknowledgment() {
         for fail_start in [true, false] {
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let ledger = UsageLedger::default().with_journal(sender);
+            let journal = CapabilityJournal::new(sender);
             let dispatched = Arc::new(AtomicUsize::new(0));
             let calls = dispatched.clone();
             let started = record();
             let expected = started.clone();
             let task = tokio::spawn(async move {
                 execute_recorded(
-                    &ledger,
+                    &journal,
                     started,
                     Instant::now() + Duration::from_secs(5),
                     &Cancellation::default(),
@@ -143,10 +140,10 @@ mod tests {
     async fn tool_failure_is_settled_but_oversized_output_is_not_retained() {
         for oversized in [true, false] {
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let ledger = UsageLedger::default().with_journal(sender);
+            let journal = CapabilityJournal::new(sender);
             let task = tokio::spawn(async move {
                 execute_recorded(
-                    &ledger,
+                    &journal,
                     record(),
                     Instant::now() + Duration::from_secs(5),
                     &Cancellation::default(),
@@ -186,12 +183,12 @@ mod tests {
     #[tokio::test]
     async fn cancellation_during_intent_commit_prevents_dispatch() {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let ledger = UsageLedger::default().with_journal(sender);
+        let journal = CapabilityJournal::new(sender);
         let cancellation = Cancellation::default();
         let stop = cancellation.clone();
         let task = tokio::spawn(async move {
             execute_recorded(
-                &ledger,
+                &journal,
                 record(),
                 Instant::now() + Duration::from_secs(5),
                 &cancellation,
@@ -210,12 +207,12 @@ mod tests {
     #[tokio::test]
     async fn dropping_in_flight_execution_leaves_only_started_intent() {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let ledger = UsageLedger::default().with_journal(sender);
+        let journal = CapabilityJournal::new(sender);
         let dispatched = Arc::new(tokio::sync::Notify::new());
         let signal = dispatched.clone();
         let task = tokio::spawn(async move {
             execute_recorded(
-                &ledger,
+                &journal,
                 record(),
                 Instant::now() + Duration::from_secs(5),
                 &Cancellation::default(),

@@ -2,7 +2,6 @@
 
 mod adapters;
 mod api;
-pub mod fixture;
 pub mod prompts;
 pub mod turn;
 mod application;

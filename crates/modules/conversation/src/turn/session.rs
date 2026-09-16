@@ -370,7 +370,7 @@ pub struct ModelRequest {
     pub usage: crate::turn::UsageLedger,
     pub replay: Vec<ModelReplay>,
     pub schema_version: u32,
-    pub prompt: floe_knowledge::PromptAssembly,
+    pub prompt: floe_knowledge::prompts::PromptAssembly,
     pub person_id: PersonId,
     pub session_id: Uuid,
     pub turn_id: Uuid,
@@ -482,7 +482,7 @@ impl ModelRequest {
 #[serde(deny_unknown_fields)]
 pub struct ContextEnvelope {
     pub schema_version: u32,
-    pub stable_instructions: floe_knowledge::PromptAssembly,
+    pub stable_instructions: floe_knowledge::prompts::PromptAssembly,
     pub scoped_instructions: ScopedInstructions,
     pub contextual_data: ContextualData,
     pub conversation: ConversationContext,
@@ -548,7 +548,7 @@ pub struct AgentCardManifestEntry {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromptManifestEntry {
-    pub kind: floe_knowledge::PromptComponentKind,
+    pub kind: floe_knowledge::prompts::PromptComponentKind,
     pub source: String,
     pub revision: u64,
 }

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure};
 use floe_execution::{Cancellation};
-use floe_execution::budget::UsageLedger;
+use floe_inference::UsageLedger;
 
 #[cfg(test)]
 use floe_kernel::AGENT_VERSION;

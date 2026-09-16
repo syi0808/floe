@@ -1,5 +1,5 @@
 use floe_agent_contract::{AgentFailure};
-use crate::{AgentMessage};
+use floe_conversation::AgentMessage;
 use uuid::Uuid;
 
 pub fn bounded_model_history_start(
@@ -19,7 +19,7 @@ pub fn bounded_model_history_start(
         })
         .collect::<Result<Vec<_>, AgentFailure>>()?;
     let selected = floe_context::bounded_history_start(&sizes, current_turn, max_bytes)?;
-    if floe_context::has_calendar_history(&messages[..selected]) {
+    if super::has_calendar_history(&messages[..selected]) {
         let current_start = messages
             .iter()
             .position(|message| message.turn_id() == current_turn)

@@ -8,6 +8,14 @@ use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
 use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_execution::tasks::run_bounded as bounded;
+use floe_agent_contract::ModelPlacement;
+use floe_experts::{
+    A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
+    A2ATaskState, NoA2AHost,
+};
+use floe_inference::ModelAttemptRecord;
+
+use crate::prompts::manager_prompt;
 
 pub struct AgentRuntime<'runtime, Store, Model, Host> {
     pub store: &'runtime Store,
@@ -90,7 +98,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             &mut emit,
         );
         let mut usage = AgentUsage::default();
-        let ledger = UsageLedger::new(self.budget.max_tokens, self.budget.max_cost_micros, usage);
+        let ledger = crate::turn::turn_ledger(self.budget.max_tokens, self.budget.max_cost_micros, usage);
         let (outcome, resumable) = match self
             .drive(
                 &mut session,
@@ -114,7 +122,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 stop.resumable,
             ),
         };
-        ledger.sync(&mut usage);
+        crate::turn::sync_usage(&ledger, &mut usage);
         session.usage = usage;
         if outcome != AgentOutcome::Completed {
             let (interrupted, attempts) = interrupt_executions(
@@ -241,7 +249,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             &mut emit,
         );
         let mut usage = continuation.usage;
-        let ledger = UsageLedger::new(budget.max_tokens, budget.max_cost_micros, usage);
+        let ledger = crate::turn::turn_ledger(budget.max_tokens, budget.max_cost_micros, usage);
         let (outcome, resumable) = match self
             .drive(
                 &mut session,
@@ -265,7 +273,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 stop.resumable,
             ),
         };
-        ledger.sync(&mut usage);
+        crate::turn::sync_usage(&ledger, &mut usage);
         session.usage = usage;
         if outcome != AgentOutcome::Completed {
             let (interrupted, attempts) = interrupt_executions(
@@ -409,7 +417,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         session: &mut AgentSession,
         usage: &mut AgentUsage,
         ledger: &UsageLedger,
-        journal: &mut tokio::sync::mpsc::UnboundedReceiver<crate::turn::journal::JournalUpdate>,
+        attempts: &mut tokio::sync::mpsc::UnboundedReceiver<floe_inference::AttemptUpdate>,
+        capabilities: &mut tokio::sync::mpsc::UnboundedReceiver<crate::turn::journal::CapabilityUpdate>,
         turn_id: Uuid,
         emit: &mut impl FnMut(AgentEvent),
         deadline: Instant,
@@ -419,10 +428,11 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         loop {
             tokio::select! {
                 biased;
-                update = journal.recv() => {
+                update = attempts.recv() => {
                     let update = update.ok_or(AgentFailure::Interrupted)?;
-                    match update.record {
-                        crate::turn::journal::JournalRecord::Model(record) => {
+                    {
+                        {
+                            let record = update.record;
                             let previous = session.model_attempts.clone();
                             if record.state == floe_inference::ModelAttemptState::Started {
                                 session.model_attempts.push(record.clone());
@@ -431,7 +441,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                     .ok_or(AgentFailure::InvalidInput)?;
                                 *saved = record.clone();
                             }
-                            ledger.sync(usage);
+                            crate::turn::sync_usage(&ledger, usage);
                             session.usage = *usage;
                             if let Err(failure) = self.commit(session).await {
                                 session.model_attempts = previous;
@@ -444,8 +454,14 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             }
                             emit_event(session, turn_id, AgentEventKind::ModelAttempt { record }, emit);
                         }
-                        crate::turn::journal::JournalRecord::Capability(record) => {
-                            let record = *record;
+                    }
+                    let _ = update.acknowledged.send(Ok(()));
+                }
+                update = capabilities.recv() => {
+                    let update = update.ok_or(AgentFailure::Interrupted)?;
+                    {
+                        {
+                            let record = *update.record;
                             let previous = session.capability_executions.clone();
                             if record.state == CapabilityExecutionState::Started {
                                 if session.capability_executions.iter().any(|saved| saved.call_id == record.call_id) {
@@ -474,7 +490,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             if let Some(message) = &message {
                                 session.messages.push(message.clone());
                             }
-                            ledger.sync(usage);
+                            crate::turn::sync_usage(&ledger, usage);
                             session.usage = *usage;
                             let commit = if encoded_len(session)? > self.budget.max_session_bytes.saturating_sub(4096) {
                                 Err(AgentFailure::BudgetExceeded)
@@ -522,10 +538,12 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         agents: &Agents,
         emit: &mut impl FnMut(AgentEvent),
     ) -> Result<(), DriveStop> {
-        let (sender, mut journal) = tokio::sync::mpsc::unbounded_channel();
-        let ledger = ledger.clone().with_journal(sender);
+        let (attempt_sender, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+        let (capability_sender, mut capabilities) = tokio::sync::mpsc::unbounded_channel();
+        let ledger = ledger.clone().with_journal(attempt_sender);
+        let journal = crate::turn::journal::CapabilityJournal::new(capability_sender);
         for iteration in usage.iterations..budget.max_iterations {
-            ledger.sync(usage);
+            crate::turn::sync_usage(&ledger, usage);
             check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
             if usage.tokens >= budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
@@ -663,7 +681,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     session,
                     usage,
                     &ledger,
-                    &mut journal,
+                    &mut attempts,
+                    &mut capabilities,
                     turn_id,
                     emit,
                     deadline,
@@ -676,7 +695,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             if response.schema_version != AGENT_VERSION {
                 return Err(AgentFailure::InvalidModelOutput.into());
             }
-            ledger.sync(usage);
+            crate::turn::sync_usage(&ledger, usage);
             session.usage = *usage;
             if usage.tokens > budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
                 return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
@@ -800,8 +819,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         };
                         let result = self
                             .recorded(
-                                crate::capability_execution::execute_recorded(
-                                    &ledger,
+                                crate::turn::capability::execute_recorded(
+                                    &journal,
                                     execution,
                                     deadline,
                                     &call_cancellation,
@@ -824,7 +843,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                 session,
                                 usage,
                                 &ledger,
-                                &mut journal,
+                                &mut attempts,
+                    &mut capabilities,
                                 turn_id,
                                 emit,
                                 deadline,
@@ -911,7 +931,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                 session,
                                 usage,
                                 &ledger,
-                                &mut journal,
+                                &mut attempts,
+                    &mut capabilities,
                                 turn_id,
                                 emit,
                                 deadline,
@@ -979,7 +1000,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         continue;
                     }
                 };
-                ledger.sync(usage);
+                crate::turn::sync_usage(&ledger, usage);
                 session.usage = *usage;
                 session.messages.push(message.clone());
                 if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {

@@ -1,11 +1,11 @@
-use crate::{AgentMessage, ModelRequest};
-use floe_experts::{A2ATaskState};
+use floe_conversation::{AgentMessage, ModelRequest};
+use floe_experts::A2ATaskState;
 
 fn calendar_boundary(message: &AgentMessage) -> bool {
     match message {
         AgentMessage::Compaction { .. } => true,
         AgentMessage::Delegation { task, .. } => {
-            (task.agent_id == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
+            (task.agent_id == crate::BuiltinExpertKind::Schedule.package_id()
                 || task.agent_id == "schedule")
                 && (task.state == A2ATaskState::Completed || !task.artifacts.is_empty())
         }
@@ -138,7 +138,7 @@ mod tests {
             task: floe_experts::A2ATask {
                 id: Uuid::new_v4(),
                 context_id: Uuid::new_v4(),
-                agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule.package_id().into(),
+                agent_id: crate::BuiltinExpertKind::Schedule.package_id().into(),
                 state: A2ATaskState::Completed,
                 history: vec![],
                 artifacts: vec![],

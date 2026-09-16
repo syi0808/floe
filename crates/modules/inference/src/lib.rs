@@ -12,10 +12,10 @@ pub use api::{
     PlannedRoute, RecipientConstraint, RouteRequest,
 };
 pub use application::{
-    AttemptJournal, AttemptLifecycle, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter,
+    AttemptJournal, AttemptLifecycle, AttemptUpdate, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter,
     LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY, ModelAttemptRecord, ModelAttemptState,
     ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute, RemoteRouteResolver,
-    RoutePairing, RoutePlanError, SavedConnectionStore, SavedServerConnection,
+    RoutePairing, RoutePlanError, SavedConnectionStore, SavedServerConnection, UsageLedger,
     admit_saved_connection, candidate_route, plan_remote_route, select_remote_route,
     valid_external_recipient,
 };

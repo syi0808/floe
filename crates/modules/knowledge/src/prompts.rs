@@ -209,7 +209,7 @@ pub fn product_component(
     }
 }
 
-fn validate_persona(persona: &PersonaProfile) -> Result<(), AgentFailure> {
+pub fn validate_persona(persona: &PersonaProfile) -> Result<(), AgentFailure> {
     if persona.revision == 0
         || persona.source.trim().is_empty()
         || persona.source.len() > 128
