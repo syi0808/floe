@@ -1,18 +1,18 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
-use floe_context::{AgentContext, InferencePolicyDecision};
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::AGENT_VERSION;
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_execution::{Cancellation};
-use floe_context::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind};
+use floe_context_contract::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind};
 use floe_experts_builtin::life_logistics::{LogisticsUrgency, run_life_logistics_expert};
 use floe_experts_builtin::work_context::{run_work_context_expert};
 use floe_experts_builtin::{PortfolioExpertInvocation};
-use floe_context::{LogisticsItem, LogisticsItemKind};
-use floe_inference::{UsageLedger};
-use floe_knowledge::prompts::PromptRole;
-use floe_kernel::PersonId;
+use floe_context_contract::{LogisticsItem, LogisticsItemKind};
+use floe_conversation::UsageLedger;
+use floe_agent_contract::prompts::PromptRole;
+use floe_agent_contract::PersonId;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 

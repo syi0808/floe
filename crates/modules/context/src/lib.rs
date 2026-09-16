@@ -1,7 +1,6 @@
 pub mod application {
     pub mod archive;
     pub mod day_context_views;
-    pub mod policy;
     pub mod routing;
     pub mod assembler;
     pub mod consumed;
@@ -10,7 +9,6 @@ pub mod application {
     pub mod leases;
     pub mod projection;
     pub mod service;
-    pub mod views;
     pub mod source_view;
 }
 
@@ -21,17 +19,18 @@ pub mod ports {
 }
 
 pub use application::archive::read_authorized_archive;
-pub use application::assembler::{
-    OptionalSource, acquire_memory_context, acquire_optional_source, record_source_issue,
+pub use application::assembler::acquire_memory_context;
+pub use floe_context_contract::{
+    OptionalSource, acquire_optional_source, record_source_issue,
 };
 pub use application::consumed::ConsumedLineage;
 pub use application::coverage::{CoverageAccumulator, CoverageMessageFact, CoverageRegistry};
-pub use application::history::{HistoryMessageSize, bounded_history_start, read_history_coverage};
+pub use application::history::read_history_coverage;
+pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};
 pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
-pub use application::views::*;
 pub use application::service::{ContextService, PreparedContext};
 pub use application::source_view::SourceView;
 pub use floe_context_contract::ContextDependency;
@@ -42,9 +41,19 @@ pub use ports::archive_reader::{
 pub use ports::evidence_reader::EvidenceReader;
 pub use ports::source_reader::{SourceKey, SourceRead, SourceReadRequest, SourceReader};
 
-pub use application::policy::{
+/// The immutable projection an authorized read produces.
+///
+/// The view shapes, the evidence they yield and the memories that reach a
+/// context are the context contract's; what one turn may see and which
+/// placement may see it is the agent contract's. This module composes them —
+/// it does not define them, and an Expert names them from the contract.
+pub use floe_agent_contract::{
     AgentContext, ContextEvidence, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_ISSUES,
+};
+pub use floe_context_contract::views::*;
+pub use floe_context_contract::{
+    ContextMemory, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot,
 };
 pub use application::routing::{
     ContextRouteResult, ContextRoutingRuntime, ContextTransferClass, DeviceClass, DevicePresence,

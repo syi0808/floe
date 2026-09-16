@@ -378,6 +378,7 @@ impl<'model> ConversationExperts<'model> {
 
 impl BuiltinExpertHost for ConversationExperts<'_> {
     type Model = Model;
+    type SourceRead = floe_context::SourceView<serde_json::Value>;
 
     fn model(&self) -> &Self::Model {
         self.model

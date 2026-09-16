@@ -904,6 +904,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
@@ -995,15 +996,11 @@ dependencies = [
  "floe-actions",
  "floe-agent-contract",
  "floe-agent-runtime",
- "floe-context",
  "floe-context-contract",
  "floe-conversation",
  "floe-day",
  "floe-execution",
  "floe-experts",
- "floe-inference",
- "floe-kernel",
- "floe-knowledge",
  "serde",
  "serde_json",
  "tempfile",

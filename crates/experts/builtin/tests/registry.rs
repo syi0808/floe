@@ -4,7 +4,7 @@ use floe_experts::{
     ExpertPackaging, ExpertSetupSpec,
 };
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use uuid::Uuid;
 
 /// The builtin Experts, in the shape the registry installs them.

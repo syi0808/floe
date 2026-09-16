@@ -10,15 +10,11 @@ chrono.workspace = true
 floe-actions = { path = "../../modules/actions" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
-floe-context = { path = "../../modules/context" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-conversation = { path = "../../modules/conversation" }
 floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-experts = { path = "../../modules/experts" }
-floe-inference = { path = "../../modules/inference" }
-floe-kernel = { path = "../../contracts/kernel" }
-floe-knowledge = { path = "../../modules/knowledge" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

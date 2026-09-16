@@ -9,18 +9,19 @@
 use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::AgentFailure;
-use floe_context::{
-    AgentContext, AttentionView, CalendarContextView, InferencePolicyDecision, NativeContextView,
-    PeopleView, SourceView, WellbeingView, WorkContextView,
+use floe_context_contract::{
+    AttentionView, AuthorizedRead, CalendarContextView, NativeContextView, PeopleView,
+    WellbeingView, WorkContextView,
 };
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{ContextDependency, SourceGrant};
 use floe_conversation::{ModelRunner, UsageLedger};
 use floe_execution::Cancellation;
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context::{CommunicationView, ConfirmedInteractionView};
+use floe_context_contract::{CommunicationView, ConfirmedInteractionView};
 use crate::{
     BuiltinContextSource, MailExpertInvocation, PersonalExpertInvocation,
     PortfolioExpertInvocation,
@@ -133,6 +134,9 @@ impl BuiltinExpertOutput {
 pub trait BuiltinExpertHost: Sync {
     type Model: ModelRunner + Sync;
 
+    /// One source read this Expert holds open while it reasons over it.
+    type SourceRead: AuthorizedRead;
+
     /// The model this turn runs on, whatever its placement.
     fn model(&self) -> &Self::Model;
 
@@ -165,7 +169,7 @@ pub trait BuiltinExpertHost: Sync {
         request: &'a BuiltinExpertRequest,
         view_id: &'a str,
         query: serde_json::Value,
-    ) -> Acquiring<'a, SourceView<serde_json::Value>>;
+    ) -> Acquiring<'a, Self::SourceRead>;
 
     /// Record that this Expert's result depends on a source it read.
     fn record_dependency(
@@ -208,7 +212,7 @@ pub trait BuiltinExpertHost: Sync {
     fn conversation_context_available(&self) -> bool;
 
     /// The confirmed memories this Person has, for an Expert granted them.
-    fn memory_context<'a>(&'a self) -> Acquiring<'a, floe_knowledge::MemoryContextSnapshot>;
+    fn memory_context<'a>(&'a self) -> Acquiring<'a, floe_context_contract::MemoryContextSnapshot>;
 
     /// The Person's own task view, for an Expert granted it.
     fn task_view<'a>(&'a self) -> Acquiring<'a, NativeContextView>;

@@ -10,7 +10,7 @@ pub fn bounded_model_history_start(
     let sizes = messages
         .iter()
         .map(|message| {
-            Ok(floe_context::HistoryMessageSize {
+            Ok(floe_agent_contract::HistoryMessageSize {
                 turn_id: message.turn_id(),
                 encoded_bytes: serde_json::to_vec(message)
                     .map_err(|_| AgentFailure::InvalidInput)?
@@ -18,7 +18,7 @@ pub fn bounded_model_history_start(
             })
         })
         .collect::<Result<Vec<_>, AgentFailure>>()?;
-    let selected = floe_context::bounded_history_start(&sizes, current_turn, max_bytes)?;
+    let selected = floe_agent_contract::bounded_history_start(&sizes, current_turn, max_bytes)?;
     if super::has_calendar_history(&messages[..selected]) {
         let current_start = messages
             .iter()

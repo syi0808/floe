@@ -3,24 +3,20 @@
 //! Each Expert owns its own judgment and result shape; what is common is how a
 //! bounded assignment reaches the model and how its answer is checked back.
 
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, SessionProtection};
-use floe_context::{
-    AgentContext, CalendarContextView, CommunicationView, ContextEvidence,
-    InferencePolicyDecision, calendar_context_evidence, communication_context_evidence,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, validate_calendar_context_view,
-    validate_communication_view,
-};
+use floe_context_contract::{CalendarContextView, CommunicationView, ContextEvidence, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, calendar_context_evidence, communication_context_evidence, validate_calendar_context_view, validate_communication_view};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_conversation::{
     AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep, UsageLedger,
     generate_with_recovery,
 };
-use floe_kernel::AGENT_VERSION;
-use floe_knowledge::prompts::PromptAssembly;
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::prompts::PromptAssembly;
 
 /// How many findings one communication-backed Expert may report.
 pub(crate) const MAX_MAIL_EXPERT_FINDINGS: usize = 16;

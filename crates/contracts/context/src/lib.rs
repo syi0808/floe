@@ -8,7 +8,21 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod assembly;
+mod authorized_read;
+mod evidence;
+mod memory;
+pub mod views;
+
 pub use floe_kernel::PersonId;
+pub use authorized_read::AuthorizedRead;
+pub use assembly::{OptionalSource, acquire_optional_source, record_source_issue};
+pub use evidence::{ContextEvidence, MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_BYTES};
+pub use views::*;
+pub use memory::{
+    ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
+    MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

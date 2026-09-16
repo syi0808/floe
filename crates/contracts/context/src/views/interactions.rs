@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::AgentFailure;
+use floe_kernel::AgentFailure;
 use floe_kernel::AGENT_VERSION;
 
 use super::personal::PeopleView;

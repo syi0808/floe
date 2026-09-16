@@ -5,11 +5,14 @@
 
 mod archive;
 mod capability;
+mod context;
 mod delegation;
 mod endpoint;
+mod history;
 mod message;
 mod model;
 mod ports;
+pub mod prompts;
 mod replay;
 
 pub use archive::{
@@ -19,20 +22,24 @@ pub use archive::{
 pub use capability::{
     CapabilityExecution, CapabilityExecutionState, CapabilityJournal, ModelReplay, ProviderReplay,
 };
+pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};
 pub use delegation::{DelegationRequest, TaskReceipt, TaskSnapshot, TaskState};
 pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
     MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
 pub use floe_context_contract::{
-    ContextIssue, ContextIssueReason, ContextSource, DataClass, DependencyCoverage, ModelPlacement,
-    SourceGrant, TransferConsent,
+    ContextEvidence, ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass,
+    DependencyCoverage, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
+    MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
+    MemoryContextSnapshot, ModelPlacement, PersonalMemoryKind, SourceGrant, TransferConsent,
 };
 pub use floe_execution::{CancelReason, Cancellation, ExecutionScope};
 pub use floe_kernel::{
-    AgentFailure, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
-    AgentRetryPolicy, CommandId, RunId, ScopeId, TaskId, TraceContext,
+    AGENT_VERSION, AgentFailure, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
+    AgentRetryPolicy, CommandId, PersonId, RunId, ScopeId, TaskId, TraceContext,
 };
+pub use history::{HistoryMessageSize, bounded_history_start};
 pub use message::{
     AgentCard, AgentMessage, Artifact, ArtifactPart, MessageRole, OutcomeIssue, ToolResult,
 };

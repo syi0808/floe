@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::{AgentFailure, DataClass};
+use floe_kernel::AgentFailure;
+
+use crate::DataClass;
 use floe_kernel::AGENT_VERSION;
 
 use crate::ContextEvidence;

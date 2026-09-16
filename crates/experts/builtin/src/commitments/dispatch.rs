@@ -4,10 +4,11 @@
 //! confirmed memory, tasks and calendars — and how it composes them. Acquiring
 //! each view stays behind the host port.
 
+use floe_context_contract::AuthorizedRead;
 use floe_agent_contract::{AgentFailure, ContextSource};
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
-use floe_context::CommunicationView;
+use floe_context_contract::CommunicationView;
 
 use crate::commitments::{
     CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
@@ -34,7 +35,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     if memory_granted {
         let snapshot = host.memory_context().await?;
         context.memories = snapshot.memories;
-        floe_context::record_source_issue(
+        floe_context_contract::record_source_issue(
             &mut context.optional_context_issues,
             ContextSource::Memory,
             snapshot.issue,
@@ -43,8 +44,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     let mut task_views = host.staged_task_views().to_vec();
     if tasks_granted {
         let acquired =
-            floe_context::acquire_optional_source(ContextSource::Tasks, host.task_view()).await?;
-        floe_context::record_source_issue(
+            floe_context_contract::acquire_optional_source(ContextSource::Tasks, host.task_view()).await?;
+        floe_context_contract::record_source_issue(
             &mut context.optional_context_issues,
             ContextSource::Tasks,
             acquired.issue.map(|issue| issue.reason),

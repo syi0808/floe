@@ -5,7 +5,7 @@ use floe_experts::{
     ExpertPackaging, ExpertPrivateState, PackageImplementation, PackageKind, PackageRef,
 };
 use floe_experts_builtin::BuiltinExpertKind;
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use uuid::Uuid;
 
 /// How the Schedule Expert is packaged when its calendar setup is installed.

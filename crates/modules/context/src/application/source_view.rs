@@ -445,3 +445,18 @@ mod tests {
         assert!(registry.reserve(person, MAX_LEASE_BYTES).is_ok());
     }
 }
+
+/// A held source read, as any reader outside Context sees it.
+impl floe_context_contract::AuthorizedRead for SourceView<serde_json::Value> {
+    fn dependency(&self) -> &ContextDependency {
+        &self.dependency
+    }
+
+    fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.deadline > Instant::now()
+    }
+}

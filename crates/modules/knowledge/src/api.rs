@@ -5,8 +5,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const KNOWLEDGE_VERSION: u32 = 1;
-pub const MAX_CONTEXT_MEMORIES: usize = 32;
-pub const MAX_CONTEXT_MEMORY_BYTES: usize = 16 * 1024;
+
+/// How a confirmed memory reaches an authorized context. The projection and its
+/// bounds belong to the context contract; this module owns the record behind it.
+pub use floe_context_contract::{
+    ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
+    MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
+};
 pub const MAX_MEMORY_OVERVIEW_ITEMS: usize = 100;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -16,36 +21,6 @@ pub enum LearningOutcome {
     Halted { reason: AgentFailure },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextMemory {
-    pub target_id: Uuid,
-    pub revision: u64,
-    pub kind: PersonalMemoryKind,
-    pub statement: String,
-    pub epistemic_status: EpistemicStatus,
-    pub confidence_millis: u16,
-    pub observed_at_unix_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_from_unix_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_until_unix_ms: Option<i64>,
-    pub source_refs: Vec<LearningEvidenceRef>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MemoryContextSnapshot {
-    pub memories: Vec<ContextMemory>,
-    pub issue: Option<floe_context_contract::ContextIssueReason>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LearningEvidenceRef {
-    pub session_id: Uuid,
-    pub turn_id: Uuid,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LearningObservationKind {
@@ -53,23 +28,6 @@ pub enum LearningObservationKind {
     UserCorrection,
     OutcomeConflict,
     ReusableProcedure,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PersonalMemoryKind {
-    Fact,
-    Observation,
-    Inference,
-    Preference,
-    Commitment,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EpistemicStatus {
-    Fact,
-    Inference,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

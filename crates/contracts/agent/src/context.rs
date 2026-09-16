@@ -1,12 +1,23 @@
+//! The context one turn may see, and whether a placement may see it.
+//!
+//! Context owns which views it assembles and how it authorizes each read. What
+//! it hands the runtime is this immutable projection, so every role — a root
+//! Run, a delegated Expert, the Learner — reads the same shape and passes the
+//! same authorization.
+
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent};
+use floe_context_contract::{
+    ContextEvidence, ContextIssue, ContextMemory, ContextSource, DataClass,
+    MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES,
+    MAX_CONTEXT_MEMORY_BYTES, ModelPlacement, TransferConsent,
+};
+use floe_kernel::AgentFailure;
 
-pub const MAX_CONTEXT_EVIDENCE: usize = 64;
-pub const MAX_CONTEXT_EVIDENCE_BYTES: usize = 32 * 1024;
+use crate::SessionProtection;
+use crate::prompts::PersonaProfile;
+
 pub const MAX_CONTEXT_ISSUES: usize = 3;
-
-pub use floe_knowledge::{ContextMemory, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -22,23 +33,14 @@ pub struct InferencePolicyDecision {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ContextEvidence {
-    pub source_handle: String,
-    pub data_class: DataClass,
-    pub untrusted_text: String,
-    pub expires_at_unix_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct AgentContext {
     pub projection_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persona: Option<floe_knowledge::prompts::PersonaProfile>,
+    pub persona: Option<PersonaProfile>,
     #[serde(default)]
     pub memories: Vec<ContextMemory>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub optional_context_issues: Vec<floe_agent_contract::ContextIssue>,
+    pub optional_context_issues: Vec<ContextIssue>,
     pub evidence: Vec<ContextEvidence>,
 }
 
@@ -57,7 +59,7 @@ impl AgentContext {
             || (self
                 .optional_context_issues
                 .iter()
-                .any(|issue| issue.source == floe_agent_contract::ContextSource::Memory)
+                .any(|issue| issue.source == ContextSource::Memory)
                 && !self.memories.is_empty())
         {
             return Err(AgentFailure::PolicyDenied);

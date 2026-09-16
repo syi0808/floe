@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_kernel::AGENT_VERSION;
-use floe_context::{AgentContext, CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction, ConfirmedInteractionView, validate_confirmed_interaction_view, AttentionView, CalendarContextView, ContextEvidence, InferencePolicyDecision, PeopleView, personal_context_evidence, validate_people_view};
+use floe_agent_contract::AGENT_VERSION;
+use floe_context_contract::{AttentionView, CONFIRMED_INTERACTION_VIEW_ID, CalendarContextView, ConfirmedInteraction, ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence, validate_confirmed_interaction_view, validate_people_view};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_conversation::ModelRunner;
 
 use crate::prompts::{relationships_expert_prompt};

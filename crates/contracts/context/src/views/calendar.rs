@@ -2,8 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::{AgentFailure, DataClass};
-use crate::{ContextEvidence};
+use floe_kernel::AgentFailure;
+
+use crate::DataClass;
+use crate::ContextEvidence;
 use floe_kernel::AGENT_VERSION;
 
 pub const CALENDAR_CONTEXT_VIEW_ID: &str = "calendar.timeline";

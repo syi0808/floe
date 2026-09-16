@@ -1,7 +1,7 @@
 //! Role prompts for the builtin Experts. Each role's text is owned here.
 
-use floe_kernel::AGENT_VERSION;
-use floe_knowledge::prompts::{
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::prompts::{
     BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL, CAPABILITY_PROTOCOL_REVISION,
     PromptAssembly, PromptComponentKind, PromptRole, expert_prompt, product_component,
 };

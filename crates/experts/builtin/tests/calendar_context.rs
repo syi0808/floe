@@ -1,5 +1,5 @@
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_context::{CalendarContextView, calendar_context_evidence, validate_calendar_context_view};
+use floe_context_contract::{CalendarContextView, calendar_context_evidence, validate_calendar_context_view};
 
 const NOW: i64 = 1_789_128_000_000;
 

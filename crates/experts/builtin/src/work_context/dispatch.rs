@@ -1,9 +1,10 @@
 //! The Work Context Expert's own execution.
 
+use floe_context_contract::AuthorizedRead;
 use floe_agent_contract::AgentFailure;
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
-use floe_context::WorkContextView;
+use floe_context_contract::WorkContextView;
 
 use crate::work_context::{WorkContextExpertResult, run_work_context_expert};
 use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};

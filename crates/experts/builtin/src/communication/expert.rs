@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::AgentFailure;
-use floe_kernel::AGENT_VERSION;
-use floe_context::{CommunicationView, InferencePolicyDecision};
+use floe_agent_contract::AGENT_VERSION;
+use floe_context_contract::{CommunicationView};
+use floe_agent_contract::{InferencePolicyDecision};
 use floe_conversation::ModelRunner;
 
 use crate::prompts::{communication_expert_prompt};

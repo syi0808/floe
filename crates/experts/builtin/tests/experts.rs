@@ -13,7 +13,8 @@ use floe_agent_contract::{
     AgentFailure, CapabilityExecution, CapabilityJournal, DataClass, ModelPlacement,
     TransferConsent,
 };
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_context_contract::{ContextEvidence};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_conversation::{
     AgentMessage, CapabilityDescriptor, ModelRequest, ModelResponse, ModelRunner, ModelStep,
 };
@@ -29,8 +30,8 @@ use floe_experts_builtin::schedule::{
     ExpertHost, ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
     MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
 };
-use floe_knowledge::prompts::{PromptComponentKind, PromptRole};
-use floe_kernel::{AGENT_VERSION, PersonId};
+use floe_agent_contract::prompts::{PromptComponentKind, PromptRole};
+use floe_agent_contract::{AGENT_VERSION, PersonId};
 use uuid::Uuid;
 
 struct Fixture {

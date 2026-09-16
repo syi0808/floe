@@ -1,19 +1,19 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
-use floe_context::{AgentContext, InferencePolicyDecision};
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::AGENT_VERSION;
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_execution::{Cancellation};
-use floe_context::{AttentionState, AttentionView, CalendarContextItem, CalendarContextView, CapacityState, ConfirmedInteraction, ConfirmedInteractionView, PeopleIdentity, PeopleView, RecoveryState, WellbeingView, WorkContextItem, WorkContextView, WorkItemKind, validate_calendar_context_view, validate_work_context_view};
+use floe_context_contract::{AttentionState, AttentionView, CalendarContextItem, CalendarContextView, CapacityState, ConfirmedInteraction, ConfirmedInteractionView, PeopleIdentity, PeopleView, RecoveryState, WellbeingView, WorkContextItem, WorkContextView, WorkItemKind, validate_calendar_context_view, validate_work_context_view};
 use floe_experts_builtin::focus_attention::{FocusContextViews, FocusRecommendation, run_focus_expert_with_views};
 use floe_experts_builtin::relationships::{RelationshipsContextViews, run_relationships_expert_with_views};
 use floe_experts_builtin::wellbeing::{ScheduleImpact, WellbeingContextViews, run_wellbeing_expert_with_views};
 use floe_experts_builtin::{PersonalExpertInvocation};
-use floe_inference::{UsageLedger};
-use floe_knowledge::prompts::PromptRole;
-use floe_knowledge::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind};
-use floe_kernel::PersonId;
+use floe_conversation::UsageLedger;
+use floe_agent_contract::prompts::PromptRole;
+use floe_context_contract::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind};
+use floe_agent_contract::PersonId;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 

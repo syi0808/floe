@@ -3,7 +3,7 @@
 use std::{future::Future, sync::Mutex, time::SystemTime};
 
 use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -14,7 +14,7 @@ use floe_agent_contract::{
     AgentFailure, CapabilityExecution, CapabilityExecutionState, DataClass,
 };
 use floe_agent_runtime::execute_recorded;
-use floe_context::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_conversation::{
     AgentMessage, CapabilityDescriptor, ModelRequest, ModelRunner, ModelStep,
     generate_with_recovery,
@@ -24,7 +24,7 @@ use floe_experts::{
     AgentRegistry, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
     ExpertRule, PackageImplementation, PackageRef, ViewCancellation, check_running,
 };
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
 pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
 pub const MAX_TIMELINE_VIEW_ITEMS: usize = 128;

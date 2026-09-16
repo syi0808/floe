@@ -1,9 +1,10 @@
 //! The Life Logistics Expert's own execution.
 
+use floe_context_contract::AuthorizedRead;
 use floe_agent_contract::AgentFailure;
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
-use floe_context::LogisticsView;
+use floe_context_contract::LogisticsView;
 
 use crate::life_logistics::{LifeLogisticsExpertResult, run_life_logistics_expert};
 use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};

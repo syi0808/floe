@@ -2,8 +2,10 @@ use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{ContextEvidence};
-use floe_agent_contract::{AgentFailure, DataClass};
+use crate::ContextEvidence;
+use floe_kernel::AgentFailure;
+
+use crate::DataClass;
 use floe_kernel::AGENT_VERSION;
 
 pub const FLOE_TASK_VIEW_ID: &str = "floe.tasks";

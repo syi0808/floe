@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::AgentFailure;
-use floe_kernel::AGENT_VERSION;
-use floe_context::{AgentContext, CalendarContextView, CommunicationView, InferencePolicyDecision, NativeContextView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, FLOE_TASK_VIEW_ID, NativeContextItem, native_context_evidence, calendar_context_evidence, validate_calendar_context_view, validate_communication_view, validate_native_context_view};
+use floe_agent_contract::AGENT_VERSION;
+use floe_context_contract::{CalendarContextView, CommunicationView, FLOE_TASK_VIEW_ID, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, NativeContextItem, NativeContextView, calendar_context_evidence, native_context_evidence, validate_calendar_context_view, validate_communication_view, validate_native_context_view};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_conversation::ModelRunner;
 
 use crate::prompts::{commitments_expert_prompt};
@@ -196,8 +197,8 @@ fn commitment_evidence(
             invocation.person_id,
             view.handle,
             now,
-            floe_context::MAX_NATIVE_CONTEXT_ITEMS,
-            floe_context::MAX_NATIVE_CONTEXT_BYTES,
+            floe_context_contract::MAX_NATIVE_CONTEXT_ITEMS,
+            floe_context_contract::MAX_NATIVE_CONTEXT_BYTES,
         )?;
         handles.extend(view.items.iter().filter_map(|item| match item {
             NativeContextItem::Task {
