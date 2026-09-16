@@ -13,15 +13,18 @@ pub mod life_logistics;
 pub mod prompts;
 pub mod relationships;
 pub mod schedule;
-pub mod setup;
 pub mod wellbeing;
 pub mod work_context;
 
 mod shared;
 
-pub use catalog::{BUILTIN_EXPERT_PACKAGE_VERSION, BuiltinContextSource, BuiltinExpertKind};
+pub use catalog::{
+    BUILTIN_EXPERT_PACKAGE_VERSION, BUILTIN_EXPERT_PUBLISHER, BUILTIN_EXPERT_STATE_SCHEMA_VERSION,
+    BuiltinContextSource, BuiltinExpertDeclaration, BuiltinExpertKind, builtin_setup_declarations,
+};
 pub use host::{
     Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context,
     require_mandatory_source,
 };
 pub use shared::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};
+pub(crate) use shared::*;

@@ -1,6 +1,70 @@
-use floe_day::{CalendarProvider, CalendarScope};
+//! Installing the Schedule Expert against one bound calendar view.
+//!
+//! The registry keeps the binding, the installation and the assignment. Which
+//! agent id and metadata carry the Expert is the owning crate's declaration,
+//! supplied as [`ExpertPackaging`]; the data class follows from the provider
+//! the registry already records.
 
-use super::*;
+use floe_day::{CalendarProvider, CalendarScope};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use floe_agent_contract::{AgentFailure, DataClass};
+use floe_kernel::{AGENT_VERSION, PersonId};
+
+use super::{
+    AgentPackage, AgentRegistry, CalendarExpertSetupReceipt, CalendarViewBinding, ExpertMetadata,
+    ExpertPrivateState, PackageAssignment, PackageImplementation, PackageInstallation, PackageKind,
+    PackageRef, RegistryOverview, RegistrySnapshot,
+};
+
+/// How the crate that owns an Expert wants it packaged in the registry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpertPackaging {
+    pub expert: super::AgentId,
+    pub tool_id: String,
+    pub version: String,
+    pub publisher: String,
+    pub metadata: ExpertMetadata,
+    pub state_schema_version: u32,
+}
+
+impl ExpertPackaging {
+    /// The tool and Expert packages this declaration installs for `data_class`.
+    pub fn packages(&self, data_class: DataClass) -> [AgentPackage; 2] {
+        let tool = PackageRef {
+            kind: PackageKind::Tool,
+            id: self.tool_id.clone(),
+            version: self.version.clone(),
+        };
+        [
+            AgentPackage {
+                schema_version: AGENT_VERSION,
+                reference: tool.clone(),
+                publisher: self.publisher.clone(),
+                implementation: PackageImplementation::TimelineRead { data_class },
+                expert_metadata: None,
+                required_tools: vec![],
+                state_schema_version: self.state_schema_version,
+            },
+            AgentPackage {
+                schema_version: AGENT_VERSION,
+                reference: PackageRef {
+                    kind: PackageKind::Expert,
+                    id: self.expert.as_str().to_owned(),
+                    version: self.version.clone(),
+                },
+                publisher: self.publisher.clone(),
+                implementation: PackageImplementation::Builtin {
+                    expert: self.expert.clone(),
+                },
+                expert_metadata: Some(self.metadata.clone()),
+                required_tools: vec![tool],
+                state_schema_version: self.state_schema_version,
+            },
+        ]
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -168,6 +232,7 @@ impl AgentRegistry {
         &mut self,
         person_id: PersonId,
         request: &CalendarExpertSetup,
+        packaging: &ExpertPackaging,
     ) -> Result<CalendarExpertSetupReceipt, AgentFailure> {
         if let Some(receipt) = self.calendar_expert_setup(person_id, request)? {
             return Ok(receipt);
@@ -196,7 +261,7 @@ impl AgentRegistry {
             .revision
             .checked_add(1)
             .ok_or(AgentFailure::BudgetExceeded)?;
-        let [tool, expert] = setup_packages(request.provider);
+        let [tool, expert] = setup_packages(packaging, request.provider);
         for package in [&tool, &expert] {
             match next
                 .packages
@@ -376,7 +441,6 @@ impl AgentRegistry {
                 binding.provider,
                 receipt.reviewed_native_subject_fingerprint.as_deref(),
             )?;
-            let [tool, expert] = setup_packages(binding.provider);
             if binding.person_id != receipt.person_id
                 || binding.connection_scope != receipt.connection_scope
                 || binding.connection_revision != receipt.connection_revision
@@ -384,15 +448,15 @@ impl AgentRegistry {
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            for (package, installation_id, assignment_id, tools) in [
+            for (kind, installation_id, assignment_id, tools) in [
                 (
-                    tool,
+                    PackageKind::Tool,
                     receipt.tool_installation_id,
                     receipt.tool_assignment_id,
                     vec![],
                 ),
                 (
-                    expert,
+                    PackageKind::Expert,
                     receipt.expert_installation_id,
                     receipt.expert_assignment_id,
                     vec![receipt.tool_assignment_id],
@@ -400,8 +464,16 @@ impl AgentRegistry {
             ] {
                 let installation = self.installation(installation_id)?;
                 let assignment = self.assignment(receipt.person_id, assignment_id)?;
-                if installation.package != package.reference
-                    || self.package(&package.reference)? != &package
+                let package = self.package(&installation.package)?;
+                let data_class_matches = match &package.implementation {
+                    PackageImplementation::TimelineRead { data_class } => {
+                        *data_class == binding.data_class()
+                    }
+                    PackageImplementation::Builtin { .. } => true,
+                    PackageImplementation::Declarative { .. } => false,
+                };
+                if package.reference.kind != kind
+                    || !data_class_matches
                     || assignment.installation_id != installation_id
                     || assignment.granted_tool_assignments != tools
                     || assignment.granted_view_handles != [binding.handle]
@@ -495,7 +567,7 @@ fn validate_native_subject_fingerprint(
     Ok(())
 }
 
-fn setup_packages(provider: CalendarProvider) -> [AgentPackage; 2] {
+fn setup_packages(packaging: &ExpertPackaging, provider: CalendarProvider) -> [AgentPackage; 2] {
     let data_class = match provider {
         CalendarProvider::Fixture => DataClass::Synthetic,
         CalendarProvider::EventKit
@@ -503,5 +575,5 @@ fn setup_packages(provider: CalendarProvider) -> [AgentPackage; 2] {
         | CalendarProvider::Microsoft
         | CalendarProvider::Android => DataClass::Personal,
     };
-    BuiltinExpertKind::Schedule.packages(data_class)
+    packaging.packages(data_class)
 }

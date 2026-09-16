@@ -7,10 +7,14 @@
 use floe_agent_contract::{AgentFailure, ContextSource};
 use floe_kernel::AGENT_VERSION;
 
+use floe_context::CommunicationView;
+
+use crate::commitments::{
+    CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
+};
 use crate::{
     BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    CommitmentsContextViews, CommitmentsExpertResult, CommunicationView, granted_context,
-    run_commitments_expert_with_views,
+    granted_context,
 };
 
 /// How much communication this Expert reads in one invocation.

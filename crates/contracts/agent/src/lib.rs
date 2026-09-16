@@ -4,6 +4,7 @@
 //! Owners admit a request and supply an [`ExecutionJournal`] to the runtime.
 
 mod archive;
+mod capability;
 mod delegation;
 mod endpoint;
 mod message;
@@ -14,6 +15,9 @@ mod replay;
 pub use archive::{
     ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
     MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
+};
+pub use capability::{
+    CapabilityExecution, CapabilityExecutionState, CapabilityJournal, ModelReplay, ProviderReplay,
 };
 pub use delegation::{DelegationRequest, TaskReceipt, TaskSnapshot, TaskState};
 pub use endpoint::{

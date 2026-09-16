@@ -1,18 +1,18 @@
 //! Communication assessment over confirmed interactions.
 
-use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
-use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::prompts::{commitments_expert_prompt, communication_expert_prompt};
-use floe_context::{CalendarContextView, CommunicationView, calendar_context_evidence, communication_context_evidence, validate_calendar_context_view, validate_communication_view};
-use floe_agent_contract::{AgentFailure, SessionProtection};
-use floe_context::{AgentContext, FLOE_TASK_VIEW_ID, InferencePolicyDecision, NativeContextItem, NativeContextView, native_context_evidence, validate_native_context_view};
+use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
+use floe_context::{CommunicationView, InferencePolicyDecision};
+use floe_conversation::ModelRunner;
 
+use crate::prompts::{communication_expert_prompt};
+use crate::shared::{MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CommunicationChannel {
     Email,
 }
@@ -110,94 +110,6 @@ pub async fn run_communication_expert<Model: ModelRunner>(
     })
 }
 
-async fn run_mail_model<Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: &MailExpertInvocation,
-    prompt: floe_knowledge::prompts::PromptAssembly,
-    mut context: AgentContext,
-) -> Result<floe_conversation::ModelResponse, AgentFailure> {
-    if invocation.assignment.trim().is_empty()
-        || invocation.assignment.len() > 2048
-        || invocation.max_output_bytes == 0
-        || invocation.max_model_tokens == 0
-        || invocation.deadline <= Instant::now()
-        || invocation.cancellation.is_cancelled()
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    validate_communication_view(
-        &invocation.view,
-        invocation.current_time_unix_ms,
-        crate::MAX_COMMUNICATION_ITEMS,
-        crate::MAX_COMMUNICATION_BYTES,
-    )?;
-    context
-        .evidence
-        .push(communication_context_evidence(&invocation.view)?);
-    policy.authorize(
-        model.placement(),
-        SessionProtection::Encrypted,
-        &context,
-        u64::try_from(invocation.current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
-    )?;
-    let turn_id = Uuid::new_v4();
-    let response = generate_with_recovery(
-        model,
-        ModelRequest {
-            usage: invocation.usage.clone(),
-            replay: vec![],
-            schema_version: AGENT_VERSION,
-            prompt,
-            person_id: invocation.person_id,
-            session_id: invocation.invocation_id,
-            turn_id,
-            policy: policy.clone(),
-            context: context.clone(),
-            messages: vec![AgentMessage::User {
-                turn_id,
-                text: invocation.assignment.clone(),
-            }],
-            capabilities: vec![],
-            active_agents: vec![],
-            remaining_tokens: invocation.max_model_tokens,
-            remaining_cost_micros: invocation.max_model_cost_micros,
-            max_output_bytes: invocation.max_output_bytes.min(8192),
-            deadline: invocation.deadline,
-            cancellation: invocation.cancellation.clone(),
-        },
-    )
-    .await?;
-    if response.schema_version != AGENT_VERSION
-        || response.used_tokens > invocation.max_model_tokens
-        || response.cost_micros > invocation.max_model_cost_micros
-    {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    Ok(response)
-}
-
-fn decode_answer<Output: for<'de> Deserialize<'de>>(
-    response: &floe_conversation::ModelResponse,
-    maximum_bytes: usize,
-) -> Result<Output, AgentFailure> {
-    let [ModelStep::Answer { text }] = response.output.as_slice() else {
-        return Err(AgentFailure::InvalidModelOutput);
-    };
-    if text.len() > maximum_bytes.min(8192) {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)
-}
-
 fn evidence_exists(view: &CommunicationView, handle: &str) -> bool {
     view.items.iter().any(|item| item.evidence_handle == handle)
-}
-
-fn validate_summary(summary: &str) -> Result<(), AgentFailure> {
-    if summary.trim().is_empty() || summary.len() > 2048 {
-        Err(AgentFailure::InvalidModelOutput)
-    } else {
-        Ok(())
-    }
 }

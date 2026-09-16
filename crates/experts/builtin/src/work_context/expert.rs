@@ -1,32 +1,15 @@
 //! Work context insights.
 
-use floe_kernel::PersonId;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::time::Instant;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::prompts::{life_logistics_expert_prompt, work_context_expert_prompt};
-use floe_context::{LogisticsView, WorkContextView, logistics_context_evidence, validate_logistics_view, validate_work_context_view, work_context_evidence};
-use floe_agent_contract::{AgentFailure, SessionProtection};
-use floe_context::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
-use floe_knowledge::prompts::{PromptAssembly};
+use floe_context::{InferencePolicyDecision, WorkContextView, validate_work_context_view, work_context_evidence};
+use floe_conversation::ModelRunner;
 
-pub struct PortfolioExpertInvocation {
-    pub usage: UsageLedger,
-    pub person_id: PersonId,
-    pub invocation_id: Uuid,
-    pub assignment: String,
-    pub current_time_unix_ms: i64,
-    pub context: AgentContext,
-    pub max_output_bytes: usize,
-    pub max_model_tokens: u64,
-    pub max_model_cost_micros: u64,
-    pub deadline: Instant,
-    pub cancellation: floe_execution::Cancellation,
-}
+use crate::prompts::{work_context_expert_prompt};
+use crate::shared::{PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -51,8 +34,8 @@ pub struct WorkContextExpertResult {
     pub insights: Vec<WorkInsight>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WorkOutput {
     summary: String,
     insights: Vec<WorkInsight>,
@@ -65,7 +48,7 @@ pub async fn run_work_context_expert<Model: ModelRunner>(
     view: WorkContextView,
 ) -> Result<WorkContextExpertResult, AgentFailure> {
     validate_work_context_view(&view, invocation.current_time_unix_ms)?;
-    let output: WorkOutput = run_model(
+    let output: WorkOutput = run_portfolio_model(
         model,
         policy,
         &invocation,
@@ -109,16 +92,4 @@ pub async fn run_work_context_expert<Model: ModelRunner>(
         summary: output.summary,
         insights: output.insights,
     })
-}
-
-fn validate_summary(value: &str) -> Result<(), AgentFailure> {
-    if valid_text(value, 2048) {
-        Ok(())
-    } else {
-        Err(AgentFailure::InvalidModelOutput)
-    }
-}
-
-fn valid_text(value: &str, maximum: usize) -> bool {
-    !value.trim().is_empty() && value.len() <= maximum
 }

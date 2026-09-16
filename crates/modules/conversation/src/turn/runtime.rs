@@ -8,7 +8,7 @@ use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
 use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_execution::tasks::run_bounded as bounded;
-use floe_agent_contract::ModelPlacement;
+use floe_agent_contract::{CapabilityExecutionState, ModelPlacement, ModelReplay};
 use floe_experts::{
     A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
     A2ATaskState, NoA2AHost,
@@ -541,7 +541,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         let (attempt_sender, mut attempts) = tokio::sync::mpsc::unbounded_channel();
         let (capability_sender, mut capabilities) = tokio::sync::mpsc::unbounded_channel();
         let ledger = ledger.clone().with_journal(attempt_sender);
-        let journal = crate::turn::journal::CapabilityJournal::new(capability_sender);
+        let journal = crate::turn::journal::CapabilityJournalSender::new(capability_sender);
         for iteration in usage.iterations..budget.max_iterations {
             crate::turn::sync_usage(&ledger, usage);
             check_drive_running(deadline, cancellation)?;
@@ -819,7 +819,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         };
                         let result = self
                             .recorded(
-                                crate::turn::capability::execute_recorded(
+                                floe_agent_runtime::execute_recorded(
                                     &journal,
                                     execution,
                                     deadline,

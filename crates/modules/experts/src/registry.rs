@@ -6,6 +6,14 @@ use floe_agent_contract::{AgentFailure, DataClass};
 use floe_day::CalendarScope;
 use floe_kernel::AGENT_VERSION;
 
+mod calendar_setup;
+mod expert_setup;
+
+pub use calendar_setup::{
+    CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
+    CalendarExpertSetupResult, ExpertPackaging,
+};
+pub use expert_setup::{BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec};
 
 /// The identity of a builtin agent in the common delegation path.
 ///
@@ -55,11 +63,37 @@ pub struct BuiltinSourceBinding {
 #[serde(deny_unknown_fields)]
 pub struct BuiltinExpertAssignmentReceipt {
     pub expert: AgentId,
+    /// Every source this Expert declared it reads, in its own order.
+    pub required_sources: Vec<AgentId>,
+    /// The one source it declared it cannot answer without.
+    pub mandatory_source: AgentId,
     pub tool_installation_id: Uuid,
     pub expert_installation_id: Uuid,
     pub tool_assignment_id: Uuid,
     pub expert_assignment_id: Uuid,
     pub granted_view_handles: Vec<Uuid>,
+}
+
+/// Why an Expert may or may not read one source right now.
+///
+/// A source the setup never mentioned and a source whose connection is down are
+/// different answers; only the Expert that asked can decide what each means for
+/// its own judgment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceGrant {
+    Granted,
+    /// No setup records this Expert, or the setup never bound this source.
+    NotConfigured,
+    /// The source is bound but currently disabled or unreachable.
+    Unavailable,
+    /// The source is bound and available, but this Expert holds no grant to it.
+    Denied,
+}
+
+impl SourceGrant {
+    pub fn is_granted(self) -> bool {
+        matches!(self, Self::Granted)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -412,6 +446,10 @@ impl AgentRegistry {
 
     pub fn instance_id(&self) -> Uuid {
         self.snapshot.instance_id
+    }
+
+    pub(crate) fn snapshot_ref(&self) -> &RegistrySnapshot {
+        &self.snapshot
     }
 
     pub fn snapshot(&self) -> RegistrySnapshot {
@@ -995,7 +1033,7 @@ impl AgentRegistry {
         Ok(revision)
     }
 
-    fn validate_grants(&self, assignment: &PackageAssignment) -> Result<(), AgentFailure> {
+    pub(crate) fn validate_grants(&self, assignment: &PackageAssignment) -> Result<(), AgentFailure> {
         let installation = self.installation(assignment.installation_id)?;
         let package = self.package(&installation.package)?;
         for handle in &assignment.granted_view_handles {
@@ -1044,7 +1082,7 @@ impl AgentRegistry {
         }
     }
 
-    fn package(&self, reference: &PackageRef) -> Result<&AgentPackage, AgentFailure> {
+    pub(crate) fn package(&self, reference: &PackageRef) -> Result<&AgentPackage, AgentFailure> {
         self.snapshot
             .packages
             .iter()
@@ -1052,7 +1090,7 @@ impl AgentRegistry {
             .ok_or(AgentFailure::NotFound)
     }
 
-    fn installation(&self, id: Uuid) -> Result<&PackageInstallation, AgentFailure> {
+    pub(crate) fn installation(&self, id: Uuid) -> Result<&PackageInstallation, AgentFailure> {
         self.snapshot
             .installations
             .iter()
@@ -1060,7 +1098,7 @@ impl AgentRegistry {
             .ok_or(AgentFailure::NotFound)
     }
 
-    fn assignment(
+    pub(crate) fn assignment(
         &self,
         person_id: PersonId,
         id: Uuid,
@@ -1072,7 +1110,7 @@ impl AgentRegistry {
             .ok_or(AgentFailure::NotFound)
     }
 
-    fn check_revision(&self, expected: u64) -> Result<(), AgentFailure> {
+    pub(crate) fn check_revision(&self, expected: u64) -> Result<(), AgentFailure> {
         if self.revision() == expected {
             Ok(())
         } else {
@@ -1080,7 +1118,7 @@ impl AgentRegistry {
         }
     }
 
-    fn advance(&mut self) -> Result<(), AgentFailure> {
+    pub(crate) fn advance(&mut self) -> Result<(), AgentFailure> {
         self.snapshot.revision = self
             .snapshot
             .revision

@@ -28,10 +28,12 @@ pub use invocation::{
 };
 pub use registry::{
     AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
-    BuiltinExpertSetupReceipt, BuiltinSourceBinding, BuiltinSourceState,
-    CalendarExpertSetupReceipt, CalendarViewBinding, ExpertMetadata,
-    ExpertPrivateState, ExpertRule, PackageAssignment, PackageImplementation, PackageInstallation,
-    PackageKind, PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
-    NoSetupValidator, RegistrySnapshot, SetupValidator,
+    BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, BuiltinSourceBinding,
+    BuiltinSourceState, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview,
+    CalendarExpertSetup, CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarViewBinding,
+    ExpertMetadata, ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec,
+    NoSetupValidator, PackageAssignment, PackageImplementation, PackageInstallation, PackageKind,
+    PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
+    RegistrySnapshot, SetupValidator, SourceGrant,
 };
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

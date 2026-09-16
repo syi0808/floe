@@ -1,26 +1,25 @@
 //! Focus and attention recommendations.
 
-use floe_kernel::PersonId;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::time::Instant;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::prompts::{focus_expert_prompt, relationships_expert_prompt, wellbeing_expert_prompt};
-use floe_context::{AttentionView, CalendarContextView, PeopleView, WellbeingView, WorkContextView, calendar_context_evidence, personal_context_evidence, validate_attention_view, validate_calendar_context_view, validate_people_view, validate_wellbeing_view, validate_work_context_view, work_context_evidence};
-use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
-use floe_knowledge::prompts::{PromptAssembly};
+use floe_context::{AttentionView, CalendarContextView, ContextEvidence, InferencePolicyDecision, WorkContextView, personal_context_evidence, validate_attention_view, validate_work_context_view, work_context_evidence};
+use floe_conversation::ModelRunner;
 
+use crate::prompts::{focus_expert_prompt};
+use crate::shared::{PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, valid_handle, validate_judgment};
+
+#[derive(Clone, Debug)]
 pub struct FocusContextViews {
     pub attention: AttentionView,
     pub calendars: Vec<CalendarContextView>,
     pub active_work: Vec<WorkContextView>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FocusRecommendation {
     ProtectFocus,
     AvailableForInterruptions,
@@ -42,8 +41,8 @@ pub struct FocusExpertResult {
     pub evidence_handles: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FocusOutput {
     summary: String,
     recommendation: FocusRecommendation,

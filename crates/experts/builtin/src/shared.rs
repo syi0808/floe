@@ -1,19 +1,62 @@
-//! Values and validation shared by the builtin Experts.
+//! Values and model calls shared by the builtin Experts.
+//!
+//! Each Expert owns its own judgment and result shape; what is common is how a
+//! bounded assignment reaches the model and how its answer is checked back.
 
 use floe_kernel::PersonId;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, de::DeserializeOwned};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::prompts::{focus_expert_prompt, relationships_expert_prompt, wellbeing_expert_prompt};
-use floe_context::{AttentionView, CalendarContextView, PeopleView, WellbeingView, WorkContextView, calendar_context_evidence, personal_context_evidence, validate_attention_view, validate_calendar_context_view, validate_people_view, validate_wellbeing_view, validate_work_context_view, work_context_evidence};
-use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_agent_contract::{AgentFailure, SessionProtection};
+use floe_context::{
+    AgentContext, CalendarContextView, CommunicationView, ContextEvidence,
+    InferencePolicyDecision, calendar_context_evidence, communication_context_evidence,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, validate_calendar_context_view,
+    validate_communication_view,
+};
+use floe_conversation::{
+    AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep, UsageLedger,
+    generate_with_recovery,
+};
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
-use floe_knowledge::prompts::{PromptAssembly};
+use floe_knowledge::prompts::PromptAssembly;
 
+/// How many findings one communication-backed Expert may report.
+pub(crate) const MAX_MAIL_EXPERT_FINDINGS: usize = 16;
+
+/// One assignment handed to an Expert that reads a communication view.
+pub struct MailExpertInvocation {
+    pub usage: UsageLedger,
+    pub person_id: PersonId,
+    pub invocation_id: Uuid,
+    pub assignment: String,
+    pub current_time_unix_ms: i64,
+    pub context: AgentContext,
+    pub view: CommunicationView,
+    pub max_output_bytes: usize,
+    pub max_model_tokens: u64,
+    pub max_model_cost_micros: u64,
+    pub deadline: Instant,
+    pub cancellation: floe_execution::Cancellation,
+}
+
+/// One assignment handed to an Expert that reads a work or logistics view.
+pub struct PortfolioExpertInvocation {
+    pub usage: UsageLedger,
+    pub person_id: PersonId,
+    pub invocation_id: Uuid,
+    pub assignment: String,
+    pub current_time_unix_ms: i64,
+    pub context: AgentContext,
+    pub max_output_bytes: usize,
+    pub max_model_tokens: u64,
+    pub max_model_cost_micros: u64,
+    pub deadline: Instant,
+    pub cancellation: floe_execution::Cancellation,
+}
+
+/// One assignment handed to an Expert that reads the Person's own views.
 pub struct PersonalExpertInvocation {
     pub usage: UsageLedger,
     pub person_id: PersonId,
@@ -28,9 +71,220 @@ pub struct PersonalExpertInvocation {
     pub cancellation: floe_execution::Cancellation,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-fn add_schedule_views(
+/// Whether one assignment is inside the bounds every Expert shares.
+fn admissible(
+    assignment: &str,
+    max_output_bytes: usize,
+    max_model_tokens: u64,
+    deadline: Instant,
+    cancellation: &floe_execution::Cancellation,
+) -> Result<(), AgentFailure> {
+    if !valid_text(assignment, 2048)
+        || max_output_bytes == 0
+        || max_model_tokens == 0
+        || deadline <= Instant::now()
+        || cancellation.is_cancelled()
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
+}
+
+/// The one bounded model call an Expert makes, with its context authorized for
+/// the placement it is about to run on.
+#[allow(clippy::too_many_arguments)]
+async fn run_expert_model<Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    usage: &UsageLedger,
+    person_id: PersonId,
+    invocation_id: Uuid,
+    assignment: &str,
+    current_time_unix_ms: i64,
+    context: AgentContext,
+    prompt: PromptAssembly,
+    max_model_tokens: u64,
+    max_model_cost_micros: u64,
+    max_output_bytes: usize,
+    deadline: Instant,
+    cancellation: &floe_execution::Cancellation,
+) -> Result<ModelResponse, AgentFailure> {
+    policy.authorize(
+        model.placement(),
+        SessionProtection::Encrypted,
+        &context,
+        u64::try_from(current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
+    )?;
+    let turn_id = Uuid::new_v4();
+    let response = generate_with_recovery(
+        model,
+        ModelRequest {
+            usage: usage.clone(),
+            replay: vec![],
+            schema_version: AGENT_VERSION,
+            prompt,
+            person_id,
+            session_id: invocation_id,
+            turn_id,
+            policy: policy.clone(),
+            context,
+            messages: vec![AgentMessage::User {
+                turn_id,
+                text: assignment.to_owned(),
+            }],
+            capabilities: vec![],
+            active_agents: vec![],
+            remaining_tokens: max_model_tokens,
+            remaining_cost_micros: max_model_cost_micros,
+            max_output_bytes: max_output_bytes.min(8192),
+            deadline,
+            cancellation: cancellation.clone(),
+        },
+    )
+    .await?;
+    if response.schema_version != AGENT_VERSION
+        || response.used_tokens > max_model_tokens
+        || response.cost_micros > max_model_cost_micros
+    {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    Ok(response)
+}
+
+/// Run the model for an Expert whose evidence is one communication view.
+pub(crate) async fn run_mail_model<Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    invocation: &MailExpertInvocation,
+    prompt: PromptAssembly,
+    mut context: AgentContext,
+) -> Result<ModelResponse, AgentFailure> {
+    admissible(
+        &invocation.assignment,
+        invocation.max_output_bytes,
+        invocation.max_model_tokens,
+        invocation.deadline,
+        &invocation.cancellation,
+    )?;
+    validate_communication_view(
+        &invocation.view,
+        invocation.current_time_unix_ms,
+        MAX_COMMUNICATION_ITEMS,
+        MAX_COMMUNICATION_BYTES,
+    )?;
+    context
+        .evidence
+        .push(communication_context_evidence(&invocation.view)?);
+    run_expert_model(
+        model,
+        policy,
+        &invocation.usage,
+        invocation.person_id,
+        invocation.invocation_id,
+        &invocation.assignment,
+        invocation.current_time_unix_ms,
+        context,
+        prompt,
+        invocation.max_model_tokens,
+        invocation.max_model_cost_micros,
+        invocation.max_output_bytes,
+        invocation.deadline,
+        &invocation.cancellation,
+    )
+    .await
+}
+
+/// Run the model for an Expert whose evidence is one portfolio view.
+pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    invocation: &PortfolioExpertInvocation,
+    evidence: ContextEvidence,
+    prompt: PromptAssembly,
+) -> Result<Output, AgentFailure> {
+    admissible(
+        &invocation.assignment,
+        invocation.max_output_bytes,
+        invocation.max_model_tokens,
+        invocation.deadline,
+        &invocation.cancellation,
+    )?;
+    let mut context = invocation.context.clone();
+    context.evidence.push(evidence);
+    let response = run_expert_model(
+        model,
+        policy,
+        &invocation.usage,
+        invocation.person_id,
+        invocation.invocation_id,
+        &invocation.assignment,
+        invocation.current_time_unix_ms,
+        context,
+        prompt,
+        invocation.max_model_tokens,
+        invocation.max_model_cost_micros,
+        invocation.max_output_bytes,
+        invocation.deadline,
+        &invocation.cancellation,
+    )
+    .await?;
+    decode_answer(&response, invocation.max_output_bytes)
+}
+
+/// Run the model for an Expert whose evidence is the Person's own views.
+pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    invocation: &PersonalExpertInvocation,
+    evidence: Vec<ContextEvidence>,
+    prompt: PromptAssembly,
+) -> Result<Output, AgentFailure> {
+    admissible(
+        &invocation.assignment,
+        invocation.max_output_bytes,
+        invocation.max_model_tokens,
+        invocation.deadline,
+        &invocation.cancellation,
+    )?;
+    let mut context = invocation.context.clone();
+    context.evidence.extend(evidence);
+    let response = run_expert_model(
+        model,
+        policy,
+        &invocation.usage,
+        invocation.person_id,
+        invocation.invocation_id,
+        &invocation.assignment,
+        invocation.current_time_unix_ms,
+        context,
+        prompt,
+        invocation.max_model_tokens,
+        invocation.max_model_cost_micros,
+        invocation.max_output_bytes,
+        invocation.deadline,
+        &invocation.cancellation,
+    )
+    .await?;
+    decode_answer(&response, invocation.max_output_bytes)
+}
+
+/// The single answer step an Expert's model call must have produced.
+pub(crate) fn decode_answer<Output: for<'de> Deserialize<'de>>(
+    response: &ModelResponse,
+    maximum_bytes: usize,
+) -> Result<Output, AgentFailure> {
+    let [ModelStep::Answer { text }] = response.output.as_slice() else {
+        return Err(AgentFailure::InvalidModelOutput);
+    };
+    if text.len() > maximum_bytes.min(8192) {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)
+}
+
+/// Add the calendar views an Expert was granted to its evidence, keeping every
+/// source and handle distinct and the whole view's freshness bounded.
+pub(crate) fn add_schedule_views(
     calendars: &[CalendarContextView],
     now_unix_ms: i64,
     evidence: &mut Vec<ContextEvidence>,
@@ -52,7 +306,10 @@ fn add_schedule_views(
     Ok(())
 }
 
-fn ensure_unique_source(source_handles: &[String], source: &str) -> Result<(), AgentFailure> {
+pub(crate) fn ensure_unique_source(
+    source_handles: &[String],
+    source: &str,
+) -> Result<(), AgentFailure> {
     if source_handles.iter().any(|value| value == source) {
         Err(AgentFailure::InvalidInput)
     } else {
@@ -60,7 +317,7 @@ fn ensure_unique_source(source_handles: &[String], source: &str) -> Result<(), A
     }
 }
 
-fn extend_unique_handles<'a>(
+pub(crate) fn extend_unique_handles<'a>(
     available: &mut Vec<String>,
     handles: impl Iterator<Item = &'a String>,
 ) -> Result<(), AgentFailure> {
@@ -73,85 +330,25 @@ fn extend_unique_handles<'a>(
     Ok(())
 }
 
-fn valid_handle(value: &str) -> bool {
+pub(crate) fn valid_handle(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128
 }
 
-async fn run_personal_model<Output: DeserializeOwned, Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: &PersonalExpertInvocation,
-    evidence: Vec<ContextEvidence>,
-    prompt: PromptAssembly,
-) -> Result<Output, AgentFailure> {
-    if invocation.assignment.trim().is_empty()
-        || invocation.assignment.len() > 2048
-        || invocation.max_output_bytes == 0
-        || invocation.max_model_tokens == 0
-        || invocation.deadline <= Instant::now()
-        || invocation.cancellation.is_cancelled()
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let mut context = invocation.context.clone();
-    context.evidence.extend(evidence);
-    policy.authorize(
-        model.placement(),
-        SessionProtection::Encrypted,
-        &context,
-        u64::try_from(invocation.current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
-    )?;
-    let turn_id = Uuid::new_v4();
-    let response = generate_with_recovery(
-        model,
-        ModelRequest {
-            usage: invocation.usage.clone(),
-            replay: vec![],
-            schema_version: AGENT_VERSION,
-            prompt,
-            person_id: invocation.person_id,
-            session_id: invocation.invocation_id,
-            turn_id,
-            policy: policy.clone(),
-            context,
-            messages: vec![AgentMessage::User {
-                turn_id,
-                text: invocation.assignment.clone(),
-            }],
-            capabilities: vec![],
-            active_agents: vec![],
-            remaining_tokens: invocation.max_model_tokens,
-            remaining_cost_micros: invocation.max_model_cost_micros,
-            max_output_bytes: invocation.max_output_bytes.min(8192),
-            deadline: invocation.deadline,
-            cancellation: invocation.cancellation.clone(),
-        },
-    )
-    .await?;
-    if response.schema_version != AGENT_VERSION
-        || response.used_tokens > invocation.max_model_tokens
-        || response.cost_micros > invocation.max_model_cost_micros
-    {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    let [ModelStep::Answer { text }] = response.output.as_slice() else {
-        return Err(AgentFailure::InvalidModelOutput);
-    };
-    if text.len() > invocation.max_output_bytes.min(8192) {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)
+pub(crate) fn valid_text(value: &str, maximum: usize) -> bool {
+    !value.trim().is_empty() && value.len() <= maximum
 }
 
-fn validate_summary(summary: &str) -> Result<(), AgentFailure> {
-    if summary.trim().is_empty() || summary.len() > 2048 {
-        Err(AgentFailure::InvalidModelOutput)
-    } else {
+pub(crate) fn validate_summary(summary: &str) -> Result<(), AgentFailure> {
+    if valid_text(summary, 2048) {
         Ok(())
+    } else {
+        Err(AgentFailure::InvalidModelOutput)
     }
 }
 
-fn validate_judgment(
+/// A judgment must cite evidence it was actually shown, or say it reached no
+/// conclusion. It cannot do both, and it cannot do neither.
+pub(crate) fn validate_judgment(
     summary: &str,
     rationale: &str,
     evidence_handles: &[String],

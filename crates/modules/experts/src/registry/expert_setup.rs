@@ -1,9 +1,34 @@
-use super::*;
+//! Installing a set of Experts and the sources each of them was granted.
+//!
+//! The registry keeps the records; it never knows what any Expert means. The
+//! crate that owns the Experts states each one's identity, the sources its
+//! judgment reads and the packages that carry it, and the registry stores that
+//! declaration so later eligibility checks need no Expert-specific knowledge.
 
-mod schedule;
-pub use schedule::*;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
+use floe_agent_contract::AgentFailure;
+use floe_kernel::{AGENT_VERSION, PersonId};
 
+use super::{
+    AgentId, AgentPackage, AgentRegistry, BuiltinExpertAssignmentReceipt,
+    BuiltinExpertSetupReceipt, BuiltinSourceBinding, BuiltinSourceState, ExpertPrivateState,
+    PackageAssignment, PackageImplementation, PackageInstallation, PackageKind, RegistryOverview,
+    SourceGrant,
+};
+
+/// One Expert's installation, as its owning crate declares it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpertSetupSpec {
+    pub expert: AgentId,
+    /// Every source this Expert reads, in its own declared order.
+    pub required_sources: Vec<AgentId>,
+    /// The one source it cannot answer without.
+    pub mandatory_source: AgentId,
+    /// The tool package and the Expert package installed together.
+    pub packages: [AgentPackage; 2],
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -28,13 +53,14 @@ impl AgentRegistry {
         &mut self,
         person_id: PersonId,
         request: &BuiltinExpertSetup,
+        specs: &[ExpertSetupSpec],
     ) -> Result<BuiltinExpertSetupReceipt, AgentFailure> {
         let already_installed = self
             .snapshot
             .builtin_setups
             .iter()
             .any(|setup| setup.setup_id == request.setup_id);
-        let receipt = self.install_builtin_experts(person_id, request)?;
+        let receipt = self.install_builtin_experts(person_id, request, specs)?;
         if already_installed {
             return Ok(receipt);
         }
@@ -63,8 +89,10 @@ impl AgentRegistry {
         &mut self,
         person_id: PersonId,
         request: &BuiltinExpertSetup,
+        specs: &[ExpertSetupSpec],
     ) -> Result<BuiltinExpertSetupReceipt, AgentFailure> {
         validate_request(request, self.instance_id())?;
+        validate_specs(specs)?;
         if let Some(receipt) = self
             .snapshot
             .builtin_setups
@@ -94,19 +122,10 @@ impl AgentRegistry {
             .revision
             .checked_add(1)
             .ok_or(AgentFailure::BudgetExceeded)?;
-        let mut receipts = Vec::with_capacity(BuiltinExpertKind::BUILTIN_SETUP.len());
-        for expert in BuiltinExpertKind::BUILTIN_SETUP {
-            let views = expert
-                .required_sources()
-                .iter()
-                .filter_map(|source| {
-                    request.sources.iter().find(|binding| {
-                        binding.source == *source && binding.state == BuiltinSourceState::Available
-                    })
-                })
-                .map(|binding| binding.view_handle)
-                .collect::<Vec<_>>();
-            let [tool, package] = builtin_packages(expert);
+        let mut receipts = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let views = granted_views(&spec.required_sources, &request.sources);
+            let [tool, package] = spec.packages.clone();
             for candidate in [&tool, &package] {
                 match next
                     .packages
@@ -119,7 +138,9 @@ impl AgentRegistry {
                 }
             }
             let receipt = BuiltinExpertAssignmentReceipt {
-                expert,
+                expert: spec.expert.clone(),
+                required_sources: spec.required_sources.clone(),
+                mandatory_source: spec.mandatory_source.clone(),
                 tool_installation_id: Uuid::new_v4(),
                 expert_installation_id: Uuid::new_v4(),
                 tool_assignment_id: Uuid::new_v4(),
@@ -192,20 +213,7 @@ impl AgentRegistry {
         let assignments = self.snapshot.builtin_setups[index].assignments.clone();
         let grants = assignments
             .iter()
-            .map(|receipt| {
-                receipt
-                    .expert
-                    .required_sources()
-                    .iter()
-                    .filter_map(|source| {
-                        sources.iter().find(|binding| {
-                            binding.source == *source
-                                && binding.state == BuiltinSourceState::Available
-                        })
-                    })
-                    .map(|binding| binding.view_handle)
-                    .collect::<Vec<_>>()
-            })
+            .map(|receipt| granted_views(&receipt.required_sources, &sources))
             .collect::<Vec<_>>();
         self.advance()?;
         for (receipt, granted_view_handles) in assignments.iter().zip(grants) {
@@ -228,7 +236,7 @@ impl AgentRegistry {
         Ok(self.snapshot.builtin_setups[index].clone())
     }
 
-    pub fn enabled_expert_cards(&self, person_id: PersonId) -> Vec<floe_experts::AgentCard> {
+    pub fn enabled_expert_cards(&self, person_id: PersonId) -> Vec<crate::AgentCard> {
         self.snapshot
             .assignments
             .iter()
@@ -245,8 +253,8 @@ impl AgentRegistry {
                 {
                     return None;
                 }
-                if let PackageImplementation::Builtin { expert } = &package.implementation
-                    && !self.assignment_has_source(assignment.id, expert.mandatory_source())
+                if matches!(package.implementation, PackageImplementation::Builtin { .. })
+                    && !self.assignment_has_mandatory_source(assignment.id)
                 {
                     return None;
                 }
@@ -262,9 +270,9 @@ impl AgentRegistry {
                     return None;
                 }
                 let metadata = package.expert_metadata.as_ref()?;
-                let card = floe_experts::AgentCard {
+                let card = crate::AgentCard {
                     schema_version: AGENT_VERSION,
-                    protocol_version: floe_experts::A2A_PROTOCOL_VERSION.into(),
+                    protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
                     id: package.reference.id.clone(),
                     version: package.reference.version.clone(),
                     name: metadata.name.clone(),
@@ -277,29 +285,88 @@ impl AgentRegistry {
             .collect()
     }
 
-    fn assignment_has_source(&self, assignment_id: Uuid, source: BuiltinContextSource) -> bool {
-        self.snapshot.builtin_setups.iter().any(|setup| {
-            setup.assignments.iter().any(|receipt| {
-                receipt.expert_assignment_id == assignment_id
-                    && setup.sources.iter().any(|binding| {
-                        binding.source == source
-                            && binding.state == BuiltinSourceState::Available
-                            && receipt.granted_view_handles.contains(&binding.view_handle)
-                    })
-            })
+    /// Whether this assignment still holds the source its Expert declared it
+    /// cannot answer without.
+    ///
+    /// A builtin installed outside a recorded setup has stated no mandatory
+    /// source, so there is nothing here to confirm and the card stands on its
+    /// own grants.
+    fn assignment_has_mandatory_source(&self, assignment_id: Uuid) -> bool {
+        let Some((setup, receipt)) = self.snapshot.builtin_setups.iter().find_map(|setup| {
+            setup
+                .assignments
+                .iter()
+                .find(|receipt| receipt.expert_assignment_id == assignment_id)
+                .map(|receipt| (setup, receipt))
+        }) else {
+            return true;
+        };
+        setup.sources.iter().any(|binding| {
+            binding.source == receipt.mandatory_source
+                && binding.state == BuiltinSourceState::Available
+                && receipt.granted_view_handles.contains(&binding.view_handle)
         })
+    }
+
+    /// Whether the Expert behind `expert_assignment_id` was granted `source`
+    /// at setup time, and what stands in the way when it was not.
+    pub fn assignment_source_grant(
+        &self,
+        assignment_id: Uuid,
+        source: &AgentId,
+    ) -> SourceGrant {
+        let Some((setup, receipt)) = self.snapshot.builtin_setups.iter().find_map(|setup| {
+            setup
+                .assignments
+                .iter()
+                .find(|receipt| receipt.expert_assignment_id == assignment_id)
+                .map(|receipt| (setup, receipt))
+        }) else {
+            return SourceGrant::NotConfigured;
+        };
+        let Some(binding) = setup
+            .sources
+            .iter()
+            .find(|binding| binding.source == *source)
+        else {
+            return SourceGrant::NotConfigured;
+        };
+        match binding.state {
+            _ if !receipt.granted_view_handles.contains(&binding.view_handle) => {
+                SourceGrant::Denied
+            }
+            BuiltinSourceState::Available => SourceGrant::Granted,
+            BuiltinSourceState::Disabled | BuiltinSourceState::Unavailable => {
+                SourceGrant::Unavailable
+            }
+        }
+    }
+
+    /// The Expert assignment recorded for `expert` in this Person's setup.
+    pub fn expert_assignment_id(&self, person_id: PersonId, expert: &AgentId) -> Option<Uuid> {
+        self.snapshot
+            .builtin_setups
+            .iter()
+            .filter(|setup| setup.person_id == person_id)
+            .find_map(|setup| {
+                setup
+                    .assignments
+                    .iter()
+                    .find(|receipt| receipt.expert == *expert)
+                    .map(|receipt| receipt.expert_assignment_id)
+            })
     }
 
     pub(super) fn validate_builtin_setups(&self) -> Result<(), AgentFailure> {
         for (index, receipt) in self.snapshot.builtin_setups.iter().enumerate() {
             if receipt.setup_id.is_nil()
                 || receipt.expected_revision >= self.revision()
-                || receipt.assignments.len() != BuiltinExpertKind::BUILTIN_SETUP.len()
-                || !receipt
-                    .assignments
-                    .iter()
-                    .map(|entry| entry.expert)
-                    .eq(BuiltinExpertKind::BUILTIN_SETUP)
+                || receipt.assignments.is_empty()
+                || receipt.assignments.iter().enumerate().any(|(position, entry)| {
+                    receipt.assignments[..position]
+                        .iter()
+                        .any(|other| other.expert == entry.expert)
+                })
                 || self.snapshot.builtin_setups[..index].iter().any(|other| {
                     other.setup_id == receipt.setup_id || other.person_id == receipt.person_id
                 })
@@ -308,22 +375,15 @@ impl AgentRegistry {
             }
             validate_sources(&receipt.sources)?;
             for expert_receipt in &receipt.assignments {
-                let expected_views = expert_receipt
-                    .expert
-                    .required_sources()
-                    .iter()
-                    .filter_map(|source| {
-                        receipt.sources.iter().find(|binding| {
-                            binding.source == *source
-                                && binding.state == BuiltinSourceState::Available
-                        })
-                    })
-                    .map(|binding| binding.view_handle)
-                    .collect::<Vec<_>>();
-                if expert_receipt.granted_view_handles != expected_views {
+                let expected_views =
+                    granted_views(&expert_receipt.required_sources, &receipt.sources);
+                if expert_receipt.granted_view_handles != expected_views
+                    || !expert_receipt
+                        .required_sources
+                        .contains(&expert_receipt.mandatory_source)
+                {
                     return Err(AgentFailure::CapabilityDenied);
                 }
-                let [tool, expert] = builtin_packages(expert_receipt.expert);
                 let tool_installation = self.installation(expert_receipt.tool_installation_id)?;
                 let expert_installation =
                     self.installation(expert_receipt.expert_installation_id)?;
@@ -331,10 +391,12 @@ impl AgentRegistry {
                     self.assignment(receipt.person_id, expert_receipt.tool_assignment_id)?;
                 let expert_assignment =
                     self.assignment(receipt.person_id, expert_receipt.expert_assignment_id)?;
-                if tool_installation.package != tool.reference
-                    || expert_installation.package != expert.reference
-                    || self.package(&tool.reference)? != &tool
-                    || self.package(&expert.reference)? != &expert
+                let tool_package = self.package(&tool_installation.package)?;
+                let expert_package = self.package(&expert_installation.package)?;
+                if tool_package.reference.kind != PackageKind::Tool
+                    || expert_package.reference.kind != PackageKind::Expert
+                    || expert_package.reference.id != expert_receipt.expert.as_str()
+                    || !expert_package.required_tools.contains(&tool_package.reference)
                     || tool_assignment.installation_id != expert_receipt.tool_installation_id
                     || expert_assignment.installation_id != expert_receipt.expert_installation_id
                     || tool_assignment.granted_view_handles != expected_views
@@ -376,6 +438,35 @@ fn validate_sources(sources: &[BuiltinSourceBinding]) -> Result<(), AgentFailure
     }
 }
 
-fn builtin_packages(kind: BuiltinExpertKind) -> [AgentPackage; 2] {
-    kind.packages(kind.context_data_class())
+/// The view handles a declared source list actually resolves to right now.
+fn granted_views(required: &[AgentId], sources: &[BuiltinSourceBinding]) -> Vec<Uuid> {
+    required
+        .iter()
+        .filter_map(|source| {
+            sources.iter().find(|binding| {
+                binding.source == *source && binding.state == BuiltinSourceState::Available
+            })
+        })
+        .map(|binding| binding.view_handle)
+        .collect()
+}
+
+fn validate_specs(specs: &[ExpertSetupSpec]) -> Result<(), AgentFailure> {
+    if specs.is_empty()
+        || specs.len() > 32
+        || specs.iter().enumerate().any(|(index, spec)| {
+            !spec.required_sources.contains(&spec.mandatory_source)
+                || spec.required_sources.len() > 16
+                || spec.packages[0].reference.kind != PackageKind::Tool
+                || spec.packages[1].reference.kind != PackageKind::Expert
+                || spec.packages[1].reference.id != spec.expert.as_str()
+                || !spec.packages[1]
+                    .required_tools
+                    .contains(&spec.packages[0].reference)
+                || specs[..index].iter().any(|other| other.expert == spec.expert)
+        })
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
 }

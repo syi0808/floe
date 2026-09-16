@@ -1,6 +1,10 @@
 //! Role prompts for the builtin Experts. Each role's text is owned here.
 
-use floe_knowledge::prompts::{PromptAssembly, PromptRole, expert_prompt};
+use floe_kernel::AGENT_VERSION;
+use floe_knowledge::prompts::{
+    BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL, CAPABILITY_PROTOCOL_REVISION,
+    PromptAssembly, PromptComponentKind, PromptRole, expert_prompt, product_component,
+};
 
 const SCHEDULE_EXPERT_ROLE: &str = include_str!("../prompts/schedule_expert_role.txt");
 const COMMITMENTS_EXPERT_ROLE: &str = include_str!("../prompts/commitments_expert_role.txt");

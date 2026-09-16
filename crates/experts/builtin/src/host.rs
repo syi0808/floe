@@ -20,9 +20,12 @@ use floe_kernel::PersonId;
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use floe_context::CommunicationView;
+
+use crate::relationships::ConfirmedInteractionView;
 use crate::{
-    BuiltinContextSource, ConfirmedInteractionView, MailExpertInvocation,
-    PersonalExpertInvocation, PortfolioExpertInvocation, communication::CommunicationView,
+    BuiltinContextSource, MailExpertInvocation, PersonalExpertInvocation,
+    PortfolioExpertInvocation,
 };
 
 /// Every builtin Expert runs one bounded model call with the same ceiling.

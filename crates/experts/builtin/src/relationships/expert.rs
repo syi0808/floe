@@ -1,18 +1,15 @@
 //! Relationship follow-ups from confirmed interactions.
 
-use floe_kernel::PersonId;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::time::Instant;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::prompts::{focus_expert_prompt, relationships_expert_prompt, wellbeing_expert_prompt};
-use floe_context::{AttentionView, CalendarContextView, PeopleView, WellbeingView, WorkContextView, calendar_context_evidence, personal_context_evidence, validate_attention_view, validate_calendar_context_view, validate_people_view, validate_wellbeing_view, validate_work_context_view, work_context_evidence};
-use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_agent_contract::{AgentFailure, DataClass};
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
-use floe_knowledge::prompts::{PromptAssembly};
+use floe_context::{AgentContext, AttentionView, CalendarContextView, ContextEvidence, InferencePolicyDecision, PeopleView, personal_context_evidence, validate_people_view};
+use floe_conversation::ModelRunner;
+
+use crate::prompts::{relationships_expert_prompt};
+use crate::shared::{validate_summary, PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, valid_handle, validate_judgment};
 
 pub const CONFIRMED_INTERACTION_VIEW_ID: &str = "relationships.confirmed_interactions";
 
@@ -41,7 +38,8 @@ pub struct RelationshipsContextViews {
     pub confirmed_interactions: Vec<ConfirmedInteractionView>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RelationshipFollowUp {
     pub identity_handle: String,
     pub reason: String,
@@ -62,8 +60,8 @@ pub struct RelationshipsExpertResult {
     pub follow_ups: Vec<RelationshipFollowUp>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RelationshipsOutput {
     summary: String,
     follow_ups: Vec<RelationshipFollowUp>,
@@ -172,6 +170,7 @@ pub async fn run_relationships_expert_with_views<Model: ModelRunner>(
     })
 }
 
+#[derive(Serialize)]
 struct RelationshipMemoryLink {
     identity_handle: String,
     evidence_handle: String,
@@ -196,7 +195,7 @@ pub fn validate_confirmed_interaction_view(
         || serde_json::to_vec(view)
             .map_err(|_| AgentFailure::InvalidInput)?
             .len()
-            > crate::MAX_PERSONAL_CONTEXT_BYTES
+            > floe_context::MAX_PERSONAL_CONTEXT_BYTES
     {
         return Err(AgentFailure::InvalidInput);
     }

@@ -5,10 +5,12 @@
 
 use floe_agent_contract::AgentFailure;
 
+use crate::relationships::{
+    RelationshipsContextViews, RelationshipsExpertResult, run_relationships_expert_with_views,
+};
 use crate::{
     BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    RelationshipsContextViews, RelationshipsExpertResult, granted_context,
-    run_relationships_expert_with_views,
+    granted_context,
 };
 
 /// This Expert reads people context as itself, not as the assistant.

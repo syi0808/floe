@@ -5,10 +5,10 @@
 use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
 
-use crate::{
-    BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, CommunicationExpertResult,
-    CommunicationView, granted_context, run_communication_expert,
-};
+use floe_context::CommunicationView;
+
+use crate::communication::{CommunicationExpertResult, run_communication_expert};
+use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
 
 /// How much communication this Expert reads in one invocation.
 const COMMUNICATION_LIMIT: usize = 25;

@@ -1,10 +1,47 @@
+//! Which builtin Experts exist, what each one reads and how it is packaged.
+//!
+//! This is a declaration, not an installation: nothing here issues a grant or
+//! reveals that a Person has a source. The registry stores what the composition
+//! root installs from it.
+
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::{DataClass};
-use floe_kernel::AGENT_VERSION;
-use floe_experts::{AgentPackage, ExpertMetadata, PackageImplementation, PackageKind, PackageRef};
+use floe_agent_contract::DataClass;
 
 pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
+pub const BUILTIN_EXPERT_PUBLISHER: &str = "floe";
+pub const BUILTIN_EXPERT_STATE_SCHEMA_VERSION: u32 = 1;
+
+/// What one builtin Expert declares about itself.
+///
+/// The composition root installs this; the generic registry stores only the
+/// resulting identities, so no module below it needs to know a builtin kind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BuiltinExpertDeclaration {
+    pub expert_id: &'static str,
+    pub tool_id: String,
+    pub version: &'static str,
+    pub publisher: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub domain_tags: Vec<String>,
+    pub skills: Vec<String>,
+    pub data_class: DataClass,
+    /// The sources this Expert reads, in its own declared order.
+    pub required_sources: Vec<&'static str>,
+    /// The one source it cannot answer without.
+    pub mandatory_source: &'static str,
+    /// Whether its judgment can run on the on-device model.
+    pub runs_on_device_model: bool,
+}
+
+/// Every Expert the builtin setup installs together.
+pub fn builtin_setup_declarations() -> Vec<BuiltinExpertDeclaration> {
+    BuiltinExpertKind::BUILTIN_SETUP
+        .into_iter()
+        .map(BuiltinExpertKind::declaration)
+        .collect()
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,8 +104,31 @@ impl BuiltinExpertKind {
             .find(|expert| expert.package_id() == package_id)
     }
 
-    pub(crate) fn tool_id(self) -> String {
+    pub fn tool_id(self) -> String {
         format!("{}.context", self.package_id())
+    }
+
+    /// What this Expert states about itself to whoever installs it.
+    pub fn declaration(self) -> BuiltinExpertDeclaration {
+        let metadata = self.metadata();
+        BuiltinExpertDeclaration {
+            expert_id: self.package_id(),
+            tool_id: self.tool_id(),
+            version: BUILTIN_EXPERT_PACKAGE_VERSION,
+            publisher: BUILTIN_EXPERT_PUBLISHER,
+            name: metadata.0,
+            description: metadata.1,
+            domain_tags: metadata.2.into_iter().map(str::to_owned).collect(),
+            skills: vec![metadata.3.to_owned()],
+            data_class: self.context_data_class(),
+            required_sources: self
+                .required_sources()
+                .iter()
+                .map(|source| source.source_id())
+                .collect(),
+            mandatory_source: self.mandatory_source().source_id(),
+            runs_on_device_model: self.supports_device_model(),
+        }
     }
 
     pub const fn context_data_class(self) -> DataClass {
@@ -126,8 +186,8 @@ impl BuiltinExpertKind {
         }
     }
 
-    pub(crate) fn metadata(self) -> ExpertMetadata {
-        let (name, description, domain_tags, skills) = match self {
+    fn metadata(self) -> (&'static str, &'static str, Vec<&'static str>, &'static str) {
+        match self {
             Self::Schedule => (
                 "Schedule Expert",
                 "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.",
@@ -176,45 +236,7 @@ impl BuiltinExpertKind {
                 vec!["life", "logistics"],
                 "Recommend logistics preparation",
             ),
-        };
-        ExpertMetadata {
-            name: name.into(),
-            description: description.into(),
-            domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
-            skills: vec![skills.into()],
         }
-    }
-
-    pub(crate) fn packages(self, data_class: DataClass) -> [AgentPackage; 2] {
-        let tool = PackageRef {
-            kind: PackageKind::Tool,
-            id: self.tool_id(),
-            version: BUILTIN_EXPERT_PACKAGE_VERSION.into(),
-        };
-        [
-            AgentPackage {
-                schema_version: AGENT_VERSION,
-                reference: tool.clone(),
-                publisher: "floe".into(),
-                implementation: PackageImplementation::TimelineRead { data_class },
-                expert_metadata: None,
-                required_tools: vec![],
-                state_schema_version: 1,
-            },
-            AgentPackage {
-                schema_version: AGENT_VERSION,
-                reference: PackageRef {
-                    kind: PackageKind::Expert,
-                    id: self.package_id().into(),
-                    version: BUILTIN_EXPERT_PACKAGE_VERSION.into(),
-                },
-                publisher: "floe".into(),
-                implementation: PackageImplementation::Builtin { expert: self },
-                expert_metadata: Some(self.metadata()),
-                required_tools: vec![tool],
-                state_schema_version: 1,
-            },
-        ]
     }
 }
 
@@ -231,6 +253,24 @@ pub enum BuiltinContextSource {
     WorkContext,
     Wellbeing,
     Logistics,
+}
+
+impl BuiltinContextSource {
+    /// The stable id this source is bound under in the registry.
+    pub const fn source_id(self) -> &'static str {
+        match self {
+            Self::Calendar => "floe.source.calendar",
+            Self::Mail => "floe.source.mail",
+            Self::Tasks => "floe.source.tasks",
+            Self::ConfirmedMemory => "floe.source.confirmed-memory",
+            Self::Contacts => "floe.source.contacts",
+            Self::ConfirmedInteractions => "floe.source.confirmed-interactions",
+            Self::Attention => "floe.source.attention",
+            Self::WorkContext => "floe.source.work-context",
+            Self::Wellbeing => "floe.source.wellbeing",
+            Self::Logistics => "floe.source.logistics",
+        }
+    }
 }
 
 #[cfg(test)]

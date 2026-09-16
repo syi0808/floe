@@ -5,9 +5,10 @@
 
 use floe_agent_contract::AgentFailure;
 
+use crate::focus_attention::{FocusContextViews, FocusExpertResult, run_focus_expert_with_views};
 use crate::{
     BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    FocusContextViews, FocusExpertResult, granted_context, run_focus_expert_with_views,
+    granted_context,
 };
 
 /// This Expert reads attention under its own consumer identity.

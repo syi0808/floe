@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
+
+pub use floe_agent_contract::{
+    CapabilityExecution, CapabilityExecutionState, ModelReplay, ProviderReplay,
+};
 use floe_context::{InferencePolicyDecision};
 
 pub const AGENT_VERSION: u32 = 1;
@@ -91,19 +95,6 @@ impl AgentSession {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct CapabilityExecution {
-    pub scope_id: Uuid,
-    pub turn_id: Uuid,
-    pub call_id: Uuid,
-    pub capability_id: String,
-    pub input: String,
-    pub state: CapabilityExecutionState,
-    pub result: Option<Result<String, AgentFailure>>,
-    pub replay: Option<ProviderReplay>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct DelegationExecution {
     pub turn_id: Uuid,
     pub task_id: Uuid,
@@ -117,33 +108,6 @@ pub struct DelegationExecution {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DelegationExecutionState {
-    Started,
-    Settled,
-    Interrupted,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProviderReplay {
-    pub call_ids: Vec<String>,
-    pub preamble: String,
-    pub gateway: String,
-    pub purpose: String,
-    pub external: bool,
-    pub source: String,
-    pub provider_call_id: String,
-    pub items: serde_json::Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ModelReplay {
-    pub call_id: Uuid,
-    pub replay: ProviderReplay,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CapabilityExecutionState {
     Started,
     Settled,
     Interrupted,

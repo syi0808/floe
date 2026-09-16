@@ -1,60 +1,18 @@
-use std::{future::Future, pin::Pin};
-
-use tokio::time::Instant;
-
-use crate::{CapabilityExecution, CapabilityExecutionState};
-use floe_agent_contract::{AgentFailure};
-use floe_execution::{Cancellation};
-use crate::turn::journal::CapabilityJournal;
-
-pub(crate) async fn execute_recorded(
-    journal: &CapabilityJournal,
-    mut record: CapabilityExecution,
-    deadline: Instant,
-    cancellation: &Cancellation,
-    max_output_bytes: usize,
-    execute: Pin<Box<impl Future<Output = Result<String, AgentFailure>>>>,
-) -> Result<Result<String, AgentFailure>, AgentFailure> {
-    check_running(deadline, cancellation)?;
-    journal.record(record.clone()).await?;
-    check_running(deadline, cancellation)?;
-    let result = tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
-        _ = tokio::time::sleep_until(deadline) => Err(AgentFailure::DeadlineExceeded),
-        result = execute => result,
-    };
-    if result
-        .as_ref()
-        .is_ok_and(|output| output.len() > max_output_bytes)
-    {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    record.state = if matches!(
-        result,
-        Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded)
-    ) {
-        CapabilityExecutionState::Interrupted
-    } else {
-        CapabilityExecutionState::Settled
-    };
-    record.result = Some(result.clone());
-    journal.record(record).await?;
-    Ok(result)
-}
-
-fn check_running(deadline: Instant, cancellation: &Cancellation) -> Result<(), AgentFailure> {
-    if cancellation.is_cancelled() {
-        return Err(AgentFailure::Cancelled);
-    }
-    if Instant::now() >= deadline {
-        return Err(AgentFailure::DeadlineExceeded);
-    }
-    Ok(())
-}
+//! Conversation's regression over the shared capability dispatch.
+//!
+//! The dispatch itself is role-neutral and lives in floe-agent-runtime. What is
+//! checked here is Conversation's own contract: a call is not dispatched until
+//! its intent is durably acknowledged, and a settled call is not reported until
+//! its outcome is.
 
 #[cfg(test)]
 mod tests {
+    use tokio::time::Instant;
+
+    use floe_agent_contract::{AgentFailure, CapabilityExecution, CapabilityExecutionState};
+    use floe_agent_runtime::execute_recorded;
+    use floe_execution::Cancellation;
+
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -63,8 +21,7 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::*;
-    use crate::turn::journal::CapabilityUpdate;
+        use crate::turn::journal::{CapabilityJournalSender, CapabilityUpdate};
 
     fn record() -> CapabilityExecution {
         CapabilityExecution {
@@ -87,7 +44,7 @@ mod tests {
     async fn dispatch_and_result_wait_for_durable_acknowledgment() {
         for fail_start in [true, false] {
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let journal = CapabilityJournal::new(sender);
+            let journal = CapabilityJournalSender::new(sender);
             let dispatched = Arc::new(AtomicUsize::new(0));
             let calls = dispatched.clone();
             let started = record();
@@ -140,7 +97,7 @@ mod tests {
     async fn tool_failure_is_settled_but_oversized_output_is_not_retained() {
         for oversized in [true, false] {
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let journal = CapabilityJournal::new(sender);
+            let journal = CapabilityJournalSender::new(sender);
             let task = tokio::spawn(async move {
                 execute_recorded(
                     &journal,
@@ -183,7 +140,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_during_intent_commit_prevents_dispatch() {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let journal = CapabilityJournal::new(sender);
+        let journal = CapabilityJournalSender::new(sender);
         let cancellation = Cancellation::default();
         let stop = cancellation.clone();
         let task = tokio::spawn(async move {
@@ -207,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_in_flight_execution_leaves_only_started_intent() {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let journal = CapabilityJournal::new(sender);
+        let journal = CapabilityJournalSender::new(sender);
         let dispatched = Arc::new(tokio::sync::Notify::new());
         let signal = dispatched.clone();
         let task = tokio::spawn(async move {

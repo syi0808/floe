@@ -1,34 +1,15 @@
 //! Commitment findings extracted from confirmed communication evidence.
 
-use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
-use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::prompts::{commitments_expert_prompt, communication_expert_prompt};
-use floe_context::{CalendarContextView, CommunicationView, calendar_context_evidence, communication_context_evidence, validate_calendar_context_view, validate_communication_view};
-use floe_agent_contract::{AgentFailure, SessionProtection};
-use floe_context::{AgentContext, FLOE_TASK_VIEW_ID, InferencePolicyDecision, NativeContextItem, NativeContextView, native_context_evidence, validate_native_context_view};
+use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
+use floe_context::{AgentContext, CalendarContextView, CommunicationView, InferencePolicyDecision, NativeContextView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, FLOE_TASK_VIEW_ID, NativeContextItem, native_context_evidence, calendar_context_evidence, validate_calendar_context_view, validate_communication_view, validate_native_context_view};
+use floe_conversation::ModelRunner;
 
-const MAX_MAIL_EXPERT_FINDINGS: usize = 16;
-
-pub struct MailExpertInvocation {
-    pub usage: UsageLedger,
-    pub person_id: PersonId,
-    pub invocation_id: Uuid,
-    pub assignment: String,
-    pub current_time_unix_ms: i64,
-    pub context: AgentContext,
-    pub view: CommunicationView,
-    pub max_output_bytes: usize,
-    pub max_model_tokens: u64,
-    pub max_model_cost_micros: u64,
-    pub deadline: Instant,
-    pub cancellation: floe_execution::Cancellation,
-}
+use crate::prompts::{commitments_expert_prompt};
+use crate::shared::{MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary};
 
 #[derive(Clone, Debug, Default)]
 pub struct CommitmentsContextViews {
@@ -89,8 +70,8 @@ pub struct CommitmentsExpertResult {
     pub findings: Vec<CommitmentFinding>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CommitmentsModelOutput {
     summary: String,
     findings: Vec<CommitmentFinding>,
@@ -167,8 +148,8 @@ fn commitment_evidence(
     validate_communication_view(
         &invocation.view,
         now,
-        crate::MAX_COMMUNICATION_ITEMS,
-        crate::MAX_COMMUNICATION_BYTES,
+        MAX_COMMUNICATION_ITEMS,
+        MAX_COMMUNICATION_BYTES,
     )?;
     let mut context = invocation.context.clone();
     let mut handles = invocation

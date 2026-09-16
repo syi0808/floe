@@ -2,10 +2,12 @@
 
 use floe_agent_contract::AgentFailure;
 
+use crate::wellbeing::{
+    WellbeingContextViews, WellbeingExpertResult, run_wellbeing_expert_with_views,
+};
 use crate::{
     BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    WellbeingContextViews, WellbeingExpertResult, granted_context,
-    run_wellbeing_expert_with_views,
+    granted_context,
 };
 
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(

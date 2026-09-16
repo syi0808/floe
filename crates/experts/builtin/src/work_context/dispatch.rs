@@ -3,10 +3,10 @@
 use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
 
-use crate::{
-    BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, WorkContextExpertResult,
-    WorkContextView, granted_context, run_work_context_expert,
-};
+use floe_context::WorkContextView;
+
+use crate::work_context::{WorkContextExpertResult, run_work_context_expert};
+use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
 
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,

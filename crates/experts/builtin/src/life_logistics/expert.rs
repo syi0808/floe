@@ -1,19 +1,18 @@
 //! Life logistics preparation and urgency.
 
-use floe_kernel::PersonId;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::time::Instant;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::prompts::{life_logistics_expert_prompt, work_context_expert_prompt};
-use floe_context::{LogisticsView, WorkContextView, logistics_context_evidence, validate_logistics_view, validate_work_context_view, work_context_evidence};
-use floe_agent_contract::{AgentFailure, SessionProtection};
-use floe_context::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::AgentFailure;
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, ModelStep};
-use floe_conversation::{UsageLedger, generate_with_recovery};
-use floe_knowledge::prompts::{PromptAssembly};
+use floe_context::{InferencePolicyDecision, LogisticsView, logistics_context_evidence, validate_logistics_view};
+use floe_conversation::ModelRunner;
 
+use crate::prompts::{life_logistics_expert_prompt};
+use crate::shared::{PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LogisticsUrgency {
     Now,
     Soon,
@@ -54,7 +53,7 @@ pub async fn run_life_logistics_expert<Model: ModelRunner>(
     view: LogisticsView,
 ) -> Result<LifeLogisticsExpertResult, AgentFailure> {
     validate_logistics_view(&view, invocation.current_time_unix_ms)?;
-    let output: LogisticsOutput = run_model(
+    let output: LogisticsOutput = run_portfolio_model(
         model,
         policy,
         &invocation,
@@ -87,81 +86,4 @@ pub async fn run_life_logistics_expert<Model: ModelRunner>(
         summary: output.summary,
         preparations: output.preparations,
     })
-}
-
-async fn run_model<Output: DeserializeOwned, Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: &PortfolioExpertInvocation,
-    evidence: floe_context::ContextEvidence,
-    prompt: PromptAssembly,
-) -> Result<Output, AgentFailure> {
-    if !valid_text(&invocation.assignment, 2048)
-        || invocation.max_output_bytes == 0
-        || invocation.max_model_tokens == 0
-        || invocation.deadline <= Instant::now()
-        || invocation.cancellation.is_cancelled()
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let mut context = invocation.context.clone();
-    context.evidence.push(evidence);
-    policy.authorize(
-        model.placement(),
-        SessionProtection::Encrypted,
-        &context,
-        u64::try_from(invocation.current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
-    )?;
-    let turn_id = Uuid::new_v4();
-    let response = generate_with_recovery(
-        model,
-        ModelRequest {
-            usage: invocation.usage.clone(),
-            replay: vec![],
-            schema_version: AGENT_VERSION,
-            prompt,
-            person_id: invocation.person_id,
-            session_id: invocation.invocation_id,
-            turn_id,
-            policy: policy.clone(),
-            context,
-            messages: vec![AgentMessage::User {
-                turn_id,
-                text: invocation.assignment.clone(),
-            }],
-            capabilities: vec![],
-            active_agents: vec![],
-            remaining_tokens: invocation.max_model_tokens,
-            remaining_cost_micros: invocation.max_model_cost_micros,
-            max_output_bytes: invocation.max_output_bytes.min(8192),
-            deadline: invocation.deadline,
-            cancellation: invocation.cancellation.clone(),
-        },
-    )
-    .await?;
-    if response.schema_version != AGENT_VERSION
-        || response.used_tokens > invocation.max_model_tokens
-        || response.cost_micros > invocation.max_model_cost_micros
-    {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    let [ModelStep::Answer { text }] = response.output.as_slice() else {
-        return Err(AgentFailure::InvalidModelOutput);
-    };
-    if text.len() > invocation.max_output_bytes.min(8192) {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)
-}
-
-fn validate_summary(value: &str) -> Result<(), AgentFailure> {
-    if valid_text(value, 2048) {
-        Ok(())
-    } else {
-        Err(AgentFailure::InvalidModelOutput)
-    }
-}
-
-fn valid_text(value: &str, maximum: usize) -> bool {
-    !value.trim().is_empty() && value.len() <= maximum
 }
