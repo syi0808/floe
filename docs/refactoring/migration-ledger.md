@@ -10,12 +10,12 @@ This is the only mutable refactoring progress record. The [active document editi
 | Active plan | **R003**, [PLAN](versions/r003-structure-first/PLAN.md) / [execution](versions/r003-structure-first/EXECUTION_PLAN.md) |
 | Current stage | **A — structural refactoring; not complete** |
 | Execution | One coding agent, one sequential change set; product Manager/Expert A2A retained |
-| Current change | Stage-A ownership placement after the structure-first reshape: return misfiled bodies to their owning modules, move grant, eligibility and Schedule judgment out of the App Expert host, and close the ABI's dependency surface |
-| Runtime changes in this refresh | Attempt accounting moves to Inference and carries the journaling ledger through A2A again; capability executions become a role-neutral record with a `CapabilityJournal` port and one shared dispatch; Expert setup is installed from a declaration the owning crate supplies rather than a builtin enum; `SourceGrant` replaces the App host's boolean and no longer grants everything when no setup exists; cards declare where they run and eligibility filters on that; the Schedule Expert decides its own setup selection, day range, `/focus` intent, remote acquisition and policy; registry `restore` validates its own setup receipts again; app wire schema remains 2 |
-| Contract validation in this refresh | `cargo check --workspace` clean; 226 tests pass across every target that builds, including `floe-protocol --test app_wire_v2`, `floe-experts-builtin` (72), `floe-context` (44), `floe-provider-adapters` (40), `floe-conversation` (21), `floe-knowledge` (21), `floe-execution` (24); `python3 tools/architecture/check_boundaries.py .` reports 34 errors, down from 40; `git diff --check` passes |
+| Current change | Stage-A ownership placement, second pass: take the wire back off App's public boundary, give the immutable projection and the role-neutral prompt a contract to live in, and send the personal and remote source judgment to Access and Context |
+| Runtime changes in this refresh | None intended. Every move in this refresh preserves the behaviour it moved: the calendar execution policy, the four personal grant selections, the grant and subject re-checks, the query fingerprints and the remote view admission are the same rules in a different crate. The Schedule Expert now names the reasoning placement its own acquisition already implied, rather than the App host deriving it; app wire schema remains 2 |
+| Contract validation in this refresh | `cargo check --workspace` clean; 231 unit tests pass across twenty crates, including `floe-provider-adapters` (40), `floe-context` (39), `floe-execution` (24), `floe-conversation` (21), `floe-knowledge` (21), `floe-access` (15); `floe-experts-builtin` passes 72 with its integration targets and `floe-protocol` 25 including `--test app_wire_v2`; `python3 tools/architecture/check_boundaries.py .` reports 26 errors, down from 34; every package's test targets build exactly as they did before this refresh, package for package, except floe-ffi (39 -> 36); `git diff --check` passes |
 | Product validation in this refresh | `not_run` |
 | Latest recorded app observation | Normal macOS debug app ended in VaultUnavailable before route selection; cause not confirmed; unchanged by this refresh |
-| Next code task | Restore the remaining integration targets (floe-app, floe-vault, and one to four each in floe-connections, floe-day, floe-context, floe-actions, floe-experts, floe-conversation, floe-ffi), then R003 07: replace `AgentVaultActionDto` so the conversation turn request and remote route stop being wire types |
+| Next code task | Finish the Expert execution contract: consolidate floe-conversation's `turn/session.rs` contract (`ModelRunner`, `ModelRequest`, `AgentMessage`, `CapabilityDescriptor`) with floe-agent-contract's `EngineRequest`/`ModelPort`, so floe-experts-builtin's boundary stops naming a module — first file `crates/modules/conversation/src/turn/session.rs`. Restoring the broken integration targets is not this stage's work and must not precede it |
 
 The SHA is a fixed review anchor. A later implementation session must inspect its actual HEAD and dirty diff. Document publication is not completion of the contract work.
 
@@ -99,6 +99,84 @@ These are source and prior checkpoint summaries, not new passes. R003 source win
 - **Safety finding:** Restoring the builtin crate's tests surfaced a regression the reshape had introduced: replacing setup validation with the `SetupValidator` port left `AgentRegistry::restore` calling `NoSetupValidator`, so a restored snapshot validated neither its calendar nor its builtin setup receipts. The registry validates its own records again; the port remains for setup an owner outside the crate adds.
 - **Behavior change to note:** with no recorded setup, an Expert's source grant is now `NotConfigured` rather than an implicit allow. A mandatory source that is `NotConfigured` or `Denied` refuses the Expert; `Unavailable` reports `CapabilityUnavailable` so the Person can act on it. Optional enrichment is skipped for all three.
 - **Unfinished:** floe-app's and floe-vault's test targets, and seven integration targets in floe-connections, floe-day, floe-context, floe-actions, floe-experts, floe-conversation and floe-ffi, still carry the imports the reshape scattered. `AgentConversationTurnRequestDto` and `AgentRemoteRouteDto` are the in-process vault-worker transport rather than app wire, but they are reached through `AgentVaultActionDto`, the legacy vault operation envelope R003 07 replaces, so they cannot move without splitting that envelope. `ExpertHost` in `schedule/host.rs` is the Expert-neutral invocation loop and still sits in the builtin crate. floe-experts-builtin still depends on floe-context, floe-conversation, floe-inference, floe-knowledge, floe-experts and floe-kernel; closing those needs the view and model-path types to reach their contract owners, which is R003 06.1. Twelve of the 34 boundary errors are contracts crates the policy's allowed lists omit (`floe-kernel` for app, context, experts, builtin, providers; `floe-agent-contract` for access, connections, actions, day, vault); whether that is code to change or policy to correct is an open question for the plan owner.
+
+### R003 stage-A ownership placement, second pass
+
+Review of the first pass found three things done, three not, and one done in the
+wrong direction. This entry records the correction and what it did and did not
+close.
+
+- **App and the ABI, corrected.** The first pass narrowed floe-ffi's manifest by
+  moving the wire into the app — `ErrorDto`, the version check, the serde
+  re-encode — and opened `floe_app::modules` over every business module and the
+  native calendar adapter. The manifest got shorter; the reach did not. Parsing a
+  wire field and naming a failure on the wire are floe-protocol's `wire` now;
+  restating an owner's failure (`HostError`, `CoreError`, `AppOpenError`) is
+  floe-ffi's, with `FloeHandle`. The calendar action body follows its judgment:
+  `allow_create` is `CalendarActionPolicy::for_execution` in floe-actions,
+  choosing the provider and the device Person binding is floe-app's
+  `CalendarActionCommand`, and floe-protocol's codec gained the classification,
+  record and batch conversions the binding was open-coding. `floe_app::modules`
+  is gone; what replaces it is the values App's own signatures carry — a
+  receipt, a run state, a failure, the panic barrier's diagnostics.
+- **The immutable projection.** floe-context-contract takes the source views and
+  their validators, the evidence they yield, the confirmed memories that reach a
+  context, the optional-source rule, and `AuthorizedRead`, the lease-held read an
+  Expert holds open and releases by dropping without naming the registry behind
+  it. floe-agent-contract takes `AgentContext`, `InferencePolicyDecision`, the
+  role-neutral prompt assembly and the turn-boundary history bound. floe-context
+  and floe-knowledge re-export what moved, so callers read the same names; the
+  Learner keeps its own role text. floe-experts-builtin drops floe-context,
+  floe-knowledge, floe-kernel and floe-inference — the last it had never used.
+- **Personal and remote source acquisition.** `active_read_grant`,
+  `grant_unchanged`, `subject_unchanged`, `valid_subject_fingerprint` and
+  `active_resource_grant` are floe-access's; the four personal reads had each
+  spelled the first out, differing only on whether the source authority must
+  match and whether a second live grant is a review. The query fingerprints that
+  make a stored dependency re-checkable, and the remote view catalog — which
+  views exist, which connector serves one, how its resource is named, what a
+  grant covers, what a query and an answer must satisfy — are floe-context's.
+  App composes the acquisition and injects what it built, and is ~240 lines
+  lighter.
+- **Schedule.** `plan_run` already decided the acquisition; it names the
+  reasoning placement that follows from it (`ScheduleReasoning`) instead of the
+  App host deriving it. `external_transfer_consent` is floe-inference's, which
+  owns where a run executes and, separately, who may receive its input.
+- **Checks:** `cargo check --workspace` clean; 231 unit tests across twenty
+  crates; floe-experts-builtin 72 and floe-protocol 25 with their integration
+  targets. Access gained five regressions over the moved grant rules, Context one
+  over the attention lineage, floe-experts-builtin one pinning that a remotely
+  acquired calendar is never reasoned over off-device. `git diff --check` passes.
+- **Behavior:** `not_run`; no live macOS app, Keychain/Vault diagnosis, OAuth,
+  provider or model behavior was exercised.
+- **Boundary checker, 34 -> 26, split by kind.** Seventeen are real module or
+  adapter coupling and are code to change: floe-app -> floe-protocol (the vault
+  worker's own envelope, R003 07); floe-provider-adapters -> floe-protocol,
+  floe-vault, floe-conversation, floe-knowledge, floe-day; floe-experts-builtin
+  -> floe-conversation, floe-experts; floe-experts -> floe-day,
+  floe-agent-runtime; floe-access -> floe-day, floe-context; floe-actions ->
+  floe-experts; floe-conversation -> floe-day; floe-protocol -> floe-day;
+  floe-connections -> floe-day; floe-vault -> floe-context. Nine are the
+  contracts doorway question, unchanged and still the plan owner's: floe-app,
+  floe-experts, floe-context and floe-provider-adapters name floe-kernel or a
+  contract their approved list omits, and floe-vault names both contracts where
+  its list routes it through the modules. Four crates that were in that count —
+  Access, Day, Connections and Actions — are out of it because their
+  floe-agent-contract dependency was spurious: they named only `AgentFailure`
+  (floe-kernel's) and `DataClass` (floe-context-contract's), and both of those
+  contracts were already theirs.
+- **Unfinished.** floe-experts-builtin's boundary still names floe-conversation
+  and floe-experts, and both are the same thing: `ModelRunner`/`ModelRequest` in
+  `turn/session.rs` and `EngineRequest`/`ModelPort` in floe-agent-contract are
+  two live agent execution contracts, and `schedule/host.rs` — the
+  Expert-neutral invocation loop, still filed under builtin — needs the whole of
+  the first. Consolidating them is R003 06.1 and is the next task. App still
+  composes the native acquisition requests as `LocalContext*Dto`, and still
+  reaches floe-protocol for `AgentVaultActionDto`; both are the legacy vault
+  worker transport R003 07 replaces. floe-app's and floe-vault's test targets,
+  and the integration targets in floe-connections, floe-day, floe-context,
+  floe-actions, floe-experts and floe-ffi, still do not build; this refresh
+  broke none of them further and fixed floe-ffi's from 39 errors to 36.
 
 [Full ledger through 89452eb](history/migration-ledger-through-89452eb.md) preserves the original inventory/P/T/code/test records. [R002 snapshot](versions/r002-sequential/MIGRATION_SNAPSHOT.md) preserves the previous concise current ledger without changes. Both are historical, not competing mutable records.
 
