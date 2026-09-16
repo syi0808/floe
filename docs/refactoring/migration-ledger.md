@@ -6,7 +6,7 @@ This is the only mutable refactoring progress record. The [active document editi
 
 | Field | State |
 |---|---|
-| Source reviewed for this documentation edition | `40d9397fe31c9dda42073e82dc04ef735a230806`; current dirty tree contains the R003 step 01 explicit-profile forwarding change set |
+| Source reviewed for this documentation edition | `40d9397fe31c9dda42073e82dc04ef735a230806`; text-contract implementation checkpoint `64ab369` |
 | Active plan | **R003**, [PLAN](versions/r003-structure-first/PLAN.md) / [execution](versions/r003-structure-first/EXECUTION_PLAN.md) |
 | Current stage | **A — structural refactoring; not complete** |
 | Execution | One coding agent, one sequential change set; product Manager/Expert A2A retained |
