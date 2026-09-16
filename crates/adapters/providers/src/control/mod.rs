@@ -1,0 +1,13 @@
+//! Control-plane transports: pairing, enrollment and authority checks.
+
+pub mod authorization;
+pub mod server_connection;
+
+pub use authorization::{
+    CalendarChallengeParts, PairingConfirmationResponse, PairingIssuerResponse,
+    PairingStartResponse, PairingStatusResponse, RemoteAuthorizationClient, RemotePairingClient,
+    RemoteViewAuthorizationRequest, RemoteViewSourcePreviewResponse, calendar_query_sha256,
+    parse_calendar_challenge,
+};
+
+pub use server_connection::load_saved_connection;

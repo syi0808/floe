@@ -1,0 +1,1100 @@
+use std::{
+    collections::HashMap,
+    fs,
+    os::unix::fs::PermissionsExt,
+    sync::{Arc, Mutex},
+};
+
+use floe_agent_contract::{ModelPlacement};
+use floe_conversation::{SessionStore};
+use floe_agent_contract::{
+    AllowedCatalog, BoundedContext, DelegationPort, DelegationRequest, ModelPort, ModelRequest,
+    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, ToolPort, ToolResult,
+};
+use floe_conversation::{
+    ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnMode,
+    TurnRequest,
+};
+use floe_app::{FloeCore};
+use floe_vault::{VaultConversationAdmissionRequest, VaultKey};
+use floe_kernel::PersonId;
+
+use super::*;
+use crate::vault_host::OpenVault;
+
+#[derive(Clone, Default)]
+struct Keys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+
+impl VaultKeyProvider for Keys {
+    fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(&(person_id, vault_id))
+            .copied()
+            .map(VaultKey::from_bytes)
+            .ok_or(AgentFailure::VaultUnavailable)
+    }
+
+    fn insert(
+        &self,
+        person_id: PersonId,
+        vault_id: Uuid,
+        key: &VaultKey,
+    ) -> Result<(), AgentFailure> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert((person_id, vault_id), *key.as_bytes());
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct Model {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for Model {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: vec![ModelStep::Answer {
+                    text: "encrypted answer".into(),
+                    artifacts: vec![],
+                }],
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            })
+        })
+    }
+}
+
+#[derive(Default)]
+struct FinalizingModel {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for FinalizingModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: if call == 0 {
+                    vec![ModelStep::CallTool {
+                        tool_id: "lookup".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }]
+                } else {
+                    assert_eq!(call, 1);
+                    assert!(request.catalog.tools.is_empty());
+                    assert!(request.catalog.cards.is_empty());
+                    vec![ModelStep::Answer {
+                        text: "The lookup finished, but the full request did not complete.".into(),
+                        artifacts: vec![],
+                    }]
+                },
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            })
+        })
+    }
+}
+
+#[derive(Default)]
+struct ReadTool {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct ToolThenAnswerModel {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for ToolThenAnswerModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: if call == 0 {
+                    vec![ModelStep::CallTool {
+                        tool_id: "actions.receipt".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }]
+                } else {
+                    vec![ModelStep::Answer {
+                        text: "source-derived answer".into(),
+                        artifacts: vec![],
+                    }]
+                },
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            })
+        })
+    }
+}
+
+struct DependentReceiptTool {
+    coverage: DependencyCoverage,
+}
+
+impl ToolPort for DependentReceiptTool {
+    fn invoke<'a>(
+        &'a self,
+        call: ToolCall,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        let coverage = self.coverage.clone();
+        Box::pin(async move {
+            Ok(ToolResult {
+                call_id: call.call_id,
+                text: "source observation".into(),
+                artifacts: vec![ContractArtifact {
+                    artifact_id: Uuid::new_v4(),
+                    name: "Action receipt".into(),
+                    parts: vec![ContractArtifactPart::Data {
+                        media_type: "application/vnd.floe.action-receipt+json".into(),
+                        data: "{\"status\":\"settled\"}".into(),
+                    }],
+                    coverage: coverage.clone(),
+                }],
+                coverage,
+                issue: None,
+            })
+        })
+    }
+}
+
+impl ToolPort for ReadTool {
+    fn invoke<'a>(
+        &'a self,
+        call: ToolCall,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ToolResult {
+                call_id: call.call_id,
+                text: "encrypted lookup result".into(),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            })
+        })
+    }
+}
+
+struct NoTools;
+impl ToolPort for NoTools {
+    fn invoke<'a>(
+        &'a self,
+        _: ToolCall,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+}
+
+struct NoDelegation;
+impl DelegationPort for NoDelegation {
+    fn delegate<'a>(
+        &'a self,
+        _: DelegationRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+}
+
+struct Validator;
+impl FinalPayloadValidator for Validator {
+    fn validate(&self, role: &str, text: &str, _: &[ContractArtifact]) -> Result<(), AgentFailure> {
+        if role == "manager" && !text.trim().is_empty() {
+            Ok(())
+        } else {
+            Err(AgentFailure::InvalidModelOutput)
+        }
+    }
+}
+
+fn build_service(
+    repository: Arc<VaultConversationRepository<Keys>>,
+) -> ConversationService<VaultConversationRepository<Keys>> {
+    ConversationService::new(
+        repository,
+        ManagerConfig {
+            role_spec: RoleSpec {
+                role_id: "manager".into(),
+                prompt: "Answer safely.".into(),
+                output_contract: "User-facing text.".into(),
+            },
+            max_iterations: 4,
+            max_output_bytes: 16 * 1024,
+            max_run_duration: std::time::Duration::from_secs(10),
+            budget: floe_execution::budget::BudgetConfig::new(16_384, 1_000_000),
+        },
+    )
+    .unwrap()
+}
+
+fn build_finalization_service(
+    repository: Arc<VaultConversationRepository<Keys>>,
+) -> ConversationService<VaultConversationRepository<Keys>> {
+    ConversationService::new(
+        repository,
+        ManagerConfig {
+            role_spec: RoleSpec {
+                role_id: "manager".into(),
+                prompt: "Answer safely.".into(),
+                output_contract: "User-facing text.".into(),
+            },
+            max_iterations: 1,
+            max_output_bytes: 16 * 1024,
+            max_run_duration: std::time::Duration::from_secs(10),
+            budget: floe_execution::budget::BudgetConfig::new(8_192, 100)
+                .with_finalization_reserve(1_024, 10),
+        },
+    )
+    .unwrap()
+}
+
+fn request(
+    command_id: floe_agent_contract::CommandId,
+    session_id: Uuid,
+    cancellation: floe_execution::Cancellation,
+) -> TurnRequest {
+    TurnRequest {
+        command_id,
+        session_id,
+        expected_session_revision: 0,
+        principal: String::new(),
+        prompt: "hello".into(),
+        mode: TurnMode::New,
+        retry_of: None,
+        profile: floe_conversation::ProfileSelection::Auto,
+        execution_profile: "device_local".into(),
+        bounded_context: BoundedContext {
+            text: String::new(),
+            coverage: DependencyCoverage::Independent,
+        },
+        allowed_catalog: AllowedCatalog::default(),
+        replay: vec![],
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        cancellation,
+    }
+}
+
+fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
+    use chrono::{Duration, Utc};
+    use floe_context_contract::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+
+    let now = Utc::now();
+    floe_context::ContextDependency::try_new(
+        person_id,
+        GrantId::new(),
+        GrantAuthority::new(),
+        GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("archive-connection").unwrap(),
+            ConnectorId::try_new("archive-connector").unwrap(),
+            ExecutionOwnerId::try_new("archive-owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap(),
+        vec![ResourceHandle::try_new("action/receipt").unwrap()],
+        vec![GrantDataCategory::Metadata],
+        GrantOperation::Read,
+        GrantPurpose::Scheduling,
+        GrantConsumer::builtin("manager").unwrap(),
+        ProcessingRestriction::LocalOnly,
+        ConsumerPolicyAuthority::new(),
+        Uuid::new_v4(),
+        b"archive-query".to_vec(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        now,
+        now + Duration::minutes(5),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn session_management_uses_conversation_owner_and_rejects_foreign_or_sample_reads() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    let repository = VaultConversationRepository::new(Arc::clone(&vault));
+    let started = floe_conversation::start_session(
+        &repository,
+        floe_conversation::SessionRequest {
+            principal: person_id.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(started.session_revision, 0);
+    assert_eq!(
+        floe_conversation::get_session(
+            &repository,
+            floe_conversation::SessionReadRequest {
+                principal: person_id.to_string(),
+                session_id: started.session_id,
+            },
+        )
+        .await
+        .unwrap(),
+        started
+    );
+    assert_eq!(
+        floe_conversation::resume_session(
+            &repository,
+            floe_conversation::SessionRequest {
+                principal: person_id.to_string(),
+            },
+        )
+        .await
+        .unwrap(),
+        started
+    );
+    assert_eq!(
+        floe_conversation::get_session(
+            &repository,
+            floe_conversation::SessionReadRequest {
+                principal: PersonId::new().to_string(),
+                session_id: started.session_id,
+            },
+        )
+        .await,
+        Err(AgentFailure::CapabilityDenied)
+    );
+    let sample = vault.create_sample_session().await.unwrap();
+    assert_eq!(
+        floe_conversation::get_session(
+            &repository,
+            floe_conversation::SessionReadRequest {
+                principal: person_id.to_string(),
+                session_id: sample.id,
+            },
+        )
+        .await,
+        Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[tokio::test]
+async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let service = build_service(Arc::clone(&repository));
+    let model = Model::default();
+    let command_id = floe_agent_contract::CommandId::new();
+    let mut turn = request(
+        command_id,
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = person_id.to_string();
+    let receipt = service
+        .run_turn(
+            turn.clone(),
+            ConversationPorts {
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(receipt.session_revision, 2);
+    assert_eq!(
+        floe_conversation::get_command(
+            repository.as_ref(),
+            floe_conversation::CommandQuery {
+                principal: person_id.to_string(),
+                command_id,
+            },
+        )
+        .await
+        .unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(
+        floe_conversation::get_run(
+            repository.as_ref(),
+            floe_conversation::RunQuery {
+                principal: person_id.to_string(),
+                run_id: receipt.run_id,
+            },
+        )
+        .await
+        .unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(
+        floe_conversation::get_run(
+            repository.as_ref(),
+            floe_conversation::RunQuery {
+                principal: PersonId::new().to_string(),
+                run_id: receipt.run_id,
+            },
+        )
+        .await,
+        Err(AgentFailure::CapabilityDenied)
+    );
+    let stored = vault
+        .conversation_run(receipt.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.journal_revision, 3);
+    let journal = repository.load_journal(receipt.run_id).await.unwrap();
+    assert_eq!(journal.len(), 3);
+    assert!(matches!(journal[0].event, JournalEvent::ModelIntent { .. }));
+    assert!(matches!(journal[1].event, JournalEvent::ModelResult { .. }));
+    assert!(matches!(journal[2].event, JournalEvent::Output { .. }));
+    let legacy = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(legacy.active_turn, None);
+    assert!(matches!(
+        legacy.messages.as_slice(),
+        [AgentMessage::User { .. }, AgentMessage::Assistant { text, .. }] if text == "encrypted answer"
+    ));
+
+    drop(service);
+    drop(repository);
+    drop(vault);
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap(),
+    );
+    let activation = reopened.activate_conversation_executor().await.unwrap();
+    assert!(activation.interrupted.is_empty());
+    let reopened_repository = Arc::new(VaultConversationRepository::new(reopened));
+    let reopened_service = build_service(reopened_repository);
+    turn.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+    let replay = reopened_service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay, receipt);
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn t28_compaction_preserves_recovery_and_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let service = build_service(Arc::clone(&repository));
+    let dependency = archive_dependency(person_id);
+    let tools = DependentReceiptTool {
+        coverage: DependencyCoverage::dependent(dependency.clone()).unwrap(),
+    };
+    let mut first_request = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    first_request.principal = person_id.to_string();
+    first_request.prompt = "find the source and retain its action receipt".into();
+    first_request.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "actions.receipt".into(),
+            definition_revision: 1,
+            description: "Read a source-bound action receipt.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "personal".into(),
+        }],
+        revision: 1,
+    };
+    let first = service
+        .run_turn(
+            first_request,
+            ConversationPorts {
+                model: &ToolThenAnswerModel::default(),
+                tools: &tools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.state, RunState::Completed);
+    assert!(matches!(
+        first.coverage,
+        DependencyCoverage::Dependent { .. }
+    ));
+    let journal_before = vault.conversation_journal(first.run_id).await.unwrap();
+    assert!(journal_before.iter().any(|entry| {
+        entry.kind == "result"
+            && entry
+                .payload
+                .contains("application/vnd.floe.action-receipt+json")
+    }));
+
+    let mut second_request = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    second_request.principal = person_id.to_string();
+    second_request.expected_session_revision = first.session_revision;
+    second_request.prompt = "keep this later turn".into();
+    let second = service
+        .run_turn(
+            second_request,
+            ConversationPorts {
+                model: &Model::default(),
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.state, RunState::Completed);
+
+    let compacted = service
+        .compact_session(floe_conversation::CompactionRequest {
+            session_id: session.id,
+            expected_session_revision: second.session_revision,
+            principal: person_id.to_string(),
+            through_turn_id: first.run_id.as_uuid(),
+            summary: "source-derived compacted summary".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(compacted.session_revision, second.session_revision + 1);
+    assert!(matches!(
+        compacted.summary.coverage,
+        DependencyCoverage::Dependent { .. }
+    ));
+    let live = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(live.messages.len(), 3);
+    assert!(matches!(
+        &live.messages[0],
+        AgentMessage::Compaction { summary, .. }
+            if summary == "source-derived compacted summary"
+    ));
+    assert!(
+        live.messages[1..]
+            .iter()
+            .all(|message| message.turn_id() == second.run_id.as_uuid())
+    );
+    assert_eq!(
+        vault.conversation_journal(first.run_id).await.unwrap(),
+        journal_before
+    );
+
+    let archive_request = floe_agent_contract::ArchiveReadRequest {
+        person_id,
+        session_id: session.id,
+        pointer: compacted.pointer.clone(),
+        max_messages: 8,
+        max_bytes: 4 * 1024,
+    };
+    let denied = service
+        .read_archive(&archive_request, |candidate| {
+            let expected = dependency.clone();
+            async move { Ok(candidate != expected) }
+        })
+        .await
+        .unwrap();
+    assert!(denied.messages.is_empty());
+    assert_eq!(
+        service
+            .read_archive(&archive_request, |_| async {
+                Err(AgentFailure::VaultUnavailable)
+            })
+            .await,
+        Err(AgentFailure::VaultUnavailable)
+    );
+    let recovered = service
+        .read_archive(&archive_request, |_| async { Ok(true) })
+        .await
+        .unwrap();
+    assert_eq!(recovered.messages.len(), 2);
+    assert!(
+        recovered
+            .messages
+            .iter()
+            .all(|message| message.turn_id == first.run_id.as_uuid())
+    );
+    assert!(
+        serde_json::to_vec(
+            &recovered
+                .messages
+                .iter()
+                .map(|message| &message.message)
+                .collect::<Vec<_>>()
+        )
+        .unwrap()
+        .len()
+            <= archive_request.max_bytes
+    );
+
+    drop(service);
+    drop(repository);
+    drop(vault);
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap(),
+    );
+    reopened.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&reopened)));
+    let service = build_service(Arc::clone(&repository));
+    assert_eq!(
+        reopened.conversation_journal(first.run_id).await.unwrap(),
+        journal_before
+    );
+    let recovered = service
+        .read_archive(&archive_request, |_| async { Ok(true) })
+        .await
+        .unwrap();
+    assert_eq!(recovered.messages.len(), 2);
+
+    let mut third_request = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    third_request.principal = person_id.to_string();
+    third_request.expected_session_revision = compacted.session_revision;
+    third_request.prompt = "continue after compaction".into();
+    let third = service
+        .run_turn(
+            third_request,
+            ConversationPorts {
+                model: &Model::default(),
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(third.state, RunState::Completed);
+    assert_eq!(third.session_revision, compacted.session_revision + 2);
+}
+
+#[tokio::test]
+async fn finalization_commits_reply_while_encrypted_run_remains_failed() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let service = build_finalization_service(Arc::clone(&repository));
+    let model = FinalizingModel::default();
+    let tools = ReadTool::default();
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = person_id.to_string();
+    turn.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "lookup".into(),
+            definition_revision: 1,
+            description: "Read an independent value.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "public".into(),
+        }],
+        revision: 1,
+    };
+
+    let receipt = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &tools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::Stalled));
+    assert_eq!(
+        receipt.output.as_deref(),
+        Some("The lookup finished, but the full request did not complete.")
+    );
+    assert!(receipt.continuation().is_none());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let stored_session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(stored_session.continuation, None);
+    assert_eq!(
+        stored_session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Halted {
+            reason: AgentFailure::Stalled
+        })
+    );
+    assert!(matches!(
+        stored_session.messages.as_slice(),
+        [AgentMessage::User { .. }, AgentMessage::Assistant { text, .. }]
+            if text == "The lookup finished, but the full request did not complete."
+    ));
+    assert_eq!(
+        repository.load_journal(receipt.run_id).await.unwrap().len(),
+        8
+    );
+}
+
+#[tokio::test]
+async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: 0,
+            request_digest: [9; 32],
+            text: "continue safely".into(),
+            continuation: None,
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    let attempt_id = Uuid::new_v4();
+    let call = ToolCall {
+        call_id: Uuid::new_v4(),
+        invocation_key: floe_agent_contract::InvocationKey::new(),
+        tool_id: "read.context".into(),
+        definition_revision: 1,
+        input: "{}".into(),
+    };
+    let result = ToolResult {
+        call_id: call.call_id,
+        text: "settled observation".into(),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+    };
+    for (kind, event) in [
+        ("intent", JournalEvent::ModelIntent { attempt_id }),
+        (
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+        ),
+        ("intent", JournalEvent::ToolIntent { call: call.clone() }),
+        (
+            "result",
+            JournalEvent::ToolResult {
+                result: result.clone(),
+            },
+        ),
+        ("checkpoint", JournalEvent::Checkpoint { iteration: 1 }),
+    ] {
+        vault
+            .append_conversation_journal(run_id, kind, &serde_json::to_string(&event).unwrap())
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            run_id,
+            1,
+            floe_vault::VaultConversationTerminal {
+                state: floe_vault::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let continuation =
+        floe_conversation::continuation(repository.as_ref(), run_id, &person_id.to_string())
+            .await
+            .unwrap();
+    assert_eq!(continuation.completed_iterations, 1);
+    assert_eq!(continuation.messages.len(), 2);
+    assert_eq!(continuation.replay.len(), 1);
+    assert_eq!(continuation.replay[0].call_id, call.call_id);
+    assert_eq!(continuation.replay[0].result, result.text);
+
+    let second_run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id: second_run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: continuation.session_revision,
+            request_digest: [8; 32],
+            text: "continue safely".into(),
+            continuation: Some(floe_vault::VaultConversationContinuationRef {
+                run_id: continuation.reference.run_id,
+                executor_generation: continuation.reference.executor_generation,
+                level: continuation.reference.level,
+            }),
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    let second_attempt_id = Uuid::new_v4();
+    let second_call = ToolCall {
+        call_id: Uuid::new_v4(),
+        invocation_key: floe_agent_contract::InvocationKey::new(),
+        tool_id: "read.more-context".into(),
+        definition_revision: 1,
+        input: "{}".into(),
+    };
+    let second_result = ToolResult {
+        call_id: second_call.call_id,
+        text: "second settled observation".into(),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+    };
+    for (kind, event) in [
+        (
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id: second_attempt_id,
+            },
+        ),
+        (
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id: second_attempt_id,
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            },
+        ),
+        (
+            "intent",
+            JournalEvent::ToolIntent {
+                call: second_call.clone(),
+            },
+        ),
+        (
+            "result",
+            JournalEvent::ToolResult {
+                result: second_result.clone(),
+            },
+        ),
+        ("checkpoint", JournalEvent::Checkpoint { iteration: 1 }),
+    ] {
+        vault
+            .append_conversation_journal(
+                second_run_id,
+                kind,
+                &serde_json::to_string(&event).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            second_run_id,
+            1,
+            floe_vault::VaultConversationTerminal {
+                state: floe_vault::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let continuation =
+        floe_conversation::continuation(repository.as_ref(), second_run_id, &person_id.to_string())
+            .await
+            .unwrap();
+    assert_eq!(continuation.completed_iterations, 2);
+    assert_eq!(continuation.usage.attempts, 2);
+    assert_eq!(continuation.usage.tokens, 3);
+    assert_eq!(continuation.messages.len(), 3);
+    assert_eq!(continuation.replay.len(), 2);
+    assert_eq!(continuation.replay[0].call_id, call.call_id);
+    assert_eq!(continuation.replay[1].call_id, second_call.call_id);
+
+    let service = build_service(Arc::clone(&repository));
+    let model = Model::default();
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = person_id.to_string();
+    turn.expected_session_revision = continuation.session_revision;
+    turn.prompt = "continue safely".into();
+    turn.mode = TurnMode::Continue(continuation.reference);
+    let completed = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(completed.continuation_of, Some(second_run_id));
+    assert_eq!(completed.continuation_level, 2);
+    let session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(
+        session
+            .messages
+            .iter()
+            .filter(|message| matches!(message, AgentMessage::User { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(session.continuation, None);
+}
+
+#[tokio::test]
+async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    let command_id = floe_agent_contract::CommandId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id,
+            command_id,
+            session_id: session.id,
+            person_id,
+            expected_session_revision: 0,
+            request_digest: [9; 32],
+            text: "unfinished".into(),
+            continuation: None,
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    drop(vault);
+
+    let opened = OpenVault::activate(
+        EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap(),
+        Arc::new(FloeCore::open(":memory:").await.unwrap()),
+        Arc::new(crate::local_context::LocalContextStore::default()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened._recovered_conversation_runs.len(), 1);
+    let recovered = &opened._recovered_conversation_runs[0];
+    assert_eq!(recovered.run_id, run_id);
+    assert_eq!(recovered.command_id, command_id);
+    assert_eq!(recovered.state, VaultConversationRunState::Interrupted);
+    assert_eq!(recovered.issue, Some(AgentFailure::Interrupted));
+    assert_eq!(recovered.executor_generation, 2);
+    let recovered_session = opened.load(person_id, session.id).await.unwrap();
+    assert_eq!(recovered_session.active_turn, None);
+    assert_eq!(
+        opened.conversation_run(run_id).await.unwrap().unwrap(),
+        *recovered
+    );
+}

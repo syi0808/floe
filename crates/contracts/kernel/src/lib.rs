@@ -4,6 +4,9 @@
 //! UUID wrappers are the canonical definitions; older crates re-export them
 //! while they are being migrated.
 
+/// The schema version every agent-facing contract in this workspace speaks.
+pub const AGENT_VERSION: u32 = 1;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

@@ -1,9 +1,9 @@
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
-import 'package:floe_client/features/day_canvas/domain/day_models.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/infrastructure/native/local_context_publication.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
-import 'package:floe_client/infrastructure/native/native_transport.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

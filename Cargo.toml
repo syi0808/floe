@@ -1,5 +1,28 @@
 [workspace]
-members = ["crates/contracts/kernel", "crates/contracts/context", "crates/contracts/agent", "crates/runtime/execution", "crates/runtime/agent", "crates/platform/diagnostics", "crates/platform/native", "crates/floe-agent", "crates/floe-core", "crates/floe-domain", "crates/modules/access", "crates/modules/day", "crates/modules/connections", "crates/modules/inference", "crates/modules/knowledge", "crates/modules/context", "crates/modules/experts", "crates/modules/conversation", "crates/adapters/providers", "crates/app", "crates/floe-ffi", "crates/floe-infra", "crates/floe-protocol"]
+members = [
+    "crates/contracts/kernel",
+    "crates/contracts/context",
+    "crates/contracts/agent",
+    "crates/runtime/execution",
+    "crates/runtime/agent",
+    "crates/platform/diagnostics",
+    "crates/platform/native",
+    "crates/modules/access",
+    "crates/modules/actions",
+    "crates/modules/connections",
+    "crates/modules/context",
+    "crates/modules/conversation",
+    "crates/modules/day",
+    "crates/modules/experts",
+    "crates/modules/inference",
+    "crates/modules/knowledge",
+    "crates/experts/builtin",
+    "crates/adapters/providers",
+    "crates/adapters/vault",
+    "crates/app",
+    "crates/bindings/protocol",
+    "crates/bindings/ffi",
+]
 resolver = "3"
 
 [workspace.package]

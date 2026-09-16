@@ -2,8 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import 'floe_motion.dart';
-import 'floe_squircle.dart';
+import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 
 Rect floeAnchorRect(BuildContext context) {
   final box = context.findRenderObject()! as RenderBox;

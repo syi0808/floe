@@ -2,12 +2,9 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
-use crate::{
-    CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror, CalendarProvider,
-    CalendarRange, CalendarRecord, CalendarScope, CalendarSelection, CalendarSource,
-    CalendarSyncStatus, DayError, DayService, Event, EventSchedule, PersonId, SourceAuthority,
-    SourceRef, TimelineRepository,
-};
+use crate::{CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror, CalendarProvider, CalendarRange, CalendarRecord, CalendarScope, CalendarSelection, CalendarSource, CalendarSyncStatus, DayError, DayService, Event, EventSchedule, SourceRef, TimelineRepository};
+use floe_context_contract::{SourceAuthority};
+use floe_kernel::{PersonId};
 
 #[derive(Clone, Debug)]
 pub struct CalendarObservation {

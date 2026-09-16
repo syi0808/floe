@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-
-	"floe/server/internal/console"
 )
 
 var ErrRequiredDependency = errors.New("required application dependency unavailable")
@@ -14,19 +12,19 @@ var ErrRequiredSecurity = errors.New("required application security unavailable"
 type LocalConfig struct {
 	Directory string
 	Address   string
-	Vault     console.Vault
-	Runtime   console.AuthRuntime
+	Vault     Vault
+	Runtime   AuthRuntime
 }
 
 type LocalServer struct {
-	Management *console.Console
+	Management *Console
 }
 
 func NewLocal(config LocalConfig) (*LocalServer, error) {
 	if config.Vault == nil || config.Runtime == nil {
 		return nil, ErrRequiredDependency
 	}
-	management, err := console.New(config.Directory, config.Address, config.Vault, config.Runtime)
+	management, err := New(config.Directory, config.Address, config.Vault, config.Runtime)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRequiredSecurity, err)
 	}

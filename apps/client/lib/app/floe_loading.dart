@@ -3,8 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
-import 'design_tokens.dart';
-import 'floe_motion.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_motion.dart';
 
 abstract final class FloeLoading {
   static const minimumDuration = Duration(milliseconds: 500);

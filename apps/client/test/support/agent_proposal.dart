@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:floe_client/features/agent/agent_proposal.dart';
-import 'package:floe_client/features/agent/agent_vault_gateway.dart';
+import 'package:floe_client/features/actions/domain/agent_proposal.dart';
+import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 import 'agent_vault_gateway.dart';
 import 'expert_result.dart';

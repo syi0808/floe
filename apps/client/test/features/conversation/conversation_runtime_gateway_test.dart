@@ -1,11 +1,11 @@
 import 'dart:async';
 
-import 'package:floe_client/features/agent/agent_conversation_gateway.dart';
-import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
-import 'package:floe_client/features/conversation/conversation_runtime_gateway.dart';
-import 'package:floe_client/runtime_client/floe_client.dart';
-import 'package:floe_client/runtime_client/read_model/app_read_model.dart';
-import 'package:floe_client/runtime_client/transport/app_wire_transport.dart';
+import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
+import 'package:floe_client/app/runtime/floe_client.dart';
+import 'package:floe_client/app/runtime/app_read_model.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

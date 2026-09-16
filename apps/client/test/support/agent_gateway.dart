@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
 
 class TestAgentGateway implements AgentFixtureStreamingGateway {
   TestAgentGateway({this.personId = 'test'});

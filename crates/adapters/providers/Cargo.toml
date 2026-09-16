@@ -6,5 +6,31 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
+chrono.workspace = true
+floe-actions = { path = "../../modules/actions" }
+floe-agent-contract = { path = "../../contracts/agent" }
+floe-connections = { path = "../../modules/connections" }
+floe-context = { path = "../../modules/context" }
+floe-context-contract = { path = "../../contracts/context" }
+floe-day = { path = "../../modules/day" }
+floe-execution = { path = "../../runtime/execution" }
+floe-inference = { path = "../../modules/inference" }
+floe-vault = { path = "../vault" }
+floe-experts-builtin = { path = "../../experts/builtin" }
+floe-experts = { path = "../../modules/experts" }
+floe-conversation = { path = "../../modules/conversation" }
+floe-kernel = { path = "../../contracts/kernel" }
+floe-knowledge = { path = "../../modules/knowledge" }
 floe-native = { path = "../../platform/native" }
+floe-protocol = { path = "../../bindings/protocol" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+base64 = "0.22.1"
+tempfile = "3.23.0"

@@ -2,10 +2,7 @@ use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
 use tokio::time::Instant;
 
-use crate::{
-    PairingConfirmation, PairingConfirmationRequest, PairingStatus, PairingStatusRequest,
-    RemoteControl,
-};
+use crate::{PairingConfirmation, PairingConfirmationRequest, PairingStatus, PairingStatusRequest, RemoteControl};
 
 #[derive(Clone)]
 pub struct PairingService<Remote> {
@@ -369,4 +366,126 @@ mod tests {
             Err(AgentFailure::CapabilityUnavailable)
         );
     }
+}
+
+/// The durable pairing Operation this device is driving.
+///
+/// Connections owns when the Operation continues, settles or expires, and which
+/// observed identity may be accepted. The client only displays the code and
+/// relays what the producer reported.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PairingOperation {
+    pub pairing_id: String,
+    pub challenge_id: String,
+    pub polling_proof: String,
+    /// Advances on restart or cancel; an observation for an earlier generation
+    /// can no longer settle the Operation.
+    pub generation: u64,
+    pub expires_at_unix_ms: i64,
+    pub state: PairingOperationState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PairingOperationState {
+    AwaitingApproval,
+    Approved { client_id: String, token: String },
+    Rejected,
+    Expired,
+    RepairRequired,
+}
+
+impl PairingOperationState {
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self, Self::AwaitingApproval)
+    }
+}
+
+/// What the client should do next for a pairing Operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PairingDirective {
+    ObserveAgain { poll_after_ms: i64 },
+    Settled { state: PairingOperationState },
+}
+
+/// The interval the client is told to wait between observations.
+pub const PAIRING_POLL_INTERVAL_MS: i64 = 2_000;
+
+/// Apply one observed pairing status to the Operation.
+///
+/// Expiry is enforced here rather than by the client's own clock loop, and an
+/// approved status is accepted only when the producer's identity matches the
+/// pairing it belongs to.
+pub fn observe_pairing(
+    operation: &PairingOperation,
+    observed: &PairingStatus,
+    generation: u64,
+    now_unix_ms: i64,
+) -> Result<(PairingOperation, PairingDirective), AgentFailure> {
+    if operation.generation != generation || operation.pairing_id != observed.pairing_id {
+        return Err(AgentFailure::Conflict);
+    }
+    if operation.state.is_terminal() {
+        return Err(AgentFailure::Conflict);
+    }
+    if now_unix_ms >= operation.expires_at_unix_ms {
+        return Ok(settle_pairing(operation, PairingOperationState::Expired));
+    }
+    let state = match observed.status.as_str() {
+        "pending" | "local_confirmed" => {
+            return Ok((
+                operation.clone(),
+                PairingDirective::ObserveAgain {
+                    poll_after_ms: PAIRING_POLL_INTERVAL_MS,
+                },
+            ));
+        }
+        "rejected" => PairingOperationState::Rejected,
+        "expired" => PairingOperationState::Expired,
+        "repair_required" => PairingOperationState::RepairRequired,
+        "approved" => {
+            let client_id = observed
+                .client_id
+                .as_deref()
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            let token = observed
+                .token
+                .as_deref()
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if client_id != observed.pairing_id {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+            validate_token_text(token)?;
+            PairingOperationState::Approved {
+                client_id: client_id.to_owned(),
+                token: token.to_owned(),
+            }
+        }
+        _ => return Err(AgentFailure::CapabilityUnavailable),
+    };
+    Ok(settle_pairing(operation, state))
+}
+
+/// Cancel a pending pairing Operation and advance its generation.
+pub fn cancel_pairing(operation: &PairingOperation) -> Result<PairingOperation, AgentFailure> {
+    if operation.state.is_terminal() {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(PairingOperation {
+        generation: operation.generation.saturating_add(1),
+        state: PairingOperationState::Expired,
+        ..operation.clone()
+    })
+}
+
+fn settle_pairing(
+    operation: &PairingOperation,
+    state: PairingOperationState,
+) -> (PairingOperation, PairingDirective) {
+    (
+        PairingOperation {
+            state: state.clone(),
+            ..operation.clone()
+        },
+        PairingDirective::Settled { state },
+    )
 }

@@ -5,11 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'design_tokens.dart';
-import 'floe_field.dart';
-import 'floe_motion.dart';
-import 'floe_squircle.dart';
-import 'floe_states.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_field.dart';
+import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/app/floe_states.dart';
 
 @immutable
 class FloeSelectOption<T> {

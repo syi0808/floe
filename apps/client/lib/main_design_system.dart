@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'app/floe_theme.dart';
-import 'preview/design_system_catalog.dart';
+import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/preview/design_system_catalog.dart';
 
 void main() => runApp(
   MaterialApp(

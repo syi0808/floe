@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
-import '../../features/day_canvas/application/calendar_gateway.dart';
-import '../../features/day_canvas/domain/day_models.dart';
+import 'package:floe_client/features/day/application/calendar_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
 
 const _channel = MethodChannel('floe/android_context');
 

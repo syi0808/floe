@@ -1,6 +1,6 @@
-import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
-import 'package:floe_client/features/day_canvas/domain/day_models.dart';
-import 'package:floe_client/features/day_canvas/presentation/day_appearance.dart';
+import 'package:floe_client/features/day/application/fake_day_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/day/presentation/day_appearance.dart';
 import 'package:flutter/widgets.dart';
 
 Widget previewAppearance(Widget child) => DayAppearance(

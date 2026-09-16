@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'floe_field.dart';
-import 'design_tokens.dart';
+import 'package:floe_client/app/floe_field.dart';
+import 'package:floe_client/app/design_tokens.dart';
 
 class FloeInput extends StatelessWidget {
   const FloeInput({

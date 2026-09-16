@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'design_tokens.dart';
+import 'package:floe_client/app/design_tokens.dart';
 
 abstract final class FloeStates {
   static Color filledBackground(Set<WidgetState> states) {

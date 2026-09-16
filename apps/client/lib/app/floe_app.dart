@@ -2,24 +2,27 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../l10n/app_localizations.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 
-import '../features/day_canvas/application/day_gateway.dart';
-import '../features/day_canvas/domain/day_models.dart';
-import '../features/day_canvas/presentation/personal_day_screen.dart';
-import '../features/agent/agent_fixture_gateway.dart';
-import '../features/server/local_server_client.dart';
-import '../infrastructure/native/android_context_gateway.dart';
-import '../infrastructure/native/apple_context_gateway.dart';
-import '../infrastructure/native/macos_context_gateway.dart';
-import 'floe_theme.dart';
-import 'floe_toast.dart';
-import 'local_identity.dart';
+import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
+import 'package:floe_client/features/day/application/day_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/day/presentation/personal_day_screen.dart';
+import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/connections/application/local_server_client.dart';
+import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
+import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_toast.dart';
+import 'package:floe_client/app/local_identity.dart';
 
 class FloeApp extends StatefulWidget {
   const FloeApp({
     super.key,
     required this.gateway,
+    this.calendarActions,
+    this.agentFixture,
     this.query,
     this.agentGateway,
     this.serverClient,
@@ -32,6 +35,12 @@ class FloeApp extends StatefulWidget {
   });
   final Locale locale;
   final DayGateway gateway;
+
+  /// Proposal, approval and execution of calendar actions.
+  final CalendarActionExecutionGateway? calendarActions;
+
+  /// The synthetic sample conversation.
+  final AgentFixtureStreamingGateway? agentFixture;
   final DayQuery? query;
   final AgentFixtureStreamingGateway? agentGateway;
   final LocalServerClient? serverClient;

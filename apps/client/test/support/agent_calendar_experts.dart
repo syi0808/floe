@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:floe_client/features/agent/agent_calendar_experts.dart';
-import 'package:floe_client/features/agent/agent_registry.dart';
-import 'package:floe_client/features/agent/agent_vault_gateway.dart';
-import 'package:floe_client/features/day_canvas/domain/day_models.dart';
+import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
+import 'package:floe_client/features/experts/domain/agent_registry.dart';
+import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
 
 import 'agent_registry.dart';
 import 'agent_vault_gateway.dart';

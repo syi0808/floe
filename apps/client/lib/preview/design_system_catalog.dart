@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../app/design_tokens.dart';
-import '../app/floe_action_card.dart';
-import '../app/floe_badge.dart';
-import '../app/floe_button.dart';
-import '../app/floe_input.dart';
-import '../app/floe_primitives.dart';
-import '../app/floe_selection.dart';
-import '../app/floe_squircle.dart';
-import '../app/floe_switch.dart';
-import '../app/floe_time_picker.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_action_card.dart';
+import 'package:floe_client/app/floe_badge.dart';
+import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_input.dart';
+import 'package:floe_client/app/floe_primitives.dart';
+import 'package:floe_client/app/floe_selection.dart';
+import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/app/floe_switch.dart';
+import 'package:floe_client/app/floe_time_picker.dart';
 
 class DesignSystemCatalog extends StatefulWidget {
   const DesignSystemCatalog({super.key});

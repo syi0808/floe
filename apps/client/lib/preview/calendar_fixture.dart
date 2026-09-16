@@ -1,5 +1,5 @@
-import '../features/day_canvas/application/fake_day_gateway.dart';
-import '../features/day_canvas/domain/day_models.dart';
+import 'package:floe_client/features/day/application/fake_day_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
 
 final calendarPreviewDate = DateTime.utc(2026, 9, 4);
 final calendarPreviewQuery = DayQuery(

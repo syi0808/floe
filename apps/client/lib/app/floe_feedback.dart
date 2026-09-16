@@ -5,10 +5,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'design_tokens.dart';
-import 'floe_loading.dart';
-import 'floe_motion.dart';
-import 'floe_squircle.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_loading.dart';
+import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 
 class FloeTextLink extends StatelessWidget {
   const FloeTextLink({

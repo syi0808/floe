@@ -3,7 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/services.dart';
 
-import 'native_transport.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 
 typedef PersonalAcquisitionReader = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> request,

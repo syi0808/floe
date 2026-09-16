@@ -2,10 +2,7 @@ use chrono::Utc;
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
 
-use crate::{
-    LearnerBudget, LearnerJobRepository, LearnerModel, LearnerReviewJob, LearnerRuntime,
-    MemoryCandidateSink, settlement_for_learner_result,
-};
+use crate::{LearnerBudget, LearnerJobRepository, LearnerModel, LearnerReviewJob, LearnerRuntime, MemoryCandidateSink, settlement_for_learner_result};
 
 const DISCOVERY_LIMIT: usize = 8;
 

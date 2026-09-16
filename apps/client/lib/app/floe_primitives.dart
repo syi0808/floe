@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import 'design_tokens.dart';
-import 'floe_button.dart';
-import 'floe_squircle.dart';
-import 'floe_switch.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/app/floe_switch.dart';
 
 Future<T?> showFloeSheet<T>(BuildContext context, WidgetBuilder builder) =>
     showModalBottomSheet<T>(

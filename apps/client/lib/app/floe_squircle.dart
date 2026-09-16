@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:figma_squircle/figma_squircle.dart';
 
-import 'design_tokens.dart';
+import 'package:floe_client/app/design_tokens.dart';
 
 enum FloeSquircleSize { xs, sm, md, lg, xl, frame }
 

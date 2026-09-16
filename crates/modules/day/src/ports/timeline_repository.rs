@@ -1,7 +1,5 @@
-use crate::{
-    CalendarMirror, Capture, CaptureId, Event, EventId, Note, NoteId, PersonId, Revision, Task,
-    TaskId, TimelineItem,
-};
+use crate::{CalendarMirror, Capture, Event, Note, Task, TimelineItem};
+use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 use std::{collections::BTreeMap, fmt::Display};
 use thiserror::Error;
 

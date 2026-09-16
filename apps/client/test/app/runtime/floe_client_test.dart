@@ -1,0 +1,509 @@
+import 'dart:async';
+import 'dart:collection';
+
+import 'package:floe_client/app/runtime/floe_client.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test(
+    'StartTurn uses Rust whitespace and transmits normalized text',
+    () async {
+      final transport = FakeTransport();
+      final client = FloeClient(transport, newId: _unusedId);
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: '\u{0085}\thello\t\u{0085}',
+      );
+      expect(command.text, 'hello');
+      transport.command = (request) async => {
+        'kind': 'command_receipt',
+        'command_id': request['command_id'],
+        'runtime_epoch': 7,
+        'admission': 'accepted',
+        'run_id': '00000000-0000-4000-8000-000000000205',
+        'session_revision': 4,
+      };
+
+      await client.submitStartTurn(command);
+
+      expect(
+        (transport.commandRequests.single['command'] as Map)['text'],
+        'hello',
+      );
+    },
+  );
+
+  test(
+    'StartTurn preserves line feeds and rejects other internal controls',
+    () {
+      final client = FloeClient(FakeTransport(), newId: _unusedId);
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: 'hello\nworld',
+      );
+      expect(command.text, 'hello\nworld');
+
+      for (final text in [
+        'hello\tworld',
+        'hello\rworld',
+        'hello\u{000B}world',
+      ]) {
+        expect(
+          () => client.prepareStartTurn(
+            sessionId: '00000000-0000-4000-8000-000000000204',
+            expectedRevision: 3,
+            text: text,
+          ),
+          throwsFormatException,
+        );
+      }
+    },
+  );
+
+  test('StartTurn applies the normalized UTF-8 byte limit', () {
+    final client = FloeClient(FakeTransport(), newId: _unusedId);
+    final exact = '${List.filled(2730, '한').join()}ab';
+    expect(
+      client
+          .prepareStartTurn(
+            sessionId: '00000000-0000-4000-8000-000000000204',
+            expectedRevision: 3,
+            text: exact,
+          )
+          .text,
+      exact,
+    );
+    expect(
+      () => client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: '${exact}c',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: '   ',
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'StartTurn keeps its command identity across transport retries',
+    () async {
+      final transport = FakeTransport();
+      final identifiers = Queue.of([
+        '00000000-0000-4000-8000-000000000201',
+        '00000000-0000-4000-8000-000000000202',
+        '00000000-0000-4000-8000-000000000203',
+      ]);
+      final client = FloeClient(transport, newId: identifiers.removeFirst);
+      final command = client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 3,
+        text: 'hello',
+      );
+      transport.command = (request) async => {
+        'kind': 'command_receipt',
+        'command_id': request['command_id'],
+        'runtime_epoch': 7,
+        'admission': 'accepted',
+        'run_id': '00000000-0000-4000-8000-000000000205',
+        'session_revision': 4,
+      };
+
+      final first = await client.submitStartTurn(command);
+      final second = await client.submitStartTurn(command);
+      expect(first.commandId, command.commandId);
+      expect(second.runId, first.runId);
+      expect(
+        transport.commandRequests.map((request) => request['request_id']),
+        containsAll([
+          '00000000-0000-4000-8000-000000000202',
+          '00000000-0000-4000-8000-000000000203',
+        ]),
+      );
+      for (final request in transport.commandRequests) {
+        expect(request['command_id'], command.commandId);
+        expect(request.containsKey('person_id'), isFalse);
+        expect(request.containsKey('device_id'), isFalse);
+        expect(
+          (request['command'] as Map).containsKey('remote_route'),
+          isFalse,
+        );
+      }
+    },
+  );
+
+  test(
+    'query decoding restores command, Run, report, and final message',
+    () async {
+      final identifiers = Queue.of([
+        '00000000-0000-4000-8000-000000000211',
+        '00000000-0000-4000-8000-000000000212',
+        '00000000-0000-4000-8000-000000000213',
+      ]);
+      final transport = FakeTransport();
+      final client = FloeClient(transport, newId: identifiers.removeFirst);
+      transport.query = (request) async {
+        final query = request['query'] as Map;
+        return switch (query['kind']) {
+          'conversation.get_command' => {
+            'kind': 'command_receipt',
+            'command_id': query['command_id'],
+            'runtime_epoch': 7,
+            'admission': 'accepted',
+            'run_id': '00000000-0000-4000-8000-000000000214',
+            'session_revision': 8,
+          },
+          'conversation.get_run' => {
+            'kind': 'run_snapshot',
+            'run_id': query['run_id'],
+            'session_id': '00000000-0000-4000-8000-000000000215',
+            'revision': 2,
+            'runtime_epoch': 7,
+            'executor_generation': 1,
+            'state': 'finished',
+            'progress': 'completed',
+            'task_refs': <Object?>[],
+            'attempt_refs': <Object?>[],
+            'report': {
+              'execution': 'completed',
+              'reply': 'generated',
+              'issues': <Object?>[],
+              'action_refs': <Object?>[],
+              'final_message_ref': '00000000-0000-4000-8000-000000000214',
+            },
+          },
+          'conversation.get_message' => {
+            'kind': 'message',
+            'message_id': query['message_id'],
+            'role': 'assistant',
+            'text': 'done',
+          },
+          _ => throw StateError('unexpected query'),
+        };
+      };
+
+      final receipt = await client.getCommand(
+        '00000000-0000-4000-8000-000000000216',
+      );
+      final run = await client.getRun(receipt!.runId);
+      final message = await client.getMessage(run.report!.finalMessageRef!);
+      expect(run.state, AppRunState.finished);
+      expect(run.runtimeEpoch, 7);
+      expect(message.text, 'done');
+    },
+  );
+
+  test('StartTurn serializes a bounded continuation reference', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000206',
+      '00000000-0000-4000-8000-000000000207',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000204',
+      expectedRevision: 4,
+      text: 'continue',
+      continuation: const AppContinuationRef(
+        runId: '00000000-0000-4000-8000-000000000205',
+        executorGeneration: 3,
+        level: 2,
+      ),
+    );
+    transport.command = (request) async => {
+      'kind': 'command_receipt',
+      'command_id': request['command_id'],
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000208',
+      'session_revision': 5,
+    };
+
+    await client.submitStartTurn(command);
+
+    expect((transport.commandRequests.single['command'] as Map)['mode'], {
+      'kind': 'continue',
+      'continuation_ref': {
+        'run_id': '00000000-0000-4000-8000-000000000205',
+        'executor_generation': 3,
+        'level': 2,
+      },
+    });
+  });
+
+  test('StartTurn serializes an explicit profile selection', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000217',
+      '00000000-0000-4000-8000-000000000218',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000204',
+      expectedRevision: 4,
+      text: 'use this profile',
+      profileId: 'local-fast',
+    );
+    transport.command = (request) async => {
+      'kind': 'command_receipt',
+      'command_id': request['command_id'],
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000219',
+      'session_revision': 5,
+    };
+
+    await client.submitStartTurn(command);
+
+    expect((transport.commandRequests.single['command'] as Map)['profile'], {
+      'kind': 'explicit',
+      'profile_id': 'local-fast',
+    });
+  });
+
+  test('Run report preserves typed retry recovery metadata', () async {
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: _unusedId);
+    transport.query = (request) async => {
+      'kind': 'run_snapshot',
+      'run_id': (request['query'] as Map)['run_id'],
+      'session_id': '00000000-0000-4000-8000-000000000215',
+      'revision': 2,
+      'runtime_epoch': 7,
+      'executor_generation': 1,
+      'state': 'finished',
+      'progress': 'failed',
+      'task_refs': <Object?>[],
+      'attempt_refs': <Object?>[],
+      'report': {
+        'execution': 'failed',
+        'reply': 'not_produced',
+        'issues': [
+          {
+            'code': 'unavailable',
+            'message': 'app request could not complete',
+            'metadata': {
+              'reason_code': 'server_model_unavailable',
+              'recovery_action': 'retry_read',
+            },
+          },
+        ],
+        'action_refs': <Object?>[],
+      },
+    };
+
+    final run = await client.getRun('00000000-0000-4000-8000-000000000214');
+
+    expect(run.report!.issues.single.metadata, {
+      'reason_code': 'server_model_unavailable',
+      'recovery_action': 'retry_read',
+    });
+  });
+
+  test('StartTurn serializes explicit retry lineage', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000209',
+      '00000000-0000-4000-8000-000000000210',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000204',
+      expectedRevision: 6,
+      text: 'retry safely',
+      retryOf: '00000000-0000-4000-8000-000000000205',
+    );
+    transport.command = (request) async => {
+      'kind': 'command_receipt',
+      'command_id': request['command_id'],
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000211',
+      'session_revision': 7,
+    };
+
+    await client.submitStartTurn(command);
+
+    expect(
+      transport.commandRequests.single['command'],
+      containsPair('retry_of', '00000000-0000-4000-8000-000000000205'),
+    );
+    expect(
+      () => client.prepareStartTurn(
+        sessionId: '00000000-0000-4000-8000-000000000204',
+        expectedRevision: 6,
+        text: 'invalid retry continuation',
+        retryOf: '00000000-0000-4000-8000-000000000205',
+        continuation: const AppContinuationRef(
+          runId: '00000000-0000-4000-8000-000000000206',
+          executorGeneration: 1,
+          level: 1,
+        ),
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('CancelRun keeps command identity across transport retries', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000231',
+      '00000000-0000-4000-8000-000000000232',
+      '00000000-0000-4000-8000-000000000233',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareCancelRun(
+      '00000000-0000-4000-8000-000000000234',
+    );
+    transport.command = (request) async => {
+      'kind': 'cancel_run_receipt',
+      'command_id': request['command_id'],
+      'run_id': (request['command'] as Map)['run_id'],
+      'runtime_epoch': 7,
+      'outcome': 'accepted',
+    };
+
+    final first = await client.submitCancelRun(command);
+    final second = await client.submitCancelRun(command);
+    expect(first.outcome, AppCancelRunOutcome.accepted);
+    expect(second.commandId, command.commandId);
+    for (final request in transport.commandRequests) {
+      expect(request['command_id'], command.commandId);
+      expect((request['command'] as Map)['reason'], 'user_requested');
+    }
+  });
+
+  test('close settles a pending request once and rejects new work', () async {
+    final transport = FakeTransport();
+    final response = Completer<Map<String, dynamic>>();
+    transport.command = (_) => response.future;
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000221',
+      '00000000-0000-4000-8000-000000000222',
+    ]);
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000223',
+      expectedRevision: 0,
+      text: 'hello',
+    );
+    final pending = client.submitStartTurn(command);
+    final settled = expectLater(pending, throwsStateError);
+    await client.close();
+    await settled;
+    response.complete({
+      'kind': 'command_receipt',
+      'command_id': command.commandId,
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000224',
+      'session_revision': 1,
+    });
+    await expectLater(client.getCommand(command.commandId), throwsStateError);
+    expect(transport.closed, isTrue);
+  });
+
+  test(
+    'events require resync then enforce epoch revision and cursor order',
+    () async {
+      final identifiers = Queue.of([
+        '00000000-0000-4000-8000-000000000241',
+        '00000000-0000-4000-8000-000000000242',
+      ]);
+      final transport = FakeTransport();
+      final client = FloeClient(transport, newId: identifiers.removeFirst);
+      transport.events = (request) async {
+        if (!request.containsKey('cursor')) {
+          return {
+            'kind': 'resync_required',
+            'runtime_epoch': 7,
+            'snapshot_cursor': 10,
+          };
+        }
+        return {
+          'kind': 'events',
+          'runtime_epoch': 7,
+          'next_cursor': 11,
+          'events': [
+            {
+              'cursor': 11,
+              'aggregate_revision': 2,
+              'runtime_epoch': 7,
+              'event': {
+                'kind': 'run_updated',
+                'run': {
+                  'run_id': '00000000-0000-4000-8000-000000000243',
+                  'session_id': '00000000-0000-4000-8000-000000000244',
+                  'revision': 2,
+                  'runtime_epoch': 7,
+                  'executor_generation': 1,
+                  'state': 'finished',
+                  'progress': 'cancelled',
+                  'task_refs': <Object?>[],
+                  'attempt_refs': <Object?>[],
+                  'report': {
+                    'execution': 'cancelled',
+                    'reply': 'not_produced',
+                    'issues': <Object?>[],
+                    'action_refs': <Object?>[],
+                  },
+                },
+              },
+            },
+          ],
+        };
+      };
+
+      final initial = await client.readEvents();
+      final cursor = (initial as AppEventsResyncRequired).snapshotCursor;
+      final page = await client.readEvents(after: cursor) as AppEventsPage;
+      expect(page.cursor.cursor, 11);
+      expect((page.events.single as AppRunUpdated).run.progress, 'cancelled');
+    },
+  );
+}
+
+String _unusedId() => '00000000-0000-4000-8000-000000000299';
+
+final class FakeTransport implements AppWireTransport {
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? command;
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? query;
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? events;
+  final List<Map<String, dynamic>> commandRequests = [];
+  bool closed = false;
+
+  @override
+  Future<Map<String, dynamic>> commandV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    commandRequests.add(request);
+    return command!(request);
+  }
+
+  @override
+  Future<Map<String, dynamic>> queryV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => query!(request);
+
+  @override
+  Future<Map<String, dynamic>> eventsV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => events!(request);
+
+  @override
+  Future<void> close() async {
+    closed = true;
+  }
+}

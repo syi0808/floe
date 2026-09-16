@@ -4,11 +4,11 @@ import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../../features/agent/agent_connections.dart';
-import 'android_context_gateway.dart';
-import 'apple_context_gateway.dart';
-import 'macos_context_gateway.dart';
-import 'native_transport.dart';
+import 'package:floe_client/features/connections/domain/agent_connections.dart';
+import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 
 const _peopleViewId = 'people.identity';
 const _feasibilityViewId = 'schedule.feasibility';

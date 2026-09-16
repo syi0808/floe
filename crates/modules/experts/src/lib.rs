@@ -1,7 +1,31 @@
-//! Expert directory, endpoint dispatch, and Task ownership.
+//! Expert directory, registration, endpoint dispatch, A2A Task transport and
+//! Task ownership.
+//!
+//! Nothing here decides what a specific Expert means. The common path carries an
+//! agent identity and a role-neutral invocation.
 
+mod a2a;
 mod directory;
+mod invocation;
+mod registry;
 mod task;
 
+pub use a2a::{
+    A2A_PROTOCOL_VERSION, A2AArtifact, A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ARouter,
+    A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard,
+    EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
+};
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
+pub use invocation::{
+    ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
+    ViewCancellation, check_running,
+};
+pub use registry::{
+    AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
+    BuiltinExpertSetupReceipt, BuiltinSourceBinding, BuiltinSourceState,
+    CalendarExpertSetupReceipt, CalendarViewBinding, ExpertMetadata,
+    ExpertPrivateState, ExpertRule, PackageAssignment, PackageImplementation, PackageInstallation,
+    PackageKind, PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
+    NoSetupValidator, RegistrySnapshot, SetupValidator,
+};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

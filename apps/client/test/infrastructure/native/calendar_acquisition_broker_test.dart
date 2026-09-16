@@ -1,5 +1,5 @@
 import 'package:floe_client/infrastructure/native/calendar_acquisition_broker.dart';
-import 'package:floe_client/infrastructure/native/native_transport.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

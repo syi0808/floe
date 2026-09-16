@@ -7,23 +7,26 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'app/floe_app.dart';
-import 'app/local_identity.dart';
-import 'app/design_tokens.dart';
-import 'app/floe_primitives.dart';
-import 'app/floe_theme.dart';
-import 'features/day_canvas/application/ffi_day_gateway.dart';
-import 'features/day_canvas/application/calendar_gateway.dart';
-import 'features/server/local_server_client.dart';
-import 'infrastructure/native/android_context_gateway.dart';
-import 'infrastructure/native/apple_context_gateway.dart';
-import 'infrastructure/native/macos_context_gateway.dart';
-import 'infrastructure/native/attention_acquisition_broker.dart';
-import 'infrastructure/native/calendar_acquisition_broker.dart';
-import 'infrastructure/native/local_context_publication.dart';
-import 'infrastructure/native/personal_acquisition_broker.dart';
-import 'infrastructure/diagnostics/app_diagnostics.dart';
-import 'preview/design_feedback_overlay.dart';
+import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/local_identity.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_primitives.dart';
+import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/runtime/app_runtime.dart';
+import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
+import 'package:floe_client/features/conversation/application/agent_fixture_facade.dart';
+import 'package:floe_client/features/day/application/native_day_gateway.dart';
+import 'package:floe_client/features/day/application/calendar_gateway.dart';
+import 'package:floe_client/features/connections/application/local_server_client.dart';
+import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/attention_acquisition_broker.dart';
+import 'package:floe_client/infrastructure/native/calendar_acquisition_broker.dart';
+import 'package:floe_client/infrastructure/native/local_context_publication.dart';
+import 'package:floe_client/infrastructure/native/personal_acquisition_broker.dart';
+import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
+import 'package:floe_client/preview/design_feedback_overlay.dart';
 
 void main() {
   runZonedGuarded(
@@ -72,11 +75,11 @@ Future<void> _start() async {
     final calendarAdapter = androidNative == null
         ? EventKitCalendarAdapter(deviceId: device.id)
         : AndroidCalendarAdapter(androidNative);
-    final gateway = await FfiDayGateway.openDefault(
-      serverClient: serverClient,
-      deviceId: device.id,
-      calendarAdapter: calendarAdapter,
-    );
+    // App-lifetime objects are created once here; no feature owns them.
+    final runtime = await AppRuntime.openDefault(deviceId: device.id);
+    final gateway = NativeDayGateway(runtime, calendarAdapter);
+    final calendarActions = CalendarActionFacade(runtime);
+    final agentFixture = AgentFixtureFacade(runtime);
     CalendarAcquisitionService? calendarAcquisition;
     if (Platform.isIOS || androidNative != null) {
       final reader = Platform.isIOS
@@ -84,7 +87,7 @@ Future<void> _start() async {
           : androidNative!.readAcquisition;
       calendarAcquisition = CalendarAcquisitionService(
         broker: CalendarAcquisitionBroker(
-          transport: gateway.localContextTransport,
+          transport: runtime.localContextTransport,
           personId: localPersonId,
         ),
         reader: reader,
@@ -102,7 +105,7 @@ Future<void> _start() async {
     if (Platform.isMacOS) {
       final attentionGateway = macOSContextGateway!;
       final broker = AttentionAcquisitionBroker(
-        transport: gateway.localContextTransport,
+        transport: runtime.localContextTransport,
         personId: localPersonId,
       );
       attentionAcquisition = AttentionAcquisitionService(
@@ -164,7 +167,7 @@ Future<void> _start() async {
         ? null
         : PublishingAppleContextGateway(
             gateway: appleNativeGateway,
-            transport: gateway.localContextTransport,
+            transport: runtime.localContextTransport,
             personId: localPersonId,
             deviceId: device.id,
           );
@@ -172,7 +175,7 @@ Future<void> _start() async {
         ? null
         : PublishingAndroidContextGateway(
             gateway: androidNative,
-            transport: gateway.localContextTransport,
+            transport: runtime.localContextTransport,
             personId: localPersonId,
             deviceId: device.id,
           );
@@ -184,7 +187,7 @@ Future<void> _start() async {
         : null;
     if (personalReader != null) {
       final broker = PersonalAcquisitionBroker(
-        transport: gateway.localContextTransport,
+        transport: runtime.localContextTransport,
         personId: localPersonId,
       );
       personalAcquisition = PersonalAcquisitionService(
@@ -202,7 +205,7 @@ Future<void> _start() async {
     if (Platform.isMacOS) {
       final macOSContext = PublishingMacOSContextGateway(
         gateway: macOSContextGateway!,
-        transport: gateway.localContextTransport,
+        transport: runtime.localContextTransport,
         personId: localPersonId,
         deviceId: device.id,
       );
@@ -226,8 +229,10 @@ Future<void> _start() async {
     runApp(
       FloeApp(
         gateway: gateway,
-        agentGateway: gateway.secureAgent,
-        serverClient: gateway.serverClient,
+        calendarActions: calendarActions,
+        agentFixture: agentFixture,
+        agentGateway: runtime.vault,
+        serverClient: serverClient,
         androidContext: androidContext,
         appleContext: appleContext,
         macOSContext: macOSContextGateway,
@@ -236,7 +241,8 @@ Future<void> _start() async {
           await calendarAcquisition?.dispose();
           await attentionAcquisition?.dispose();
           await personalAcquisition?.dispose();
-          await gateway.close();
+          await gateway.drain();
+          await runtime.close();
         },
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)

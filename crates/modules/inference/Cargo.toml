@@ -6,12 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-execution = { path = "../../runtime/execution" }
+floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 thiserror.workspace = true
-uuid.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
 tokio.workspace = true
+uuid.workspace = true

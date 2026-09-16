@@ -7,9 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
-import '../app/design_tokens.dart';
-import '../app/floe_input.dart';
-import '../infrastructure/diagnostics/app_diagnostics.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_input.dart';
+import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 
 class DesignFeedbackOverlay extends StatefulWidget {
   const DesignFeedbackOverlay({

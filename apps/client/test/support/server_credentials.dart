@@ -1,4 +1,4 @@
-import 'package:floe_client/features/server/local_server_client.dart';
+import 'package:floe_client/features/connections/application/local_server_client.dart';
 
 class MemoryServerCredentials implements ServerCredentialStore {
   String? value;

@@ -19,3 +19,10 @@ pub use floe_context_contract::{
 };
 pub use floe_kernel::PersonId;
 pub use ports::CurrentAuthority;
+
+pub use application::calendar_lease::{CalendarLeaseKey, calendar_lease_dependency};
+pub use application::calendar_read::{
+    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessAdmission,
+    CalendarReadAccessRequest, CalendarReadAccessStamp, ProjectedCalendarItem,
+    ProjectedCalendarObservation, admission_matches, admission_matches_dependency,
+};

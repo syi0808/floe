@@ -2,6 +2,9 @@
 
 mod adapters;
 mod api;
+pub mod fixture;
+pub mod prompts;
+pub mod turn;
 mod application;
 mod domain;
 mod ports;
@@ -29,3 +32,5 @@ pub use floe_agent_contract::{
 };
 pub use floe_agent_runtime::FinalPayloadValidator;
 pub use ports::{ConversationRepository, SessionArchiveRepository, SessionRepository};
+
+pub use turn::*;

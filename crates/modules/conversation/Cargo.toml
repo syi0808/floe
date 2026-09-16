@@ -6,11 +6,22 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context = { path = "../context" }
+floe-context-contract = { path = "../../contracts/context" }
+floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
+floe-experts = { path = "../experts" }
+floe-inference = { path = "../inference" }
 floe-kernel = { path = "../../contracts/kernel" }
+floe-knowledge = { path = "../knowledge" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"

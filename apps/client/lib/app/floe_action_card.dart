@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'design_tokens.dart';
-import 'floe_motion.dart';
-import 'floe_squircle.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 
 final class FloeActionCard extends StatelessWidget {
   const FloeActionCard({

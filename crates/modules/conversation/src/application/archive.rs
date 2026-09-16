@@ -2,10 +2,7 @@ use std::future::Future;
 
 use floe_agent_contract::{AgentFailure, ArchiveReadRequest};
 
-use crate::{
-    CompactionReceipt, CompactionRequest, SessionArchiveRepository,
-    adapters::context_reader::ConversationArchiveReader,
-};
+use crate::{CompactionReceipt, CompactionRequest, SessionArchiveRepository, adapters::context_reader::ConversationArchiveReader};
 
 pub async fn compact_session<Repository: SessionArchiveRepository>(
     repository: &Repository,

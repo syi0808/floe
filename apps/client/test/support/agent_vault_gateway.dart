@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
-import 'package:floe_client/features/agent/agent_vault_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 import 'agent_gateway.dart';
 

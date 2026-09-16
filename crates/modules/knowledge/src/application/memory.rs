@@ -2,12 +2,7 @@ use std::collections::HashSet;
 
 use floe_kernel::{AgentFailure, PersonId};
 
-use crate::{
-    EpistemicStatus, EvidenceProjectionPurpose, EvidenceReader, KNOWLEDGE_VERSION, KnowledgeActor,
-    KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceSnapshot,
-    LearningOutcome, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin, MemorySummary, PersonalMemoryKind,
-    StageMemoryCandidate,
-};
+use crate::{EpistemicStatus, EvidenceProjectionPurpose, EvidenceReader, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceSnapshot, LearningOutcome, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin, MemorySummary, PersonalMemoryKind, StageMemoryCandidate};
 
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_MEMORY_STATEMENT_BYTES: usize = 2 * 1024;
@@ -213,10 +208,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{
-        KnowledgeKind, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
-        LearningEvidenceRef, LearningObservationKind, PersonalMemoryValue,
-    };
+    use crate::{KnowledgeKind, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceRef, LearningObservationKind, PersonalMemoryValue};
 
     fn request() -> StageMemoryCandidate {
         StageMemoryCandidate {

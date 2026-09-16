@@ -6,9 +6,9 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../l10n/app_localizations.dart';
-import 'design_tokens.dart';
-import 'floe_motion.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_motion.dart';
 
 enum FloeToastTone { success, info }
 
