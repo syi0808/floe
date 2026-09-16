@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use floe_agent_contract::{AgentFailure, DataClass};
+use floe_context_contract::DataClass;
+use floe_kernel::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 

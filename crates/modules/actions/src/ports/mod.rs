@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, future::Future};
 
 use chrono::{DateTime, Utc};
-use floe_agent_contract::AgentFailure;
+use floe_kernel::AgentFailure;
 use floe_context_contract::ContextDependency;
 use floe_day::{CalendarConnection, CalendarMirror, Event, PersonId};
 use floe_experts::ExpertResult;

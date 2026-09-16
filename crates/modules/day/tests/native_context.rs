@@ -22,7 +22,7 @@ async fn optional_context_keeps_budget_issues_distinct_from_corrupt_storage() {
     let note = core.create_note(person, "one", now).await.unwrap();
     core.create_note(person, "two", now).await.unwrap();
     let tasks = floe_context::acquire_optional_source(
-        floe_agent_contract::ContextSource::Tasks,
+        floe_context_contract::ContextSource::Tasks,
         core.task_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
     )
     .await
@@ -30,10 +30,10 @@ async fn optional_context_keeps_budget_issues_distinct_from_corrupt_storage() {
     assert!(tasks.value.is_none());
     assert_eq!(
         tasks.issue.unwrap().reason,
-        floe_agent_contract::ContextIssueReason::BudgetExceeded
+        floe_context_contract::ContextIssueReason::BudgetExceeded
     );
     let notes = floe_context::acquire_optional_source(
-        floe_agent_contract::ContextSource::Notes,
+        floe_context_contract::ContextSource::Notes,
         core.note_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
     )
     .await
@@ -41,7 +41,7 @@ async fn optional_context_keeps_budget_issues_distinct_from_corrupt_storage() {
     assert!(notes.value.is_none());
     assert_eq!(
         notes.issue.unwrap().reason,
-        floe_agent_contract::ContextIssueReason::BudgetExceeded
+        floe_context_contract::ContextIssueReason::BudgetExceeded
     );
     let database = turso::Builder::new_local(path.to_str().unwrap())
         .build()
@@ -69,12 +69,12 @@ async fn optional_context_keeps_budget_issues_distinct_from_corrupt_storage() {
     assert_eq!(
         core.task_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES)
             .await,
-        Err(floe_agent_contract::AgentFailure::StorageUnavailable)
+        Err(floe_kernel::AgentFailure::StorageUnavailable)
     );
     assert_eq!(
         core.note_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES)
             .await,
-        Err(floe_agent_contract::AgentFailure::StorageUnavailable)
+        Err(floe_kernel::AgentFailure::StorageUnavailable)
     );
     connection
         .execute("UPDATE tasks SET payload = 'not-json'", ())
@@ -86,19 +86,19 @@ async fn optional_context_keeps_budget_issues_distinct_from_corrupt_storage() {
         .unwrap();
     assert_eq!(
         floe_context::acquire_optional_source(
-            floe_agent_contract::ContextSource::Tasks,
+            floe_context_contract::ContextSource::Tasks,
             core.task_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
         )
         .await,
-        Err(floe_agent_contract::AgentFailure::StorageUnavailable)
+        Err(floe_kernel::AgentFailure::StorageUnavailable)
     );
     assert_eq!(
         floe_context::acquire_optional_source(
-            floe_agent_contract::ContextSource::Notes,
+            floe_context_contract::ContextSource::Notes,
             core.note_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
         )
         .await,
-        Err(floe_agent_contract::AgentFailure::StorageUnavailable)
+        Err(floe_kernel::AgentFailure::StorageUnavailable)
     );
 }
 

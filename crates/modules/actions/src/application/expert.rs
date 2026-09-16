@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use floe_agent_contract::{AgentFailure, DataClass};
+use floe_context_contract::DataClass;
+use floe_kernel::AgentFailure;
 use floe_context_contract::ContextDependency;
 use floe_day::{CalendarProvider, PersonId, TimedSchedule};
 use floe_execution::Cancellation;

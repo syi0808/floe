@@ -764,7 +764,6 @@ name = "floe-access"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-agent-contract",
  "floe-context",
  "floe-context-contract",
  "floe-day",
@@ -783,7 +782,6 @@ name = "floe-actions"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-agent-contract",
  "floe-context-contract",
  "floe-day",
  "floe-execution",
@@ -863,7 +861,6 @@ name = "floe-connections"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-agent-contract",
  "floe-context-contract",
  "floe-day",
  "floe-execution",
@@ -936,7 +933,6 @@ name = "floe-day"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-agent-contract",
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",

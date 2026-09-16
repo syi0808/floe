@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
-floe-agent-contract = { path = "../../contracts/agent" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-context = { path = "../context" }
 floe-day = { path = "../day" }

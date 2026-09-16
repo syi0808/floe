@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use floe_agent_contract::DataClass;
+use floe_context_contract::DataClass;
 use floe_day::{CalendarFailure, CalendarMirror, CalendarProvider, CalendarSyncStatus, SourceRef};
 use sha2::{Digest, Sha256};
 

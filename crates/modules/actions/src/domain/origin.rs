@@ -1,4 +1,4 @@
-use floe_agent_contract::DataClass;
+use floe_context_contract::DataClass;
 use floe_day::{CalendarProvider, PersonId};
 use floe_experts::{PackageKind, PackageRef};
 use serde::{Deserialize, Serialize};

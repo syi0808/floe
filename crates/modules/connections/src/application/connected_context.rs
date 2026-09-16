@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::DataClass;
+use floe_context_contract::DataClass;
 
 pub const CONNECTED_CONTEXT_VERSION: u32 = 1;
 

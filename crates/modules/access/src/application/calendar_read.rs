@@ -4,7 +4,7 @@
 use std::future::Future;
 
 use chrono::{DateTime, Utc};
-use floe_agent_contract::AgentFailure;
+use floe_kernel::AgentFailure;
 use floe_context_contract::{
     ConsumerPolicyAuthority, ContextDependency, GrantAuthority, GrantConsumer, GrantId,
     GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,

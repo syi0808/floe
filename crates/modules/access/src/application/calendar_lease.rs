@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use floe_agent_contract::AgentFailure;
+use floe_kernel::AgentFailure;
 use floe_context_contract::{ContextDependency};
 use floe_kernel::{PersonId};
 use serde::Serialize;
