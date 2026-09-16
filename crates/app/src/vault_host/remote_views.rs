@@ -3,21 +3,20 @@ use std::{future::Future, pin::Pin};
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_conversation::{ModelRequest};
-use floe_context::{CommunicationView, LogisticsView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, WorkContextView, validate_communication_view, validate_logistics_view, validate_work_context_view};
+use floe_context::{
+    is_remote_view, remote_view_connector_admissible, remote_view_data_category,
+    remote_view_resource, validate_remote_view, validate_remote_view_query,
+};
 use floe_vault::{EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, RemoteCalendarAuthorizationExpectation, RemoteProducerIdentity, RemoteViewSourceReference, VaultKeyProvider};
-use floe_access::{DataAccessGrant, GrantState};
-use floe_context_contract::{ContextDependency, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, ProcessingRestriction, ResourceHandle};
+use floe_access::{DataAccessGrant, GrantState, active_resource_grant};
+use floe_context_contract::{ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope, ProcessingRestriction, ResourceHandle};
+
+const ASSISTANT_PURPOSE: GrantPurpose = GrantPurpose::Assistant;
 use floe_provider_adapters::control::RemoteViewAuthorizationRequest;
 use floe_provider_adapters::sources::ServerSourceClient;
 use floe_protocol::AgentRemoteRouteDto;
-use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
-
-const MAIL_VIEW: &str = "mail.communication";
-const WORK_VIEW: &str = "work.context";
-const LOGISTICS_VIEW: &str = "life.logistics";
-const ASSISTANT_PURPOSE: GrantPurpose = GrantPurpose::Assistant;
 
 pub(crate) struct RemoteViewReader<'a, Keys: VaultKeyProvider> {
     pub(crate) vault: &'a EncryptedAgentVault<Keys>,
@@ -55,8 +54,8 @@ pub(crate) async fn preview_remote_view_grant<Keys: VaultKeyProvider>(
     if pairing.person_id != person_id.to_string()
         || pairing.client_id.is_empty()
         || pairing.device_id.is_empty()
-        || expected_resource(view_id, connection_id) != resource
-        || !matches!(view_id, MAIL_VIEW | WORK_VIEW | LOGISTICS_VIEW)
+        || remote_view_resource(view_id, connection_id) != resource
+        || !is_remote_view(view_id)
         || consumer_name.trim().is_empty()
     {
         return Err(AgentFailure::PolicyDenied);
@@ -157,11 +156,7 @@ pub(crate) async fn review_and_activate_remote_view_grant<Keys: VaultKeyProvider
         return Err(AgentFailure::PolicyDenied);
     }
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let category = if view_id == MAIL_VIEW {
-        GrantDataCategory::Content
-    } else {
-        GrantDataCategory::Derived
-    };
+    let category = remote_view_data_category(view_id);
     let scope = GrantScope::try_new(
         vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
         vec![category.clone()],
@@ -243,13 +238,15 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
         check_window(deadline, cancellation)?;
         let consumer =
             GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-        let (max_items, max_bytes) = validate_query(view_id, &query)?;
+        let (max_items, max_bytes) = validate_remote_view_query(view_id, &query)?;
         let grants = self.vault.list_data_access_grants(128).await?;
-        let grant = select_grant(&grants, self.person_id, view_id, &consumer)?;
+        let grant = active_resource_grant(&grants, self.person_id, &consumer, |source| {
+            remote_view_grant_resource(view_id, source)
+        })?;
         let source = grant.source();
         let connection_id = source.connection_id();
         let connection_id_text = connection_id.as_str();
-        let resource = expected_resource(view_id, connection_id_text);
+        let resource = remote_view_resource(view_id, connection_id_text);
         let client = self.source_client.authorization_client()?;
         let preview = client
             .view_source_preview(
@@ -348,7 +345,7 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
             .read_authorized_view(self.vault, request, expected, deadline, cancellation)
             .await?;
         let now = Utc::now().timestamp_millis();
-        let (value, observed, expires) = validate_view(view_id, value, now, max_items, max_bytes)?;
+        let (value, observed, expires) = validate_remote_view(view_id, value, now, max_items, max_bytes)?;
         let observed =
             DateTime::<Utc>::from_timestamp_millis(observed).ok_or(AgentFailure::StaleContext)?;
         let expires =
@@ -426,7 +423,7 @@ impl<Keys: VaultKeyProvider> GovernedDependencyResolver for RemoteDependencyReso
             let resource = grant.scope().resources()[0].as_str();
             let (view_id, connection_id) =
                 resource.split_once(':').ok_or(AgentFailure::PolicyDenied)?;
-            if expected_resource(view_id, dependency.source().connection_id().as_str()) != resource
+            if remote_view_resource(view_id, dependency.source().connection_id().as_str()) != resource
                 || connection_id != dependency.source().connection_id().as_str()
             {
                 return Err(AgentFailure::PolicyDenied);
@@ -508,111 +505,6 @@ fn check_window(
     Ok(())
 }
 
-pub(crate) fn expected_resource(view_id: &str, connection_id: &str) -> String {
-    format!("{view_id}:{connection_id}")
-}
-
-fn select_grant(
-    grants: &[floe_access::DataAccessGrant],
-    person_id: floe_kernel::PersonId,
-    view_id: &str,
-    consumer: &GrantConsumer,
-) -> Result<floe_access::DataAccessGrant, AgentFailure> {
-    let candidates: Vec<_> = grants
-        .iter()
-        .filter(|grant| {
-            grant.source().person_id() == person_id
-                && grant.state() == GrantState::Active
-                && !grant.review_required()
-                && grant.scope().operations().contains(&GrantOperation::Read)
-                && grant.scope().purposes().contains(&ASSISTANT_PURPOSE)
-                && grant.scope().consumers().contains(consumer)
-                && matches!(view_id, MAIL_VIEW | WORK_VIEW | LOGISTICS_VIEW)
-                && (view_id != MAIL_VIEW
-                    || matches!(
-                        grant.source().connector().as_str(),
-                        "gmail" | "microsoft.mail"
-                    ))
-                && grant.scope().resources().len() == 1
-                && grant.scope().resources()[0].as_str()
-                    == expected_resource(view_id, grant.source().connection_id().as_str())
-        })
-        .collect();
-    match candidates.as_slice() {
-        [grant] => Ok((*grant).clone()),
-        [] => Err(AgentFailure::AccessReviewRequired),
-        _ => Err(AgentFailure::Conflict),
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MailQuery {
-    schema_version: u32,
-    query: String,
-    cursor: usize,
-    limit: usize,
-}
-
-fn validate_query(view_id: &str, query: &Value) -> Result<(usize, usize), AgentFailure> {
-    match view_id {
-        MAIL_VIEW => {
-            let query: MailQuery =
-                serde_json::from_value(query.clone()).map_err(|_| AgentFailure::InvalidInput)?;
-            if query.schema_version != floe_kernel::AGENT_VERSION
-                || query.query.len() > 512
-                || query.cursor > 10_000
-                || !(1..=MAX_COMMUNICATION_ITEMS).contains(&query.limit)
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            Ok((query.limit, MAX_COMMUNICATION_BYTES))
-        }
-        WORK_VIEW | LOGISTICS_VIEW
-            if query == &serde_json::json!({"schema_version": floe_kernel::AGENT_VERSION}) =>
-        {
-            Ok((1, MAX_PORTFOLIO_VIEW_BYTES))
-        }
-        _ => Err(AgentFailure::InvalidInput),
-    }
-}
-
-fn validate_view(
-    view_id: &str,
-    value: Value,
-    now: i64,
-    max_items: usize,
-    max_bytes: usize,
-) -> Result<(Value, i64, i64), AgentFailure> {
-    match view_id {
-        MAIL_VIEW => {
-            let view: CommunicationView =
-                serde_json::from_value(value).map_err(|_| AgentFailure::CapabilityUnavailable)?;
-            validate_communication_view(&view, now, max_items, max_bytes)?;
-            let result =
-                serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidModelOutput)?;
-            Ok((result, view.observed_at_unix_ms, view.expires_at_unix_ms))
-        }
-        WORK_VIEW => {
-            let view: WorkContextView =
-                serde_json::from_value(value).map_err(|_| AgentFailure::CapabilityUnavailable)?;
-            validate_work_context_view(&view, now)?;
-            let result =
-                serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidModelOutput)?;
-            Ok((result, view.observed_at_unix_ms, view.expires_at_unix_ms))
-        }
-        LOGISTICS_VIEW => {
-            let view: LogisticsView =
-                serde_json::from_value(value).map_err(|_| AgentFailure::CapabilityUnavailable)?;
-            validate_logistics_view(&view, now)?;
-            let result =
-                serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidModelOutput)?;
-            Ok((result, view.observed_at_unix_ms, view.expires_at_unix_ms))
-        }
-        _ => Err(AgentFailure::InvalidInput),
-    }
-}
-
 fn reference_to_source(
     reference: &RemoteViewSourceReference,
 ) -> Result<floe_context_contract::GrantSourceBinding, AgentFailure> {
@@ -632,4 +524,14 @@ fn reference_to_source(
         reference.source_authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
+}
+
+/// The resource handle a grant must name to admit this view from this source.
+fn remote_view_grant_resource(
+    view_id: &str,
+    source: &floe_context_contract::GrantSourceBinding,
+) -> Option<String> {
+    (is_remote_view(view_id)
+        && remote_view_connector_admissible(view_id, source.connector().as_str()))
+    .then(|| remote_view_resource(view_id, source.connection_id().as_str()))
 }

@@ -7,7 +7,9 @@ pub mod application {
     pub mod coverage;
     pub mod history;
     pub mod leases;
+    pub mod personal_lineage;
     pub mod projection;
+    pub mod remote_views;
     pub mod service;
     pub mod source_view;
 }
@@ -30,7 +32,16 @@ pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};
 pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
+pub use application::personal_lineage::{
+    FeasibilityQueryLineage, attention_query_fingerprint, attention_subject_fingerprint,
+    feasibility_query_fingerprint, people_query_fingerprint, wellbeing_query_fingerprint,
+};
 pub use application::projection::{CoverageProjection, project_coverage};
+pub use application::remote_views::{
+    LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_connector_admissible,
+    remote_view_data_category, remote_view_resource, validate_remote_view,
+    validate_remote_view_query,
+};
 pub use application::service::{ContextService, PreparedContext};
 pub use application::source_view::SourceView;
 pub use floe_context_contract::ContextDependency;
