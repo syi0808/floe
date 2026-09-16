@@ -514,7 +514,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub(crate) async fn initialize_expert_registry_checked(
+    pub async fn initialize_expert_registry_checked(
         &self,
         snapshot: &RegistrySnapshot,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
@@ -557,7 +557,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub(crate) async fn save_expert_registry_checked(
+    pub async fn save_expert_registry_checked(
         &self,
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
@@ -1007,7 +1007,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub(crate) async fn commit_expert_session(
+    pub async fn commit_expert_session(
         &self,
         session: &AgentSession,
         previous_revision: u64,
@@ -1024,7 +1024,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
-    pub(crate) async fn commit_expert_session_with_hook(
+    pub async fn commit_expert_session_with_hook(
         &self,
         session: &AgentSession,
         previous_revision: u64,
@@ -1044,7 +1044,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
-    pub(crate) async fn commit_expert_session_scoped_with_hook(
+    pub async fn commit_expert_session_scoped_with_hook(
         &self,
         session: &AgentSession,
         previous_revision: u64,
@@ -1066,7 +1066,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
-    pub(crate) async fn commit_expert_session_scoped_with_coverage_hook(
+    pub async fn commit_expert_session_scoped_with_coverage_hook(
         &self,
         session: &AgentSession,
         previous_revision: u64,

@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_conversation::{ModelRequest};
-use floe_experts_builtin::{CommunicationView, LogisticsView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, WorkContextView, validate_communication_view, validate_logistics_view, validate_work_context_view};
+use floe_context::{CommunicationView, LogisticsView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, WorkContextView, validate_communication_view, validate_logistics_view, validate_work_context_view};
 use floe_vault::{EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, RemoteCalendarAuthorizationExpectation, RemoteProducerIdentity, RemoteViewSourceReference, VaultKeyProvider};
 use floe_access::{DataAccessGrant, GrantState};
 use floe_context_contract::{ContextDependency, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, ProcessingRestriction, ResourceHandle};

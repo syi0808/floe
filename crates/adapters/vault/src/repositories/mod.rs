@@ -12,8 +12,8 @@ mod expert_actions;
 mod task;
 
 #[cfg(unix)]
-pub(crate) use context_evidence::ContextEvidenceReader;
+pub use context_evidence::ContextEvidenceReader;
 #[cfg(unix)]
-pub use conversation::VaultConversationRepository;
+pub use conversation::{VaultConversationRepository, execution_profile};
 #[cfg(unix)]
 pub use task::VaultTaskRepository;

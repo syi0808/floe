@@ -124,7 +124,7 @@ use floe_vault::{EncryptedAgentVault, KeyringVaultKeys};
         let vault = EncryptedAgentVault::create(root, person, KeyringVaultKeys).await?;
         let initial = vault.create_sample_session().await?;
         let completed = vault
-            .run_persisted_agent_sample(
+            ; floe_app::run_persisted_agent_sample(
                 AgentFixtureTurn {
                     person_id: person,
                     session_id: initial.id,

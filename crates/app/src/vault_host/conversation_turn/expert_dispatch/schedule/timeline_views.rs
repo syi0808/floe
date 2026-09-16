@@ -1,6 +1,8 @@
-//! The Schedule Expert's bounded timeline view over a governed calendar read.
-
-//! Calendar timeline grants, observations and the bounded view projection.
+//! The bounded timeline view the Schedule Expert reads under one grant.
+//!
+//! The grant, the observation it is satisfied from and the lease that keeps it
+//! alive are all acquisition, so they are composed here and handed to the
+//! Expert as a view it may read once.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -15,7 +17,10 @@ use std::{
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_execution::{Cancellation};
-use floe_experts_builtin::{ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead};
+use floe_experts_builtin::schedule::{
+    ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
+    MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
+};
 use floe_context_contract::{ConsumerPolicyAuthority, ContextDependency, GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction};
 use floe_day::{CalendarMirror, CalendarProvider, CalendarRange, EventSchedule, SourceRef};
 use floe_kernel::{PersonId};
@@ -23,8 +28,15 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_app::FloeCore;
-use crate::calendar_lease::{CalendarLeaseKey, calendar_lease_dependency};
+use floe_access::{
+    CalendarLeaseKey, CalendarObservation, CalendarObserveRequest, CalendarReadAccess,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
+    ProjectedCalendarObservation, admission_matches, admission_matches_dependency,
+    calendar_lease_dependency,
+};
+use floe_day::CalendarTimelineGrant;
+
+use crate::FloeCore;
 
 pub struct CalendarTimelineViews<'host, Access, Clock> {
     core: &'host FloeCore,
@@ -43,7 +55,7 @@ pub struct CalendarTimelineViews<'host, Access, Clock> {
     fatal_source_denial: AtomicBool,
 }
 
-pub(crate) struct GovernedDependencyResolver<'views, 'host, Access, Clock> {
+pub(super) struct GovernedDependencyResolver<'views, 'host, Access, Clock> {
     views: &'views CalendarTimelineViews<'host, Access, Clock>,
 }
 
@@ -246,7 +258,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         self.consumed
             .validate((self.clock)(), Instant::now(), |dependency, scope| {
                 admission.is_some_and(|admission| {
-                    admission.scope == *scope && admission_matches_dependency(admission, dependency)
+                    admission.scope() == scope && admission_matches_dependency(admission, dependency)
                 })
             })
     }
@@ -313,7 +325,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         let reservation = reservation.ok_or(AgentFailure::CapabilityUnavailable)?;
         let lease = Arc::new(floe_context::SourceView::try_new(
             dependency.clone(),
-            admission.scope.clone(),
+            admission.scope().clone(),
             view.clone(),
             expires_at_monotonic,
             reservation,
@@ -329,7 +341,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .insert(key, lease);
         self.consumed.record(
             dependency,
-            admission.scope,
+            admission.scope().clone(),
             expires_at_monotonic,
         )?;
         let mut saved = self

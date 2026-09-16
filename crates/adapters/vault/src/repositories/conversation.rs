@@ -516,7 +516,7 @@ fn session_receipt(session: floe_conversation::AgentSession) -> Result<SessionRe
     Ok(receipt)
 }
 
-pub(super) const fn execution_profile(placement: ModelPlacement) -> &'static str {
+pub const fn execution_profile(placement: ModelPlacement) -> &'static str {
     match placement {
         ModelPlacement::DeviceLocal => "device_local",
         ModelPlacement::Remote => "remote",

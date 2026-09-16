@@ -7,7 +7,7 @@ use uuid::Uuid;
 const MAX_RETAINED_EVENTS: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EventPayload {
+pub enum EventPayload {
     CommandUpdated {
         command_id: CommandId,
         run_id: RunId,
@@ -17,7 +17,7 @@ pub(crate) enum EventPayload {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RunEventRecord {
+pub struct RunEventRecord {
     pub run_id: RunId,
     pub session_id: Uuid,
     pub aggregate_revision: u64,
@@ -28,14 +28,14 @@ pub(crate) struct RunEventRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct BufferedEvent {
+pub struct BufferedEvent {
     pub cursor: u64,
     pub aggregate_revision: u64,
     pub payload: EventPayload,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum EventRead {
+pub enum EventRead {
     Events {
         next_cursor: u64,
         events: Vec<BufferedEvent>,
@@ -52,7 +52,7 @@ struct EventState {
 }
 
 #[derive(Default)]
-pub(crate) struct AppEventBuffer {
+pub struct AppEventBuffer {
     state: Mutex<EventState>,
 }
 
@@ -83,7 +83,7 @@ impl AppEventBuffer {
         );
     }
 
-    pub(crate) fn read(
+    pub fn read(
         &self,
         runtime_epoch: u64,
         requested_epoch: Option<u64>,

@@ -54,7 +54,7 @@ impl TursoStore {
         Ok(())
     }
 
-    pub(crate) async fn agent_fixture_session(
+    pub async fn agent_fixture_session(
         &self,
         person_id: PersonId,
         session_id: uuid::Uuid,
@@ -74,7 +74,7 @@ impl TursoStore {
         Ok(session)
     }
 
-    pub(crate) async fn latest_agent_fixture_session(
+    pub async fn latest_agent_fixture_session(
         &self,
         person_id: PersonId,
     ) -> Result<Option<floe_conversation::AgentSession>, StoreError> {
@@ -92,7 +92,7 @@ impl TursoStore {
         }
     }
 
-    pub(crate) async fn save_agent_fixture_session(
+    pub async fn save_agent_fixture_session(
         &self,
         session: &floe_conversation::AgentSession,
         previous: Option<&floe_conversation::AgentSession>,
@@ -126,7 +126,7 @@ impl TursoStore {
         self.get("calendar_mirrors", person_id.to_string()).await
     }
 
-    pub(crate) async fn bounded_calendar_mirror(
+    pub async fn bounded_calendar_mirror(
         &self,
         person_id: PersonId,
     ) -> Result<floe_day::CalendarMirror, floe_agent_contract::AgentFailure> {

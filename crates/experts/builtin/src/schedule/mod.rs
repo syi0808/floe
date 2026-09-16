@@ -3,7 +3,7 @@
 
 mod calendar_history;
 mod model_history;
-mod definition;
+pub mod definition;
 mod plan;
 mod host;
 

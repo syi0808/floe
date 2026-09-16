@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use floe_conversation::{RunReceipt, RunState};
-use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
+use floe_app::modules::conversation::{RunReceipt, RunState};
+use floe_app::modules::kernel::{AgentFailure, CommandId, PersonId, RunId};
 use floe_protocol::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
     AppCommandResultDto, AppCommandStatusDto, AppEventDto, AppEventKindDto, AppEventsRequestDto,
@@ -10,10 +10,9 @@ use floe_protocol::{
     AppTurnExecutionDto, AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
 };
 
-use crate::{
-    FloeHandle,
-    app_events::{EventPayload, EventRead, RunEventRecord},
-    vault_host::ConversationQuery,
+use floe_app::{
+    ConversationQuery, FloeHandle,
+    events::{EventPayload, EventRead, RunEventRecord},
 };
 
 pub(crate) type AppWireResult<T> = Result<T, AppWireErrorDto>;
@@ -22,7 +21,7 @@ pub(crate) fn command(
     handle: &FloeHandle,
     request: AppCommandRequestDto,
 ) -> AppWireResult<AppCommandResultDto> {
-    command_with_host(&handle.app, request)
+    command_with_host(&handle.app(), request)
 }
 
 fn command_with_host<Services>(
@@ -114,7 +113,7 @@ pub(crate) fn query(
 ) -> AppWireResult<AppQueryResultDto> {
     request.validate().map_err(request_validation)?;
     let host_request = handle
-        .app
+        .app()
         .request(request.request_id)
         .map_err(host_failure)?;
     let caller = host_request.caller();
@@ -127,7 +126,7 @@ pub(crate) fn query(
             let command_id =
                 CommandId::from_uuid(command_id).ok_or_else(|| validation("query.command_id"))?;
             let receipt = services
-                .agent_vault
+                .agent_vault()
                 .conversation_query(person, ConversationQuery::Command(command_id))
                 .map_err(agent_failure)?;
             Ok(match receipt {
@@ -142,7 +141,7 @@ pub(crate) fn query(
         AppQueryDto::ConversationGetRun { run_id } => {
             let run_id = RunId::from_uuid(run_id).ok_or_else(|| validation("query.run_id"))?;
             let receipt = services
-                .agent_vault
+                .agent_vault()
                 .conversation_query(person, ConversationQuery::Run(run_id))
                 .map_err(agent_failure)?
                 .ok_or_else(not_found)?;
@@ -154,7 +153,7 @@ pub(crate) fn query(
             let run_id =
                 RunId::from_uuid(message_id).ok_or_else(|| validation("query.message_id"))?;
             let receipt = services
-                .agent_vault
+                .agent_vault()
                 .conversation_query(person, ConversationQuery::Message(run_id))
                 .map_err(agent_failure)?
                 .ok_or_else(not_found)?;
@@ -176,11 +175,11 @@ pub(crate) fn events(
 ) -> AppWireResult<AppEventsResultDto> {
     request.validate().map_err(request_validation)?;
     let host_request = handle
-        .app
+        .app()
         .request(request.request_id)
         .map_err(host_failure)?;
     let runtime_epoch = host_request.caller().runtime_epoch();
-    let read = host_request.services().agent_vault.app_events().read(
+    let read = host_request.services().agent_vault().app_events().read(
         runtime_epoch,
         request.runtime_epoch,
         request.cursor,

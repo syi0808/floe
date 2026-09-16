@@ -16,13 +16,13 @@ use floe_experts_builtin::{
     BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, BuiltinExpertKind,
 };
 
-mod schedule;
+pub(in crate::vault_host) mod schedule;
 
 /// The Experts this host serves, and the judgment registered behind each id.
 ///
 /// Registration is static: the composition root never picks an Expert from what
 /// a request appears to mean.
-fn registered_experts<'host>() -> floe_experts::ExpertDispatchTable<
+pub(super) fn registered_experts<'host>() -> floe_experts::ExpertDispatchTable<
     ConversationExperts<'host>,
     BuiltinExpertRequest,
     BuiltinExpertOutput,
@@ -278,7 +278,7 @@ pub(super) trait ExpertTaskRunner: Send + Sync {
 
 pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
     pub coordinator: &'a floe_experts::TaskCoordinator<
-        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+        floe_vault::VaultTaskRepository<Keys>,
     >,
     pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
     pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
@@ -325,7 +325,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
 ///
 /// This is the injection site for the host port the builtin Experts declare:
 /// every field is a reader or policy decided elsewhere and handed in here.
-pub(super) struct ConversationExperts<'model> {
+pub(crate) struct ConversationExperts<'model> {
     pub(super) model: &'model Model,
     pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
     pub(super) policy: &'model InferencePolicyDecision,
@@ -473,7 +473,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         &'a self,
         request: &'a BuiltinExpertRequest,
         people: &'a floe_context::PeopleView,
-    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_experts_builtin::ConfirmedInteractionView>>
+    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::ConfirmedInteractionView>>
     {
         Box::pin(async move {
             self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)

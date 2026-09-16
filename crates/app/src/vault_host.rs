@@ -27,8 +27,7 @@ use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use floe_access::{CalendarReadAccess, CalendarReadAccessRequest};
 use floe_actions::{CalendarActionState, ExpertCalendarInspection, ExpertProposalReference};
-use floe_app::{FloeCore};
-use floe_conversation::{AgentFixtureTurn, recover_agent_sample};
+use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
 use floe_vault::{EncryptedAgentVault, RemotePairingChallenge, RemoteProducerIdentity, VaultKeyProvider};
 use floe_access::{GrantState};
 use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle};
@@ -42,18 +41,16 @@ use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
-use crate::{diagnostics, local_context::LocalContextStore};
+use crate::bridge::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
+use crate::local_context::LocalContextStore;
+use crate::{FloeCore, diagnostics};
 
-mod conversation_repository;
 mod conversation_turn;
 mod learner_worker;
 mod personal_grants;
 mod remote_views;
-mod task_repository;
 
-use conversation_repository::VaultConversationRepository;
-use task_repository::VaultTaskRepository;
+use floe_vault::{VaultConversationRepository, VaultTaskRepository};
 
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
@@ -157,12 +154,12 @@ fn concurrent_host_action(action: &AgentVaultActionDto) -> bool {
     )
 }
 
-pub(crate) struct VaultBridge {
+pub struct VaultBridge {
     root: PathBuf,
     core: Arc<FloeCore>,
     worker: RefCell<Option<Worker>>,
     local_context: Arc<LocalContextStore>,
-    app_events: Arc<crate::app_events::AppEventBuffer>,
+    app_events: Arc<crate::events::AppEventBuffer>,
 }
 
 impl VaultBridge {
@@ -176,11 +173,11 @@ impl VaultBridge {
             core,
             worker: RefCell::new(None),
             local_context,
-            app_events: Arc::new(crate::app_events::AppEventBuffer::default()),
+            app_events: Arc::new(crate::events::AppEventBuffer::default()),
         }
     }
 
-    pub(crate) fn request(
+    pub fn request(
         &self,
         request: AgentVaultRequestDto,
     ) -> BridgeResult<AgentVaultResultDto> {
@@ -200,7 +197,7 @@ impl VaultBridge {
             })
     }
 
-    pub(crate) fn conversation_query(
+    pub fn conversation_query(
         &self,
         person: PersonId,
         query: ConversationQuery,
@@ -208,7 +205,7 @@ impl VaultBridge {
         self.worker()?.conversation_query(person, query)
     }
 
-    pub(crate) fn app_events(&self) -> &crate::app_events::AppEventBuffer {
+    pub fn app_events(&self) -> &crate::events::AppEventBuffer {
         self.app_events.as_ref()
     }
 
@@ -267,7 +264,7 @@ struct Worker {
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     closing: Arc<AtomicBool>,
     learner_scheduling: floe_knowledge::LearnerScheduling,
-    app_events: Arc<crate::app_events::AppEventBuffer>,
+    app_events: Arc<crate::events::AppEventBuffer>,
 }
 
 struct OpenVault<Keys> {
@@ -320,7 +317,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         )?;
         let repository = Arc::new(VaultTaskRepository::new(
             Arc::clone(&vault),
-            expert_dispatch::schedule::CALENDAR_EXPERT_SETTLEMENT_OWNER,
+            conversation_turn::expert_dispatch::schedule::CALENDAR_EXPERT_SETTLEMENT_OWNER,
         ));
         let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
             directory.clone(),
@@ -396,7 +393,7 @@ struct Job {
     admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
     admission_ready: Condvar,
     progress: Mutex<Progress>,
-    app_events: Arc<crate::app_events::AppEventBuffer>,
+    app_events: Arc<crate::events::AppEventBuffer>,
 }
 
 impl Job {
@@ -445,7 +442,7 @@ enum WorkerMessage {
     ConversationCancel(ConversationCancelJob),
 }
 
-pub(crate) enum ConversationQuery {
+pub enum ConversationQuery {
     Command(floe_kernel::CommandId),
     Run(floe_kernel::RunId),
     Message(floe_kernel::RunId),
@@ -578,7 +575,7 @@ impl Worker {
         keys: Keys,
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextStore>,
-        app_events: Arc<crate::app_events::AppEventBuffer>,
+        app_events: Arc<crate::events::AppEventBuffer>,
     ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_IN_FLIGHT_VAULT_JOBS);
         let closing = Arc::new(AtomicBool::new(false));
@@ -1730,8 +1727,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     expected_revision,
                     prompt,
                 } => {
-                    vault
-                        .run_persisted_agent_sample(
+                    run_persisted_agent_sample(
+                            vault,
                             AgentFixtureTurn {
                                 person_id: job.person,
                                 session_id: session_uuid(session_id)?,
@@ -1784,7 +1781,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         AgentVaultActionDto::CalendarExperts { setup } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             if let Some(request) = setup {
-                let mut request: floe_experts_builtin::CalendarExpertSetup = decode_contract(request)?;
+                let mut request: floe_experts::CalendarExpertSetup = decode_contract(request)?;
                 let connection_id = match Box::pin(calendar_grant_authority(
                     core,
                     local_context,
@@ -1864,7 +1861,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         connection_revision,
                         source_authority,
                         reviewed_native_subject_fingerprint,
-                    } => floe_experts_builtin::CalendarExpertSetup {
+                    } => floe_experts::CalendarExpertSetup {
                         instance_id: change.instance_id,
                         expected_revision: change.expected_revision,
                         setup_id: setup.setup_id,
@@ -1877,7 +1874,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         reviewed_native_subject_fingerprint: reviewed_native_subject_fingerprint
                             .clone(),
                     },
-                    _ => floe_experts_builtin::CalendarExpertSetup {
+                    _ => floe_experts::CalendarExpertSetup {
                         instance_id: change.instance_id,
                         expected_revision: change.expected_revision,
                         setup_id: setup.setup_id,
@@ -1941,7 +1938,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         core,
                         local_context,
                         job.person,
-                        &floe_experts_builtin::CalendarExpertSetup {
+                        &floe_experts::CalendarExpertSetup {
                             instance_id: change.instance_id,
                             expected_revision: change.expected_revision,
                             setup_id: change.setup_id,
@@ -2120,7 +2117,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             };
             let action = core
                 .inspect_expert_calendar_action(
-                    vault,
+                    vault.vault.as_ref(),
                     ExpertCalendarInspection {
                         reference: reference.clone(),
                         cancellation: job.cancellation.clone(),
@@ -2213,7 +2210,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 .memories
                 .into_iter()
                 .map(|memory| {
-                    Ok(AgentMemorySummaryDto {
+                    Ok::<_, AgentFailure>(AgentMemorySummaryDto {
                         target_id: memory.target_id.to_string(),
                         revision: memory.revision,
                         statement: memory.statement,
@@ -2844,7 +2841,7 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
     person_id: PersonId,
     operation: &CalendarActionOperationDto,
     cancellation: &Cancellation,
-) -> Result<crate::CalendarActionsResult, AgentFailure> {
+) -> Result<crate::services::CalendarActionsResult, AgentFailure> {
     if cancellation.is_cancelled() {
         return Err(AgentFailure::Cancelled);
     }
@@ -2865,7 +2862,7 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
         _ => None,
     };
     if let Some(calendar_create) = mode {
-        return Ok(crate::CalendarActionsResult {
+        return Ok(crate::services::CalendarActionsResult {
             actions: vec![],
             writes_enabled: None,
             authority: Some(floe_actions::ActionAuthority {
@@ -2898,13 +2895,13 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
             .await?
         }
         CalendarActionOperationDto::Execute { .. } | CalendarActionOperationDto::Recover { .. } => {
-            if person_id.to_string() != crate::native_calendar::LOCAL_PERSON
+            if person_id.to_string() != floe_provider_adapters::sources::native_calendar::LOCAL_PERSON
                 || stored.provider != CalendarProvider::EventKit
             {
                 return Err(AgentFailure::CapabilityUnavailable);
             }
             let provider =
-                crate::native_calendar::NativeCalendar::new(vec![stored.calendar_id.clone()]);
+                floe_provider_adapters::sources::native_calendar::NativeCalendar::new(vec![stored.calendar_id.clone()]);
             if matches!(operation, CalendarActionOperationDto::Recover { .. }) {
                 core.recover_expert_calendar_action(vault, person_id, action_id, &provider)
                     .await?
@@ -2913,7 +2910,7 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
                     person_id,
                     provider: stored.provider,
                     allowed_calendar_ids: vec![stored.calendar_id.clone()],
-                    allow_create: crate::native_calendar::NativeCalendar::enabled(),
+                    allow_create: floe_provider_adapters::sources::native_calendar::NativeCalendar::enabled(),
                 };
                 core.execute_expert_calendar_action_with_cancellation(
                     vault,
@@ -2929,7 +2926,7 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
         }
         _ => return Err(AgentFailure::InvalidInput),
     };
-    Ok(crate::CalendarActionsResult {
+    Ok(crate::services::CalendarActionsResult {
         actions: vec![action],
         writes_enabled: None,
         authority: None,
@@ -2940,7 +2937,7 @@ async fn calendar_grant_authority(
     core: &FloeCore,
     _local_context: &LocalContextStore,
     person_id: PersonId,
-    request: &floe_experts_builtin::CalendarExpertSetup,
+    request: &floe_experts::CalendarExpertSetup,
     cancellation: Cancellation,
 ) -> Result<Option<(String, floe_context_contract::SourceAuthority, String)>, AgentFailure> {
     if !matches!(
@@ -3019,7 +3016,7 @@ async fn calendar_grant_authority(
                         device_id: request.device_id.clone(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: crate::conversion::calendar_provider_to_dto(request.provider),
+                        provider: floe_protocol::conversion::calendar_provider_to_dto(request.provider),
                         mode: LocalContextAcquisitionModeDto::InspectSubject,
                         calendar_ids,
                         range_start_unix_ms: start,
@@ -3071,8 +3068,8 @@ async fn calendar_subject_preview(
         return Err(AgentFailure::Cancelled);
     }
     let mut calendar_ids = request.calendar_ids.clone();
-    let provider = crate::conversion::calendar_provider_from_dto(request.provider);
-    let scope = crate::conversion::calendar_scope_from_dto(request.connection_scope);
+    let provider = floe_protocol::conversion::calendar_provider_from_dto(request.provider);
+    let scope = floe_protocol::conversion::calendar_scope_from_dto(request.connection_scope);
     calendar_ids.sort();
     if calendar_ids.is_empty()
         || calendar_ids.len() > 4
@@ -3141,7 +3138,7 @@ async fn calendar_subject_preview(
                         device_id: request.device_id.clone(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: crate::conversion::calendar_provider_to_dto(provider),
+                        provider: floe_protocol::conversion::calendar_provider_to_dto(provider),
                         mode: LocalContextAcquisitionModeDto::InspectSubject,
                         calendar_ids: calendar_ids.clone(),
                         range_start_unix_ms: range_start,
@@ -3176,10 +3173,10 @@ async fn calendar_subject_preview(
         return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(CalendarSubjectPreviewDto {
-        provider: crate::conversion::calendar_provider_to_dto(provider),
+        provider: floe_protocol::conversion::calendar_provider_to_dto(provider),
         device_id: request.device_id.clone(),
         calendar_ids,
-        connection_scope: crate::conversion::calendar_scope_to_dto(refreshed.scope),
+        connection_scope: floe_protocol::conversion::calendar_scope_to_dto(refreshed.scope),
         connection_id: refreshed.connection_id,
         connection_revision: refreshed.revision,
         source_authority: refreshed.source_authority,
@@ -3833,7 +3830,7 @@ mod tests {
                 keys,
                 Arc::new(core),
                 Arc::new(LocalContextStore::default()),
-                Arc::new(crate::app_events::AppEventBuffer::default()),
+                Arc::new(crate::events::AppEventBuffer::default()),
             )
         }
     }

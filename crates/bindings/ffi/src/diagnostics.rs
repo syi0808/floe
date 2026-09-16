@@ -1,6 +1,6 @@
 use std::{any::Any, sync::Once};
 
-use floe_diagnostics::{PanicRecord, TraceContext, panic_record};
+use floe_app::modules::diagnostics::{PanicRecord, TraceContext, panic_record};
 use floe_protocol::{ErrorCodeDto, ErrorDto};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -19,7 +19,7 @@ pub(crate) fn instrument<F>(
 where
     F: std::future::Future,
 {
-    floe_diagnostics::instrument(future, context, operation)
+    floe_app::modules::diagnostics::instrument(future, context, operation)
 }
 
 pub(crate) fn initialize() {

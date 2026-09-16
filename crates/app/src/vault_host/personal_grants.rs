@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_conversation::{ModelRequest};
-use floe_experts_builtin::{AttentionState, AttentionView, PeopleView, WellbeingView, validate_people_view, validate_wellbeing_view};
+use floe_context::{AttentionState, AttentionView, PeopleView, WellbeingView, validate_people_view, validate_wellbeing_view};
 use floe_vault::{EncryptedAgentVault, FeasibilityGrantQuery, GovernedDependencyLiveness, GovernedDependencyResolver, VaultKeyProvider};
 use floe_access::{DataAccessGrant, GrantState};
 use floe_context_contract::{ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
@@ -220,7 +220,7 @@ pub(crate) async fn read_feasibility<Keys: VaultKeyProvider>(
     lease_invocation_id: Uuid,
     deadline: tokio::time::Instant,
     cancellation: &floe_execution::Cancellation,
-) -> Result<(floe_experts_builtin::FeasibilityView, ContextDependency), AgentFailure> {
+) -> Result<(floe_context::FeasibilityView, ContextDependency), AgentFailure> {
     check_read_window(deadline, cancellation)?;
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
     let source = feasibility_source(person_id, device_id)?;
@@ -247,10 +247,10 @@ pub(crate) async fn read_feasibility<Keys: VaultKeyProvider>(
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    let view: floe_experts_builtin::FeasibilityView =
+    let view: floe_context::FeasibilityView =
         serde_json::from_value(result.view.ok_or(AgentFailure::CapabilityUnavailable)?)
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    floe_experts_builtin::validate_feasibility_view(&view, Utc::now().timestamp_millis())
+    floe_context::validate_feasibility_view(&view, Utc::now().timestamp_millis())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let current = active_feasibility_grant(
         &vault.list_data_access_grants(128).await?,
@@ -490,7 +490,7 @@ fn feasibility_acquisition_request(
 }
 
 fn feasibility_query_fingerprint(
-    view: &floe_experts_builtin::FeasibilityView,
+    view: &floe_context::FeasibilityView,
     query: &FeasibilityGrantQuery,
     native_subject_fingerprint: &str,
     observation: Uuid,
@@ -2392,7 +2392,7 @@ pub(crate) fn overview(
     person_id: PersonId,
     device_id: &str,
     grant: Option<&DataAccessGrant>,
-    presence: Option<(floe_experts_builtin::AttentionView, Uuid, Uuid)>,
+    presence: Option<(floe_context::AttentionView, Uuid, Uuid)>,
     native_subject_fingerprint: Option<String>,
 ) -> PersonalAccessOverviewDto {
     PersonalAccessOverviewDto {

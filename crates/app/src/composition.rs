@@ -5,18 +5,21 @@ use std::sync::Arc;
 
 use tokio::runtime::{Builder, Runtime};
 
-use crate::{AppHost, CallerContext, HostError, HostServices, agent_run, events, vault_host};
+use crate::{
+    AppHost, CallerContext, FloeCore, HostError, HostServices, agent_run, events,
+    inference_routes, local_context, vault_host,
+};
 use floe_protocol::{AgentConversationTurnRequestDto, AppProfileSelectionDto};
 
 pub struct AppComposition {
-    runtime: Runtime,
-    core: Arc<FloeCore>,
-    agent_runs: agent_run::AgentRuns,
-    local_context: Arc<local_context::LocalContextStore>,
+    pub(crate) runtime: Runtime,
+    pub(crate) core: Arc<FloeCore>,
+    pub(crate) agent_runs: agent_run::AgentRuns,
+    pub(crate) local_context: Arc<local_context::LocalContextStore>,
     #[cfg(unix)]
-    agent_vault: vault_host::VaultBridge,
+    pub(crate) agent_vault: vault_host::VaultBridge,
     #[cfg(unix)]
-    inference_routes: inference_routes::HostInferenceRoutes,
+    pub(crate) inference_routes: inference_routes::HostInferenceRoutes,
 }
 
 impl HostServices for AppComposition {

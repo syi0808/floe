@@ -29,10 +29,13 @@ pub struct ExpertCalendarInspection {
     pub deadline: Instant,
 }
 
-/// Observation fence used before an external write is dispatched.
+/// What the source actually looked like when the action was proposed.
+///
+/// An external write is only dispatched against the observation it was reviewed
+/// against, so the fence answers with the subject fingerprint that observation
+/// carried, or refuses.
 pub trait ObservationFence: Send + Sync {
-    fn observation(&self, dependency: &ContextDependency)
-    -> Result<(Uuid, String), AgentFailure>;
+    fn observation(&self, dependency: &ContextDependency) -> Result<String, AgentFailure>;
 }
 
 /// Expert-originated proposals: inspection, publication, approval, dispatch and
@@ -200,7 +203,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             action.provider,
             CalendarProvider::EventKit | CalendarProvider::Android
         ) {
-            let (_, subject) = self.fence.observation(&stored.envelope.dependency)?;
+            let subject = self.fence.observation(&stored.envelope.dependency)?;
             provider
                 .validate_source(&action, &stored.envelope.dependency, &subject)
                 .await
@@ -231,7 +234,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             return Err(AgentFailure::PolicyDenied);
         }
         if let Some(expected_subject) = &native_subject {
-            let (_, subject) = self.fence.observation(&stored.envelope.dependency)?;
+            let subject = self.fence.observation(&stored.envelope.dependency)?;
             if &subject != expected_subject {
                 return Err(AgentFailure::StaleContext);
             }
@@ -251,7 +254,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
                 cancellation,
                 || {
                     if let Some(expected_subject) = &native_subject {
-                        let (_, subject) = self.fence.observation(&stored.envelope.dependency)?;
+                        let subject = self.fence.observation(&stored.envelope.dependency)?;
                         if &subject != expected_subject {
                             return Err(AgentFailure::StaleContext);
                         }

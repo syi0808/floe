@@ -11,6 +11,9 @@ pub use application::pairing::{
     PAIRING_POLL_INTERVAL_MS, PairingDirective, PairingOperation, PairingOperationState,
     PairingService, cancel_pairing, observe_pairing,
 };
+pub use application::calendar_connector::{
+    ConnectorProjectionError, project_calendar_connector, validate_connector_device,
+};
 pub use ports::RemoteControl;
 
 pub use application::connected_context::{

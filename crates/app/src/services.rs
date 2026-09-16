@@ -226,3 +226,14 @@ mod tests {
         );
     }
 }
+
+/// The calendar actions one caller may see, with the authority they stand
+/// under when the caller is allowed to know it.
+#[derive(serde::Serialize)]
+pub struct CalendarActionsResult {
+    pub actions: Vec<floe_actions::CalendarAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writes_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority: Option<floe_actions::ActionAuthority>,
+}

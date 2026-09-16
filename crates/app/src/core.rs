@@ -1,10 +1,16 @@
-use chrono::{DateTime, NaiveDate, Utc};
-use floe_context::SourceLeaseRegistry;
-// FIXME(stage-2): glob import of the retired floe-domain crate
 use std::sync::Arc;
 
+use chrono::{DateTime, NaiveDate, Utc};
+
+use floe_context::SourceLeaseRegistry;
+use floe_day::{
+    Capture, CaptureId, DaySnapshot, DomainRef, Event, EventId, EventSchedule, Note, NoteId,
+    Priority, Revision, Task, TaskId, TimelineItem,
+};
+use floe_kernel::PersonId;
+use floe_vault::TursoStore;
+
 use crate::{CoreError, ErrorCode};
-use floe_vault::{TursoStore};
 
 pub struct FloeCore {
     pub(crate) store: TursoStore,
@@ -16,7 +22,9 @@ pub use floe_day::Classification;
 impl FloeCore {
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self, CoreError> {
         Ok(Self {
-            store: TursoStore::open(path).await?,
+            store: TursoStore::open(path)
+                .await
+                .map_err(|error| CoreError::new(ErrorCode::Storage, error.to_string()))?,
             lease_registry: Arc::new(SourceLeaseRegistry::new()),
         })
     }

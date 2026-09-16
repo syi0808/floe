@@ -7,7 +7,7 @@ use tokio::time::Instant;
 
 use floe_agent_contract::{AgentFailure};
 use floe_execution::{Cancellation};
-use floe_experts_builtin::{AttentionView, FeasibilityView, PeopleView, WellbeingView, validate_attention_view, validate_feasibility_view, validate_people_view, validate_wellbeing_view};
+use floe_context::{AttentionView, FeasibilityView, PeopleView, WellbeingView, validate_attention_view, validate_feasibility_view, validate_people_view, validate_wellbeing_view};
 use floe_day::{CalendarBatch, CalendarFailure, CalendarProvider as DomainCalendarProvider, CalendarRecord};
 use floe_kernel::{PersonId};
 use floe_protocol::{
@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{BridgeResult, agent_failure, invalid};
+use crate::bridge::{BridgeResult, agent_failure, invalid};
 
 const ALLOWED_VIEW_IDS: [&str; 5] = [
     "people.identity",
@@ -249,7 +249,7 @@ impl LocalContextStore {
         self.request_bound(person_id, operation, None)
     }
 
-    pub(crate) fn request_bound(
+    pub fn request_bound(
         &self,
         person_id: PersonId,
         operation: LocalContextOperationDto,
@@ -285,7 +285,7 @@ impl LocalContextStore {
                     person_id,
                     &host_epoch,
                     &request_id,
-                    crate::conversion::calendar_failure_from_dto(failure),
+                    floe_protocol::conversion::calendar_failure_from_dto(failure),
                 )?;
                 Ok(result(person_id, None, None, 0, None))
             }
@@ -413,7 +413,7 @@ impl LocalContextStore {
                 range_end_unix_ms,
                 batches,
             } => {
-                let provider = crate::conversion::calendar_provider_from_dto(provider);
+                let provider = floe_protocol::conversion::calendar_provider_from_dto(provider);
                 validate_handle(&device_id, "operation.device_id")?;
                 validate_handle(&connection_id, "operation.connection_id")?;
                 if !matches!(
@@ -439,7 +439,7 @@ impl LocalContextStore {
                                         external_id: record.external_id,
                                         external_revision: record.external_revision,
                                         title: record.title,
-                                        schedule: crate::conversion::event_schedule_from_dto(
+                                        schedule: floe_protocol::conversion::event_schedule_from_dto(
                                             record.schedule,
                                         )
                                         .map_err(|_| AgentFailure::InvalidInput)?,
@@ -448,7 +448,7 @@ impl LocalContextStore {
                                 .collect::<Result<Vec<_>, AgentFailure>>()?,
                             failure: batch
                                 .failure
-                                .map(crate::conversion::calendar_failure_from_dto),
+                                .map(floe_protocol::conversion::calendar_failure_from_dto),
                         })
                     })
                     .collect::<Result<Vec<_>, AgentFailure>>()

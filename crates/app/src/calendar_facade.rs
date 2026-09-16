@@ -1,5 +1,11 @@
 use chrono::{DateTime, Utc};
-// FIXME(stage-2): glob import of the retired floe-domain crate
+
+use floe_day::{
+    CalendarBatch, CalendarConnection, CalendarFailure, CalendarProvider, CalendarRange,
+    CalendarRecord, CalendarScope,
+    CalendarSelection, CalendarSource, CalendarSyncStatus,
+};
+use floe_kernel::PersonId;
 
 use crate::{CoreError, FloeCore};
 

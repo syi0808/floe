@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use super::*;
 use serde::de::DeserializeOwned;
 
@@ -180,7 +182,7 @@ pub unsafe extern "C" fn floe_core_agent_fixture_run(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, agent_run::run)
+    invoke_json(handle_ptr, request_json, floe_app::agent_run::run)
 }
 
 #[unsafe(no_mangle)]
@@ -197,12 +199,12 @@ pub unsafe extern "C" fn floe_core_agent_vault(
         let handle = handle.services();
         #[cfg(unix)]
         {
-            handle.agent_vault.request(request)
+            handle.agent_vault().request(request)
         }
         #[cfg(not(unix))]
         {
             let _ = (handle, request);
-            Err::<AgentVaultResultDto, _>(agent_failure(floe_agent_contract::AgentFailure::VaultUnavailable))
+            Err::<AgentVaultResultDto, _>(agent_failure(floe_app::modules::agent_contract::AgentFailure::VaultUnavailable))
         }
     })
 }

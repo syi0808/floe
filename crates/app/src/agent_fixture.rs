@@ -1,15 +1,45 @@
-use crate::*;
-use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
-use floe_execution::Cancellation;
-use floe_kernel::PersonId;
-use serde::{Deserialize, Serialize};
+//! The scripted conversation the app runs without a model or a Vault.
+//!
+//! The fixture composes the real Conversation runtime against a recorded model
+//! and an in-memory store, so the app's own turn, event and recovery paths are
+//! exercised end to end without reaching a provider.
+
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{sync::Mutex, time::Duration};
+
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_vault::{TursoStore};
+use floe_agent_contract::{
+    AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent,
+};
+use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_conversation::{
+    AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentRuntime, AgentSession,
+    CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse,
+    ModelRunner, ModelStep, SessionStore, UsageLedger,
+};
+use floe_execution::Cancellation;
+use floe_experts::{
+    A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
+    AgentId, AgentPackage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertBudget, ExpertInput,
+    ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertResult, InProcessA2ATransport,
+    InProcessAgent, PackageImplementation, PackageKind, PackageRef, RegistrySnapshot,
+};
+use floe_experts_builtin::schedule::{
+    ExpertHost, ExpertTimelineView, ExpertViews, TimelineViewItem, TimelineViewRead,
+};
+use floe_kernel::{AGENT_VERSION, PersonId};
+use floe_vault::TursoStore;
+
+use crate::{
+    CoreError, FloeCore,
+    prompts::{
+        fixture_follow_up_prompt, fixture_repeated_call_prompt, fixture_today_prompt,
+        fixture_unavailable_prompt,
+    },
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -199,66 +229,69 @@ async fn run_sample_with_capabilities(
 }
 
 #[cfg(unix)]
-impl<Keys: floe_vault::VaultKeyProvider> floe_vault::EncryptedAgentVault<Keys> {
-    pub async fn run_persisted_agent_sample(
-        &self,
-        turn: AgentFixtureTurn,
-        cancellation: Cancellation,
-        latency: Duration,
-        emit: impl FnMut(AgentEvent) + Send,
-    ) -> Result<AgentSession, AgentFailure> {
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let session = self.load(turn.person_id, turn.session_id).await?;
-        if session.scope.is_some() || session.data_classes != [DataClass::Synthetic] {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        if session.revision != turn.expected_revision || session.active_turn.is_some() {
-            return Err(AgentFailure::Conflict);
-        }
-        let check = || {
-            if cancellation.is_cancelled() {
-                Err(AgentFailure::Cancelled)
-            } else {
-                Ok(())
-            }
-        };
-        let snapshot = match self.expert_registry().await? {
-            Some(previous) => {
-                let revision = previous.revision;
-                let snapshot = FixtureCapabilities::ensure_snapshot(turn.person_id, previous)?;
-                if snapshot.revision != revision {
-                    self.save_expert_registry_checked(revision, &snapshot, &check)
-                        .await?;
-                }
-                snapshot
-            }
-            None => {
-                let capabilities = FixtureCapabilities::new_with_instance(
-                    turn.person_id,
-                    self.registry_instance_id(),
-                )?;
-                let snapshot = capabilities.snapshot()?;
-                self.initialize_expert_registry_checked(&snapshot, &check)
-                    .await?;
-                snapshot
-            }
-        };
-        let revision = snapshot.revision;
-        let capabilities = FixtureCapabilities::from_snapshot(turn.person_id, snapshot)?;
-        let store = ExpertSessionStore {
-            vault: self,
-            registry: &capabilities.registry,
-            persisted_revision: AtomicU64::new(revision),
-        };
-        let authorized = PersistedFixtureCapabilities {
-            vault: self,
-            capabilities: &capabilities,
-            persisted_revision: &store.persisted_revision,
-        };
-        run_sample_with_capabilities(&store, &authorized, turn, cancellation, latency, emit).await
+/// Run the scripted conversation against a real encrypted Vault.
+///
+/// The fixture is synthetic by construction: it refuses any session that is
+/// scoped or carries anything but synthetic data, so a real conversation can
+/// never be replayed through it.
+pub async fn run_persisted_agent_sample<Keys: floe_vault::VaultKeyProvider>(
+    vault: &floe_vault::EncryptedAgentVault<Keys>,
+    turn: AgentFixtureTurn,
+    cancellation: Cancellation,
+    latency: Duration,
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<AgentSession, AgentFailure> {
+    if cancellation.is_cancelled() {
+        return Err(AgentFailure::Cancelled);
     }
+    let session = vault.load(turn.person_id, turn.session_id).await?;
+    if session.scope.is_some() || session.data_classes != [DataClass::Synthetic] {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if session.revision != turn.expected_revision || session.active_turn.is_some() {
+        return Err(AgentFailure::Conflict);
+    }
+    let check = || {
+        if cancellation.is_cancelled() {
+            Err(AgentFailure::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let snapshot = match vault.expert_registry().await? {
+        Some(previous) => {
+            let revision = previous.revision;
+            let snapshot = FixtureCapabilities::ensure_snapshot(turn.person_id, previous)?;
+            if snapshot.revision != revision {
+                vault.save_expert_registry_checked(revision, &snapshot, &check)
+                    .await?;
+            }
+            snapshot
+        }
+        None => {
+            let capabilities = FixtureCapabilities::new_with_instance(
+                turn.person_id,
+                vault.registry_instance_id(),
+            )?;
+            let snapshot = capabilities.snapshot()?;
+            vault.initialize_expert_registry_checked(&snapshot, &check)
+                .await?;
+            snapshot
+        }
+    };
+    let revision = snapshot.revision;
+    let capabilities = FixtureCapabilities::from_snapshot(turn.person_id, snapshot)?;
+    let store = ExpertSessionStore {
+        vault,
+        registry: &capabilities.registry,
+        persisted_revision: AtomicU64::new(revision),
+    };
+    let authorized = PersistedFixtureCapabilities {
+        vault,
+        capabilities: &capabilities,
+        persisted_revision: &store.persisted_revision,
+    };
+    run_sample_with_capabilities(&store, &authorized, turn, cancellation, latency, emit).await
 }
 
 #[cfg(unix)]
@@ -544,13 +577,19 @@ impl FixtureCapabilities {
                 reference: expert.clone(),
                 publisher: "floe".into(),
                 implementation: PackageImplementation::Builtin {
-                    expert: floe_experts_builtin::BuiltinExpertKind::Schedule,
+                    expert: AgentId::try_new(
+                        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+                    )
+                    .expect("builtin expert ids are valid"),
                 },
                 expert_metadata: Some(ExpertMetadata {
                     name: "Schedule Expert".into(),
                     description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),
                     domain_tags: vec!["schedule".into(), "calendar".into()],
                     skills: vec!["Provide independent scheduling judgment".into()],
+                    supported_placements: floe_experts_builtin::BuiltinExpertKind::Schedule
+                        .declaration()
+                        .supported_placements,
                 }),
                 required_tools: vec![tool.clone()],
                 state_schema_version: 1,
@@ -720,6 +759,7 @@ impl InProcessAgent for FixtureCapabilities {
         }
         .invoke(ExpertInvocation {
             usage: request.usage,
+            capabilities: std::sync::Arc::new(NoCapabilityJournal),
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
@@ -814,5 +854,18 @@ fn agent_error(error: floe_vault::StoreError) -> AgentFailure {
         floe_vault::StoreErrorCode::NotFound => AgentFailure::NotFound,
         floe_vault::StoreErrorCode::Conflict => AgentFailure::Conflict,
         _ => AgentFailure::StorageUnavailable,
+    }
+}
+
+/// The fixture keeps no durable capability record: nothing it does leaves the
+/// process, so there is nothing to recover.
+struct NoCapabilityJournal;
+
+impl floe_agent_contract::CapabilityJournal for NoCapabilityJournal {
+    fn record<'a>(
+        &'a self,
+        _record: floe_agent_contract::CapabilityExecution,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Ok(()) })
     }
 }

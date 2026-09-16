@@ -1,5 +1,5 @@
-use crate::{AgentMessage as LegacyMessage, CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest as LegacyModelRequest, ModelResponse as LegacyModelResponse, ModelRunner as LegacyModelRunner, ModelStep as LegacyModelStep};
-use crate::turn::UsageLedger;
+use floe_conversation::{AgentMessage as LegacyMessage, CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest as LegacyModelRequest, ModelResponse as LegacyModelResponse, ModelRunner as LegacyModelRunner, ModelStep as LegacyModelStep};
+use floe_conversation::turn::UsageLedger;
 use floe_agent_contract::{
     AgentDefinition, AllowedCatalog, Artifact, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, MessageRole, ModelPort, ModelRequest, ModelResponse, ModelStep,
@@ -10,9 +10,11 @@ use floe_kernel::PersonId;
 use floe_execution::ExecutionScope;
 use uuid::Uuid;
 
-use super::{
-    AgentContext, AgentFailure, BuiltinExpertKind, GovernedModel, InferencePolicyDecision,
-};
+use floe_agent_contract::AgentFailure;
+use floe_context::{AgentContext, InferencePolicyDecision};
+use floe_experts_builtin::BuiltinExpertKind;
+
+use super::GovernedModel;
 
 const DEFINITION_REVISION: u64 = 1;
 const MAX_ATTEMPT_TOKENS: u64 = 4_096;
@@ -45,8 +47,8 @@ where
             if request.role.role_id != "manager" || request.attempt_id.is_nil() {
                 return Err(AgentFailure::InvalidInput);
             }
-            let finalization = request.role.prompt == crate::FINALIZATION_ROLE_PROMPT
-                && request.role.output_contract == crate::FINALIZATION_OUTPUT_CONTRACT;
+            let finalization = request.role.prompt == floe_conversation::FINALIZATION_ROLE_PROMPT
+                && request.role.output_contract == floe_conversation::FINALIZATION_OUTPUT_CONTRACT;
             let run_id = scope
                 .root_run_id()
                 .ok_or(AgentFailure::InvalidInput)?
@@ -58,12 +60,12 @@ where
                 .min(MAX_ATTEMPT_COST_MICROS);
             let usage =
                 UsageLedger::new(remaining_tokens, remaining_cost_micros, Default::default());
-            let mut prompt = crate::manager_prompt(self.context.persona.as_ref())?;
+            let mut prompt = floe_conversation::prompts::manager_prompt(self.context.persona.as_ref())?;
             if finalization {
                 let role = prompt
                     .components
                     .iter_mut()
-                    .find(|component| component.kind == floe_knowledge::PromptComponentKind::Role)
+                    .find(|component| component.kind == floe_knowledge::prompts::PromptComponentKind::Role)
                     .ok_or(AgentFailure::InvalidInput)?;
                 role.content = format!("{}\n{}", request.role.prompt, request.role.output_contract);
             }
@@ -130,7 +132,7 @@ where
                 store: self.store,
                 resolver: self.resolver,
             };
-            let response = crate::turn::generate_with_recovery(&governed, legacy_request).await?;
+            let response = floe_conversation::turn::generate_with_recovery(&governed, legacy_request).await?;
             contract_response(request.attempt_id, response, &request.catalog)
         })
     }
@@ -202,7 +204,7 @@ where
 
 pub(super) struct LegacyDelegationPort<'a, Keys: VaultKeyProvider> {
     pub task_coordinator: &'a floe_experts::TaskCoordinator<
-        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+        floe_vault::VaultTaskRepository<Keys>,
     >,
     pub schedule_endpoint: &'a super::expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     pub builtin_expert_endpoint: &'a super::expert_dispatch::BuiltinExpertEndpoint<Keys>,
@@ -264,7 +266,7 @@ impl<Keys: VaultKeyProvider + 'static> DelegationPort for LegacyDelegationPort<'
 
 pub(super) struct ManagerPayloadValidator;
 
-impl crate::FinalPayloadValidator for ManagerPayloadValidator {
+impl floe_conversation::FinalPayloadValidator for ManagerPayloadValidator {
     fn validate(&self, role: &str, text: &str, artifacts: &[Artifact]) -> Result<(), AgentFailure> {
         if role != "manager"
             || text.trim().is_empty()
@@ -308,6 +310,7 @@ pub(crate) fn contract_definition(card: &floe_experts::AgentCard) -> AgentDefini
             version: card.version.clone(),
             name: card.name.clone(),
             description: card.description.clone(),
+            supported_placements: card.supported_placements.clone(),
             domain_tags: card.domain_tags.clone(),
             skills: card.skills.clone(),
         },
@@ -378,7 +381,7 @@ fn contract_response(
         .output
         .into_iter()
         .map(|step| match step {
-            LegacyModelStep::Preamble { text } => Ok(ModelStep::Preamble { text }),
+            LegacyModelStep::Preamble { text } => Ok::<_, AgentFailure>(ModelStep::Preamble { text }),
             LegacyModelStep::Answer { text } => Ok(ModelStep::Answer {
                 text,
                 artifacts: vec![],

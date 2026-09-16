@@ -37,7 +37,7 @@ impl CalendarTimelineGrant {
         }
     }
 
-    fn validate(&self, now: DateTime<Utc>) -> Result<(), AgentFailure> {
+    pub fn validate(&self, now: DateTime<Utc>) -> Result<(), AgentFailure> {
         let identifiers: HashSet<_> = self.calendar_ids.iter().collect();
         let (day_start, day_end) = range_bounds(&self.day)?;
         let range_days = (self.day.end_date_exclusive - self.day.start_date).num_days();

@@ -53,6 +53,32 @@ pub struct CalendarReadAccessAdmission {
 }
 
 impl CalendarReadAccessAdmission {
+    /// The admission a device-local read stands under: the Person's own grant,
+    /// read for the assistant, and never processed anywhere but this device.
+    #[allow(clippy::too_many_arguments)]
+    pub fn device_local(
+        person_id: PersonId,
+        grant_id: GrantId,
+        grant_authority: GrantAuthority,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+        consumer_policy: ConsumerPolicyAuthority,
+        consumer: GrantConsumer,
+    ) -> Self {
+        Self {
+            person_id,
+            grant_id,
+            grant_authority,
+            source,
+            scope,
+            consumer_policy,
+            operation: GrantOperation::Read,
+            purpose: GrantPurpose::Assistant,
+            consumer,
+            processing: ProcessingRestriction::LocalOnly,
+        }
+    }
+
     pub fn remote(
         person_id: PersonId,
         grant_id: GrantId,
@@ -91,6 +117,10 @@ impl CalendarReadAccessAdmission {
 
     pub fn processing(&self) -> &ProcessingRestriction {
         &self.processing
+    }
+
+    pub fn scope(&self) -> &GrantScope {
+        &self.scope
     }
 }
 

@@ -5,13 +5,13 @@ use uuid::Uuid;
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 
-pub(crate) struct ContextEvidenceReader<'vault, Keys> {
+pub struct ContextEvidenceReader<'vault, Keys> {
     vault: &'vault EncryptedAgentVault<Keys>,
     session_id: Uuid,
 }
 
 impl<'vault, Keys: VaultKeyProvider> ContextEvidenceReader<'vault, Keys> {
-    pub(crate) fn new(vault: &'vault EncryptedAgentVault<Keys>, session_id: Uuid) -> Self {
+    pub fn new(vault: &'vault EncryptedAgentVault<Keys>, session_id: Uuid) -> Self {
         Self { vault, session_id }
     }
 }

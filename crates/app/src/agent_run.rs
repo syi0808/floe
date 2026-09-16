@@ -7,20 +7,20 @@ use std::{
 use floe_agent_contract::{AgentFailure};
 use floe_conversation::{AgentEvent, AgentSession};
 use floe_execution::{Cancellation};
-use floe_conversation::{AgentFixturePrompt, AgentFixtureTurn};
+use crate::{AgentFixturePrompt, AgentFixtureTurn};
 use floe_diagnostics::{TraceContext, current_context};
 use floe_kernel::PersonId;
 use floe_protocol::*;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use super::{
+use crate::bridge::{
     BridgeResult, FloeHandle, agent_failure, check_version, parse_id, parse_person,
     protocol_payload,
 };
 
 #[derive(Default)]
-pub(crate) struct AgentRuns(RefCell<Option<AgentRun>>);
+pub struct AgentRuns(RefCell<Option<AgentRun>>);
 
 struct AgentRun {
     person_id: PersonId,
@@ -34,7 +34,7 @@ struct AgentRun {
 }
 
 impl AgentRuns {
-    pub(crate) fn ensure_idle(&self, person_id: PersonId, session_id: Uuid) -> BridgeResult<()> {
+    pub fn ensure_idle(&self, person_id: PersonId, session_id: Uuid) -> BridgeResult<()> {
         if self.0.borrow().as_ref().is_some_and(|run| {
             run.person_id == person_id && run.session_id == session_id && run.result.is_none()
         }) {
@@ -58,7 +58,7 @@ impl AgentRuns {
     }
 }
 
-pub(crate) fn run(
+pub fn run(
     handle: &FloeHandle,
     request: AgentFixtureRunRequestDto,
 ) -> BridgeResult<AgentFixtureRunDto> {
@@ -98,7 +98,7 @@ pub(crate) fn run(
                 expected_revision: request.expected_revision,
                 prompt: fixture_prompt(prompt),
             };
-            let task = handle.runtime.spawn(super::diagnostics::instrument(
+            let task = handle.runtime.spawn(crate::diagnostics::instrument(
                 async move {
                     core.stream_agent_fixture(turn, worker_cancellation.clone(), |event| {
                         if let Ok(mut events) = worker_events.lock() {
@@ -194,7 +194,7 @@ fn snapshot(run: &AgentRun, after_sequence: usize) -> BridgeResult<AgentFixtureR
     })
 }
 
-pub(crate) fn fixture_prompt(prompt: AgentFixturePromptDto) -> AgentFixturePrompt {
+pub fn fixture_prompt(prompt: AgentFixturePromptDto) -> AgentFixturePrompt {
     match prompt {
         AgentFixturePromptDto::Today => AgentFixturePrompt::Today,
         AgentFixturePromptDto::FollowUp => AgentFixturePrompt::FollowUp,

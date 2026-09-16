@@ -3,12 +3,25 @@ use std::{future::Future, pin::Pin};
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
 use floe_kernel::AGENT_VERSION;
-use crate::{AgentBudget, AgentEvent, CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse, ModelRunner, SessionStore};
+use floe_conversation::{AgentBudget, AgentEvent, CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse, ModelRunner, SessionStore};
 use floe_experts::{A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard, EXPERT_RESULT_MEDIA_TYPE, InProcessAgent};
-use floe_experts_builtin::{AttentionView, BuiltinContextSource, BuiltinExpertKind, BuiltinExpertSetupReceipt, CalendarContextView, CommitmentsContextViews, CommitmentsExpertResult, CommunicationExpertResult, FeasibilityView, FocusContextViews, FocusExpertResult, LifeLogisticsExpertResult, MailExpertInvocation, PeopleView, PersonalExpertInvocation, PortfolioExpertInvocation, RelationshipsContextViews, RelationshipsExpertResult, WellbeingContextViews, WellbeingExpertResult, WellbeingView, WorkContextExpertResult, run_commitments_expert_with_views, run_communication_expert, run_focus_expert_with_views, run_life_logistics_expert, run_relationships_expert_with_views, run_wellbeing_expert_with_views, run_work_context_expert};
+use floe_context::{
+    AttentionView, CalendarContextView, FeasibilityView, PeopleView, WellbeingView,
+};
+use floe_experts::BuiltinExpertSetupReceipt;
+use floe_experts_builtin::commitments::{CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views};
+use floe_experts_builtin::communication::{CommunicationExpertResult, run_communication_expert};
+use floe_experts_builtin::focus_attention::{FocusContextViews, FocusExpertResult, run_focus_expert_with_views};
+use floe_experts_builtin::life_logistics::{LifeLogisticsExpertResult, run_life_logistics_expert};
+use floe_experts_builtin::relationships::{RelationshipsContextViews, RelationshipsExpertResult, run_relationships_expert_with_views};
+use floe_experts_builtin::wellbeing::{WellbeingContextViews, WellbeingExpertResult, run_wellbeing_expert_with_views};
+use floe_experts_builtin::work_context::{WorkContextExpertResult, run_work_context_expert};
+use floe_experts_builtin::{
+    BuiltinContextSource, BuiltinExpertKind, MailExpertInvocation, PersonalExpertInvocation,
+    PortfolioExpertInvocation,
+};
 #[cfg(test)]
-use crate::{AgentCommand, AgentRuntime};
-use floe_app::{FloeCore};
+use floe_conversation::{AgentCommand, AgentRuntime};
 use floe_vault::{EncryptedAgentVault, GovernedAgentSessionStore, VaultKeyProvider};
 use floe_kernel::PersonId;
 #[cfg(test)]
@@ -18,8 +31,9 @@ use floe_protocol::{
 };
 use uuid::Uuid;
 
+use crate::FloeCore;
 use crate::local_context::LocalContextStore;
-use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner};
+use floe_provider_adapters::models::{FoundationModelRunner, ServerModelRunner};
 // BOUNDARY(stage-3): the conversation turn still reaches the provider adapter
 // directly. Source acquisition must arrive through a Context-owned port.
 use floe_provider_adapters::sources::ServerSourceClient;
@@ -28,6 +42,9 @@ use floe_provider_adapters::sources::server::CalendarContextRequest;
 use super::personal_grants;
 use super::remote_views;
 use super::session_uuid;
+
+pub(super) mod engine_ports;
+pub(super) mod expert_dispatch;
 
 const FINALIZATION_TOKENS: u64 = 1_024;
 const FINALIZATION_COST_MICROS: u64 = 10_000;
@@ -40,10 +57,10 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     request: &'a AgentConversationTurnRequestDto,
     command_id: floe_agent_contract::CommandId,
     conversation_repository:
-        &'a std::sync::Arc<crate::vault_host::conversation_repository::VaultConversationRepository<Keys>>,
-    run_cancellations: &'a std::sync::Arc<crate::RunCancellationRegistry>,
+        &'a std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
+    run_cancellations: &'a std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     task_coordinator: &'a floe_experts::TaskCoordinator<
-        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+        floe_vault::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     builtin_expert_endpoint: &'a expert_dispatch::BuiltinExpertEndpoint<Keys>,
@@ -54,21 +71,21 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     vault: &EncryptedAgentVault<Keys>,
     local_context: &LocalContextStore,
     task_coordinator: &floe_experts::TaskCoordinator<
-        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+        floe_vault::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     builtin_expert_endpoint: &expert_dispatch::BuiltinExpertEndpoint<Keys>,
     conversation_repository: &std::sync::Arc<
-        crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
+        floe_vault::VaultConversationRepository<Keys>,
     >,
-    run_cancellations: &std::sync::Arc<crate::RunCancellationRegistry>,
+    run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     person_id: PersonId,
     command_id: floe_agent_contract::CommandId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_execution::Cancellation,
-    on_admitted: impl FnMut(&crate::RunReceipt),
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
     emit: impl FnMut(AgentEvent) + Send,
-) -> Result<crate::AgentSession, AgentFailure> {
+) -> Result<floe_conversation::AgentSession, AgentFailure> {
     let text = request.text.trim();
     if text.is_empty()
         || text.len() > 8_192
@@ -80,9 +97,9 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     let session_id = session_uuid(&request.session_id)?;
     let session = vault.load(person_id, session_id).await?;
     let existing_continuation = if request.continuation {
-        crate::get_command(
+        floe_conversation::get_command(
             conversation_repository.as_ref(),
-            crate::CommandQuery {
+            floe_conversation::CommandQuery {
                 principal: person_id.to_string(),
                 command_id,
             },
@@ -99,7 +116,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     {
         return Err(AgentFailure::Conflict);
     }
-    if request.continuation && floe_context::has_calendar_history(&session.messages) {
+    if request.continuation && floe_experts_builtin::schedule::has_calendar_history(&session.messages) {
         return Err(AgentFailure::StaleContext);
     }
     let context = AgentContext {
@@ -157,9 +174,9 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     inputs: &ConversationTurnInputs<'_, Keys>,
     context: AgentContext,
     cancellation: floe_execution::Cancellation,
-    on_admitted: impl FnMut(&crate::RunReceipt),
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
     mut emit: impl FnMut(AgentEvent) + Send,
-) -> Result<crate::AgentSession, AgentFailure> {
+) -> Result<floe_conversation::AgentSession, AgentFailure> {
     let core = inputs.core;
     let vault = inputs.vault;
     let local_context = inputs.local_context;
@@ -280,6 +297,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         recorder: Some(&result_recorder),
     };
     let experts = ConversationExperts {
+        registrations: expert_dispatch::registered_experts(),
         model: &model,
         source_client: source_client.as_ref(),
         policy: &policy,
@@ -296,7 +314,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         context_reader: Some(&context_reader),
         task_views: &[],
         cards: expert_cards.clone(),
-        builtin_setup: builtin_setup.clone(),
+        grants: floe_experts::SourceGrants::new(builtin_setup.clone()),
         task_runners: &[(
             floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
             &schedule_runner,
@@ -308,9 +326,9 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let catalog = floe_agent_contract::AllowedCatalog {
             cards: active_agents
                 .iter()
-                .map(crate::turn::engine_ports::contract_definition)
+                .map(engine_ports::contract_definition)
                 .collect(),
-            tools: crate::turn::engine_ports::contract_tools(&legacy_capabilities),
+            tools: engine_ports::contract_tools(&legacy_capabilities),
             revision: builtin_setup
                 .as_ref()
                 .map_or(1, |setup| setup.expected_revision.max(1)),
@@ -318,12 +336,12 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let budget = AgentBudget::default();
         let duration = std::time::Duration::from_millis(budget.deadline_ms);
         let deadline = tokio::time::Instant::now() + duration;
-        let service = crate::ConversationService::with_run_cancellations(
+        let service = floe_conversation::ConversationService::with_run_cancellations(
             std::sync::Arc::clone(inputs.conversation_repository),
-            crate::ManagerConfig {
+            floe_conversation::ManagerConfig {
                 role_spec: floe_agent_contract::RoleSpec {
                     role_id: "manager".into(),
-                    prompt: crate::manager_prompt(context.persona.as_ref())?.render(),
+                    prompt: floe_conversation::prompts::manager_prompt(context.persona.as_ref())?.render(),
                     output_contract: "Return one user-facing answer or one registered delegation."
                         .into(),
                 },
@@ -341,7 +359,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             },
             std::sync::Arc::clone(inputs.run_cancellations),
         )?;
-        let model_port = crate::turn::engine_ports::LegacyModelPort {
+        let model_port = engine_ports::LegacyModelPort {
             model: &model,
             store: &governed_store,
             resolver: &resolver,
@@ -353,14 +371,14 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             active_agents,
             max_output_bytes: budget.max_output_bytes,
         };
-        let tool_port = crate::turn::engine_ports::LegacyToolPort {
+        let tool_port = engine_ports::LegacyToolPort {
             host: &capabilities,
             store: &governed_store,
             person_id,
             session_id,
             max_output_bytes: budget.max_output_bytes,
         };
-        let delegation_port = crate::turn::engine_ports::LegacyDelegationPort {
+        let delegation_port = engine_ports::LegacyDelegationPort {
             task_coordinator: inputs.task_coordinator,
             schedule_endpoint: inputs.schedule_endpoint,
             builtin_expert_endpoint: inputs.builtin_expert_endpoint,
@@ -370,11 +388,11 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             max_output_bytes: budget.max_output_bytes,
         };
         let execution_profile =
-            crate::vault_host::conversation_repository::execution_profile(model.placement());
+            floe_vault::execution_profile(model.placement());
         let mode = if request.continuation {
-            if let Some(existing) = crate::get_command(
+            if let Some(existing) = floe_conversation::get_command(
                 inputs.conversation_repository.as_ref(),
-                crate::CommandQuery {
+                floe_conversation::CommandQuery {
                     principal: person_id.to_string(),
                     command_id: inputs.command_id,
                 },
@@ -382,7 +400,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             .await?
             {
                 let source_run_id = existing.continuation_of.ok_or(AgentFailure::Conflict)?;
-                crate::TurnMode::Continue(crate::ContinuationRef {
+                floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {
                     run_id: source_run_id,
                     executor_generation: existing
                         .continuation_executor_generation
@@ -392,7 +410,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             } else {
                 let session = vault.load(person_id, session_id).await?;
                 let legacy_reference = session.continuation.ok_or(AgentFailure::Conflict)?;
-                let snapshot = crate::continuation(
+                let snapshot = floe_conversation::continuation(
                     inputs.conversation_repository.as_ref(),
                     floe_agent_contract::RunId::from_uuid(legacy_reference.turn_id)
                         .ok_or(AgentFailure::Conflict)?,
@@ -403,10 +421,10 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 {
                     return Err(AgentFailure::Conflict);
                 }
-                crate::TurnMode::Continue(snapshot.reference)
+                floe_conversation::TurnMode::Continue(snapshot.reference)
             }
         } else {
-            crate::TurnMode::New
+            floe_conversation::TurnMode::New
         };
         let retry_of = request
             .retry_of
@@ -415,14 +433,14 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             })
             .transpose()?;
         let profile = match &request.profile {
-            AppProfileSelectionDto::Auto => crate::ProfileSelection::Auto,
+            AppProfileSelectionDto::Auto => floe_conversation::ProfileSelection::Auto,
             AppProfileSelectionDto::Explicit { profile_id } => {
-                crate::ProfileSelection::Explicit(profile_id.clone())
+                floe_conversation::ProfileSelection::Explicit(profile_id.clone())
             }
         };
         let receipt = service
             .run_turn_observed(
-                crate::TurnRequest {
+                floe_conversation::TurnRequest {
                     command_id: inputs.command_id,
                     session_id,
                     expected_session_revision: request.expected_revision,
@@ -441,21 +459,21 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     deadline,
                     cancellation,
                 },
-                crate::ConversationPorts {
+                floe_conversation::ConversationPorts {
                     model: &model_port,
                     tools: &tool_port,
                     delegation: &delegation_port,
-                    validator: &crate::turn::engine_ports::ManagerPayloadValidator,
+                    validator: &engine_ports::ManagerPayloadValidator,
                 },
                 on_admitted,
             )
             .await?;
         let session = vault.load(person_id, session_id).await?;
-        emit(crate::AgentEvent {
+        emit(floe_conversation::AgentEvent {
             schema_version: AGENT_VERSION,
             session_id,
             turn_id: receipt.run_id.as_uuid(),
-            event: crate::AgentEventKind::Finished {
+            event: floe_conversation::AgentEventKind::Finished {
                 outcome: session
                     .last_outcome
                     .ok_or(AgentFailure::StorageUnavailable)?,
@@ -510,7 +528,8 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>> {
         let handle = uuid::Uuid::new_v5(&self.person_id.0, b"floe.tasks");
-        Box::pin(self.core.task_context_view(
+        Box::pin(floe_context::application::day_context_views::task_context_view(
+            &self.core.store,
             self.person_id,
             handle,
             chrono::Utc::now(),
@@ -529,7 +548,8 @@ async fn optional_task_views(
     let handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
     let acquired = floe_context::acquire_optional_source(
         floe_agent_contract::ContextSource::Tasks,
-        core.task_context_view(person_id, handle, chrono::Utc::now(), 16, 8 * 1024),
+        floe_context::application::day_context_views::task_context_view(
+            &core.store,person_id, handle, chrono::Utc::now(), 16, 8 * 1024),
     ).await?;
     floe_context::record_source_issue(
         &mut context.optional_context_issues,
@@ -542,16 +562,16 @@ async fn optional_task_views(
 pub(super) async fn recover<Keys: VaultKeyProvider + 'static>(
     vault: &EncryptedAgentVault<Keys>,
     conversation_repository: &std::sync::Arc<
-        crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
+        floe_vault::VaultConversationRepository<Keys>,
     >,
     person_id: PersonId,
     session_id: &str,
     expected_revision: u64,
-) -> Result<crate::AgentSession, AgentFailure> {
+) -> Result<floe_conversation::AgentSession, AgentFailure> {
     let session_id = session_uuid(session_id)?;
-    let receipt = crate::recover_session(
+    let receipt = floe_conversation::recover_session(
         conversation_repository.as_ref(),
-        crate::RecoveryRequest {
+        floe_conversation::RecoveryRequest {
             session_id,
             expected_session_revision: expected_revision,
             principal: person_id.to_string(),
@@ -593,7 +613,7 @@ fn external_transfer_consent(
     }
 }
 
-enum Model {
+pub(crate) enum Model {
     Foundation(FoundationModelRunner),
     Server(ServerModelRunner),
 }
@@ -616,7 +636,7 @@ impl ModelRunner for Model {
     }
 
     async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        floe_context::project_calendar_history(&mut request);
+        floe_experts_builtin::schedule::project_calendar_history(&mut request);
         let started = std::time::Instant::now();
         let placement = match self {
             Self::Foundation(_) => "device_local",
@@ -652,11 +672,11 @@ impl<Keys: VaultKeyProvider, Runner: ModelRunner + ?Sized + Sync> ModelRunner
 {
     fn history_start(
         &self,
-        messages: &[crate::AgentMessage],
+        messages: &[floe_conversation::AgentMessage],
         current_turn: Uuid,
         max_bytes: usize,
     ) -> Result<usize, AgentFailure> {
-        floe_context::bounded_model_history_start(messages, current_turn, max_bytes)
+        floe_experts_builtin::schedule::bounded_model_history_start(messages, current_turn, max_bytes)
     }
 
     fn placement(&self) -> ModelPlacement {
@@ -855,7 +875,7 @@ impl PersonalViewSource<'_> {
                         range_start_unix_ms: now.saturating_sub(86_400_000),
                         range_end_unix_ms: now.saturating_add(86_400_000),
                         cursor: "",
-                        limit: floe_experts_builtin::MAX_CALENDAR_CONTEXT_ITEMS,
+                        limit: floe_context::MAX_CALENDAR_CONTEXT_ITEMS,
                     },
                     deadline,
                     cancellation,
@@ -875,7 +895,7 @@ impl PersonalViewSource<'_> {
         people: &PeopleView,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<Vec<floe_experts_builtin::ConfirmedInteractionView>, AgentFailure> {
+    ) -> Result<Vec<floe_context::ConfirmedInteractionView>, AgentFailure> {
         let Model::Server(_) = self.model else {
             return Ok(vec![]);
         };
@@ -899,7 +919,7 @@ impl PersonalViewSource<'_> {
         &self,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<Vec<floe_experts_builtin::WorkContextView>, AgentFailure> {
+    ) -> Result<Vec<floe_context::WorkContextView>, AgentFailure> {
         let Model::Server(_model) = self.model else {
             return Ok(vec![]);
         };
@@ -1004,6 +1024,22 @@ trait ResultRecorder: Send + Sync {
 
 struct StoreResultRecorder<'a, Keys: VaultKeyProvider> {
     store: &'a GovernedAgentSessionStore<'a, Keys>,
+}
+
+impl<Keys: VaultKeyProvider> floe_experts::TaskCoverageRecorder for StoreResultRecorder<'_, Keys> {
+    fn record_independent(&self, turn_id: Uuid, result_id: Uuid) -> Result<(), AgentFailure> {
+        self.store.record_result_independent(turn_id, result_id)
+    }
+
+    fn record(
+        &self,
+        turn_id: Uuid,
+        result_id: Uuid,
+        dependency: floe_context_contract::ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        self.store
+            .record_result_dependency(turn_id, result_id, dependency)
+    }
 }
 
 impl<Keys: VaultKeyProvider> ResultRecorder for StoreResultRecorder<'_, Keys> {
@@ -1544,7 +1580,7 @@ mod tests {
         },
     };
 
-    use crate::{AgentMessage, ModelStep};
+    use floe_conversation::{AgentMessage, ModelStep};
 use floe_execution::{Cancellation};
     use floe_vault::{VaultKey, VaultKeyProvider};
     use floe_protocol::{
@@ -1903,7 +1939,7 @@ use floe_execution::{Cancellation};
         .unwrap();
         assert_eq!(
             completed.last_outcome,
-            Some(crate::AgentOutcome::Completed)
+            Some(floe_conversation::AgentOutcome::Completed)
         );
         assert_eq!(
             &completed.messages[..saved_messages.len()],
@@ -2026,7 +2062,7 @@ use floe_execution::{Cancellation};
                 .unwrap();
                 assert_eq!(
                     completed.last_outcome,
-                    Some(crate::AgentOutcome::Completed)
+                    Some(floe_conversation::AgentOutcome::Completed)
                 );
                 assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
                 assert!(completed.messages.iter().any(|message| matches!(
@@ -2085,7 +2121,7 @@ use floe_execution::{Cancellation};
             schema_version: AGENT_VERSION, person_id, session_id: session.id,
             expected_revision: 0, text: "Hello".into(),
         }, context, Cancellation::default(), |_| {}).await.unwrap();
-        assert_eq!(completed.last_outcome, Some(crate::AgentOutcome::Completed));
+        assert_eq!(completed.last_outcome, Some(floe_conversation::AgentOutcome::Completed));
         assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
         assert_eq!(model.requests.lock().unwrap().len(), 1);
     }
@@ -2252,7 +2288,7 @@ use floe_execution::{Cancellation};
 
         assert_eq!(
             completed.last_outcome,
-            Some(crate::AgentOutcome::Completed)
+            Some(floe_conversation::AgentOutcome::Completed)
         );
         assert!(completed.messages.iter().any(|message| matches!(
             message,
@@ -2384,7 +2420,7 @@ use floe_execution::{Cancellation};
                 domain_tags: vec!["schedule".into()],
                 skills: vec!["Review a calendar assignment".into()],
             }],
-            builtin_setup: None,
+            grants: Default::default(),
             task_runners: &[(
                 floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
                 &runner,
@@ -2393,7 +2429,7 @@ use floe_execution::{Cancellation};
         let task_id = Uuid::new_v4();
         let task = experts
             .handle_message(A2ASendMessageRequest {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: Uuid::new_v4(),
@@ -2485,7 +2521,7 @@ use floe_execution::{Cancellation};
                 > body["range_start_unix_ms"].as_i64().unwrap()
         );
         assert_eq!(body["cursor"], "");
-        assert_eq!(body["limit"], floe_experts_builtin::MAX_CALENDAR_CONTEXT_ITEMS);
+        assert_eq!(body["limit"], floe_context::MAX_CALENDAR_CONTEXT_ITEMS);
         assert_eq!(body.as_object().unwrap().len(), 8);
     }
 
@@ -2666,7 +2702,7 @@ use floe_execution::{Cancellation};
         let call_id = Uuid::new_v4();
         let capability_output = capabilities
             .invoke(CapabilityInvocation {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 turn_id,
@@ -2685,11 +2721,11 @@ use floe_execution::{Cancellation};
         let mut admitted = session.clone();
         admitted.revision = 1;
         admitted.messages = vec![
-            crate::AgentMessage::User {
+            floe_conversation::AgentMessage::User {
                 turn_id,
                 text: "What is my attention state?".into(),
             },
-            crate::AgentMessage::Capability {
+            floe_conversation::AgentMessage::Capability {
                 turn_id,
                 call_id,
                 capability_id: "attention.coarse.read".into(),
@@ -2712,7 +2748,7 @@ use floe_execution::{Cancellation};
             resolver: &resolver,
         };
         let request = ModelRequest {
-            usage: crate::turn::UsageLedger::default(),
+            usage: floe_conversation::turn::UsageLedger::default(),
             replay: vec![],
             schema_version: AGENT_VERSION,
             prompt: floe_experts_builtin::focus_expert_prompt(),
@@ -2750,7 +2786,7 @@ use floe_execution::{Cancellation};
         completed.revision = 2;
         completed
             .messages
-            .push(crate::AgentMessage::Assistant {
+            .push(floe_conversation::AgentMessage::Assistant {
                 turn_id,
                 text: "Attention response".into(),
             });
@@ -2770,7 +2806,7 @@ use floe_execution::{Cancellation};
             .unwrap();
         let mut rejected = completed.clone();
         rejected.revision = 3;
-        rejected.messages.push(crate::AgentMessage::Assistant {
+        rejected.messages.push(floe_conversation::AgentMessage::Assistant {
             turn_id,
             text: "Late attention response".into(),
         });
@@ -2788,11 +2824,11 @@ use floe_execution::{Cancellation};
         let mut independent_saved = independent.clone();
         independent_saved.revision = 1;
         independent_saved.messages = vec![
-            crate::AgentMessage::User {
+            floe_conversation::AgentMessage::User {
                 turn_id: independent_turn,
                 text: "Hello".into(),
             },
-            crate::AgentMessage::Assistant {
+            floe_conversation::AgentMessage::Assistant {
                 turn_id: independent_turn,
                 text: "Hi".into(),
             },
@@ -2852,12 +2888,15 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Mail)),
+            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
+                person_id,
+                BuiltinContextSource::Mail,
+            ))),
                 task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: uuid::Uuid::new_v4(),
@@ -2922,7 +2961,7 @@ use floe_execution::{Cancellation};
 
         let result = capabilities
             .invoke(CapabilityInvocation {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 call_id: uuid::Uuid::new_v4(),
                 person_id,
@@ -3010,7 +3049,7 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         let cards = experts.agent_cards(PersonId::new());
@@ -3052,12 +3091,12 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: vec![],
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id: PersonId::new(),
                 session_id: uuid::Uuid::new_v4(),
@@ -3108,7 +3147,7 @@ use floe_execution::{Cancellation};
         };
         let result = capabilities
             .invoke(CapabilityInvocation {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 call_id: uuid::Uuid::new_v4(),
                 person_id: PersonId::new(),
@@ -3252,13 +3291,13 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
             .handle_message(A2ASendMessageRequest {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: uuid::Uuid::new_v4(),
@@ -3474,12 +3513,12 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &tasks,
             cards: test_expert_cards(),
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: uuid::Uuid::new_v4(),
@@ -3671,14 +3710,14 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
             let task = experts
                 .handle_message(A2ASendMessageRequest {
-                    usage: crate::turn::UsageLedger::default(),
+                    usage: floe_conversation::turn::UsageLedger::default(),
                     schema_version: AGENT_VERSION,
                     person_id,
                     session_id: uuid::Uuid::new_v4(),
@@ -3940,13 +3979,13 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
                 .handle_message(A2ASendMessageRequest {
-                    usage: crate::turn::UsageLedger::default(),
+                    usage: floe_conversation::turn::UsageLedger::default(),
                     schema_version: AGENT_VERSION,
                     person_id: PersonId::new(),
                     session_id: uuid::Uuid::new_v4(),
@@ -4010,12 +4049,12 @@ use floe_execution::{Cancellation};
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: None,
+            grants: Default::default(),
                 task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
-                usage: crate::turn::UsageLedger::default(),
+                usage: floe_conversation::turn::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id: PersonId::new(),
                 session_id: uuid::Uuid::new_v4(),
