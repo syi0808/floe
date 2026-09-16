@@ -39,41 +39,22 @@ impl crate::ConversationCommands for AppComposition {
         let command_id = floe_kernel::CommandId::from_uuid(request.command_id)
             .ok_or(crate::ServiceError::InvalidInput)?;
         let person = floe_kernel::PersonId(caller.person_id());
-        let existing = self
+        let precheck = self
             .agent_vault
-            .conversation_query(person, vault_host::ConversationQuery::Command(command_id))
+            .precheck_turn(
+                person,
+                floe_conversation::TurnPrecheckRequest {
+                    principal: person.to_string(),
+                    command_id,
+                    session_id: request.session_id,
+                    mode: continuation_mode(&request.mode)?,
+                },
+            )
             .map_err(service_failure)?;
-        let continuation = match &request.mode {
-            crate::TurnMode::New => false,
-            crate::TurnMode::Continue(reference) => {
-                let run_id = floe_kernel::RunId::from_uuid(reference.run_id)
-                    .ok_or(crate::ServiceError::InvalidInput)?;
-                if let Some(receipt) = existing.as_ref() {
-                    if receipt.session_id != request.session_id
-                        || receipt.continuation_of != Some(run_id)
-                        || receipt.continuation_executor_generation
-                            != Some(reference.executor_generation)
-                        || receipt.continuation_level != reference.level
-                    {
-                        return Err(crate::ServiceError::Conflict);
-                    }
-                } else {
-                    let source = self
-                        .agent_vault
-                        .conversation_query(person, vault_host::ConversationQuery::Run(run_id))
-                        .map_err(service_failure)?
-                        .ok_or(crate::ServiceError::NotFound)?;
-                    if source.session_id != request.session_id
-                        || !source.state.is_terminal()
-                        || source.executor_generation != reference.executor_generation
-                        || source.continuation_level.checked_add(1) != Some(reference.level)
-                    {
-                        return Err(crate::ServiceError::Conflict);
-                    }
-                }
-                true
-            }
-        };
+        let remote_route = self
+            .runtime
+            .block_on(self.inference_routes.resolve(caller))
+            .map_err(service_failure)?;
         let receipt = self
             .agent_vault
             .start_conversation(
@@ -90,12 +71,9 @@ impl crate::ConversationCommands for AppComposition {
                             AppProfileSelectionDto::Explicit { profile_id }
                         }
                     },
-                    continuation,
+                    continuation: precheck.continuation,
                     retry_of: request.retry_of,
-                    remote_route: self
-                        .inference_routes
-                        .resolve(&self.runtime, caller)
-                        .map_err(service_failure)?,
+                    remote_route,
                 },
             )
             .map_err(service_failure)?;
@@ -137,6 +115,25 @@ impl crate::ConversationCommands for AppComposition {
             outcome: crate::CancelRunOutcome::Accepted,
         })
     }
+}
+
+/// Restate the caller's turn mode in Conversation's own terms; Conversation
+/// decides whether the continuation it names is admissible.
+#[cfg(unix)]
+fn continuation_mode(
+    mode: &crate::TurnMode,
+) -> Result<floe_conversation::TurnMode, crate::ServiceError> {
+    Ok(match mode {
+        crate::TurnMode::New => floe_conversation::TurnMode::New,
+        crate::TurnMode::Continue(reference) => {
+            floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {
+                run_id: floe_kernel::RunId::from_uuid(reference.run_id)
+                    .ok_or(crate::ServiceError::InvalidInput)?,
+                executor_generation: reference.executor_generation,
+                level: reference.level,
+            })
+        }
+    })
 }
 
 #[cfg(unix)]

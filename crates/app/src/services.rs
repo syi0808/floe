@@ -2,7 +2,8 @@ use uuid::Uuid;
 
 use crate::CallerContext;
 
-const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
+/// The largest request body this host will even look at. The canonical text
+/// rule itself belongs to Conversation.
 const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,17 +42,10 @@ impl StartTurn {
 }
 
 fn normalize_turn_text(text: &str) -> Result<String, ServiceError> {
-    let normalized = text.trim();
-    if text.len() > MAX_TURN_PAYLOAD_BYTES
-        || normalized.is_empty()
-        || normalized.len() > MAX_TURN_TEXT_BYTES
-        || normalized
-            .chars()
-            .any(|character| character.is_control() && character != '\n')
-    {
+    if text.len() > MAX_TURN_PAYLOAD_BYTES {
         return Err(ServiceError::InvalidInput);
     }
-    Ok(normalized.to_owned())
+    floe_conversation::normalize_turn_text(text).map_err(|_| ServiceError::InvalidInput)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

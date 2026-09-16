@@ -1,3 +1,4 @@
+mod admission;
 mod archive;
 mod cancellation;
 mod coordinator;
@@ -6,10 +7,11 @@ mod query;
 mod recovery;
 mod session;
 
+pub use admission::{TurnPrecheck, TurnPrecheckRequest, precheck_turn};
 pub use archive::{compact_session, read_archive};
 pub use cancellation::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
-    CancelRunStatus, RunCancellationRegistry,
+    CancelRunStatus, RunCancellationRegistry, cancel_run_command,
 };
 pub use coordinator::{ConversationService, continuation, recover_session};
 pub use query::{get_command, get_run};

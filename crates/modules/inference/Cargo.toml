@@ -9,7 +9,6 @@ rust-version.workspace = true
 chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-execution = { path = "../../runtime/execution" }
-floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true

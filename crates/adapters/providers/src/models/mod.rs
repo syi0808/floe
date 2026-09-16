@@ -6,4 +6,4 @@ pub mod server;
 
 pub use foundation::{FoundationModelRunner, LocalModelAvailability};
 pub use learner::FoundationLearnerTransport;
-pub use server::{ServerModelRunner, resolve_remote_model_route};
+pub use server::{RemoteModelRouteResolver, ServerModelRunner, resolve_remote_model_route};

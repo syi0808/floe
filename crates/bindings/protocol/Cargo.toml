@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-floe-actions = { path = "../../modules/actions" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-day = { path = "../../modules/day" }
 floe-kernel = { path = "../../contracts/kernel" }

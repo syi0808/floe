@@ -23,6 +23,16 @@ struct StoredServerConnection {
     external_recipients: Vec<String>,
 }
 
+/// This host's saved local-server credential, as Inference's store port.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SavedServerConnectionStore;
+
+impl floe_inference::SavedConnectionStore for SavedServerConnectionStore {
+    fn load(&self) -> Result<Option<SavedServerConnection>, AgentFailure> {
+        load_saved_connection()
+    }
+}
+
 pub fn load_saved_connection() -> Result<Option<SavedServerConnection>, AgentFailure> {
     let secret = floe_native::read_generic_password(
         SERVER_CREDENTIAL_SERVICE,

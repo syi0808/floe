@@ -9,6 +9,7 @@ use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_context::{InferencePolicyDecision};
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner};
 use floe_experts_builtin::{BuiltinExpertKind};
+use floe_experts_builtin::schedule::{SCHEDULE_DEFINITION_REVISION, schedule_definition};
 use floe_agent_contract::{
     AgentCard as ContractAgentCard, AgentDefinition, AgentEndpoint, BoxFuture, DelegationPort,
     DelegationRequest, DependencyCoverage, EndpointInvocation, ExpertReport, TaskId, TaskReceipt,
@@ -43,8 +44,6 @@ use crate::{local_context::LocalContextStore, local_model::FoundationModelRunner
 
 use super::external_transfer_consent;
 use crate::vault_host::task_repository::VaultTaskRepository;
-
-const SCHEDULE_DEFINITION_REVISION: u64 = 1;
 
 #[derive(Clone)]
 pub(crate) struct ScheduleEndpointContext {
@@ -98,22 +97,6 @@ impl<Keys> ScheduleEndpoint<Keys> {
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .remove(&run_id);
         Ok(())
-    }
-}
-
-pub(crate) fn schedule_definition() -> AgentDefinition {
-    AgentDefinition {
-        card: ContractAgentCard {
-            schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
-            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
-            id: BuiltinExpertKind::Schedule.package_id().into(),
-            version: "1.0.0".into(),
-            name: "Schedule Expert".into(),
-            description: "Reviews the currently authorized calendar view".into(),
-            domain_tags: vec!["schedule".into(), "calendar".into()],
-            skills: vec!["Analyze an authorized calendar assignment".into()],
-        },
-        definition_revision: SCHEDULE_DEFINITION_REVISION,
     }
 }
 
@@ -367,11 +350,9 @@ pub(crate) async fn run_registered<
     request: floe_experts::A2ASendMessageRequest,
     turn_request: &floe_protocol::AgentConversationTurnRequestDto,
     context: &floe_context::AgentContext,
-    recorder: Option<&dyn super::ResultRecorder>,
+    recorder: Option<&dyn floe_experts::TaskCoverageRecorder>,
 ) -> Result<floe_experts::A2ATask, AgentFailure> {
     let task_uuid = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
-    let task_id = TaskId::from_uuid(task_uuid).ok_or(AgentFailure::InvalidInput)?;
-    let run_id = RunId::from_uuid(request.parent_turn_id).ok_or(AgentFailure::InvalidInput)?;
     endpoint.stage(
         request.parent_turn_id,
         ScheduleEndpointContext {
@@ -380,104 +361,18 @@ pub(crate) async fn run_registered<
             max_output_bytes: request.max_output_bytes,
         },
     )?;
-    let ledger = BudgetLedger::new(BudgetConfig::new(50_000, 100_000), Default::default());
-    let root_scope = ExecutionScope::root(
-        request.cancellation.clone(),
-        request.deadline,
-        ledger.work_lease(),
-        TraceContext::new(request.message.message_id).with_run_id(run_id),
-    );
-    let scope = root_scope.child_scope(request.deadline, 40_960, 50_000, Some(task_id));
-    let delegation = DelegationRequest {
-        task_id,
-        parent_run_id: Some(request.parent_turn_id),
-        principal: request.person_id.to_string(),
-        invocation_key: floe_agent_contract::InvocationKey::from_uuid(task_uuid)
-            .ok_or(AgentFailure::InvalidInput)?,
-        selected_agent_id: request.agent_id.clone(),
-        selected_definition_revision: SCHEDULE_DEFINITION_REVISION,
-        message: request.message.text()?.to_owned(),
-        context_refs: vec![],
-    };
-    let receipt = coordinator.delegate(delegation, &scope).await;
+    let receipt =
+        floe_experts::delegate_expert_task(coordinator, &request, SCHEDULE_DEFINITION_REVISION)
+            .await;
     let clear = endpoint.clear(request.parent_turn_id);
     let receipt = receipt?;
     clear?;
-    record_task_coverage(recorder, request.parent_turn_id, task_uuid, &receipt)?;
-    task_receipt_to_a2a(request, receipt)
-}
-
-fn record_task_coverage(
-    recorder: Option<&dyn super::ResultRecorder>,
-    turn_id: Uuid,
-    result_id: Uuid,
-    receipt: &TaskReceipt,
-) -> Result<(), AgentFailure> {
-    let Some(recorder) = recorder else {
-        return Ok(());
-    };
-    match &receipt.snapshot.coverage {
-        DependencyCoverage::Independent => recorder.record_independent(turn_id, result_id),
-        DependencyCoverage::Dependent { dependencies } => {
-            for dependency in dependencies {
-                recorder.record(turn_id, result_id, dependency.clone())?;
-            }
-            Ok(())
-        }
-        DependencyCoverage::Unknown => Ok(()),
-    }
-}
-
-fn task_receipt_to_a2a(
-    request: floe_experts::A2ASendMessageRequest,
-    receipt: TaskReceipt,
-) -> Result<floe_experts::A2ATask, AgentFailure> {
-    let state = match receipt.snapshot.state {
-        TaskState::Submitted => floe_experts::A2ATaskState::Submitted,
-        TaskState::Working => floe_experts::A2ATaskState::Working,
-        TaskState::Completed => floe_experts::A2ATaskState::Completed,
-        TaskState::Rejected => floe_experts::A2ATaskState::Rejected,
-        TaskState::Cancelled => floe_experts::A2ATaskState::Cancelled,
-        TaskState::Failed | TaskState::TimedOut | TaskState::Interrupted => {
-            floe_experts::A2ATaskState::Failed
-        }
-    };
-    let artifacts = if receipt.snapshot.state == TaskState::Completed {
-        let result = receipt
-            .snapshot
-            .result
-            .as_deref()
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        let report: floe_experts::ExpertResult =
-            serde_json::from_str(result).map_err(|_| AgentFailure::StorageUnavailable)?;
-        vec![floe_experts::A2AArtifact {
-            artifact_id: Uuid::new_v4(),
-            name: "Schedule expert result".into(),
-            parts: vec![
-                floe_experts::A2APart::Text {
-                    text: report
-                        .summary
-                        .clone()
-                        .ok_or(AgentFailure::InvalidModelOutput)?,
-                },
-                floe_experts::A2APart::Data {
-                    media_type: floe_experts::EXPERT_RESULT_MEDIA_TYPE.into(),
-                    data: result.into(),
-                },
-            ],
-        }]
-    } else {
-        vec![]
-    };
-    Ok(floe_experts::A2ATask {
-        id: receipt.task_id.as_uuid(),
-        context_id: request.message.context_id,
-        agent_id: request.agent_id,
-        state,
-        history: vec![request.message],
-        artifacts,
-        failure: receipt.snapshot.issue,
-    })
+    floe_experts::record_task_coverage(recorder, request.parent_turn_id, task_uuid, &receipt)?;
+    floe_experts::task_receipt_to_a2a(
+        request,
+        BuiltinExpertKind::Schedule.result_artifact_name(),
+        receipt,
+    )
 }
 
 struct BoundAccess<'host> {

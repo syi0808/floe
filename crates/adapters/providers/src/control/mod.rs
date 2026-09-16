@@ -10,4 +10,4 @@ pub use authorization::{
     parse_calendar_challenge,
 };
 
-pub use server_connection::load_saved_connection;
+pub use server_connection::{SavedServerConnectionStore, load_saved_connection};

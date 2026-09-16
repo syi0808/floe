@@ -210,3 +210,41 @@ fn validate_principal(principal: &str) -> Result<(), AgentFailure> {
     }
     Ok(())
 }
+
+/// Admit one caller cancel command and act on it.
+///
+/// The command is recorded first so a repeat is idempotent, then the Run's own
+/// state decides the outcome: only a Working Run is signalled, a Run that has
+/// already settled is inactive, and an unknown Run stays unknown. A Working Run
+/// whose cancellation is not registered is an interrupted host, not a silent
+/// success.
+pub async fn cancel_run_command<Repository: crate::ConversationRepository>(
+    repository: &Repository,
+    run_cancellations: &RunCancellationRegistry,
+    command: CancelRunCommand,
+) -> Result<CancelRunStatus, AgentFailure> {
+    command.validate()?;
+    repository.admit_cancel(command.clone()).await?;
+    let request = CancelRunRequest {
+        run_id: command.run_id,
+        principal: command.principal,
+    };
+    let receipt = super::query::get_run(
+        repository,
+        crate::RunQuery {
+            principal: request.principal.clone(),
+            run_id: request.run_id,
+        },
+    )
+    .await?;
+    match receipt {
+        Some(receipt) if receipt.state == crate::RunState::Working => {
+            match run_cancellations.cancel_run(request)? {
+                CancelRunStatus::Unknown => Err(AgentFailure::Interrupted),
+                status => Ok(status),
+            }
+        }
+        Some(_) => Ok(CancelRunStatus::Inactive),
+        None => Ok(CancelRunStatus::Unknown),
+    }
+}

@@ -205,7 +205,7 @@ pub(super) struct LegacyDelegationPort<'a, Keys: VaultKeyProvider> {
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     pub schedule_endpoint: &'a super::expert_dispatch::schedule::ScheduleEndpoint<Keys>,
-    pub legacy_expert_endpoint: &'a super::expert_dispatch::LegacyExpertEndpoint<Keys>,
+    pub builtin_expert_endpoint: &'a super::expert_dispatch::BuiltinExpertEndpoint<Keys>,
     pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
     pub context: &'a AgentContext,
     pub session_id: Uuid,
@@ -241,9 +241,9 @@ impl<Keys: VaultKeyProvider + 'static> DelegationPort for LegacyDelegationPort<'
                 self.schedule_endpoint.clear(run_id)?;
                 return result;
             }
-            self.legacy_expert_endpoint.stage(
+            self.builtin_expert_endpoint.stage(
                 run_id,
-                super::expert_dispatch::LegacyExpertEndpointContext {
+                super::expert_dispatch::BuiltinExpertEndpointContext {
                     request: self.turn_request.clone(),
                     context: self.context.clone(),
                     session_id: self.session_id,
@@ -256,7 +256,7 @@ impl<Keys: VaultKeyProvider + 'static> DelegationPort for LegacyDelegationPort<'
                 scope,
             )
             .await;
-            self.legacy_expert_endpoint.clear(run_id)?;
+            self.builtin_expert_endpoint.clear(run_id)?;
             result
         })
     }

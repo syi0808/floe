@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod commitments;
 pub mod communication;
 pub mod focus_attention;
+mod host;
 pub mod life_logistics;
 pub mod prompts;
 pub mod relationships;
@@ -19,4 +20,8 @@ pub mod work_context;
 mod shared;
 
 pub use catalog::{BUILTIN_EXPERT_PACKAGE_VERSION, BuiltinContextSource, BuiltinExpertKind};
+pub use host::{
+    Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context,
+    require_mandatory_source,
+};
 pub use shared::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};

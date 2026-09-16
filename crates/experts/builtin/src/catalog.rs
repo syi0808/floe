@@ -54,6 +54,13 @@ impl BuiltinExpertKind {
         }
     }
 
+    /// Whether the Expert behind this agent id can run on the on-device model.
+    ///
+    /// The common dispatch path holds no builtin knowledge, so it asks here.
+    pub fn runs_on_device_model(package_id: &str) -> bool {
+        Self::from_package_id(package_id).is_some_and(Self::supports_device_model)
+    }
+
     pub fn from_package_id(package_id: &str) -> Option<Self> {
         Self::ALL
             .into_iter()

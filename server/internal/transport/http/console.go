@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"floe/server/internal/authorization"
+	"floe/server/internal/connections"
 	"floe/server/internal/connectors/common"
 	"floe/server/internal/inference"
 )
@@ -185,59 +186,35 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			failure(writer, 404, "not_found")
 			return
 		}
-		connections := []any{}
-		if gmail != nil && connectionOwnedBy(connectionRecords, "gmail", scope) {
-			snapshot, err := gmail.ConnectionSnapshot()
-			if err != nil {
-				failure(writer, 503, "connections_unavailable")
-				return
-			}
-			connections = append(connections, snapshot)
+		sources := connections.Sources{
+			ByConnector:  map[string]connections.SnapshotSource{},
+			ByConnection: map[string]connections.SnapshotSource{},
 		}
-		if microsoftMail != nil && connectionOwnedBy(connectionRecords, "microsoft.mail", scope) {
-			snapshot, err := microsoftMail.ConnectionSnapshot(request.Context())
-			if err != nil {
-				failure(writer, 503, "connections_unavailable")
-				return
-			}
-			connections = append(connections, snapshot)
+		if gmail != nil {
+			sources.ByConnector["gmail"] = connections.LegacySnapshotSource{Runtime: gmail}
 		}
-		runtimes := make([]interface {
-			ConnectionSnapshot(context.Context) (any, error)
-		}, 0, len(work)+len(logistics)+len(calendars))
+		if microsoftMail != nil {
+			sources.ByConnector["microsoft.mail"] = microsoftMail
+		}
 		for connectionID, runtime := range work {
-			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
-				runtimes = append(runtimes, runtime)
-			}
+			sources.ByConnection[connectionID] = runtime
 		}
 		for connectionID, runtime := range logistics {
-			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
-				runtimes = append(runtimes, runtime)
-			}
+			sources.ByConnection[connectionID] = runtime
 		}
 		for connectionID, runtime := range calendars {
-			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
-				runtimes = append(runtimes, runtime)
-			}
+			sources.ByConnection[connectionID] = runtime
 		}
-		for _, runtime := range runtimes {
-			if runtime == nil {
-				continue
-			}
-			snapshot, err := runtime.ConnectionSnapshot(request.Context())
-			if err != nil {
-				failure(writer, 503, "connections_unavailable")
+		owned, err := connections.List(request.Context(), connectionScope(scope), connectionRecords, sources, console)
+		if err != nil {
+			if errors.Is(err, connections.ErrScopeUnavailable) {
+				failure(writer, 503, "connection_scope_unavailable")
 				return
 			}
-			connections = append(connections, snapshot)
-		}
-		var err error
-		connections, err = console.ownedConnectionSnapshots(connections, scope)
-		if err != nil {
-			failure(writer, 503, "connection_scope_unavailable")
+			failure(writer, 503, "connections_unavailable")
 			return
 		}
-		reply(writer, 200, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connections": connections})
+		reply(writer, 200, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connections": owned})
 		return
 	}
 	if request.URL.Path == "/v1/views/mail.communication" {
@@ -260,21 +237,21 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	if strings.HasSuffix(request.URL.Path, "/admit") || strings.HasSuffix(request.URL.Path, "/read") || strings.HasSuffix(request.URL.Path, "/release") {
 		if strings.HasPrefix(request.URL.Path, "/v1/views/mail.communication/") || strings.HasPrefix(request.URL.Path, "/v1/views/work.context/") || strings.HasPrefix(request.URL.Path, "/v1/views/life.logistics/") {
 			communication := make([]CommunicationRuntime, 0, 2)
-			if gmail != nil && connectionOwnedBy(connectionRecords, "gmail", scope) {
+			if gmail != nil && connections.OwnedByConnector(connectionRecords, "gmail", connectionScope(scope)) {
 				communication = append(communication, legacyCommunicationAdapter{runtime: gmail})
 			}
-			if microsoftMail != nil && connectionOwnedBy(connectionRecords, "microsoft.mail", scope) {
+			if microsoftMail != nil && connections.OwnedByConnector(connectionRecords, "microsoft.mail", connectionScope(scope)) {
 				communication = append(communication, microsoftMail)
 			}
 			workRuntimes := make([]WorkContextRuntime, 0, len(work))
 			for connectionID, runtime := range work {
-				if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+				if connections.OwnedByConnection(connectionRecords, connectionID, connectionScope(scope)) {
 					workRuntimes = append(workRuntimes, runtime)
 				}
 			}
 			logisticsRuntimes := make([]LogisticsRuntime, 0, len(logistics))
 			for connectionID, runtime := range logistics {
-				if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+				if connections.OwnedByConnection(connectionRecords, connectionID, connectionScope(scope)) {
 					logisticsRuntimes = append(logisticsRuntimes, runtime)
 				}
 			}
@@ -815,4 +792,9 @@ func (console *Console) updateTarget(writer http.ResponseWriter, request *http.R
 		return
 	}
 	reply(writer, 200, map[string]bool{"ok": true})
+}
+
+// connectionScope restates the authenticated client for the Connections owner.
+func connectionScope(scope clientScope) connections.Scope {
+	return connections.Scope{ClientID: scope.ClientID, PersonID: scope.PersonID, DeviceID: scope.DeviceID}
 }

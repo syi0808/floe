@@ -73,6 +73,19 @@ fn provider_call_limit() -> CallLimiter {
     .expect("valid static provider limits")
 }
 
+/// The paired local server, as Inference's route resolver port.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RemoteModelRouteResolver;
+
+impl floe_inference::RemoteRouteResolver<AgentRemoteRouteDto> for RemoteModelRouteResolver {
+    fn resolve<'a>(
+        &'a self,
+        connection: &'a RemoteModelConnection,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<AgentRemoteRouteDto, AgentFailure>> {
+        Box::pin(resolve_remote_model_route(connection))
+    }
+}
+
 /// Fetch the facts the local server reports, then let Inference decide the route
 /// and Connections project the connector catalog. No policy is decided here.
 pub async fn resolve_remote_model_route(

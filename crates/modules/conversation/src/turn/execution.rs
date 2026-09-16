@@ -46,7 +46,7 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
-    legacy_expert_endpoint: &'a expert_dispatch::LegacyExpertEndpoint<Keys>,
+    builtin_expert_endpoint: &'a expert_dispatch::BuiltinExpertEndpoint<Keys>,
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
@@ -57,7 +57,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
-    legacy_expert_endpoint: &expert_dispatch::LegacyExpertEndpoint<Keys>,
+    builtin_expert_endpoint: &expert_dispatch::BuiltinExpertEndpoint<Keys>,
     conversation_repository: &std::sync::Arc<
         crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
     >,
@@ -120,7 +120,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         run_cancellations,
         task_coordinator,
         schedule_endpoint,
-        legacy_expert_endpoint,
+        builtin_expert_endpoint,
     };
     Box::pin(expert_dispatch::run(
         &inputs,
@@ -297,7 +297,10 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         task_views: &[],
         cards: expert_cards.clone(),
         builtin_setup: builtin_setup.clone(),
-        schedule_runner: Some(&schedule_runner),
+        task_runners: &[(
+            floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+            &schedule_runner,
+        )],
     };
     {
         let legacy_capabilities = capabilities.descriptors(person_id);
@@ -360,7 +363,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let delegation_port = crate::turn::engine_ports::LegacyDelegationPort {
             task_coordinator: inputs.task_coordinator,
             schedule_endpoint: inputs.schedule_endpoint,
-            legacy_expert_endpoint: inputs.legacy_expert_endpoint,
+            builtin_expert_endpoint: inputs.builtin_expert_endpoint,
             turn_request: request,
             context: &context,
             session_id,
@@ -2311,7 +2314,7 @@ use floe_execution::{Cancellation};
         calls: AtomicUsize,
     }
 
-    impl expert_dispatch::ScheduleTaskRunner for FixtureScheduleRunner {
+    impl expert_dispatch::ExpertTaskRunner for FixtureScheduleRunner {
         fn run<'a>(
             &'a self,
             request: A2ASendMessageRequest,
@@ -2382,7 +2385,10 @@ use floe_execution::{Cancellation};
                 skills: vec!["Review a calendar assignment".into()],
             }],
             builtin_setup: None,
-            schedule_runner: Some(&runner),
+            task_runners: &[(
+                floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+                &runner,
+            )],
         };
         let task_id = Uuid::new_v4();
         let task = experts
@@ -2847,7 +2853,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Mail)),
-            schedule_runner: None,
+                task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -3005,7 +3011,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -3047,7 +3053,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: vec![],
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -3247,7 +3253,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -3469,7 +3475,7 @@ use floe_execution::{Cancellation};
             task_views: &tasks,
             cards: test_expert_cards(),
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -3666,7 +3672,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -3935,7 +3941,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -4005,7 +4011,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
-            schedule_runner: None,
+                task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

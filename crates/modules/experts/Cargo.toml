@@ -15,7 +15,6 @@ floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-inference = { path = "../inference" }
 floe-kernel = { path = "../../contracts/kernel" }
-floe-knowledge = { path = "../knowledge" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

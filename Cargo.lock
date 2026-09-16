@@ -978,7 +978,6 @@ dependencies = [
  "floe-execution",
  "floe-inference",
  "floe-kernel",
- "floe-knowledge",
  "serde",
  "serde_json",
  "tempfile",
@@ -1037,7 +1036,6 @@ dependencies = [
  "chrono",
  "floe-agent-contract",
  "floe-execution",
- "floe-kernel",
  "serde",
  "serde_json",
  "thiserror",
@@ -1085,7 +1083,6 @@ name = "floe-protocol"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-actions",
  "floe-agent-contract",
  "floe-context-contract",
  "floe-day",

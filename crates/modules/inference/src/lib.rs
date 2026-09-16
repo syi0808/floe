@@ -14,7 +14,8 @@ pub use api::{
 pub use application::{
     AttemptJournal, AttemptLifecycle, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter,
     LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY, ModelAttemptRecord, ModelAttemptState,
-    ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute, RoutePairing,
-    RoutePlanError, SavedServerConnection, admit_saved_connection, candidate_route,
-    plan_remote_route, valid_external_recipient,
+    ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute, RemoteRouteResolver,
+    RoutePairing, RoutePlanError, SavedConnectionStore, SavedServerConnection,
+    admit_saved_connection, candidate_route, plan_remote_route, select_remote_route,
+    valid_external_recipient,
 };

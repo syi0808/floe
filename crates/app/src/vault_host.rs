@@ -211,6 +211,14 @@ impl VaultBridge {
         self.app_events.as_ref()
     }
 
+    pub(crate) fn precheck_turn(
+        &self,
+        person: PersonId,
+        request: floe_conversation::TurnPrecheckRequest,
+    ) -> Result<floe_conversation::TurnPrecheck, AgentFailure> {
+        self.worker()?.precheck_turn(person, request)
+    }
+
     pub(crate) fn start_conversation(
         &self,
         person: PersonId,
@@ -269,7 +277,7 @@ struct OpenVault<Keys> {
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     directory: Directory,
     schedule_endpoint: Arc<conversation_turn::expert_dispatch::schedule::ScheduleEndpoint<Keys>>,
-    legacy_expert_endpoint: Arc<conversation_turn::expert_dispatch::LegacyExpertEndpoint<Keys>>,
+    builtin_expert_endpoint: Arc<conversation_turn::expert_dispatch::BuiltinExpertEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
 }
 
@@ -291,8 +299,8 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 Arc::clone(&local_context),
             ),
         );
-        let legacy_expert_endpoint = Arc::new(
-            conversation_turn::expert_dispatch::LegacyExpertEndpoint::new(
+        let builtin_expert_endpoint = Arc::new(
+            conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
                 core,
                 Arc::clone(&vault),
                 local_context,
@@ -325,7 +333,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             task_coordinator,
             directory,
             schedule_endpoint,
-            legacy_expert_endpoint,
+            builtin_expert_endpoint,
             _recovered_tasks: recovered_tasks,
         })
     }
@@ -352,7 +360,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                     admitted_principals: vec![self.vault.person_id().to_string()],
                     purposes: vec!["everyday-assistance".into()],
                 },
-                self.legacy_expert_endpoint.clone(),
+                self.builtin_expert_endpoint.clone(),
             )?;
         }
         Ok(())
@@ -429,6 +437,7 @@ impl Job {
 enum WorkerMessage {
     Job(Arc<Job>),
     ConversationQuery(ConversationQueryJob),
+    ConversationPrecheck(ConversationPrecheckJob),
     ConversationCancel(ConversationCancelJob),
 }
 
@@ -442,6 +451,12 @@ struct ConversationQueryJob {
     person: PersonId,
     query: ConversationQuery,
     reply: mpsc::SyncSender<Result<Option<floe_conversation::RunReceipt>, AgentFailure>>,
+}
+
+struct ConversationPrecheckJob {
+    person: PersonId,
+    request: floe_conversation::TurnPrecheckRequest,
+    reply: mpsc::SyncSender<Result<floe_conversation::TurnPrecheck, AgentFailure>>,
 }
 
 struct ConversationCancelJob {
@@ -641,55 +656,39 @@ impl Worker {
                                     let _ = worker_learner_scheduling.foreground_finished();
                                     continue;
                                 }
+                                WorkerMessage::ConversationPrecheck(precheck) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person == precheck.person =>
+                                        {
+                                            runtime.block_on(floe_conversation::precheck_turn(
+                                                open_vault.conversation_repository.as_ref(),
+                                                precheck.request,
+                                            ))
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = precheck.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
                                 WorkerMessage::ConversationCancel(cancel) => {
                                     let result = match (&runtime, vault.as_ref()) {
                                         (Ok(runtime), Some((person, open_vault)))
                                             if *person == cancel.person =>
                                         {
-                                            runtime.block_on(async {
-                                                floe_conversation::ConversationRepository::admit_cancel(
-                                                    open_vault.conversation_repository.as_ref(),
-                                                    floe_conversation::CancelRunCommand {
-                                                        command_id: cancel.command_id,
-                                                        run_id: cancel.run_id,
-                                                        principal: cancel.person.to_string(),
-                                                    },
-                                                )
-                                                .await?;
-                                                let request = floe_conversation::CancelRunRequest {
+                                            runtime.block_on(floe_conversation::cancel_run_command(
+                                                open_vault.conversation_repository.as_ref(),
+                                                &worker_run_cancellations,
+                                                floe_conversation::CancelRunCommand {
+                                                    command_id: cancel.command_id,
                                                     run_id: cancel.run_id,
                                                     principal: cancel.person.to_string(),
-                                                };
-                                                let receipt = floe_conversation::get_run(
-                                                    open_vault.conversation_repository.as_ref(),
-                                                    floe_conversation::RunQuery {
-                                                        principal: request.principal.clone(),
-                                                        run_id: request.run_id,
-                                                    },
-                                                )
-                                                .await?;
-                                                match receipt {
-                                                    Some(receipt)
-                                                        if receipt.state
-                                                            == floe_conversation::RunState::Working =>
-                                                    {
-                                                        match worker_run_cancellations
-                                                            .cancel_run(request)?
-                                                        {
-                                                            floe_conversation::CancelRunStatus::Unknown => {
-                                                                Err(AgentFailure::Interrupted)
-                                                            }
-                                                            status => Ok(status),
-                                                        }
-                                                    }
-                                                    Some(_) => Ok(
-                                                        floe_conversation::CancelRunStatus::Inactive,
-                                                    ),
-                                                    None => Ok(
-                                                        floe_conversation::CancelRunStatus::Unknown,
-                                                    ),
-                                                }
-                                            })
+                                                },
+                                            ))
                                         }
                                         (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
                                         (Ok(_), None) | (Err(_), _) => {
@@ -1094,6 +1093,30 @@ impl Worker {
             .try_send(WorkerMessage::ConversationQuery(ConversationQueryJob {
                 person,
                 query,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        response
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))
+    }
+
+    fn precheck_turn(
+        &self,
+        person: PersonId,
+        request: floe_conversation::TurnPrecheckRequest,
+    ) -> Result<floe_conversation::TurnPrecheck, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::ConversationPrecheck(ConversationPrecheckJob {
+                person,
+                request,
                 reply,
             }))
             .is_err()
@@ -1566,7 +1589,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         local_context,
         &vault.task_coordinator,
         &vault.schedule_endpoint,
-        &vault.legacy_expert_endpoint,
+        &vault.builtin_expert_endpoint,
         &vault.conversation_repository,
         &job.run_cancellations,
         job.person,

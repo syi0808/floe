@@ -1,3 +1,10 @@
+//! Registering the builtin Expert endpoints and injecting the concrete readers
+//! they run against.
+//!
+//! No Expert's judgment lives here. Each agent id is answered by the Expert
+//! registered for it in `floe-experts-builtin`; this file only decides which
+//! endpoints exist and which readers back the host port they use.
+
 use super::*;
 use std::{
     collections::HashMap,
@@ -5,25 +12,78 @@ use std::{
 };
 
 use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
+use floe_experts_builtin::{
+    BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, BuiltinExpertKind,
+};
 
 mod schedule;
 
+/// The Experts this host serves, and the judgment registered behind each id.
+///
+/// Registration is static: the composition root never picks an Expert from what
+/// a request appears to mean.
+fn registered_experts<'host>() -> floe_experts::ExpertDispatchTable<
+    ConversationExperts<'host>,
+    BuiltinExpertRequest,
+    BuiltinExpertOutput,
+> {
+    let mut table = floe_experts::ExpertDispatchTable::default();
+    let registrations: [(
+        BuiltinExpertKind,
+        floe_experts::ExpertRun<
+            ConversationExperts<'host>,
+            BuiltinExpertRequest,
+            BuiltinExpertOutput,
+        >,
+    ); 7] = [
+        (BuiltinExpertKind::Commitments, |host, request| {
+            Box::pin(floe_experts_builtin::commitments::dispatch(host, request))
+        }),
+        (BuiltinExpertKind::Communication, |host, request| {
+            Box::pin(floe_experts_builtin::communication::dispatch(host, request))
+        }),
+        (BuiltinExpertKind::WorkContext, |host, request| {
+            Box::pin(floe_experts_builtin::work_context::dispatch(host, request))
+        }),
+        (BuiltinExpertKind::LifeLogistics, |host, request| {
+            Box::pin(floe_experts_builtin::life_logistics::dispatch(host, request))
+        }),
+        (BuiltinExpertKind::Relationships, |host, request| {
+            Box::pin(floe_experts_builtin::relationships::dispatch(host, request))
+        }),
+        (BuiltinExpertKind::FocusAttention, |host, request| {
+            Box::pin(floe_experts_builtin::focus_attention::dispatch(host, request))
+        }),
+        (BuiltinExpertKind::Wellbeing, |host, request| {
+            Box::pin(floe_experts_builtin::wellbeing::dispatch(host, request))
+        }),
+    ];
+    for (kind, run) in registrations {
+        table
+            .register(kind.package_id(), run)
+            .expect("each builtin Expert registers once");
+    }
+    table
+}
+
 #[derive(Clone)]
-pub(crate) struct LegacyExpertEndpointContext {
+pub(crate) struct BuiltinExpertEndpointContext {
     pub request: floe_protocol::AgentConversationTurnRequestDto,
     pub context: AgentContext,
     pub session_id: Uuid,
     pub max_output_bytes: usize,
 }
 
-pub(crate) struct LegacyExpertEndpoint<Keys> {
+/// The endpoint the delegating Run invokes for every registered builtin Expert
+/// that answers in process.
+pub(crate) struct BuiltinExpertEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
     local_context: Arc<LocalContextStore>,
-    contexts: Mutex<HashMap<Uuid, LegacyExpertEndpointContext>>,
+    contexts: Mutex<HashMap<Uuid, BuiltinExpertEndpointContext>>,
 }
 
-impl<Keys> LegacyExpertEndpoint<Keys> {
+impl<Keys> BuiltinExpertEndpoint<Keys> {
     pub(crate) fn new(
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
@@ -40,7 +100,7 @@ impl<Keys> LegacyExpertEndpoint<Keys> {
     pub(crate) fn stage(
         &self,
         run_id: Uuid,
-        context: LegacyExpertEndpointContext,
+        context: BuiltinExpertEndpointContext,
     ) -> Result<(), AgentFailure> {
         if run_id.is_nil() || context.session_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
@@ -64,7 +124,7 @@ impl<Keys> LegacyExpertEndpoint<Keys> {
     }
 }
 
-impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for LegacyExpertEndpoint<Keys> {
+impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<Keys> {
     fn execute<'a>(
         &'a self,
         invocation: EndpointInvocation,
@@ -81,8 +141,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for LegacyExpertEndpoint<Ke
                 .map_err(|_| AgentFailure::StorageUnavailable)?
                 .remove(&run_id)
                 .ok_or(AgentFailure::CapabilityUnavailable)?;
+            let registrations = registered_experts();
             if invocation.request.principal != self.vault.person_id().to_string()
-                || invocation.request.selected_agent_id == BuiltinExpertKind::Schedule.package_id()
+                || !registrations.is_registered(&invocation.request.selected_agent_id)
                 || staged.session_id != super::session_uuid(&staged.request.session_id)?
             {
                 return Err(AgentFailure::CapabilityDenied);
@@ -170,7 +231,8 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for LegacyExpertEndpoint<Ke
                 task_views: &[],
                 cards,
                 builtin_setup: Some(builtin_setup),
-                schedule_runner: None,
+                task_runners: &[],
+                registrations,
             };
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
@@ -196,37 +258,17 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for LegacyExpertEndpoint<Ke
                     cancellation: scope.cancellation().clone(),
                 })
                 .await?;
-            if task.id != task_id
-                || task.context_id != run_id
-                || task.agent_id != invocation.request.selected_agent_id
-                || task.state != A2ATaskState::Completed
-                || task.failure.is_some()
-            {
-                return Err(AgentFailure::InvalidModelOutput);
-            }
-            let result = task
-                .data_part(EXPERT_RESULT_MEDIA_TYPE)
-                .or_else(|| task.result_text().ok())
-                .map(str::to_owned)
-                .ok_or(AgentFailure::InvalidModelOutput)?;
             let coverage = governed_store
                 .result_coverage(task_id, task_id)?
                 .unwrap_or(floe_agent_contract::DependencyCoverage::Independent);
-            Ok(ExpertReport {
-                task_id: invocation.request.task_id,
-                principal: invocation.request.principal,
-                agent_id: invocation.request.selected_agent_id,
-                definition_revision: invocation.request.selected_definition_revision,
-                result,
-                artifacts: vec![],
-                coverage,
-                settlement: None,
-            })
+            floe_experts::expert_report(invocation, &task, run_id, coverage)
         })
     }
 }
 
-pub(super) trait ScheduleTaskRunner: Send + Sync {
+/// An Expert whose work is a delegated Task of its own rather than one bounded
+/// in-process call.
+pub(super) trait ExpertTaskRunner: Send + Sync {
     fn run<'a>(
         &'a self,
         request: A2ASendMessageRequest,
@@ -240,10 +282,10 @@ pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
     pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
     pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
     pub context: &'a AgentContext,
-    pub recorder: Option<&'a dyn super::ResultRecorder>,
+    pub recorder: Option<&'a dyn floe_experts::TaskCoverageRecorder>,
 }
 
-impl<Keys: VaultKeyProvider + 'static> ScheduleTaskRunner
+impl<Keys: VaultKeyProvider + 'static> ExpertTaskRunner
     for RegisteredScheduleTaskRunner<'_, Keys>
 {
     fn run<'a>(
@@ -278,6 +320,10 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     .await
 }
 
+/// The concrete readers one turn's Experts run against.
+///
+/// This is the injection site for the host port the builtin Experts declare:
+/// every field is a reader or policy decided elsewhere and handed in here.
 pub(super) struct ConversationExperts<'model> {
     pub(super) model: &'model Model,
     pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
@@ -294,10 +340,60 @@ pub(super) struct ConversationExperts<'model> {
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
     pub(super) builtin_setup: Option<BuiltinExpertSetupReceipt>,
-    pub(super) schedule_runner: Option<&'model dyn ScheduleTaskRunner>,
+    /// Experts that answer on the Task path, by the agent id they are registered
+    /// under.
+    pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
+    pub(super) registrations: floe_experts::ExpertDispatchTable<
+        ConversationExperts<'model>,
+        BuiltinExpertRequest,
+        BuiltinExpertOutput,
+    >,
 }
 
-impl ConversationExperts<'_> {
+impl<'model> ConversationExperts<'model> {
+    /// The injected readers, bound to the consumer identity the Expert reads as.
+    fn personal_views<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+        consumer_name: &'a str,
+    ) -> PersonalViewSource<'a> {
+        PersonalViewSource {
+            model: self.model,
+            source_client: self.source_client,
+            policy: self.policy,
+            person_id: request.person_id,
+            people_reader: self.people_reader,
+            feasibility_reader: self.feasibility_reader,
+            wellbeing_reader: self.wellbeing_reader,
+            remote_reader: self.remote_reader,
+            recorder: self.recorder,
+            dependency_turn_id: request.invocation_id,
+            dependency_result_id: request.invocation_id,
+            consumer_name,
+        }
+    }
+}
+
+impl BuiltinExpertHost for ConversationExperts<'_> {
+    type Model = Model;
+
+    fn model(&self) -> &Self::Model {
+        self.model
+    }
+
+    fn server_model(&self) -> Option<&Self::Model> {
+        matches!(self.model, Model::Server(_)).then_some(self.model)
+    }
+
+    fn device_model(&self) -> Option<&Self::Model> {
+        matches!(self.model, Model::Foundation(_)).then_some(self.model)
+    }
+
+    fn policy(&self) -> &InferencePolicyDecision {
+        self.policy
+    }
+
+    /// Whether the Expert's setup assignment actually granted this source.
     fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool {
         let _ = self.local_context;
         let Some(setup) = &self.builtin_setup else {
@@ -314,36 +410,151 @@ impl ConversationExperts<'_> {
         })
     }
 
-    fn require_source(
-        &self,
-        agent_id: &str,
-        source: BuiltinContextSource,
-    ) -> Result<(), AgentFailure> {
-        self.source_granted(agent_id, source)
-            .then_some(())
-            .ok_or(AgentFailure::CapabilityDenied)
+    fn read_source_view<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+        view_id: &'a str,
+        query: serde_json::Value,
+    ) -> floe_experts_builtin::Acquiring<'a, floe_context::SourceView<serde_json::Value>> {
+        Box::pin(async move {
+            super::read_context_source(
+                self.remote_reader
+                    .ok_or(AgentFailure::CapabilityUnavailable)?,
+                request.person_id,
+                view_id,
+                &request.agent_id,
+                query,
+                request.deadline,
+                &request.cancellation,
+            )
+            .await
+        })
     }
 
-    async fn read_remote(
+    fn record_dependency(
         &self,
-        view_id: &str,
-        consumer: &str,
-        query: serde_json::Value,
-        request: &A2ASendMessageRequest,
-    ) -> Result<floe_context::SourceView<serde_json::Value>, AgentFailure> {
-        super::read_context_source(
-            self.remote_reader
-                .ok_or(AgentFailure::CapabilityUnavailable)?,
-            request.person_id,
-            view_id,
-            consumer,
-            query,
-            request.deadline,
-            &request.cancellation,
-        )
-        .await
+        turn_id: Uuid,
+        result_id: Uuid,
+        dependency: floe_context_contract::ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        self.recorder
+            .ok_or(AgentFailure::CapabilityUnavailable)?
+            .record(turn_id, result_id, dependency)
+    }
+
+    fn calendar_views<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::CalendarContextView>> {
+        Box::pin(async move {
+            self.personal_views(request, ASSISTANT_CONSUMER)
+                .calendar_views(request.deadline, &request.cancellation)
+                .await
+        })
+    }
+
+    fn work_context_views<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::WorkContextView>> {
+        Box::pin(async move {
+            self.personal_views(request, ASSISTANT_CONSUMER)
+                .work_context_views(request.deadline, &request.cancellation)
+                .await
+        })
+    }
+
+    fn people_view<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> floe_experts_builtin::Acquiring<'a, floe_context::PeopleView> {
+        Box::pin(async move {
+            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            .people_view(request.deadline, &request.cancellation)
+            .await
+        })
+    }
+
+    fn confirmed_interaction_views<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+        people: &'a floe_context::PeopleView,
+    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_experts_builtin::ConfirmedInteractionView>>
+    {
+        Box::pin(async move {
+            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            .confirmed_interaction_views(people, request.deadline, &request.cancellation)
+            .await
+        })
+    }
+
+    fn wellbeing_view<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> floe_experts_builtin::Acquiring<'a, floe_context::WellbeingView> {
+        Box::pin(async move {
+            self.personal_views(request, ASSISTANT_CONSUMER)
+                .wellbeing_view(request.deadline, &request.cancellation)
+                .await
+        })
+    }
+
+    fn attention_view<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> floe_experts_builtin::Acquiring<
+        'a,
+        (
+            floe_context::AttentionView,
+            floe_context_contract::ContextDependency,
+        ),
+    > {
+        Box::pin(async move {
+            self.attention
+                .ok_or(AgentFailure::CapabilityUnavailable)?
+                .read(
+                    request.person_id,
+                    personal_grants::ATTENTION_EXPERT_CONSUMER,
+                    request.invocation_id,
+                    request.invocation_id,
+                    request.deadline,
+                    &request.cancellation,
+                )
+                .await
+        })
+    }
+
+    fn conversation_context_available(&self) -> bool {
+        self.context_reader.is_some()
+    }
+
+    fn memory_context<'a>(
+        &'a self,
+    ) -> floe_experts_builtin::Acquiring<'a, floe_knowledge::MemoryContextSnapshot> {
+        Box::pin(async move {
+            self.context_reader
+                .ok_or(AgentFailure::CapabilityUnavailable)?
+                .memory()
+                .await
+        })
+    }
+
+    fn task_view<'a>(&'a self) -> floe_experts_builtin::Acquiring<'a, NativeContextView> {
+        Box::pin(async move {
+            self.context_reader
+                .ok_or(AgentFailure::CapabilityUnavailable)?
+                .tasks()
+                .await
+        })
+    }
+
+    fn staged_task_views(&self) -> &[NativeContextView] {
+        self.task_views
     }
 }
+
+/// The consumer identity a general assistant read is made under.
+const ASSISTANT_CONSUMER: &str = "assistant";
 
 impl InProcessAgent for ConversationExperts<'_> {
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
@@ -351,8 +562,7 @@ impl InProcessAgent for ConversationExperts<'_> {
             .iter()
             .filter(|card| {
                 matches!(self.model, Model::Server(_))
-                    || BuiltinExpertKind::from_package_id(&card.id)
-                        .is_some_and(BuiltinExpertKind::supports_device_model)
+                    || BuiltinExpertKind::runs_on_device_model(&card.id)
             })
             .cloned()
             .collect()
@@ -362,406 +572,50 @@ impl InProcessAgent for ConversationExperts<'_> {
         &self,
         request: A2ASendMessageRequest,
     ) -> Result<A2ATask, AgentFailure> {
-        if request.schema_version != AGENT_VERSION
-            || request.message.role != A2AMessageRole::User
-            || request.message.task_id.is_none()
-            || !self
-                .agent_cards(request.person_id)
-                .iter()
-                .any(|card| card.id == request.agent_id)
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let expert = BuiltinExpertKind::from_package_id(&request.agent_id)
-            .ok_or(AgentFailure::CapabilityDenied)?;
+        let cards = self.agent_cards(request.person_id);
+        let invocation_id = floe_experts::admit_expert_message(&request, &cards)?;
         let expert_started = std::time::Instant::now();
         tracing::info!(
             expert = request.agent_id,
-            invocation_id = %request.message.task_id.unwrap(),
+            invocation_id = %invocation_id,
             "expert_invocation_started"
         );
-        let assignment = request.message.text()?.to_owned();
-        if expert == BuiltinExpertKind::Schedule {
-            return self
-                .schedule_runner
-                .ok_or(AgentFailure::CapabilityUnavailable)?
-                .run(request)
-                .await;
+        if let Some((_, runner)) = self
+            .task_runners
+            .iter()
+            .find(|(agent_id, _)| *agent_id == request.agent_id)
+        {
+            return runner.run(request).await;
         }
-        self.require_source(&request.agent_id, expert.mandatory_source())?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
-        let current_time_unix_ms =
-            i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
-        let invocation_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
-        let mut expert_context = self.context.clone();
-        if !self.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory) {
-            expert_context.memories.clear();
-        }
-        let mut task_views = self.task_views.to_vec();
-        if expert == BuiltinExpertKind::Commitments
-            && let Some(reader) = self.context_reader
-        {
-            if self.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory) {
-                let snapshot = reader.memory().await?;
-                expert_context.memories = snapshot.memories;
-                floe_context::record_source_issue(
-                    &mut expert_context.optional_context_issues,
-                    floe_agent_contract::ContextSource::Memory,
-                    snapshot.issue,
-                );
-            }
-            if self.source_granted(&request.agent_id, BuiltinContextSource::Tasks) {
-                let acquired = floe_context::acquire_optional_source(
-                    floe_agent_contract::ContextSource::Tasks,
-                    reader.tasks(),
-                )
-                .await?;
-                floe_context::record_source_issue(
-                    &mut expert_context.optional_context_issues,
-                    floe_agent_contract::ContextSource::Tasks,
-                    acquired.issue.map(|issue| issue.reason),
-                );
-                task_views = acquired.value.into_iter().collect();
-            }
-        }
-        let mail_invocation = |view| MailExpertInvocation {
-            usage: request.usage.clone(),
+        let expert_request = BuiltinExpertRequest {
+            agent_id: request.agent_id.clone(),
             person_id: request.person_id,
             invocation_id,
-            assignment: assignment.clone(),
-            current_time_unix_ms,
-            context: expert_context.clone(),
-            view,
+            assignment: request.message.text()?.to_owned(),
+            current_time_unix_ms: i64::try_from(now.as_millis())
+                .map_err(|_| AgentFailure::StaleContext)?,
+            context: self.context.clone(),
+            usage: request.usage.clone(),
             max_output_bytes: request.max_output_bytes,
-            max_model_tokens: 40_960,
-            max_model_cost_micros: 50_000,
             deadline: request.deadline,
             cancellation: request.cancellation.clone(),
         };
-        let portfolio_invocation = || PortfolioExpertInvocation {
-            usage: request.usage.clone(),
-            person_id: request.person_id,
-            invocation_id,
-            assignment: assignment.clone(),
-            current_time_unix_ms,
-            context: expert_context.clone(),
-            max_output_bytes: request.max_output_bytes,
-            max_model_tokens: 40_960,
-            max_model_cost_micros: 50_000,
-            deadline: request.deadline,
-            cancellation: request.cancellation.clone(),
-        };
-        let personal_invocation = || PersonalExpertInvocation {
-            usage: request.usage.clone(),
-            person_id: request.person_id,
-            invocation_id,
-            assignment: assignment.clone(),
-            current_time_unix_ms,
-            context: expert_context.clone(),
-            max_output_bytes: request.max_output_bytes,
-            max_model_tokens: 40_960,
-            max_model_cost_micros: 50_000,
-            deadline: request.deadline,
-            cancellation: request.cancellation.clone(),
-        };
-        let personal_views = PersonalViewSource {
-            model: self.model,
-            source_client: self.source_client,
-            policy: self.policy,
-            person_id: request.person_id,
-            people_reader: self.people_reader,
-            feasibility_reader: self.feasibility_reader,
-            wellbeing_reader: self.wellbeing_reader,
-            remote_reader: self.remote_reader,
-            recorder: self.recorder,
-            dependency_turn_id: invocation_id,
-            dependency_result_id: invocation_id,
-            consumer_name: if expert == BuiltinExpertKind::Relationships {
-                "contacts.expert"
-            } else {
-                "assistant"
-            },
-        };
-        let (summary, data) = match expert {
-            BuiltinExpertKind::Schedule => unreachable!("schedule uses the registered task runner"),
-            BuiltinExpertKind::Commitments => {
-                let source_view = self
-                    .read_remote(
-                        "mail.communication",
-                        &request.agent_id,
-                        serde_json::json!({"schema_version": AGENT_VERSION, "query": "", "cursor": 0, "limit": default_communication_limit()}),
-                        &request,
-                    )
-                    .await?;
-                self.recorder
-                    .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(
-                        invocation_id,
-                        invocation_id,
-                        source_view.dependency().clone(),
-                    )?;
-                let view: floe_experts_builtin::CommunicationView =
-                    serde_json::from_value(source_view.payload().clone())
-                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-                let Model::Server(model) = self.model else {
-                    return Err(AgentFailure::CapabilityUnavailable);
-                };
-                let calendars =
-                    if self.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-                        personal_views
-                            .calendar_views(request.deadline, &request.cancellation)
-                            .await?
-                    } else {
-                        vec![]
-                    };
-                let result: CommitmentsExpertResult = run_commitments_expert_with_views(
-                    model,
-                    self.policy,
-                    mail_invocation(view),
-                    CommitmentsContextViews {
-                        calendars,
-                        tasks: if self
-                            .source_granted(&request.agent_id, BuiltinContextSource::Tasks)
-                        {
-                            task_views
-                        } else {
-                            vec![]
-                        },
-                    },
-                )
-                .await?;
-                drop(source_view);
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-            BuiltinExpertKind::Communication => {
-                let Model::Server(model) = self.model else {
-                    return Err(AgentFailure::CapabilityUnavailable);
-                };
-                let source_view = self
-                    .read_remote(
-                        "mail.communication",
-                        &request.agent_id,
-                        serde_json::json!({"schema_version": AGENT_VERSION, "query": "", "cursor": 0, "limit": default_communication_limit()}),
-                        &request,
-                    )
-                    .await?;
-                self.recorder
-                    .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(
-                        invocation_id,
-                        invocation_id,
-                        source_view.dependency().clone(),
-                    )?;
-                let view: floe_experts_builtin::CommunicationView =
-                    serde_json::from_value(source_view.payload().clone())
-                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-                let result: CommunicationExpertResult =
-                    run_communication_expert(model, self.policy, mail_invocation(view)).await?;
-                drop(source_view);
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-            BuiltinExpertKind::WorkContext => {
-                let source_view = self
-                    .read_remote(
-                        "work.context",
-                        &request.agent_id,
-                        serde_json::json!({"schema_version": AGENT_VERSION}),
-                        &request,
-                    )
-                    .await?;
-                self.recorder
-                    .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(
-                        invocation_id,
-                        invocation_id,
-                        source_view.dependency().clone(),
-                    )?;
-                let view: floe_experts_builtin::WorkContextView =
-                    serde_json::from_value(source_view.payload().clone())
-                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-                let Model::Server(model) = self.model else {
-                    return Err(AgentFailure::CapabilityUnavailable);
-                };
-                let result: WorkContextExpertResult =
-                    run_work_context_expert(model, self.policy, portfolio_invocation(), view)
-                        .await?;
-                drop(source_view);
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-            BuiltinExpertKind::LifeLogistics => {
-                let source_view = self
-                    .read_remote(
-                        "life.logistics",
-                        &request.agent_id,
-                        serde_json::json!({"schema_version": AGENT_VERSION}),
-                        &request,
-                    )
-                    .await?;
-                self.recorder
-                    .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(
-                        invocation_id,
-                        invocation_id,
-                        source_view.dependency().clone(),
-                    )?;
-                let view: floe_experts_builtin::LogisticsView =
-                    serde_json::from_value(source_view.payload().clone())
-                        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-                let Model::Server(model) = self.model else {
-                    return Err(AgentFailure::CapabilityUnavailable);
-                };
-                let result: LifeLogisticsExpertResult =
-                    run_life_logistics_expert(model, self.policy, portfolio_invocation(), view)
-                        .await?;
-                drop(source_view);
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-            BuiltinExpertKind::Relationships => {
-                let people = personal_views
-                    .people_view(request.deadline, &request.cancellation)
-                    .await?;
-                let confirmed_interactions = if self.source_granted(
-                    &request.agent_id,
-                    BuiltinContextSource::ConfirmedInteractions,
-                ) {
-                    personal_views
-                        .confirmed_interaction_views(
-                            &people,
-                            request.deadline,
-                            &request.cancellation,
-                        )
-                        .await?
-                } else {
-                    vec![]
-                };
-                let result: RelationshipsExpertResult = run_relationships_expert_with_views(
-                    self.model,
-                    self.policy,
-                    personal_invocation(),
-                    RelationshipsContextViews {
-                        people,
-                        confirmed_interactions,
-                    },
-                )
-                .await?;
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-            BuiltinExpertKind::FocusAttention => {
-                let (attention, dependency) = {
-                    if !matches!(self.model, Model::Foundation(_)) {
-                        return Err(AgentFailure::CapabilityUnavailable);
-                    }
-                    self.attention
-                        .ok_or(AgentFailure::CapabilityUnavailable)?
-                        .read(
-                            request.person_id,
-                            personal_grants::ATTENTION_EXPERT_CONSUMER,
-                            invocation_id,
-                            invocation_id,
-                            request.deadline,
-                            &request.cancellation,
-                        )
-                        .await?
-                };
-                self.recorder
-                    .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(invocation_id, invocation_id, dependency)?;
-                let calendars =
-                    if self.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-                        personal_views
-                            .calendar_views(request.deadline, &request.cancellation)
-                            .await?
-                    } else {
-                        vec![]
-                    };
-                let active_work =
-                    if self.source_granted(&request.agent_id, BuiltinContextSource::WorkContext) {
-                        personal_views
-                            .work_context_views(request.deadline, &request.cancellation)
-                            .await?
-                    } else {
-                        vec![]
-                    };
-                let result: FocusExpertResult = run_focus_expert_with_views(
-                    self.model,
-                    self.policy,
-                    personal_invocation(),
-                    FocusContextViews {
-                        attention,
-                        calendars,
-                        active_work,
-                    },
-                )
-                .await?;
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-            BuiltinExpertKind::Wellbeing => {
-                let wellbeing = personal_views
-                    .wellbeing_view(request.deadline, &request.cancellation)
-                    .await?;
-                let calendars =
-                    if self.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-                        personal_views
-                            .calendar_views(request.deadline, &request.cancellation)
-                            .await?
-                    } else {
-                        vec![]
-                    };
-                let result: WellbeingExpertResult = run_wellbeing_expert_with_views(
-                    self.model,
-                    self.policy,
-                    personal_invocation(),
-                    WellbeingContextViews {
-                        wellbeing,
-                        calendars,
-                    },
-                )
-                .await?;
-                (
-                    result.summary.clone(),
-                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-                )
-            }
-        };
-        let task = A2ATask {
-            id: request.message.task_id.ok_or(AgentFailure::InvalidInput)?,
-            context_id: request.message.context_id,
-            agent_id: request.agent_id,
-            state: A2ATaskState::Completed,
-            history: vec![request.message],
-            artifacts: vec![A2AArtifact {
-                artifact_id: uuid::Uuid::new_v4(),
-                name: expert.result_artifact_name().into(),
-                parts: vec![
-                    A2APart::Text { text: summary },
-                    A2APart::Data {
-                        media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
-                        data,
-                    },
-                ],
-            }],
-            failure: None,
-        };
+        let output = self
+            .registrations
+            .run(&request.agent_id, self, &expert_request)
+            .await?;
+        let artifact_name = BuiltinExpertKind::from_package_id(&request.agent_id)
+            .ok_or(AgentFailure::CapabilityDenied)?
+            .result_artifact_name();
+        let task = floe_experts::completed_expert_task(
+            request,
+            artifact_name,
+            output.summary,
+            output.data,
+        )?;
         tracing::info!(
             expert = task.agent_id,
             invocation_id = %task.id,

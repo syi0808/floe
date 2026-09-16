@@ -6,6 +6,7 @@
 
 mod a2a;
 mod directory;
+mod dispatch;
 mod invocation;
 mod registry;
 mod task;
@@ -16,6 +17,11 @@ pub use a2a::{
     EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
 };
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
+pub use dispatch::{
+    ExpertDispatchTable, ExpertRun, TaskCoverageRecorder, admit_expert_message,
+    completed_expert_task, delegate_expert_task, expert_report, record_task_coverage,
+    task_receipt_to_a2a,
+};
 pub use invocation::{
     ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
     ViewCancellation, check_running,

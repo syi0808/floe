@@ -35,58 +35,19 @@ func validPersonID(value string) bool     { return personIDPattern.MatchString(v
 func validDeviceID(value string) bool     { return deviceIDPattern.MatchString(value) }
 func validConnectionID(value string) bool { return connectionIDPattern.MatchString(value) }
 
-func connectionSnapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		return nil, "", "", false
-	}
-	var value map[string]any
-	if json.Unmarshal(encoded, &value) != nil {
-		return nil, "", "", false
-	}
-	connection, ok := value["connection"].(map[string]any)
-	if !ok {
-		return nil, "", "", false
-	}
-	connectorID, ok := connection["connector_id"].(string)
-	if !ok || connectorID == "" {
-		return nil, "", "", false
-	}
-	deviceID := ""
-	if descriptor, ok := value["descriptor"].(map[string]any); ok {
-		if execution, ok := descriptor["execution"].(map[string]any); ok && execution["kind"] == "device" {
-			deviceID, _ = execution["device_id"].(string)
-		}
-	}
-	return value, connectorID, deviceID, true
-}
-
-func (console *Console) ownedConnectionSnapshots(snapshots []any, scope clientScope) ([]any, error) {
+// OwnedConnection reports the connection this Person owns for a connector and
+// the authority that executes it.
+//
+// Both are read under this Console's own lock so a snapshot is never stamped
+// with an authority that no longer owns the connection.
+func (console *Console) OwnedConnection(connectorID, personID string) (connections.Record, string, bool) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	owned := make([]any, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		value, connectorID, deviceID, ok := connectionSnapshotMetadata(snapshot)
-		if !ok {
-			return nil, errors.New("invalid connection ownership")
-		}
-		record, exists := console.connectionForPerson(connectorID, scope.PersonID)
-		if !exists {
-			continue
-		}
-		if record.Device != nil && (record.Device.DeviceID != scope.DeviceID || record.Device.DeviceID != deviceID) || record.Device == nil && deviceID != "" {
-			return nil, errors.New("connection device binding mismatch")
-		}
-		connection := value["connection"].(map[string]any)
-		connection["person_id"] = record.PersonID
-		connection["connection_id"] = record.ConnectionID
-		if record.Device != nil {
-			connection["device_binding"] = map[string]any{"device_id": record.Device.DeviceID}
-		}
-		connection["authority"] = map[string]any{"execution_owner": console.state.ExecutionOwnerID, "incarnation": record.Incarnation, "epoch": record.Epoch, "identity_unverified": record.IdentityUnverified}
-		owned = append(owned, value)
+	record, exists := console.connectionForPerson(connectorID, personID)
+	if !exists {
+		return connections.Record{}, "", false
 	}
-	return owned, nil
+	return record, console.state.ExecutionOwnerID, true
 }
 
 type AuthRuntime interface {
@@ -215,8 +176,7 @@ func contextRuntimeConnectorID(runtime interface {
 	if err != nil {
 		return "", false
 	}
-	_, connectorID, _, ok := connectionSnapshotMetadata(snapshot)
-	return connectorID, ok
+	return connections.SnapshotConnectorID(snapshot)
 }
 
 func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
@@ -460,20 +420,6 @@ func decode(writer http.ResponseWriter, request *http.Request, output any) bool 
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16384))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(output) == nil && decoder.Decode(new(any)) == io.EOF
-}
-
-func connectionOwnedBy(connections map[string]connectionRecord, connectorID string, scope clientScope) bool {
-	for _, record := range connections {
-		if record.ConnectorID == connectorID && record.PersonID == scope.PersonID && (record.Device == nil || record.Device.DeviceID == scope.DeviceID) {
-			return true
-		}
-	}
-	return false
-}
-
-func runtimeConnectionOwnedBy(connections map[string]connectionRecord, connectionID string, scope clientScope) bool {
-	record, exists := connections[connectionID]
-	return exists && record.PersonID == scope.PersonID && (record.Device == nil || record.Device.DeviceID == scope.DeviceID)
 }
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)

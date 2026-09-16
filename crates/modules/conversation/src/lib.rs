@@ -15,8 +15,9 @@ pub use api::{
 };
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
-    CancelRunStatus, ConversationService, RunCancellationRegistry, compact_session, continuation,
-    get_command, get_run, get_session, project_continuation, read_archive, recover_session,
+    CancelRunStatus, ConversationService, RunCancellationRegistry, TurnPrecheck,
+    TurnPrecheckRequest, cancel_run_command, compact_session, continuation, get_command, get_run,
+    get_session, precheck_turn, project_continuation, read_archive, recover_session,
     resume_session, start_session,
 };
 pub use domain::{
