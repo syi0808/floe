@@ -279,6 +279,7 @@ impl AgentRegistry {
                     description: metadata.description.clone(),
                     domain_tags: metadata.domain_tags.clone(),
                     skills: metadata.skills.clone(),
+                    supported_placements: metadata.supported_placements.clone(),
                 };
                 card.validate().ok().map(|_| card)
             })
@@ -436,6 +437,66 @@ fn validate_sources(sources: &[BuiltinSourceBinding]) -> Result<(), AgentFailure
     } else {
         Ok(())
     }
+}
+
+/// What each Expert in one Person's setup may read right now.
+///
+/// The decision is the registry's; a caller holds the answer and forwards it,
+/// rather than walking assignments and bindings itself.
+#[derive(Clone, Debug, Default)]
+pub struct SourceGrants {
+    setup: Option<BuiltinExpertSetupReceipt>,
+}
+
+impl SourceGrants {
+    pub fn new(setup: Option<BuiltinExpertSetupReceipt>) -> Self {
+        Self { setup }
+    }
+
+    /// Whether `expert` may read `source`, and what stands in the way if not.
+    pub fn grant(&self, expert: &str, source: &str) -> SourceGrant {
+        let Some(setup) = &self.setup else {
+            return SourceGrant::NotConfigured;
+        };
+        let Some(receipt) = setup
+            .assignments
+            .iter()
+            .find(|receipt| receipt.expert.as_str() == expert)
+        else {
+            return SourceGrant::NotConfigured;
+        };
+        let Some(binding) = setup
+            .sources
+            .iter()
+            .find(|binding| binding.source.as_str() == source)
+        else {
+            return SourceGrant::NotConfigured;
+        };
+        if !receipt.granted_view_handles.contains(&binding.view_handle) {
+            return SourceGrant::Denied;
+        }
+        match binding.state {
+            BuiltinSourceState::Available => SourceGrant::Granted,
+            BuiltinSourceState::Disabled | BuiltinSourceState::Unavailable => {
+                SourceGrant::Unavailable
+            }
+        }
+    }
+}
+
+/// The cards a caller running at `placement` may offer.
+///
+/// A card states where its Expert runs; the caller never decides eligibility
+/// from what an agent id looks like.
+pub fn eligible_cards(
+    cards: &[crate::AgentCard],
+    placement: floe_context_contract::ModelPlacement,
+) -> Vec<crate::AgentCard> {
+    cards
+        .iter()
+        .filter(|card| card.runs_at(placement))
+        .cloned()
+        .collect()
 }
 
 /// The view handles a declared source list actually resolves to right now.

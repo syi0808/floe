@@ -5,32 +5,11 @@ use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_kernel::AGENT_VERSION;
-use floe_context::{AgentContext, AttentionView, CalendarContextView, ContextEvidence, InferencePolicyDecision, PeopleView, personal_context_evidence, validate_people_view};
+use floe_context::{AgentContext, CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction, ConfirmedInteractionView, validate_confirmed_interaction_view, AttentionView, CalendarContextView, ContextEvidence, InferencePolicyDecision, PeopleView, personal_context_evidence, validate_people_view};
 use floe_conversation::ModelRunner;
 
 use crate::prompts::{relationships_expert_prompt};
 use crate::shared::{validate_summary, PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, valid_handle, validate_judgment};
-
-pub const CONFIRMED_INTERACTION_VIEW_ID: &str = "relationships.confirmed_interactions";
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfirmedInteraction {
-    pub identity_handle: String,
-    pub evidence_handle: String,
-    pub occurred_at_unix_ms: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfirmedInteractionView {
-    pub schema_version: u32,
-    pub view_id: String,
-    pub source_handle: String,
-    pub observed_at_unix_ms: i64,
-    pub expires_at_unix_ms: i64,
-    pub interactions: Vec<ConfirmedInteraction>,
-}
 
 #[derive(Clone, Debug)]
 pub struct RelationshipsContextViews {
@@ -177,45 +156,6 @@ struct RelationshipMemoryLink {
     target_id: Uuid,
     revision: u64,
     valid_until_unix_ms: Option<i64>,
-}
-
-pub fn validate_confirmed_interaction_view(
-    view: &ConfirmedInteractionView,
-    people: &PeopleView,
-    now_unix_ms: i64,
-) -> Result<(), AgentFailure> {
-    if view.schema_version != AGENT_VERSION
-        || view.view_id != CONFIRMED_INTERACTION_VIEW_ID
-        || !valid_handle(&view.source_handle)
-        || view.observed_at_unix_ms > now_unix_ms
-        || view.expires_at_unix_ms <= now_unix_ms
-        || view.expires_at_unix_ms <= view.observed_at_unix_ms
-        || view.expires_at_unix_ms - view.observed_at_unix_ms > 300_000
-        || view.interactions.len() > 64
-        || serde_json::to_vec(view)
-            .map_err(|_| AgentFailure::InvalidInput)?
-            .len()
-            > floe_context::MAX_PERSONAL_CONTEXT_BYTES
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    for (index, interaction) in view.interactions.iter().enumerate() {
-        if !valid_handle(&interaction.identity_handle)
-            || !valid_handle(&interaction.evidence_handle)
-            || interaction.occurred_at_unix_ms < 0
-            || interaction.occurred_at_unix_ms > view.observed_at_unix_ms
-            || !people
-                .identities
-                .iter()
-                .any(|identity| identity.identity_handle == interaction.identity_handle)
-            || view.interactions[..index]
-                .iter()
-                .any(|other| other.evidence_handle == interaction.evidence_handle)
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-    }
-    Ok(())
 }
 
 fn confirmed_interaction_evidence(

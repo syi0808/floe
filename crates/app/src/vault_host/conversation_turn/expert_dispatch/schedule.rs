@@ -9,7 +9,9 @@ use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_context::{InferencePolicyDecision};
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner};
 use floe_experts_builtin::{BuiltinExpertKind};
-use floe_experts_builtin::schedule::{SCHEDULE_DEFINITION_REVISION, schedule_definition};
+use floe_experts_builtin::schedule::{
+    self, SCHEDULE_DEFINITION_REVISION, schedule_definition,
+};
 use floe_agent_contract::{
     AgentCard as ContractAgentCard, AgentDefinition, AgentEndpoint, BoxFuture, DelegationPort,
     DelegationRequest, DependencyCoverage, EndpointInvocation, ExpertReport, TaskId, TaskReceipt,
@@ -151,27 +153,15 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             if selected.ambiguous {
                 return Err(AgentFailure::AccessReviewRequired);
             }
-            let local = chrono::Local::now();
-            let range = floe_day::CalendarRange {
-                start_date: local.date_naive(),
-                end_date_exclusive: local.date_naive() + chrono::Duration::days(1),
-                timezone_offset_seconds: local.offset().local_minus_utc(),
-                end_timezone_offset_seconds: None,
-            };
-            let (mut starts_at, ends_at) = range_bounds(&range)?;
-            let now = chrono::Utc::now();
-            let propose_focus = staged.request.text.trim() == "/focus";
-            if propose_focus {
-                starts_at = starts_at.max(now + chrono::Duration::minutes(1));
-                if starts_at >= ends_at || selected.binding.calendar_ids.len() != 1 {
-                    return Err(AgentFailure::CapabilityUnavailable);
-                }
-            }
-            let remote_acquisition = staged.request.remote_route.is_some()
-                && matches!(
-                    selected.binding.provider,
-                    CalendarProvider::Google | CalendarProvider::Microsoft
-                );
+            let plan = schedule::plan_run(
+                &staged.request.text,
+                selected.binding.provider,
+                selected.binding.calendar_ids.len(),
+                staged.request.remote_route.is_some(),
+                chrono::Local::now(),
+                chrono::Utc::now(),
+            )?;
+            let remote_acquisition = plan.acquire_remotely;
             let model = if remote_acquisition {
                 Model::Foundation(FoundationModelRunner::encrypted())
             } else {
@@ -223,18 +213,14 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                         person_id: self.vault.person_id(),
                         usage: Default::default(),
                         context: staged.context,
-                        policy: InferencePolicyDecision {
-                            purpose: "everyday-assistance".into(),
-                            data_classes: vec![selected.binding.data_class()],
-                            allowed_placements: vec![placement],
-                            performance_class: "interactive".into(),
-                            projection_version: 1,
-                            external_transfer_consent: external_transfer_consent(
+                        policy: schedule::run_policy(
+                            placement,
+                            selected.binding.data_class(),
+                            external_transfer_consent(
                                 placement,
                                 staged.request.remote_route.as_ref(),
                             ),
-                            bounded_sensitive_projection: false,
-                        },
+                        ),
                         grant: CalendarTimelineGrant {
                             person_id: self.vault.person_id(),
                             handle: selected.setup.view_handle,
@@ -242,15 +228,15 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                             device_id: selected.binding.device_id.clone(),
                             calendar_ids: selected.binding.calendar_ids.clone(),
                             connection_revision: selected.binding.connection_revision,
-                            day: range,
-                            starts_at,
-                            ends_at,
-                            expires_at: now + chrono::Duration::minutes(2),
+                            day: plan.range,
+                            starts_at: plan.starts_at,
+                            ends_at: plan.ends_at,
+                            expires_at: plan.expires_at,
                         },
                         assignment_id: selected.setup.expert_assignment_id,
                         invocation_id: invocation.request.invocation_key.as_uuid(),
                         assignment: invocation.request.message.clone(),
-                        propose_focus,
+                        propose_focus: plan.propose_focus,
                         max_output_bytes: staged.max_output_bytes,
                         deadline: scope.deadline(),
                         cancellation: scope.cancellation().clone(),
@@ -289,56 +275,65 @@ struct SelectedSetup {
     ambiguous: bool,
 }
 
+/// Read the Person's recorded calendar setups and let the Schedule Expert pick
+/// the one this device may use.
+///
+/// Everything here is record reading and pairing; which setup is eligible, and
+/// whether the choice is ambiguous, is the Expert's judgment.
 async fn select_active_setup<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     device_id: &str,
 ) -> Result<SelectedSetup, AgentFailure> {
     let overview = vault.calendar_expert_overview().await?;
-    let active: Vec<_> = overview
+    let enabled = |ids: [Uuid; 2], installations: bool| {
+        ids.iter().all(|id| {
+            if installations {
+                overview
+                    .registry
+                    .installations
+                    .iter()
+                    .any(|entry| entry.id == *id && entry.enabled)
+            } else {
+                overview
+                    .registry
+                    .assignments
+                    .iter()
+                    .any(|entry| entry.id == *id && entry.enabled)
+            }
+        })
+    };
+    let pairs: Vec<_> = overview
         .setups
         .iter()
         .filter_map(|setup| {
             let binding = overview
                 .views
                 .iter()
-                .find(|binding| binding.handle == setup.view_handle && binding.enabled)?;
-            let installations_enabled = [setup.tool_installation_id, setup.expert_installation_id]
-                .iter()
-                .all(|id| {
-                    overview
-                        .registry
-                        .installations
-                        .iter()
-                        .any(|entry| entry.id == *id && entry.enabled)
-                });
-            let assignments_enabled = [setup.tool_assignment_id, setup.expert_assignment_id]
-                .iter()
-                .all(|id| {
-                    overview
-                        .registry
-                        .assignments
-                        .iter()
-                        .any(|entry| entry.id == *id && entry.enabled)
-                });
-            (installations_enabled && assignments_enabled)
-                .then_some((setup.clone(), binding.clone()))
+                .find(|binding| binding.handle == setup.view_handle)?;
+            Some((setup.clone(), binding.clone()))
         })
         .collect();
-    let candidates: Vec<_> = active
+    let candidates: Vec<_> = pairs
         .iter()
-        .filter(|(_, binding)| binding.device_id == device_id)
-        .cloned()
+        .map(|(setup, binding)| schedule::ScheduleSetupCandidate {
+            device_id: binding.device_id.clone(),
+            active: binding.enabled
+                && enabled(
+                    [setup.tool_installation_id, setup.expert_installation_id],
+                    true,
+                )
+                && enabled(
+                    [setup.tool_assignment_id, setup.expert_assignment_id],
+                    false,
+                ),
+        })
         .collect();
-    let ambiguous = candidates.len() != 1;
-    let (setup, binding) = candidates
-        .first()
-        .or_else(|| active.first())
-        .cloned()
-        .ok_or(AgentFailure::CapabilityDenied)?;
+    let selection = schedule::select_active_setup(&candidates, device_id)?;
+    let (setup, binding) = pairs[selection.index].clone();
     Ok(SelectedSetup {
         setup,
         binding,
-        ambiguous,
+        ambiguous: selection.ambiguous,
     })
 }
 
@@ -518,30 +513,6 @@ fn validate_active_connection(
     Ok(())
 }
 
-fn range_bounds(
-    range: &floe_day::CalendarRange,
-) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>), AgentFailure> {
-    if !range.is_valid() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let start = range
-        .start_date
-        .and_hms_opt(0, 0, 0)
-        .ok_or(AgentFailure::InvalidInput)?
-        .and_utc()
-        - chrono::Duration::seconds(i64::from(range.timezone_offset_seconds));
-    let end = range
-        .end_date_exclusive
-        .and_hms_opt(0, 0, 0)
-        .ok_or(AgentFailure::InvalidInput)?
-        .and_utc()
-        - chrono::Duration::seconds(i64::from(
-            range
-                .end_timezone_offset_seconds
-                .unwrap_or(range.timezone_offset_seconds),
-        ));
-    Ok((start, end))
-}
 
 enum Access<'model> {
     Fixture(FixtureAccess),

@@ -74,7 +74,7 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
             .await
             .unwrap(),
     );
-    let repository = VaultTaskRepository::new(Arc::clone(&vault));
+    let repository = VaultTaskRepository::new(Arc::clone(&vault), "floe.builtin.schedule/v1");
     assert_eq!(
         repository.validate_settlement(
             &floe_agent_contract::EndpointSettlement::try_new("unknown", "{}").unwrap()

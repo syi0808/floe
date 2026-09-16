@@ -93,5 +93,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )
     .await?;
     drop(source_view);
-    BuiltinExpertOutput::from_result(result.summary.clone(), &result)
+    BuiltinExpertOutput::from_result(
+        crate::BuiltinExpertKind::Commitments.result_artifact_name(),
+        result.summary.clone(),
+        &result,
+    )
 }

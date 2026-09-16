@@ -119,7 +119,7 @@ mod tests {
         let mut messages = vec![AgentMessage::Compaction {
             turn_id: old,
             summary: "A summary containing source details".into(),
-            recovery: crate::SessionRecoveryPointer {
+            recovery: floe_conversation::SessionRecoveryPointer {
                 archive_id: Uuid::new_v4(),
                 source_revision: 1,
                 through_turn_id: old,

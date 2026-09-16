@@ -55,7 +55,7 @@ pub struct ModelReplay {
 ///
 /// The owner that keeps the record implements this; a journal that accepts
 /// nothing still lets the call run, but it cannot claim the call was recorded.
-pub trait CapabilityJournal: Sync {
+pub trait CapabilityJournal: Send + Sync {
     fn record<'a>(
         &'a self,
         record: CapabilityExecution,

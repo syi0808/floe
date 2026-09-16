@@ -21,7 +21,8 @@ use floe_agent_contract::{AgentFailure};
 use floe_connections::{ConnectionState};
 use floe_conversation::{AgentEvent, AgentOutcome, AgentSession, SessionStore};
 use floe_execution::{Cancellation};
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind, BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState};
+use floe_experts::{BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState};
+use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 #[cfg(not(target_os = "android"))]
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use floe_access::{CalendarReadAccess, CalendarReadAccessRequest};
@@ -317,7 +318,10 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             },
             schedule_endpoint.clone(),
         )?;
-        let repository = Arc::new(VaultTaskRepository::new(Arc::clone(&vault)));
+        let repository = Arc::new(VaultTaskRepository::new(
+            Arc::clone(&vault),
+            expert_dispatch::schedule::CALENDAR_EXPERT_SETTLEMENT_OWNER,
+        ));
         let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
             directory.clone(),
             repository,
@@ -1799,6 +1803,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 };
                 Box::pin(vault.install_calendar_expert_with_connection(
                     request,
+                    &schedule_packaging(),
                     connection_id,
                     job.cancellation.clone(),
                 ))
@@ -3265,7 +3270,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     ]
     .into_iter()
     .map(|source| BuiltinSourceBinding {
-        source,
+        source: source_id(source),
         view_handle: builtin_source_handle(person_id, source),
         state: state(source),
     })
@@ -3299,6 +3304,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
                     ),
                     sources: sources.clone(),
                 },
+                &builtin_setup_specs(),
                 cancellation.clone(),
             )
             .await
@@ -3328,6 +3334,69 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(())
+}
+
+/// The registry identity of one builtin source.
+fn source_id(source: BuiltinContextSource) -> floe_experts::AgentId {
+    floe_experts::AgentId::try_new(source.source_id()).expect("builtin source ids are valid")
+}
+
+/// What the builtin Experts declare about themselves, in the shape the registry
+/// installs. The declarations are the Experts'; the packaging is the registry's.
+fn builtin_setup_specs() -> Vec<floe_experts::ExpertSetupSpec> {
+    floe_experts_builtin::builtin_setup_declarations()
+        .into_iter()
+        .map(expert_setup_spec)
+        .collect()
+}
+
+fn expert_setup_spec(
+    declaration: floe_experts_builtin::BuiltinExpertDeclaration,
+) -> floe_experts::ExpertSetupSpec {
+    let expert = floe_experts::AgentId::try_new(declaration.expert_id)
+        .expect("builtin expert ids are valid");
+    let packaging = expert_packaging(&declaration, expert.clone());
+    floe_experts::ExpertSetupSpec {
+        packages: packaging.packages(declaration.data_class),
+        expert,
+        required_sources: declaration
+            .required_sources
+            .iter()
+            .map(|source| {
+                floe_experts::AgentId::try_new(*source).expect("builtin source ids are valid")
+            })
+            .collect(),
+        mandatory_source: floe_experts::AgentId::try_new(declaration.mandatory_source)
+            .expect("builtin source ids are valid"),
+    }
+}
+
+fn expert_packaging(
+    declaration: &floe_experts_builtin::BuiltinExpertDeclaration,
+    expert: floe_experts::AgentId,
+) -> floe_experts::ExpertPackaging {
+    floe_experts::ExpertPackaging {
+        expert,
+        tool_id: declaration.tool_id.clone(),
+        version: declaration.version.to_owned(),
+        publisher: declaration.publisher.to_owned(),
+        metadata: floe_experts::ExpertMetadata {
+            name: declaration.name.to_owned(),
+            description: declaration.description.to_owned(),
+            domain_tags: declaration.domain_tags.clone(),
+            skills: declaration.skills.clone(),
+            supported_placements: declaration.supported_placements.clone(),
+        },
+        state_schema_version: floe_experts_builtin::BUILTIN_EXPERT_STATE_SCHEMA_VERSION,
+    }
+}
+
+/// How the Schedule Expert is packaged when its calendar setup is installed.
+fn schedule_packaging() -> floe_experts::ExpertPackaging {
+    let declaration = floe_experts_builtin::BuiltinExpertKind::Schedule.declaration();
+    let expert = floe_experts::AgentId::try_new(declaration.expert_id)
+        .expect("builtin expert ids are valid");
+    expert_packaging(&declaration, expert)
 }
 
 fn builtin_source_handle(person_id: PersonId, source: BuiltinContextSource) -> Uuid {

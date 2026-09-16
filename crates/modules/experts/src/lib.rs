@@ -9,6 +9,7 @@ mod directory;
 mod dispatch;
 mod invocation;
 mod registry;
+mod settlement;
 mod task;
 
 pub use a2a::{
@@ -34,6 +35,7 @@ pub use registry::{
     ExpertMetadata, ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec,
     NoSetupValidator, PackageAssignment, PackageImplementation, PackageInstallation, PackageKind,
     PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
-    RegistrySnapshot, SetupValidator, SourceGrant,
+    RegistrySnapshot, ResolvedExpert, SetupValidator, SourceGrant, SourceGrants, eligible_cards,
 };
+pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::DataClass;
+use floe_agent_contract::{DataClass, ModelPlacement};
 
 pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
 pub const BUILTIN_EXPERT_PUBLISHER: &str = "floe";
@@ -32,7 +32,9 @@ pub struct BuiltinExpertDeclaration {
     /// The one source it cannot answer without.
     pub mandatory_source: &'static str,
     /// Whether its judgment can run on the on-device model.
-    pub runs_on_device_model: bool,
+    /// Where this Expert's judgment can run. The registry records it, so no
+    /// caller decides eligibility from what an agent id looks like.
+    pub supported_placements: Vec<ModelPlacement>,
 }
 
 /// Every Expert the builtin setup installs together.
@@ -91,13 +93,6 @@ impl BuiltinExpertKind {
         }
     }
 
-    /// Whether the Expert behind this agent id can run on the on-device model.
-    ///
-    /// The common dispatch path holds no builtin knowledge, so it asks here.
-    pub fn runs_on_device_model(package_id: &str) -> bool {
-        Self::from_package_id(package_id).is_some_and(Self::supports_device_model)
-    }
-
     pub fn from_package_id(package_id: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -127,7 +122,11 @@ impl BuiltinExpertKind {
                 .map(|source| source.source_id())
                 .collect(),
             mandatory_source: self.mandatory_source().source_id(),
-            runs_on_device_model: self.supports_device_model(),
+            supported_placements: if self.supports_device_model() {
+                vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote]
+            } else {
+                vec![ModelPlacement::Remote]
+            },
         }
     }
 

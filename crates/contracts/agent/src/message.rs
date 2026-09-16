@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    ModelPlacement,
     AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_AGENT_MESSAGES, MAX_OUTPUT_BYTES,
 };
 
@@ -18,9 +19,25 @@ pub struct AgentCard {
     pub domain_tags: Vec<String>,
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Where this agent's judgment can run.
+    ///
+    /// Eligibility is read from the card, not inferred from the agent's
+    /// identity: a caller on the device model offers only the cards that say
+    /// they run there.
+    #[serde(default = "every_placement")]
+    pub supported_placements: Vec<ModelPlacement>,
+}
+
+fn every_placement() -> Vec<ModelPlacement> {
+    vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote]
 }
 
 impl AgentCard {
+    /// Whether this agent can answer on a caller running at `placement`.
+    pub fn runs_at(&self, placement: ModelPlacement) -> bool {
+        self.supported_placements.contains(&placement)
+    }
+
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.schema_version != AGENT_SCHEMA_VERSION
             || self.protocol_version != crate::A2A_PROTOCOL_VERSION
@@ -32,6 +49,9 @@ impl AgentCard {
             || self.skills.len() > 8
             || self.domain_tags.iter().any(|value| !bounded(value, 64))
             || self.skills.iter().any(|value| !bounded(value, 256))
+            || self.supported_placements.is_empty()
+            || self.supported_placements.len() > 2
+            || self.supported_placements[1..].contains(&self.supported_placements[0])
         {
             return Err(AgentFailure::InvalidInput);
         }

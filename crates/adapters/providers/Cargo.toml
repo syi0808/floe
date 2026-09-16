@@ -17,8 +17,6 @@ floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-inference = { path = "../../modules/inference" }
 floe-vault = { path = "../vault" }
-floe-experts-builtin = { path = "../../experts/builtin" }
-floe-experts = { path = "../../modules/experts" }
 floe-conversation = { path = "../../modules/conversation" }
 floe-kernel = { path = "../../contracts/kernel" }
 floe-knowledge = { path = "../../modules/knowledge" }

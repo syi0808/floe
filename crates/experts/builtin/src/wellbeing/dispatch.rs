@@ -31,5 +31,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         },
     )
     .await?;
-    BuiltinExpertOutput::from_result(result.summary.clone(), &result)
+    BuiltinExpertOutput::from_result(
+        crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+        result.summary.clone(),
+        &result,
+    )
 }

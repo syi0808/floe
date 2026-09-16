@@ -79,7 +79,7 @@ fn expert_identity_matches(
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn builtin_expert_overview(
         &self,
-    ) -> Result<Option<floe_experts_builtin::BuiltinExpertSetupResult>, AgentFailure> {
+    ) -> Result<Option<floe_experts::BuiltinExpertSetupResult>, AgentFailure> {
         let Some(snapshot) = self.expert_registry().await? else {
             return Ok(None);
         };
@@ -94,7 +94,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Ok(None);
         };
         self.check_access()?;
-        Ok(Some(floe_experts_builtin::BuiltinExpertSetupResult {
+        Ok(Some(floe_experts::BuiltinExpertSetupResult {
             setup,
             registry: registry.overview(self.person_id),
         }))
@@ -102,9 +102,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn install_builtin_experts(
         &self,
-        request: floe_experts_builtin::BuiltinExpertSetup,
+        request: floe_experts::BuiltinExpertSetup,
+        specs: &[floe_experts::ExpertSetupSpec],
         cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts_builtin::BuiltinExpertSetupResult, AgentFailure> {
+    ) -> Result<floe_experts::BuiltinExpertSetupResult, AgentFailure> {
         let check = || {
             cancellation
                 .is_cancelled()
@@ -121,7 +122,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None => AgentRegistry::new(self.vault_id),
         };
         let revision = registry.revision();
-        let setup = registry.install_builtin_experts(self.person_id, &request)?;
+        let setup = registry.install_builtin_experts(self.person_id, &request, specs)?;
         if registry.revision() != revision {
             match previous {
                 Some(_) => {
@@ -136,7 +137,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         check()?;
-        Ok(floe_experts_builtin::BuiltinExpertSetupResult {
+        Ok(floe_experts::BuiltinExpertSetupResult {
             setup,
             registry: registry.overview(self.person_id),
         })
@@ -144,9 +145,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn install_builtin_experts_enabled(
         &self,
-        request: floe_experts_builtin::BuiltinExpertSetup,
+        request: floe_experts::BuiltinExpertSetup,
+        specs: &[floe_experts::ExpertSetupSpec],
         cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts_builtin::BuiltinExpertSetupResult, AgentFailure> {
+    ) -> Result<floe_experts::BuiltinExpertSetupResult, AgentFailure> {
         let check = || {
             cancellation
                 .is_cancelled()
@@ -163,7 +165,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None => AgentRegistry::new(self.vault_id),
         };
         let revision = registry.revision();
-        let setup = registry.install_builtin_experts_enabled(self.person_id, &request)?;
+        let setup = registry.install_builtin_experts_enabled(self.person_id, &request, specs)?;
         if registry.revision() != revision {
             match previous {
                 Some(_) => {
@@ -186,7 +188,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         check()?;
-        Ok(floe_experts_builtin::BuiltinExpertSetupResult {
+        Ok(floe_experts::BuiltinExpertSetupResult {
             setup,
             registry: registry.overview(self.person_id),
         })
@@ -195,9 +197,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn refresh_builtin_expert_sources(
         &self,
         expected_revision: u64,
-        sources: Vec<floe_experts_builtin::BuiltinSourceBinding>,
+        sources: Vec<floe_experts::BuiltinSourceBinding>,
         cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts_builtin::BuiltinExpertSetupResult, AgentFailure> {
+    ) -> Result<floe_experts::BuiltinExpertSetupResult, AgentFailure> {
         if cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
         }
@@ -227,7 +229,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?;
         }
         self.check_access()?;
-        Ok(floe_experts_builtin::BuiltinExpertSetupResult {
+        Ok(floe_experts::BuiltinExpertSetupResult {
             setup,
             registry: registry.overview(self.person_id),
         })
@@ -257,9 +259,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn install_calendar_expert(
         &self,
-        request: floe_experts_builtin::CalendarExpertSetup,
+        request: floe_experts::CalendarExpertSetup,
+        packaging: &floe_experts::ExpertPackaging,
         cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts_builtin::CalendarExpertSetupResult, AgentFailure> {
+    ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
         if matches!(
             request.provider,
             floe_day::CalendarProvider::EventKit | floe_day::CalendarProvider::Android
@@ -267,16 +270,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let connection_id = request.setup_id.to_string();
-        self.install_calendar_expert_with_connection(request, connection_id, cancellation)
+        self.install_calendar_expert_with_connection(request, packaging, connection_id, cancellation)
             .await
     }
 
     pub async fn install_calendar_expert_with_connection(
         &self,
-        request: floe_experts_builtin::CalendarExpertSetup,
+        request: floe_experts::CalendarExpertSetup,
+        packaging: &floe_experts::ExpertPackaging,
         connection_id: String,
         cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts_builtin::CalendarExpertSetupResult, AgentFailure> {
+    ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
         let check = || {
             if cancellation.is_cancelled() {
                 Err(AgentFailure::Cancelled)
@@ -294,7 +298,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None => AgentRegistry::new(self.vault_id),
         };
         let revision = registry.revision();
-        let setup = registry.install_calendar_expert(self.person_id, &request)?;
+        let setup = registry.install_calendar_expert(self.person_id, &request, packaging)?;
         if registry.revision() != revision {
             self.persist_calendar_install(
                 previous.as_ref(),
@@ -308,7 +312,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         check()?;
-        Ok(floe_experts_builtin::CalendarExpertSetupResult {
+        Ok(floe_experts::CalendarExpertSetupResult {
             setup,
             registry: registry.overview(self.person_id),
         })
@@ -595,10 +599,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn settle_calendar_expert_task_checked(
         &self,
-        completion: floe_experts_builtin::CalendarExpertTaskCompletion,
+        completion: floe_experts::ExpertTaskCompletion,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<VaultTaskRecord, AgentFailure> {
-        let floe_experts_builtin::CalendarExpertTaskCompletion {
+        let floe_experts::ExpertTaskCompletion {
             settlement,
             task_id,
             expected_task_revision,
@@ -717,8 +721,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .map(|receipt| receipt.view_handle)
             });
             let calendar_receipt_allowed =
-                |before: &floe_experts_builtin::CalendarExpertSetupReceipt,
-                 after: &floe_experts_builtin::CalendarExpertSetupReceipt| {
+                |before: &floe_experts::CalendarExpertSetupReceipt,
+                 after: &floe_experts::CalendarExpertSetupReceipt| {
                     before == after
                         || (mutable_calendar_setup == Some(before.setup_id)
                             && before.setup_id == after.setup_id
@@ -731,8 +735,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             && before.expert_assignment_id == after.expert_assignment_id)
                 };
             let builtin_receipt_allowed =
-                |before: &floe_experts_builtin::BuiltinExpertSetupReceipt,
-                 after: &floe_experts_builtin::BuiltinExpertSetupReceipt| {
+                |before: &floe_experts::BuiltinExpertSetupReceipt,
+                 after: &floe_experts::BuiltinExpertSetupReceipt| {
                     before == after
                         || (mutable_builtin_setup == Some(before.setup_id)
                             && before.setup_id == after.setup_id

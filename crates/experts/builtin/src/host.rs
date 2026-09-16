@@ -13,16 +13,14 @@ use floe_context::{
     AgentContext, AttentionView, CalendarContextView, InferencePolicyDecision, NativeContextView,
     PeopleView, SourceView, WellbeingView, WorkContextView,
 };
-use floe_context_contract::ContextDependency;
+use floe_context_contract::{ContextDependency, SourceGrant};
 use floe_conversation::{ModelRunner, UsageLedger};
 use floe_execution::Cancellation;
 use floe_kernel::PersonId;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context::CommunicationView;
-
-use crate::relationships::ConfirmedInteractionView;
+use floe_context::{CommunicationView, ConfirmedInteractionView};
 use crate::{
     BuiltinContextSource, MailExpertInvocation, PersonalExpertInvocation,
     PortfolioExpertInvocation,
@@ -107,7 +105,11 @@ impl BuiltinExpertRequest {
 }
 
 /// What one Expert reports back to the common Task path.
+///
+/// The Expert names its own result artifact; the common path carries the name
+/// it was given rather than deriving one from the agent id.
 pub struct BuiltinExpertOutput {
+    pub artifact_name: String,
     pub summary: String,
     pub data: String,
 }
@@ -115,10 +117,12 @@ pub struct BuiltinExpertOutput {
 impl BuiltinExpertOutput {
     /// A serialized Expert result and the summary the Task carries beside it.
     pub fn from_result<Result_: serde::Serialize>(
+        artifact_name: &str,
         summary: String,
         result: &Result_,
     ) -> Result<Self, AgentFailure> {
         Ok(Self {
+            artifact_name: artifact_name.to_owned(),
             summary,
             data: serde_json::to_string(result).map_err(|_| AgentFailure::InvalidModelOutput)?,
         })
@@ -142,8 +146,18 @@ pub trait BuiltinExpertHost: Sync {
 
     fn policy(&self) -> &InferencePolicyDecision;
 
-    /// Whether this Expert was granted the named source at setup time.
-    fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool;
+    /// Whether this Expert may read the named source right now.
+    ///
+    /// The decision belongs to whoever holds the setup; the Expert only asks,
+    /// and decides for itself what a source it cannot read means for its own
+    /// judgment.
+    fn source_grant(&self, agent_id: &str, source: BuiltinContextSource) -> SourceGrant;
+
+    /// Whether the named source is readable at all, for an Expert that only
+    /// enriches its context when it is.
+    fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool {
+        self.source_grant(agent_id, source).is_granted()
+    }
 
     /// Read one authorized remote source view for this Expert.
     fn read_source_view<'a>(
@@ -228,7 +242,11 @@ pub fn require_mandatory_source<Host: BuiltinExpertHost + ?Sized>(
 ) -> Result<(), AgentFailure> {
     let expert = crate::BuiltinExpertKind::from_package_id(&request.agent_id)
         .ok_or(AgentFailure::CapabilityDenied)?;
-    host.source_granted(&request.agent_id, expert.mandatory_source())
-        .then_some(())
-        .ok_or(AgentFailure::CapabilityDenied)
+    match host.source_grant(&request.agent_id, expert.mandatory_source()) {
+        SourceGrant::Granted => Ok(()),
+        // A source that is bound but down right now is a different answer from
+        // one this Expert was never granted, and the Person can act on it.
+        SourceGrant::Unavailable => Err(AgentFailure::CapabilityUnavailable),
+        SourceGrant::NotConfigured | SourceGrant::Denied => Err(AgentFailure::CapabilityDenied),
+    }
 }

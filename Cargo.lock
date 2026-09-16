@@ -1107,8 +1107,6 @@ dependencies = [
  "floe-conversation",
  "floe-day",
  "floe-execution",
- "floe-experts",
- "floe-experts-builtin",
  "floe-inference",
  "floe-kernel",
  "floe-knowledge",

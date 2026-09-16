@@ -26,7 +26,7 @@ pub use endpoint::{
 };
 pub use floe_context_contract::{
     ContextIssue, ContextIssueReason, ContextSource, DataClass, DependencyCoverage, ModelPlacement,
-    TransferConsent,
+    SourceGrant, TransferConsent,
 };
 pub use floe_execution::{CancelReason, Cancellation, ExecutionScope};
 pub use floe_kernel::{

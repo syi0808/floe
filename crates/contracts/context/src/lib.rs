@@ -1017,6 +1017,30 @@ pub enum DataClass {
     Credential,
 }
 
+/// Whether a consumer may read one source right now, and what stands in the
+/// way when it may not.
+///
+/// A source nobody bound, a source whose connection is down and a source this
+/// consumer was never granted are different answers. Only the consumer that
+/// asked can decide what each one means for its own judgment: an optional
+/// enrichment may be skipped, a source the judgment depends on may not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceGrant {
+    Granted,
+    /// Nothing in the current setup binds this source for this consumer.
+    NotConfigured,
+    /// The source is bound but disabled or unreachable right now.
+    Unavailable,
+    /// The source is bound and available, but this consumer holds no grant.
+    Denied,
+}
+
+impl SourceGrant {
+    pub fn is_granted(self) -> bool {
+        matches!(self, Self::Granted)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPlacement {

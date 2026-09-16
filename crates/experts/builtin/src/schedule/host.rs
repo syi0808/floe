@@ -8,14 +8,23 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{BuiltinExpertKind};
-use crate::prompts::{schedule_expert_prompt};
-use floe_agent_contract::{AgentFailure, DataClass};
+use crate::BuiltinExpertKind;
+use crate::prompts::schedule_expert_prompt;
+use floe_agent_contract::{
+    AgentFailure, CapabilityExecution, CapabilityExecutionState, DataClass,
+};
+use floe_agent_runtime::execute_recorded;
 use floe_context::{AgentContext, InferencePolicyDecision};
+use floe_conversation::{
+    AgentMessage, CapabilityDescriptor, ModelRequest, ModelRunner, ModelStep,
+    generate_with_recovery,
+};
+use floe_execution::Cancellation;
+use floe_experts::{
+    AgentRegistry, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
+    ExpertRule, PackageImplementation, PackageRef, ViewCancellation, check_running,
+};
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentMessage, CapabilityDescriptor, ModelRequest, ModelRunner, ModelStep};
-use floe_execution::{Cancellation};
-use floe_experts::{AgentRegistry, ExpertRule, PackageImplementation, PackageRef};
 
 pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
 pub const MAX_TIMELINE_VIEW_ITEMS: usize = 128;
@@ -66,8 +75,6 @@ pub trait ExpertViews: Sync {
     ) -> impl Future<Output = Result<ExpertTimelineView, AgentFailure>> + Send;
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub struct ExpertHost<'host, Views> {
     pub registry: &'host Mutex<AgentRegistry>,
     pub views: &'host Views,
@@ -152,9 +159,11 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             return Err(AgentFailure::Conflict);
         }
         let minimum = match &resolved.package.implementation {
-            PackageImplementation::Builtin {
-                expert: BuiltinExpertKind::Schedule,
-            } => focus_minutes,
+            PackageImplementation::Builtin { expert }
+                if expert.as_str() == BuiltinExpertKind::Schedule.package_id() =>
+            {
+                focus_minutes
+            }
             PackageImplementation::Declarative { rules } => match rules.as_slice() {
                 [ExpertRule::FindFocusWindow { minimum_minutes }] => Some(
                     focus_minutes
@@ -168,11 +177,9 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         let (view, summary, model_calls, view_calls, action_proposals) =
             match (&resolved.package.implementation, reasoning) {
                 (
-                    PackageImplementation::Builtin {
-                        expert: BuiltinExpertKind::Schedule,
-                    },
+                    PackageImplementation::Builtin { expert },
                     ExpertReasoning::Lightweight { model, policy },
-                ) => {
+                ) if expert.as_str() == BuiltinExpertKind::Schedule.package_id() => {
                     let (summary, model_calls, view, view_calls) = run_schedule_reasoning(
                         model,
                         policy,
@@ -324,15 +331,15 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             "cursor": read.cursor,
         })
         .to_string();
-        let view_output = crate::capability_execution::execute_recorded(
-            &invocation.usage,
-            floe_conversation::CapabilityExecution {
+        let view_output = execute_recorded(
+            invocation.capabilities.as_ref(),
+            CapabilityExecution {
                 scope_id: invocation.invocation_id,
                 turn_id: invocation.invocation_id,
                 call_id: Uuid::new_v4(),
                 capability_id: "view.timeline".into(),
                 input,
-                state: floe_conversation::CapabilityExecutionState::Started,
+                state: CapabilityExecutionState::Started,
                 result: None,
                 replay: None,
             },
@@ -506,15 +513,15 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
                             "range_end_unix_ms": range_end_unix_ms,
                         })
                         .to_string();
-                        let encoded = crate::capability_execution::execute_recorded(
-                            &invocation.usage,
-                            floe_conversation::CapabilityExecution {
+                        let encoded = execute_recorded(
+                            invocation.capabilities.as_ref(),
+                            CapabilityExecution {
                                 scope_id: invocation.invocation_id,
                                 turn_id,
                                 call_id: Uuid::new_v4(),
                                 capability_id: "view.timeline".into(),
                                 input: view_input,
-                                state: floe_conversation::CapabilityExecutionState::Started,
+                                state: CapabilityExecutionState::Started,
                                 result: None,
                                 replay: None,
                             },
@@ -539,15 +546,15 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
                         view_calls += 1;
                     }
                     let call_id = Uuid::new_v4();
-                    let output = crate::capability_execution::execute_recorded(
-                        &invocation.usage,
-                        floe_conversation::CapabilityExecution {
+                    let output = execute_recorded(
+                        invocation.capabilities.as_ref(),
+                        CapabilityExecution {
                             scope_id: invocation.invocation_id,
                             turn_id,
                             call_id,
                             capability_id: capability_id.clone(),
                             input: input.clone(),
-                            state: floe_conversation::CapabilityExecutionState::Started,
+                            state: CapabilityExecutionState::Started,
                             result: None,
                             replay: response.replay_for(call_index)?,
                         },
@@ -929,7 +936,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
         .max_model_cost_micros
         .checked_sub(used_cost)
         .ok_or(AgentFailure::BudgetExceeded)?;
-    let response = crate::generate_with_recovery(
+    let response = generate_with_recovery(
         model,
         ModelRequest {
             usage: invocation.usage.clone(),

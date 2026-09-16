@@ -10,7 +10,9 @@ use uuid::Uuid;
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context::AgentContext;
 use floe_execution::Cancellation;
-use floe_execution::budget::UsageLedger;
+use std::sync::Arc;
+
+use floe_agent_contract::CapabilityJournal;
 use floe_kernel::PersonId;
 
 use crate::PackageRef;
@@ -62,7 +64,10 @@ impl Default for ExpertBudget {
 }
 
 pub struct ExpertInvocation {
-    pub usage: UsageLedger,
+    pub usage: floe_inference::UsageLedger,
+    /// Where this Expert's own capability calls are recorded before they are
+    /// dispatched. An Expert never writes its caller's Session state directly.
+    pub capabilities: Arc<dyn CapabilityJournal>,
     pub context: AgentContext,
     pub schema_version: u32,
     pub invocation_id: Uuid,

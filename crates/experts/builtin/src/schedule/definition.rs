@@ -18,6 +18,9 @@ pub fn schedule_definition() -> AgentDefinition {
             description: "Reviews the currently authorized calendar view".into(),
             domain_tags: vec!["schedule".into(), "calendar".into()],
             skills: vec!["Analyze an authorized calendar assignment".into()],
+            supported_placements: BuiltinExpertKind::Schedule
+                .declaration()
+                .supported_placements,
         },
         definition_revision: SCHEDULE_DEFINITION_REVISION,
     }

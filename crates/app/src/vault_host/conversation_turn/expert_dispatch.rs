@@ -207,12 +207,13 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             };
             let policy = super::policy(&model, staged.request.remote_route.as_ref());
             let cards = self.vault.enabled_expert_cards().await?;
-            let builtin_setup = self
-                .vault
-                .builtin_expert_overview()
-                .await?
-                .ok_or(AgentFailure::VaultUnavailable)?
-                .setup;
+            let grants = floe_experts::SourceGrants::new(Some(
+                self.vault
+                    .builtin_expert_overview()
+                    .await?
+                    .ok_or(AgentFailure::VaultUnavailable)?
+                    .setup,
+            ));
             let experts = ConversationExperts {
                 model: &model,
                 source_client: source_client.as_ref(),
@@ -230,7 +231,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 context_reader: Some(&context_reader),
                 task_views: &[],
                 cards,
-                builtin_setup: Some(builtin_setup),
+                grants,
                 task_runners: &[],
                 registrations,
             };
@@ -339,7 +340,8 @@ pub(super) struct ConversationExperts<'model> {
     pub(super) context_reader: Option<&'model dyn super::ConversationContextReaderApi>,
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
-    pub(super) builtin_setup: Option<BuiltinExpertSetupReceipt>,
+    /// What each Expert may read, as the registry decided it.
+    pub(super) grants: floe_experts::SourceGrants,
     /// Experts that answer on the Task path, by the agent id they are registered
     /// under.
     pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
@@ -393,21 +395,13 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         self.policy
     }
 
-    /// Whether the Expert's setup assignment actually granted this source.
-    fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool {
-        let _ = self.local_context;
-        let Some(setup) = &self.builtin_setup else {
-            return true;
-        };
-        setup.assignments.iter().any(|assignment| {
-            assignment.expert.package_id() == agent_id
-                && setup.sources.iter().any(|binding| {
-                    binding.source == source
-                        && assignment
-                            .granted_view_handles
-                            .contains(&binding.view_handle)
-                })
-        })
+    /// The grant the registry recorded for this Expert and source.
+    fn source_grant(
+        &self,
+        agent_id: &str,
+        source: BuiltinContextSource,
+    ) -> floe_context_contract::SourceGrant {
+        self.grants.grant(agent_id, source.source_id())
     }
 
     fn read_source_view<'a>(
@@ -557,15 +551,11 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
 const ASSISTANT_CONSUMER: &str = "assistant";
 
 impl InProcessAgent for ConversationExperts<'_> {
+    /// The Experts this turn may offer, for the model it is running on.
+    ///
+    /// Each card states where its Expert runs; nothing here reads the agent id.
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        self.cards
-            .iter()
-            .filter(|card| {
-                matches!(self.model, Model::Server(_))
-                    || BuiltinExpertKind::runs_on_device_model(&card.id)
-            })
-            .cloned()
-            .collect()
+        floe_experts::eligible_cards(&self.cards, self.model.placement())
     }
 
     async fn handle_message(
@@ -607,12 +597,9 @@ impl InProcessAgent for ConversationExperts<'_> {
             .registrations
             .run(&request.agent_id, self, &expert_request)
             .await?;
-        let artifact_name = BuiltinExpertKind::from_package_id(&request.agent_id)
-            .ok_or(AgentFailure::CapabilityDenied)?
-            .result_artifact_name();
         let task = floe_experts::completed_expert_task(
             request,
-            artifact_name,
+            &output.artifact_name,
             output.summary,
             output.data,
         )?;

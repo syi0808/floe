@@ -349,6 +349,7 @@ mod tests {
             description: "Bounded expert".to_owned(),
             domain_tags: vec!["day".to_owned(); 8],
             skills: vec!["read".to_owned(); 8],
+            supported_placements: vec![floe_agent_contract::ModelPlacement::Remote],
         };
         let canonical: floe_agent_contract::AgentCard = card.clone();
         canonical.validate().unwrap();
@@ -383,6 +384,7 @@ mod tests {
                     description: "Reviews schedules in an isolated context.".into(),
                     domain_tags: vec!["schedule".into()],
                     skills: vec![],
+                    supported_placements: vec![floe_agent_contract::ModelPlacement::Remote],
                 })
                 .into_iter()
                 .collect()

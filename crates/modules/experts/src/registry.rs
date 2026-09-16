@@ -13,7 +13,9 @@ pub use calendar_setup::{
     CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
     CalendarExpertSetupResult, ExpertPackaging,
 };
-pub use expert_setup::{BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec};
+pub use expert_setup::{
+    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec, SourceGrants, eligible_cards,
+};
 
 /// The identity of a builtin agent in the common delegation path.
 ///
@@ -74,27 +76,7 @@ pub struct BuiltinExpertAssignmentReceipt {
     pub granted_view_handles: Vec<Uuid>,
 }
 
-/// Why an Expert may or may not read one source right now.
-///
-/// A source the setup never mentioned and a source whose connection is down are
-/// different answers; only the Expert that asked can decide what each means for
-/// its own judgment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceGrant {
-    Granted,
-    /// No setup records this Expert, or the setup never bound this source.
-    NotConfigured,
-    /// The source is bound but currently disabled or unreachable.
-    Unavailable,
-    /// The source is bound and available, but this Expert holds no grant to it.
-    Denied,
-}
-
-impl SourceGrant {
-    pub fn is_granted(self) -> bool {
-        matches!(self, Self::Granted)
-    }
-}
+pub use floe_context_contract::SourceGrant;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -171,6 +153,16 @@ pub struct ExpertMetadata {
     pub description: String,
     pub domain_tags: Vec<String>,
     pub skills: Vec<String>,
+    /// Where this Expert's judgment can run, as its owning crate declared it.
+    #[serde(default = "every_placement")]
+    pub supported_placements: Vec<floe_context_contract::ModelPlacement>,
+}
+
+fn every_placement() -> Vec<floe_context_contract::ModelPlacement> {
+    vec![
+        floe_context_contract::ModelPlacement::DeviceLocal,
+        floe_context_contract::ModelPlacement::Remote,
+    ]
 }
 
 impl AgentPackage {
@@ -196,6 +188,7 @@ impl AgentPackage {
                 description: metadata.description.clone(),
                 domain_tags: metadata.domain_tags.clone(),
                 skills: metadata.skills.clone(),
+                supported_placements: metadata.supported_placements.clone(),
             }
             .validate()?;
         }
@@ -389,8 +382,10 @@ pub struct AgentRegistry {
     snapshot: RegistrySnapshot,
 }
 
+/// One Expert resolved against the registry: the package installed for it, the
+/// assignment that grants it, and the data class it may read at.
 #[derive(Clone)]
-pub(crate) struct ResolvedExpert {
+pub struct ResolvedExpert {
     pub registry_revision: u64,
     pub package: AgentPackage,
     pub assignment: PackageAssignment,
@@ -918,6 +913,7 @@ impl AgentRegistry {
             description: metadata.description.clone(),
             domain_tags: metadata.domain_tags.clone(),
             skills: metadata.skills.clone(),
+            supported_placements: metadata.supported_placements.clone(),
         };
         card.validate()?;
         Ok(card)
@@ -946,7 +942,9 @@ impl AgentRegistry {
         self.expert_card(person_id, assignment_id, expected_revision, view_handle)
     }
 
-    pub(crate) fn resolve(
+    /// Resolve one assignment to the Expert it installs, refusing anything that
+    /// is disabled, stale or not granted the views it was asked to read.
+    pub fn resolve(
         &self,
         instance_id: Uuid,
         person_id: PersonId,
@@ -1003,7 +1001,8 @@ impl AgentRegistry {
         })
     }
 
-    pub(crate) fn complete(
+    /// Record that this Expert completed `invocation_id` exactly once.
+    pub fn complete(
         &mut self,
         resolved: &ResolvedExpert,
         invocation_id: Uuid,

@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 
 use floe_experts::AgentRegistry;
 use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration, RegistrySnapshot};
-use floe_experts_builtin::{CalendarExpertSetup, CalendarExpertSetupReceipt};
+use floe_experts::{CalendarExpertSetup, CalendarExpertSetupReceipt};
 use floe_access::{DataAccessGrant, GrantState};
 use floe_context_contract::{ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
 use floe_day::{CalendarProvider};
