@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 base64 = "0.22.1"
 chrono.workspace = true
+floe-access = { path = "../../modules/access" }
 floe-actions = { path = "../../modules/actions" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-connections = { path = "../../modules/connections" }

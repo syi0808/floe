@@ -30,7 +30,7 @@ impl<Keys: VaultKeyProvider> ExpertActionStore for EncryptedAgentVault<Keys> {
     async fn store_agent_action_envelope(
         &self,
         envelope: AgentActionEnvelope,
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<AgentActionAdmission, AgentFailure> {
         EncryptedAgentVault::store_agent_action_envelope(self, envelope).await
     }
 
@@ -54,7 +54,7 @@ impl<Keys: VaultKeyProvider> ExpertActionStore for EncryptedAgentVault<Keys> {
         expected_digest: &str,
         now: DateTime<Utc>,
         cancellation: Cancellation,
-        fence: impl Fn() -> Result<(), AgentFailure>,
+        fence: impl Fn() -> Result<(), AgentFailure> + Send + Sync,
     ) -> Result<AgentActionAdmission, AgentFailure> {
         EncryptedAgentVault::admit_agent_action_dispatch_with_cancellation_and_fence(
             self,

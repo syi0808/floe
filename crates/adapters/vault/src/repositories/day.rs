@@ -153,10 +153,10 @@ impl floe_day::TimelineRepository for TursoStore {
 
 fn day_error(error: StoreError) -> floe_day::DayError {
     let code = match error.code {
-        StoreErrorCode::Validation => floe_day::DayStoreErrorCode::Validation,
-        StoreErrorCode::NotFound => floe_day::DayStoreErrorCode::NotFound,
-        StoreErrorCode::Conflict => floe_day::DayStoreErrorCode::Conflict,
-        _ => floe_day::DayStoreErrorCode::Storage,
+        StoreErrorCode::Validation => floe_day::DayErrorCode::Validation,
+        StoreErrorCode::NotFound => floe_day::DayErrorCode::NotFound,
+        StoreErrorCode::Conflict => floe_day::DayErrorCode::Conflict,
+        _ => floe_day::DayErrorCode::Storage,
     };
     let mut result = floe_day::DayError::new(code, error.message);
     for (key, value) in error.metadata {

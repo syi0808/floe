@@ -36,7 +36,7 @@ mod remote_view_grants;
 mod session_archive;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
-pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
+pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
@@ -279,7 +279,7 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         }
         let messages = std::mem::take(&mut request.messages);
         let reader =
-            crate::context_evidence::ContextEvidenceReader::new(self.vault, self.session_id);
+            crate::repositories::ContextEvidenceReader::new(self.vault, self.session_id);
         let coverage_by_turn = floe_context::read_history_coverage(
             &reader,
             self.session_id,

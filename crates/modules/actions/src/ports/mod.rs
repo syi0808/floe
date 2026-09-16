@@ -117,10 +117,14 @@ pub trait ExpertActionStore {
         &self,
         reference: &ExpertProposalReference,
     ) -> Result<ContextDependency, AgentFailure>;
+    /// Record the durable pre-dispatch intent for one action.
+    ///
+    /// The admission it returns is what the store already knows about this
+    /// execution; a caller that only needs the record to exist ignores it.
     async fn store_agent_action_envelope(
         &self,
         envelope: AgentActionEnvelope,
-    ) -> Result<(), AgentFailure>;
+    ) -> Result<AgentActionAdmission, AgentFailure>;
     async fn agent_action_admission(
         &self,
         execution_id: Uuid,
@@ -135,7 +139,7 @@ pub trait ExpertActionStore {
         expected_digest: &str,
         now: DateTime<Utc>,
         cancellation: floe_execution::Cancellation,
-        fence: impl Fn() -> Result<(), AgentFailure>,
+        fence: impl Fn() -> Result<(), AgentFailure> + Send + Sync,
     ) -> Result<AgentActionAdmission, AgentFailure>;
     async fn settle_agent_action(
         &self,

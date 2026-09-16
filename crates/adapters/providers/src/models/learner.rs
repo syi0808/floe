@@ -3,7 +3,7 @@ use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_kernel::AGENT_VERSION;
 use floe_conversation::{AgentMessage, AgentUsage, ModelRequest, ModelRunner, ModelStep};
 use floe_conversation::{UsageLedger, generate_with_recovery};
-use floe_knowledge::{learner_prompt};
+use floe_knowledge::prompts::{learner_prompt};
 use floe_inference::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
     PlannedRoute,
@@ -74,7 +74,7 @@ async fn review_with_model(
             usage: UsageLedger::new(
                 request.remaining_tokens,
                 request.remaining_cost_micros,
-                AgentUsage::default(),
+                Default::default(),
             ),
             replay: vec![],
             schema_version: AGENT_VERSION,

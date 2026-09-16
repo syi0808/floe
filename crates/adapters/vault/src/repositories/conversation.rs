@@ -264,7 +264,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     person_id: self.vault.person_id(),
                 })
                 .await?;
-            let convert = |receipt: floe_vault::VaultConversationCancelReceipt| CancelRunReceipt {
+            let convert = |receipt: crate::VaultConversationCancelReceipt| CancelRunReceipt {
                 command_id: receipt.command_id,
                 run_id: receipt.run_id,
                 principal: receipt.person_id.to_string(),

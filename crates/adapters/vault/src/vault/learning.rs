@@ -1096,7 +1096,7 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
             person_id: session.person_id,
             session_id: session.id,
             revision: session.revision,
-            outcome: session.last_outcome.map(Into::into),
+            outcome: session.last_outcome.map(learning_outcome),
             personal: session.scope.is_none() && session.data_classes == [DataClass::Personal],
             active_turn: session.active_turn.is_some(),
             pending_output: session.pending_output.is_some(),
@@ -1390,6 +1390,16 @@ async fn finish_transaction<T>(
         Err(failure) => {
             let _ = transaction.rollback().await;
             Err(failure)
+        }
+    }
+}
+
+/// The same settled outcome, in the terms the learner records it under.
+fn learning_outcome(outcome: floe_conversation::AgentOutcome) -> floe_knowledge::LearningOutcome {
+    match outcome {
+        floe_conversation::AgentOutcome::Completed => floe_knowledge::LearningOutcome::Completed,
+        floe_conversation::AgentOutcome::Halted { reason } => {
+            floe_knowledge::LearningOutcome::Halted { reason }
         }
     }
 }

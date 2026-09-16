@@ -30,7 +30,7 @@ pub struct ExpertCalendarInspection {
 }
 
 /// Observation fence used before an external write is dispatched.
-pub trait ObservationFence {
+pub trait ObservationFence: Send + Sync {
     fn observation(&self, dependency: &ContextDependency)
     -> Result<(Uuid, String), AgentFailure>;
 }
