@@ -6,11 +6,13 @@
 
 mod api;
 mod application;
+mod transfer;
 
 pub use api::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
     PlannedRoute, RecipientConstraint, RouteRequest,
 };
+pub use transfer::{RouteRecipient, external_transfer_consent};
 pub use application::{
     AttemptJournal, AttemptLifecycle, AttemptUpdate, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter,
     LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY, ModelAttemptRecord, ModelAttemptState,

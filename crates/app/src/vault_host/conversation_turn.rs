@@ -600,17 +600,19 @@ fn policy(model: &Model, route: Option<&AgentRemoteRouteDto>) -> InferencePolicy
     }
 }
 
+/// Read the route's recipient off the worker envelope and let Inference say
+/// whether this run's input may reach it.
 fn external_transfer_consent(
     placement: ModelPlacement,
     route: Option<&AgentRemoteRouteDto>,
 ) -> TransferConsent {
-    if placement == ModelPlacement::Remote
-        && route.is_some_and(|route| route.external && route.allow_external)
-    {
-        TransferConsent::Granted
-    } else {
-        TransferConsent::NotGranted
-    }
+    floe_inference::external_transfer_consent(
+        placement,
+        route.map(|route| floe_inference::RouteRecipient {
+            external: route.external,
+            allowed: route.allow_external,
+        }),
+    )
 }
 
 pub(crate) enum Model {

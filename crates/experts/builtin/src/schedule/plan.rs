@@ -73,7 +73,20 @@ pub fn select_active_setup(
     })
 }
 
-/// The window, the intent and the acquisition this run needs.
+/// Where this run's own reasoning happens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScheduleReasoning {
+    /// The calendar is being pulled from the paired server for this very turn,
+    /// so reasoning over what comes back stays on this device's own model. The
+    /// Expert will not hand a freshly acquired remote calendar to a second
+    /// remote recipient.
+    OnDevice,
+    /// Nothing is acquired remotely, so the turn reasons wherever the
+    /// conversation's own route already put it.
+    ConversationRoute,
+}
+
+/// The window, the intent, the acquisition and the reasoning this run needs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScheduleRunPlan {
     pub range: CalendarRange,
@@ -82,9 +95,10 @@ pub struct ScheduleRunPlan {
     pub expires_at: DateTime<Utc>,
     /// The turn asked for a protected focus window rather than a review.
     pub propose_focus: bool,
-    /// The calendar must be read through the paired server for this provider,
-    /// so the turn runs on the device model and the acquisition is remote.
+    /// The calendar must be read through the paired server for this provider.
     pub acquire_remotely: bool,
+    /// Which model this run may reason on, given that acquisition.
+    pub reasoning: ScheduleReasoning,
 }
 
 /// Decide what this run looks at, and how.
@@ -114,17 +128,23 @@ pub fn plan_run(
             return Err(AgentFailure::CapabilityUnavailable);
         }
     }
+    let acquire_remotely = remote_route_available
+        && matches!(
+            provider,
+            CalendarProvider::Google | CalendarProvider::Microsoft
+        );
     Ok(ScheduleRunPlan {
         range,
         starts_at,
         ends_at,
         expires_at: now + GRANT_LIFETIME,
         propose_focus,
-        acquire_remotely: remote_route_available
-            && matches!(
-                provider,
-                CalendarProvider::Google | CalendarProvider::Microsoft
-            ),
+        acquire_remotely,
+        reasoning: if acquire_remotely {
+            ScheduleReasoning::OnDevice
+        } else {
+            ScheduleReasoning::ConversationRoute
+        },
     })
 }
 
@@ -236,6 +256,30 @@ mod tests {
                 .unwrap()
                 .propose_focus
         );
+    }
+
+    #[test]
+    fn a_remotely_acquired_calendar_is_reasoned_over_on_this_device() {
+        let local = chrono::Local::now();
+        let now = Utc::now();
+        assert_eq!(
+            plan_run("review", CalendarProvider::Google, 1, true, local, now)
+                .unwrap()
+                .reasoning,
+            ScheduleReasoning::OnDevice
+        );
+        for (provider, remote_route) in [
+            (CalendarProvider::Google, false),
+            (CalendarProvider::EventKit, true),
+            (CalendarProvider::Fixture, true),
+        ] {
+            assert_eq!(
+                plan_run("review", provider, 1, remote_route, local, now)
+                    .unwrap()
+                    .reasoning,
+                ScheduleReasoning::ConversationRoute
+            );
+        }
     }
 
     #[test]

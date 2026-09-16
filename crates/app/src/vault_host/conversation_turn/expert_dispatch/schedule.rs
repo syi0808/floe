@@ -173,14 +173,17 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                 chrono::Local::now(),
                 chrono::Utc::now(),
             )?;
-            let remote_acquisition = plan.acquire_remotely;
-            let model = if remote_acquisition {
-                Model::Foundation(FoundationModelRunner::encrypted())
-            } else {
-                Model::conversation(staged.request.remote_route.clone())?
+            // The Expert decided where it may reason; the host only builds it.
+            let model = match plan.reasoning {
+                schedule::ScheduleReasoning::OnDevice => {
+                    Model::Foundation(FoundationModelRunner::encrypted())
+                }
+                schedule::ScheduleReasoning::ConversationRoute => {
+                    Model::conversation(staged.request.remote_route.clone())?
+                }
             };
             let remote_backend = match staged.request.remote_route.as_ref() {
-                Some(route) if remote_acquisition => Some(VaultRemoteCalendarBackend::new(
+                Some(route) if plan.acquire_remotely => Some(VaultRemoteCalendarBackend::new(
                     &self.vault,
                     &self.core,
                     route,
