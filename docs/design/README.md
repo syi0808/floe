@@ -1,7 +1,7 @@
 # Floe Design Specifications
 
 **Status:** target specification  
-**Last updated:** 2026-09-03
+**Last updated:** 2026-09-16
 
 ## Purpose
 
@@ -29,6 +29,7 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | [Action review](s3-calendar-action-ui.md) | Decision-first summaries, explicit approval, progressive diagnostic disclosure and safe recovery |
 | [Assistant and interventions](assistant-and-interventions.md) | Passive, suggestion, active, and confirmation states |
 | [Accessibility and motion](accessibility-and-motion.md) | Input, focus, scaling, semantics, motion, validation |
+| [Mascot motion](mascot-motion.md) | Floe state animations, reduced motion, and runtime asset ownership |
 | [Application shell](screens/application-shell.md) | Global navigation, local tools, desktop and narrow layout |
 | [Day Canvas](screens/day-canvas.md) | Today timeline, Now/Next, tasks, notes, and contextual rail |
 | [Notes](screens/notes.md) | Note collection and detail transitions |
