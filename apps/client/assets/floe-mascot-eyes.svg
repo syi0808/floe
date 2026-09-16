@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="768" height="768" viewBox="0 0 768 768" aria-hidden="true">
+  <defs>
+    <radialGradient id="eye-gradient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(236 394) rotate(68) scale(60 46)">
+      <stop offset="0" stop-color="#3b306d"/>
+      <stop offset="0.58" stop-color="#292151"/>
+      <stop offset="1" stop-color="#1b1639"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="246" cy="412" rx="27" ry="40" fill="url(#eye-gradient)"/>
+  <ellipse cx="435" cy="412" rx="27" ry="40" fill="url(#eye-gradient)"/>
+</svg>
