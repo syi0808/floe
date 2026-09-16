@@ -6,13 +6,14 @@ This is the only mutable refactoring progress record. The [active document editi
 
 | Field | State |
 |---|---|
-| Source reviewed for this documentation edition | `7eab97dcb53c705eb8d23408494adb2f22a6fcb5`; current dirty tree contains the R003 step 01 change set |
+| Source reviewed for this documentation edition | `40d9397fe31c9dda42073e82dc04ef735a230806`; current dirty tree contains the R003 step 01 explicit-profile forwarding change set |
 | Active plan | **R003**, [PLAN](versions/r003-structure-first/PLAN.md) / [execution](versions/r003-structure-first/EXECUTION_PLAN.md) |
 | Current stage | **A — structural refactoring; not complete** |
 | Execution | One coding agent, one sequential change set; product Manager/Expert A2A retained |
-| Current change | R003 step 01.1–01.4: canonical Conversation intent/archive contracts, owner-scoped command lookup, and app facade profile wiring |
-| Runtime changes in this refresh | Canonical turn digest and normalized text are wired through Conversation admission; archive values now belong to `floe-agent-contract`; app wire schema remains 2 |
-| Product validation in this refresh | `not_run`; focused Rust contract, Conversation, FFI, Core, protocol, and app tests pass, but no live Apple app/model/provider behavior was exercised |
+| Current change | R003 step 01: preserve explicit profile from the app conversation request through the vault turn DTO into Conversation canonical intent/digest |
+| Runtime changes in this refresh | Canonical turn digest and normalized text are wired through Conversation admission; the app, queued conversation request, and Conversation turn now retain profile selection; archive values now belong to `floe-agent-contract`; app wire schema remains 2 |
+| Contract validation in this refresh | Focused Rust type/tests, FFI app-wire tests, Flutter client/gateway tests, architecture boundary check, and `git diff --check` pass; no live Apple app/model/provider behavior was exercised |
+| Product validation in this refresh | `not_run` |
 | Latest recorded app observation | Normal macOS debug app ended in VaultUnavailable before route selection; cause not confirmed |
 | Next code task | R003 02.1: inspect `crates/modules/connections/src/api.rs` and introduce the concrete `ConnectionIntent`/`ConnectionObservation` owner boundary |
 
@@ -69,8 +70,8 @@ These are source and prior checkpoint summaries, not new passes. R003 source win
 ### R003 step 01 evidence
 
 - **Structure:** `StartTurn`/`CanonicalTurnIntent` owns normalized text, retry/Continue validation, profile preference, and principal-bound fixed-field digest; canonical archive values and `ArchiveReader` live in `floe-agent-contract`; `CommandQuery` scopes command lookup to the principal.
-- **Wiring/removal:** Conversation, Context, Vault/FFI, app facade, app wire, and Flutter client use the new contracts; Context-owned archive value definitions and `request_context_digest` callers are removed. ABI `_v2` names remain until the prescribed Stage 07 consumer replacement.
-- **Checks:** `cargo check -p floe-ffi` passed; `cargo test -p floe-agent-contract -p floe-context -p floe-conversation -p floe-app -p floe-protocol` passed; `cargo test -p floe-ffi` passed; `cargo test -p floe-core` passed; `flutter test test/runtime_client/floe_client_test.dart` passed; `python3 tools/architecture/check_boundaries.py . --mode migration` passed with only expected migration warnings; `git diff --check` passed. The combined Flutter command is environment-blocked by the existing missing `floe_core_query_v2` native symbol in `app_wire_transport_test.dart`. `cargo fmt --all -- --check` remains not clean because of unrelated pre-existing repository formatting outside this change set; changed Rust files pass targeted `rustfmt --check`.
+- **Wiring/removal:** The app wire maps explicit profile to the app facade, `LegacyComposition` carries it through `AgentConversationTurnRequestDto`, and the vault turn maps it into `Conversation::TurnRequest` instead of forcing `Auto`; Flutter conversation requests and `FloeClient` serialize the same selection. Context-owned archive value definitions and `request_context_digest` callers are removed. ABI `_v2` names remain until the prescribed Stage 07 consumer replacement.
+- **Checks:** `cargo check -p floe-ffi -p floe-conversation -p floe-protocol` passed; `cargo test -p floe-protocol -p floe-conversation` passed (6 app-wire, 16 Conversation, 14 protocol tests); `cargo test -p floe-ffi --lib app_wire::tests` passed (3 tests); `flutter test test/runtime_client/floe_client_test.dart test/features/conversation/conversation_runtime_gateway_test.dart` passed (15 tests); `python3 tools/architecture/check_boundaries.py . --mode migration` passed with only expected migration warnings; `git diff --check` passed. `rustfmt --check` remains not clean because of unrelated pre-existing formatting in the touched legacy FFI test/source files; no formatter-only changes were applied.
 - **Behavior:** `not_run`; no live macOS app, Keychain/Vault diagnosis, OAuth, provider, or model behavior was exercised.
 - **Unfinished:** Stage 01 does not remove final ABI aliases or legacy composition; those require the later caller replacement. No data regeneration is indicated by the archive type-path move.
 

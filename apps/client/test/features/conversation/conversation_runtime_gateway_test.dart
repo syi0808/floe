@@ -24,11 +24,19 @@ void main() {
       final observed = <AppRunState>[];
 
       final completion = await gateway.runConversationTurn(
-        AgentConversationTurnRequest(session: _session(), text: 'Hello'),
+        AgentConversationTurnRequest(
+          session: _session(),
+          text: 'Hello',
+          profileId: 'local-fast',
+        ),
         onRun: (run) => observed.add(run.state),
       );
 
       expect(transport.commandKinds, ['conversation.start_turn']);
+      expect(
+        (transport.commandRequests.single['command'] as Map)['profile'],
+        {'kind': 'explicit', 'profile_id': 'local-fast'},
+      );
       expect(transport.queryKinds, everyElement('conversation.get_run'));
       expect(transport.eventReads, greaterThanOrEqualTo(3));
       expect(observed, [AppRunState.executing, AppRunState.finished]);

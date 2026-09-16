@@ -23,7 +23,9 @@ use floe_core::{EncryptedAgentVault, FloeCore, GovernedAgentSessionStore, VaultK
 use floe_domain::PersonId;
 #[cfg(test)]
 use floe_protocol::AgentRemoteCalendarConnectionDto;
-use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
+use floe_protocol::{
+    AgentConversationTurnRequestDto, AgentRemoteRouteDto, AppProfileSelectionDto,
+};
 use uuid::Uuid;
 
 use crate::local_context::LocalContextStore;
@@ -418,6 +420,12 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 floe_agent_contract::RunId::from_uuid(run_id).ok_or(AgentFailure::InvalidInput)
             })
             .transpose()?;
+        let profile = match &request.profile {
+            AppProfileSelectionDto::Auto => floe_conversation::ProfileSelection::Auto,
+            AppProfileSelectionDto::Explicit { profile_id } => {
+                floe_conversation::ProfileSelection::Explicit(profile_id.clone())
+            }
+        };
         let receipt = service
             .run_turn_observed(
                 floe_conversation::TurnRequest {
@@ -428,7 +436,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     prompt: request.text.clone(),
                     mode,
                     retry_of,
-                    profile: floe_conversation::ProfileSelection::Auto,
+                    profile,
                     execution_profile: execution_profile.into(),
                     bounded_context: floe_agent_contract::BoundedContext {
                         text: String::new(),

@@ -566,7 +566,9 @@ mod tests {
                     expected_revision: 7,
                     text: "hello".into(),
                     mode: AppTurnModeDto::NewTurn {},
-                    profile: AppProfileSelectionDto::Auto,
+                    profile: AppProfileSelectionDto::Explicit {
+                        profile_id: "local-fast".into(),
+                    },
                     retry_of: Some(retry_of),
                 },
             },
@@ -589,6 +591,10 @@ mod tests {
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.session_id, session_id);
         assert_eq!(captured.retry_of, Some(retry_of));
+        assert_eq!(
+            captured.profile,
+            floe_app::ProfileSelection::Explicit("local-fast".into())
+        );
     }
 
     #[test]

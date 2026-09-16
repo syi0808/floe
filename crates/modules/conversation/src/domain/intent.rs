@@ -220,6 +220,23 @@ mod tests {
     }
 
     #[test]
+    fn explicit_profile_is_preserved_and_changes_same_command_intent() {
+        let mut automatic = turn("hello");
+        let mut explicit = automatic.clone();
+        explicit.profile = ProfileSelection::Explicit("local-fast".into());
+
+        let automatic = CanonicalTurnIntent::from_start_turn(&mut automatic).unwrap();
+        let explicit = CanonicalTurnIntent::from_start_turn(&mut explicit).unwrap();
+
+        assert_eq!(automatic.profile, ProfileSelection::Auto);
+        assert_eq!(
+            explicit.profile,
+            ProfileSelection::Explicit("local-fast".into())
+        );
+        assert_ne!(automatic.digest("person"), explicit.digest("person"));
+    }
+
+    #[test]
     fn normalization_uses_utf8_byte_limit() {
         assert!(normalize_turn_text(&"한".repeat(MAX_TURN_TEXT_BYTES / 3 + 1)).is_err());
         assert_eq!(normalize_turn_text("  hello\n").unwrap(), "hello");

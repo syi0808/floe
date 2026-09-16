@@ -117,6 +117,12 @@ impl floe_app::ConversationCommands for LegacyComposition {
                     expected_revision: request.expected_revision,
                     text: request.text,
                     device_id: caller.device_id().to_owned(),
+                    profile: match request.profile {
+                        floe_app::ProfileSelection::Auto => AppProfileSelectionDto::Auto,
+                        floe_app::ProfileSelection::Explicit(profile_id) => {
+                            AppProfileSelectionDto::Explicit { profile_id }
+                        }
+                    },
                     continuation,
                     retry_of: request.retry_of,
                     remote_route: self

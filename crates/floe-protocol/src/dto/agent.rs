@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 
-use super::calendar::{CalendarProviderDto, CalendarScopeDto};
+use super::{
+    AppProfileSelectionDto,
+    calendar::{CalendarProviderDto, CalendarScopeDto},
+};
 
 pub use floe_agent_contract::{
     AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
@@ -556,12 +559,18 @@ pub struct AgentConversationTurnRequestDto {
     pub expected_revision: u64,
     pub text: String,
     pub device_id: String,
+    #[serde(default, skip_serializing_if = "is_auto_profile")]
+    pub profile: AppProfileSelectionDto,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_of: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_route: Option<AgentRemoteRouteDto>,
+}
+
+fn is_auto_profile(profile: &AppProfileSelectionDto) -> bool {
+    matches!(profile, AppProfileSelectionDto::Auto)
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]

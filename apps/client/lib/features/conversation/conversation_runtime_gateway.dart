@@ -103,6 +103,7 @@ final class NativeConversationRuntimeGateway
         text: request.text,
         continuation: continuation,
         retryOf: retryOf,
+        profileId: request.profileId,
       );
       active.commandId = command.commandId;
       readModel.markCommandPending(command.commandId);

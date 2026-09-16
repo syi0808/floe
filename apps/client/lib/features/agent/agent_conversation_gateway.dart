@@ -6,12 +6,14 @@ final class AgentConversationTurnRequest {
     required this.text,
     this.continuation = false,
     this.retryOf,
+    this.profileId,
   }) : assert(!continuation || retryOf == null);
 
   final AgentSession session;
   final String text;
   final bool continuation;
   final String? retryOf;
+  final String? profileId;
 }
 
 abstract interface class AgentConversationGateway {

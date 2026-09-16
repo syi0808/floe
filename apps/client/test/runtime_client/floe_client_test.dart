@@ -152,6 +152,36 @@ void main() {
     });
   });
 
+  test('StartTurn serializes an explicit profile selection', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000217',
+      '00000000-0000-4000-8000-000000000218',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareStartTurn(
+      sessionId: '00000000-0000-4000-8000-000000000204',
+      expectedRevision: 4,
+      text: 'use this profile',
+      profileId: 'local-fast',
+    );
+    transport.command = (request) async => {
+      'kind': 'command_receipt',
+      'command_id': request['command_id'],
+      'runtime_epoch': 7,
+      'admission': 'accepted',
+      'run_id': '00000000-0000-4000-8000-000000000219',
+      'session_revision': 5,
+    };
+
+    await client.submitStartTurn(command);
+
+    expect((transport.commandRequests.single['command'] as Map)['profile'], {
+      'kind': 'explicit',
+      'profile_id': 'local-fast',
+    });
+  });
+
   test('Run report preserves typed retry recovery metadata', () async {
     final transport = FakeTransport();
     final client = FloeClient(transport, newId: _unusedId);
