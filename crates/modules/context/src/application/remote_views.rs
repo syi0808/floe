@@ -31,6 +31,24 @@ pub fn remote_view_resource(view_id: &str, connection_id: &str) -> String {
     format!("{view_id}:{connection_id}")
 }
 
+/// The view and connection one resource handle names.
+///
+/// A handle that does not name a remote view on the connection the read is
+/// bound to is not this read's, whatever it spells.
+pub fn split_remote_view_resource<'a>(
+    resource: &'a str,
+    connection_id: &str,
+) -> Result<&'a str, AgentFailure> {
+    let (view_id, named_connection) = resource.split_once(':').ok_or(AgentFailure::PolicyDenied)?;
+    if named_connection != connection_id
+        || !is_remote_view(view_id)
+        || remote_view_resource(view_id, connection_id) != resource
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(view_id)
+}
+
 /// Whether this connector may serve this view.
 ///
 /// A mail view only ever comes from a mail connector; nothing else is a
@@ -128,4 +146,52 @@ pub fn validate_remote_view(
         }
         _ => Err(AgentFailure::InvalidInput),
     }
+}
+
+/// What one remote view read owes its provenance to.
+///
+/// The categories, the processing restriction and the consumer policy come from
+/// the grant the read ran under, not from the caller: a dependency describes the
+/// authority it was produced beneath.
+#[allow(clippy::too_many_arguments)]
+pub fn remote_view_dependency(
+    person_id: floe_agent_contract::PersonId,
+    grant: &floe_access::DataAccessGrant,
+    consumer_policy: floe_access::ConsumerPolicyAuthority,
+    source: floe_access::GrantSourceBinding,
+    resource: &str,
+    consumer: floe_access::GrantConsumer,
+    query_fingerprint: Vec<u8>,
+    lease_invocation_id: uuid::Uuid,
+    process_incarnation_id: uuid::Uuid,
+    observed_at_unix_ms: i64,
+    expires_at_unix_ms: i64,
+) -> Result<floe_access::ContextDependency, AgentFailure> {
+    let observed = chrono::DateTime::from_timestamp_millis(observed_at_unix_ms)
+        .ok_or(AgentFailure::StaleContext)?;
+    let expires = chrono::DateTime::from_timestamp_millis(expires_at_unix_ms)
+        .ok_or(AgentFailure::StaleContext)?;
+    floe_access::ContextDependency::try_new(
+        person_id,
+        grant.id(),
+        grant.authority(),
+        source,
+        vec![
+            floe_access::ResourceHandle::try_new(resource)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        ],
+        grant.scope().categories().to_vec(),
+        floe_access::GrantOperation::Read,
+        floe_access::GrantPurpose::Assistant,
+        consumer,
+        grant.scope().processing().clone(),
+        consumer_policy,
+        uuid::Uuid::new_v4(),
+        query_fingerprint,
+        lease_invocation_id,
+        process_incarnation_id,
+        observed,
+        expires,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
 }

@@ -9,9 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 use floe_context_contract::{
-    ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
-    GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
-    ResourceHandle, SourceAuthority,
+    ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
+    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+    GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
 use floe_kernel::{AgentFailure, PersonId};
 
@@ -183,4 +183,121 @@ pub fn review_remote_view_grant(
         grant_id: existing.map(|grant| grant.id()).unwrap_or_else(GrantId::new),
         expected: existing.map(|grant| grant.authority()),
     })
+}
+
+/// The signed source a remote read is about to use, still describing the grant
+/// it runs under.
+///
+/// A descriptor signed under a different source authority, or naming no
+/// connection revision or provider at all, describes some other read.
+pub fn admit_remote_view_source(
+    reference: &RemoteViewSourceReference,
+    source: &GrantSourceBinding,
+) -> Result<(), AgentFailure> {
+    if reference.source_authority != source.source_authority()
+        || reference.connection_revision == 0
+        || reference.provider_identity.is_empty()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+/// The binding recorded for this source, still being the grant the read
+/// selected and still naming the resource it is about to read.
+pub fn admit_remote_view_binding(
+    binding: &DataAccessGrant,
+    selected: &DataAccessGrant,
+    source: &GrantSourceBinding,
+    resource: &str,
+) -> Result<(), AgentFailure> {
+    if binding.id() != selected.id()
+        || binding.authority() != selected.authority()
+        || binding.source() != source
+        || !binding
+            .scope()
+            .resources()
+            .iter()
+            .any(|item| item.as_str() == resource)
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+/// A stored remote dependency this Person could still be shown at all.
+pub fn remote_dependency_live(
+    dependency: &ContextDependency,
+    person_id: PersonId,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AgentFailure> {
+    dependency
+        .validate()
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    if dependency.person_id() != person_id
+        || dependency.source().person_id() != person_id
+        || dependency.operation() != GrantOperation::Read
+        || dependency.purpose() != GrantPurpose::Assistant
+        || dependency.source().execution_owner().as_str().is_empty()
+        || now >= dependency.expires_at()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+/// The grant a stored remote dependency was recorded under, still admitting it,
+/// and the single resource it admits.
+pub fn remote_dependency_resource<'a>(
+    grant: &'a DataAccessGrant,
+    dependency: &ContextDependency,
+) -> Result<&'a str, AgentFailure> {
+    if grant.authority() != dependency.grant_authority()
+        || grant.source() != dependency.source()
+        || grant.state() != GrantState::Active
+        || grant.review_required()
+        || !grant.scope().operations().contains(&GrantOperation::Read)
+        || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        || !grant.scope().consumers().contains(dependency.consumer())
+        || grant.scope().resources().len() != 1
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(grant.scope().resources()[0].as_str())
+}
+
+/// The producer, source and recipient a stored remote dependency named, still
+/// the ones answering.
+pub fn remote_dependency_source_admits(
+    dependency: &ContextDependency,
+    reference: &RemoteViewSourceReference,
+    connection_revision: u64,
+    recipient: &str,
+) -> Result<(), AgentFailure> {
+    if reference.source_authority != dependency.source().source_authority()
+        || reference.execution_owner != dependency.source().execution_owner().as_str()
+        || reference.connection_revision != connection_revision
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    match dependency.processing() {
+        ProcessingRestriction::ApprovedRecipient { recipient: approved, .. }
+            if approved == recipient => {}
+        _ => return Err(AgentFailure::PolicyDenied),
+    }
+    Ok(())
+}
+
+/// The binding recorded for the dependency's source, still the one it names.
+pub fn remote_dependency_binding_matches(
+    consumer_policy: ConsumerPolicyAuthority,
+    authority: GrantAuthority,
+    dependency: &ContextDependency,
+) -> Result<(), AgentFailure> {
+    if consumer_policy != dependency.consumer_policy()
+        || authority != dependency.grant_authority()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
 }

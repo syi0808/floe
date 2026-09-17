@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_conversation::{ModelRequest};
 use floe_context::{
@@ -9,13 +9,14 @@ use floe_context::{
 };
 use floe_vault::{EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, RemoteCalendarAuthorizationExpectation, RemoteProducerIdentity, RemoteViewSourceReference, VaultKeyProvider};
 use floe_access::{
-    DataAccessGrant, GrantState, RemoteViewApproval, RemoteViewGrantReview, active_resource_grant,
-    matches_review, producer_is_pinned, remote_view_scope, remote_view_source,
+    DataAccessGrant, RemoteViewApproval, RemoteViewGrantReview, active_resource_grant,
+    admit_remote_view_binding, admit_remote_view_source, matches_review, producer_is_pinned,
+    remote_dependency_binding_matches, remote_dependency_live, remote_dependency_resource,
+    remote_dependency_source_admits, remote_view_scope, remote_view_source,
     review_remote_view_grant, source_matches_producer,
 };
-use floe_context_contract::{ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope, ProcessingRestriction, ResourceHandle};
+use floe_context_contract::{ContextDependency, GrantConsumer, GrantScope};
 
-const ASSISTANT_PURPOSE: GrantPurpose = GrantPurpose::Assistant;
 use floe_provider_adapters::control::RemoteViewAuthorizationRequest;
 use floe_provider_adapters::sources::ServerSourceClient;
 use floe_protocol::AgentRemoteRouteDto;
@@ -259,12 +260,7 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
                 &resource,
             )
             .await?;
-        if reference.source_authority != source.source_authority()
-            || reference.connection_revision == 0
-            || reference.provider_identity.is_empty()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
+        admit_remote_view_source(&reference, source)?;
         let binding = self
             .vault
             .remote_view_grant_binding(
@@ -274,18 +270,7 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
                 reference.source_authority,
             )
             .await?;
-        if binding.grant.id() != grant.id()
-            || binding.grant.authority() != grant.authority()
-            || binding.grant.source() != source
-            || !binding
-                .grant
-                .scope()
-                .resources()
-                .iter()
-                .any(|item| item.as_str() == resource)
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
+        admit_remote_view_binding(&binding.grant, &grant, source, &resource)?;
         let policy_incarnation = binding.consumer_policy.incarnation().to_string();
         let grant_id = grant.id().as_uuid().to_string();
         let grant_incarnation = grant.authority().incarnation().to_string();
@@ -332,51 +317,28 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
             .read_authorized_view(self.vault, request, expected, deadline, cancellation)
             .await?;
         let now = Utc::now().timestamp_millis();
-        let (value, observed, expires) = validate_remote_view(view_id, value, now, max_items, max_bytes)?;
-        let observed =
-            DateTime::<Utc>::from_timestamp_millis(observed).ok_or(AgentFailure::StaleContext)?;
-        let expires =
-            DateTime::<Utc>::from_timestamp_millis(expires).ok_or(AgentFailure::StaleContext)?;
-        let process = Uuid::new_v4();
-        let dependency = ContextDependency::try_new(
+        let (value, observed, expires) =
+            validate_remote_view(view_id, value, now, max_items, max_bytes)?;
+        let dependency = floe_context::remote_view_dependency(
             self.person_id,
-            binding.grant.id(),
-            binding.grant.authority(),
-            remote_view_source(&reference)?,
-            vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
-            binding.grant.scope().categories().to_vec(),
-            GrantOperation::Read,
-            ASSISTANT_PURPOSE,
-            consumer,
-            binding.grant.scope().processing().clone(),
+            &binding.grant,
             binding.consumer_policy,
-            Uuid::new_v4(),
+            remote_view_source(&reference)?,
+            &resource,
+            consumer,
             query_fingerprint.to_vec(),
             process_incarnation_id,
-            process,
+            Uuid::new_v4(),
             observed,
             expires,
-        )
-        .map_err(|_| AgentFailure::InvalidInput)?;
+        )?;
         Ok((value, dependency, binding.grant.scope().clone()))
     }
 }
 
 impl<Keys: VaultKeyProvider> GovernedDependencyLiveness for RemoteDependencyResolver<'_, Keys> {
     fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure> {
-        dependency
-            .validate()
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if dependency.person_id() != self.reader.person_id
-            || dependency.source().person_id() != self.reader.person_id
-            || dependency.operation() != GrantOperation::Read
-            || dependency.purpose() != ASSISTANT_PURPOSE
-            || dependency.source().execution_owner().as_str().is_empty()
-            || Utc::now() >= dependency.expires_at()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        Ok(())
+        remote_dependency_live(dependency, self.reader.person_id, Utc::now())
     }
 }
 
@@ -396,25 +358,10 @@ impl<Keys: VaultKeyProvider> GovernedDependencyResolver for RemoteDependencyReso
                 .vault
                 .get_remote_view_grant(dependency.grant_id())
                 .await?;
-            if grant.authority() != dependency.grant_authority()
-                || grant.source() != dependency.source()
-                || grant.state() != GrantState::Active
-                || grant.review_required()
-                || !grant.scope().operations().contains(&GrantOperation::Read)
-                || !grant.scope().purposes().contains(&ASSISTANT_PURPOSE)
-                || !grant.scope().consumers().contains(dependency.consumer())
-                || grant.scope().resources().len() != 1
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let resource = grant.scope().resources()[0].as_str();
-            let (view_id, connection_id) =
-                resource.split_once(':').ok_or(AgentFailure::PolicyDenied)?;
-            if remote_view_resource(view_id, dependency.source().connection_id().as_str()) != resource
-                || connection_id != dependency.source().connection_id().as_str()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
+            let resource = remote_dependency_resource(&grant, dependency)?;
+            let source_connection = dependency.source().connection_id();
+            let connection_id = source_connection.as_str();
+            let view_id = floe_context::split_remote_view_resource(resource, connection_id)?;
             let client = floe_provider_adapters::control::RemoteAuthorizationClient::new(self.reader.route)?;
             let preview = client
                 .view_source_preview(
@@ -447,18 +394,15 @@ impl<Keys: VaultKeyProvider> GovernedDependencyResolver for RemoteDependencyReso
                     resource,
                 )
                 .await?;
-            if pairing.person_id != self.reader.person_id.to_string()
-                || reference.source_authority != dependency.source().source_authority()
-                || reference.execution_owner != dependency.source().execution_owner().as_str()
-                || reference.connection_revision != preview.connection_revision
-            {
+            if pairing.person_id != self.reader.person_id.to_string() {
                 return Err(AgentFailure::PolicyDenied);
             }
-            match dependency.processing() {
-                ProcessingRestriction::ApprovedRecipient { recipient, .. }
-                    if recipient == &preview.producer.audience => {}
-                _ => return Err(AgentFailure::PolicyDenied),
-            }
+            remote_dependency_source_admits(
+                dependency,
+                &reference,
+                preview.connection_revision,
+                &preview.producer.audience,
+            )?;
             let binding = self
                 .reader
                 .vault
@@ -469,12 +413,11 @@ impl<Keys: VaultKeyProvider> GovernedDependencyResolver for RemoteDependencyReso
                     reference.source_authority,
                 )
                 .await?;
-            if binding.consumer_policy != dependency.consumer_policy()
-                || binding.grant.authority() != dependency.grant_authority()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            Ok(())
+            remote_dependency_binding_matches(
+                binding.consumer_policy,
+                binding.grant.authority(),
+                dependency,
+            )
         })
     }
 }
