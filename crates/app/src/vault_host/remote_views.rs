@@ -7,7 +7,7 @@ use floe_context::{
     is_remote_view, remote_view_connector_admissible, remote_view_data_category,
     remote_view_resource, validate_remote_view, validate_remote_view_query,
 };
-use floe_vault::{EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, RemoteCalendarAuthorizationExpectation, RemoteProducerIdentity, RemoteViewSourceReference, VaultKeyProvider};
+use floe_vault::{EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, RemoteProducerIdentity, RemoteViewSourceReference, VaultKeyProvider};
 use floe_access::{
     DataAccessGrant, RemoteViewApproval, RemoteViewGrantReview, active_resource_grant,
     admit_remote_view_binding, admit_remote_view_source, matches_review, producer_is_pinned,
@@ -17,7 +17,6 @@ use floe_access::{
 };
 use floe_context_contract::{ContextDependency, GrantConsumer, GrantScope};
 
-use floe_provider_adapters::control::RemoteViewAuthorizationRequest;
 use floe_provider_adapters::sources::ServerSourceClient;
 use floe_protocol::AgentRemoteRouteDto;
 use serde_json::Value;
@@ -271,50 +270,26 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
             )
             .await?;
         admit_remote_view_binding(&binding.grant, &grant, source, &resource)?;
-        let policy_incarnation = binding.consumer_policy.incarnation().to_string();
-        let grant_id = grant.id().as_uuid().to_string();
-        let grant_incarnation = grant.authority().incarnation().to_string();
-        let path = format!("/v1/views/{view_id}/admit");
-        let expected = RemoteCalendarAuthorizationExpectation {
-            operation: "".into(),
-            client_id: self.client_id.into(),
-            device_id: self.device_id.into(),
-            challenge_id: String::new(),
-            admission_id: String::new(),
-            query_sha256: String::new(),
-            result_sha256: String::new(),
-            grant_id: grant_id.clone(),
-            grant_incarnation: grant_incarnation.clone(),
-            grant_epoch: grant.authority().access_epoch().get(),
-            source_connector: source.connector().as_str().into(),
-            source_connection: connection_id_text.into(),
-            source_execution_owner: source.execution_owner().as_str().into(),
-            source_incarnation: source.source_authority().incarnation().to_string(),
-            source_epoch: source.source_authority().epoch().get(),
-            resources: vec![resource.clone()],
-            max_items: u32::try_from(max_items).map_err(|_| AgentFailure::BudgetExceeded)?,
-            max_bytes: u32::try_from(max_bytes).map_err(|_| AgentFailure::BudgetExceeded)?,
-        };
-        let request = RemoteViewAuthorizationRequest {
-            path: &path,
-            connector_id: source.connector().as_str(),
-            connection_id: connection_id_text,
-            connection_revision: reference.connection_revision,
-            resource: &resource,
-            policy_incarnation: &policy_incarnation,
-            policy_epoch: binding.consumer_policy.epoch().get(),
-            grant_id: &grant_id,
-            grant_incarnation: &grant_incarnation,
-            grant_epoch: grant.authority().access_epoch().get(),
-            purpose: "assistant",
-            consumer: consumer_name,
-            max_items: u32::try_from(max_items).map_err(|_| AgentFailure::BudgetExceeded)?,
-            max_bytes: u32::try_from(max_bytes).map_err(|_| AgentFailure::BudgetExceeded)?,
-            query,
-        };
         let value = self
             .source_client
-            .read_authorized_view(self.vault, request, expected, deadline, cancellation)
+            .read_admitted_view(
+                self.vault,
+                floe_provider_adapters::sources::AuthorizedViewRead {
+                    view_id,
+                    grant: &binding.grant,
+                    consumer_policy: binding.consumer_policy,
+                    consumer: consumer_name,
+                    resource: &resource,
+                    connection_revision: reference.connection_revision,
+                    max_items,
+                    max_bytes,
+                    query,
+                    client_id: self.client_id,
+                    device_id: self.device_id,
+                },
+                deadline,
+                cancellation,
+            )
             .await?;
         let now = Utc::now().timestamp_millis();
         let (value, observed, expires) =

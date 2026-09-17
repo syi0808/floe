@@ -16,6 +16,25 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
 
+/// One authorized view read, as the grant it runs under states it.
+///
+/// Turning a grant into the admission the paired server checks — which
+/// authority, which epochs, which bounds — is this transport's shape, not its
+/// caller's.
+pub struct AuthorizedViewRead<'a> {
+    pub view_id: &'a str,
+    pub grant: &'a floe_access::DataAccessGrant,
+    pub consumer_policy: floe_access::ConsumerPolicyAuthority,
+    pub consumer: &'a str,
+    pub resource: &'a str,
+    pub connection_revision: u64,
+    pub max_items: usize,
+    pub max_bytes: usize,
+    pub query: serde_json::Value,
+    pub client_id: &'a str,
+    pub device_id: &'a str,
+}
+
 pub struct ServerSourceClient {
     route: AgentRemoteRouteDto,
     source_calls: CallLimiter,
@@ -127,6 +146,65 @@ impl ServerSourceClient {
     #[cfg(test)]
     pub(crate) fn call_limiter(&self) -> &CallLimiter {
         &self.source_calls
+    }
+
+
+    /// Read one view the Person's grant admits, through their paired server.
+    pub async fn read_admitted_view<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        read: AuthorizedViewRead<'_>,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<serde_json::Value, AgentFailure> {
+        let source = read.grant.source();
+        let connector = source.connector();
+        let connection = source.connection_id();
+        let grant_id = read.grant.id().as_uuid().to_string();
+        let grant_incarnation = read.grant.authority().incarnation().to_string();
+        let policy_incarnation = read.consumer_policy.incarnation().to_string();
+        let max_items = u32::try_from(read.max_items).map_err(|_| AgentFailure::BudgetExceeded)?;
+        let max_bytes = u32::try_from(read.max_bytes).map_err(|_| AgentFailure::BudgetExceeded)?;
+        let path = format!("/v1/views/{}/admit", read.view_id);
+        let expected = RemoteCalendarAuthorizationExpectation {
+            operation: "".into(),
+            client_id: read.client_id.into(),
+            device_id: read.device_id.into(),
+            challenge_id: String::new(),
+            admission_id: String::new(),
+            query_sha256: String::new(),
+            result_sha256: String::new(),
+            grant_id: grant_id.clone(),
+            grant_incarnation: grant_incarnation.clone(),
+            grant_epoch: read.grant.authority().access_epoch().get(),
+            source_connector: connector.as_str().into(),
+            source_connection: connection.as_str().into(),
+            source_execution_owner: source.execution_owner().as_str().into(),
+            source_incarnation: source.source_authority().incarnation().to_string(),
+            source_epoch: source.source_authority().epoch().get(),
+            resources: vec![read.resource.to_owned()],
+            max_items,
+            max_bytes,
+        };
+        let request = RemoteViewAuthorizationRequest {
+            path: &path,
+            connector_id: connector.as_str(),
+            connection_id: connection.as_str(),
+            connection_revision: read.connection_revision,
+            resource: read.resource,
+            policy_incarnation: &policy_incarnation,
+            policy_epoch: read.consumer_policy.epoch().get(),
+            grant_id: &grant_id,
+            grant_incarnation: &grant_incarnation,
+            grant_epoch: read.grant.authority().access_epoch().get(),
+            purpose: "assistant",
+            consumer: read.consumer,
+            max_items,
+            max_bytes,
+            query: read.query,
+        };
+        self.read_authorized_view(vault, request, expected, deadline, cancellation)
+            .await
     }
 
     pub async fn read_authorized_view<Keys: VaultKeyProvider>(
