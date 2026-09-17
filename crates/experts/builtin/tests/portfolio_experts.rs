@@ -1,16 +1,17 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{
+    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    InferencePolicyDecision,
+};
 use floe_agent_contract::AGENT_VERSION;
-use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_execution::{Cancellation};
 use floe_context_contract::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind};
 use floe_experts_builtin::life_logistics::{LogisticsUrgency, run_life_logistics_expert};
 use floe_experts_builtin::work_context::{run_work_context_expert};
 use floe_experts_builtin::{PortfolioExpertInvocation};
 use floe_context_contract::{LogisticsItem, LogisticsItemKind};
-use floe_conversation::UsageLedger;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::PersonId;
 use tokio::time::{Duration, Instant};
@@ -20,40 +21,42 @@ const NOW: i64 = 1_789_000_000_000;
 
 struct Model {
     outputs: Mutex<VecDeque<String>>,
-    requests: Mutex<Vec<ModelRequest>>,
+    calls: Mutex<Vec<ExpertModelCall>>,
 }
 
 impl Model {
     fn new(outputs: impl IntoIterator<Item = serde_json::Value>) -> Self {
         Self {
             outputs: Mutex::new(outputs.into_iter().map(|value| value.to_string()).collect()),
-            requests: Mutex::new(vec![]),
+            calls: Mutex::new(vec![]),
         }
     }
 }
 
-impl ModelRunner for Model {
+impl ExpertModel for Model {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        self.requests.lock().unwrap().push(request);
-        Ok(ModelResponse {
-            replay: None,
-            schema_version: AGENT_VERSION,
-            output: vec![ModelStep::Answer {
-                text: self.outputs.lock().unwrap().pop_front().unwrap(),
-            }],
-            used_tokens: 64,
-            cost_micros: 0,
+    fn answer<'a>(
+        &'a self,
+        call: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+        let answer = self.outputs.lock().unwrap().pop_front().unwrap();
+        self.calls.lock().unwrap().push(call);
+        Box::pin(async move {
+            Ok(ExpertModelAnswer {
+                schema_version: AGENT_VERSION,
+                answer,
+                used_tokens: 64,
+                cost_micros: 0,
+            })
         })
     }
 }
 
 fn invocation() -> PortfolioExpertInvocation {
     PortfolioExpertInvocation {
-        usage: UsageLedger::default(),
         person_id: PersonId::new(),
         invocation_id: Uuid::new_v4(),
         assignment: "Find grounded preparation and next actions.".into(),
@@ -157,14 +160,10 @@ async fn work_and_life_experts_return_source_linked_advice_without_action_author
     assert_eq!(work.scope_handle, "workspace:selected");
     assert_eq!(logistics.preparations[0].urgency, LogisticsUrgency::Soon);
     assert!(logistics.preparations[0].requires_approval);
-    let requests = model.requests.lock().unwrap();
-    assert_eq!(requests[0].prompt.role, PromptRole::WorkContextExpert);
-    assert_eq!(requests[1].prompt.role, PromptRole::LifeLogisticsExpert);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.capabilities.is_empty())
-    );
+    let calls = model.calls.lock().unwrap();
+    assert_eq!(calls[0].prompt.role, PromptRole::WorkContextExpert);
+    assert_eq!(calls[1].prompt.role, PromptRole::LifeLogisticsExpert);
+    assert!(calls.iter().all(|call| call.assignment.trim().len() > 0));
 }
 
 #[tokio::test]
@@ -195,5 +194,76 @@ async fn work_and_life_outputs_reject_scope_escape_and_high_authority_fields() {
     assert_eq!(
         run_life_logistics_expert(&model, &policy(), invocation(), logistics()).await,
         Err(AgentFailure::InvalidModelOutput)
+    );
+}
+
+#[tokio::test]
+async fn an_expert_refuses_an_answer_that_overspends_or_overflows_its_bound() {
+    struct Overspending {
+        used_tokens: u64,
+        cost_micros: u64,
+        answer: String,
+    }
+
+    impl ExpertModel for Overspending {
+        fn placement(&self) -> ModelPlacement {
+            ModelPlacement::DeviceLocal
+        }
+
+        fn answer<'a>(
+            &'a self,
+            _: ExpertModelCall,
+        ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+            Box::pin(async move {
+                Ok(ExpertModelAnswer {
+                    schema_version: AGENT_VERSION,
+                    answer: self.answer.clone(),
+                    used_tokens: self.used_tokens,
+                    cost_micros: self.cost_micros,
+                })
+            })
+        }
+    }
+
+    let sound = serde_json::json!({
+        "summary": "Prepared.",
+        "scope_handle": "workspace:selected",
+        "expires_at_unix_ms": NOW + 60_000,
+        "source_handles": ["work:selected"],
+        "preparations": [],
+    })
+    .to_string();
+    let budget = invocation();
+    for (used_tokens, cost_micros) in [
+        (budget.max_model_tokens + 1, 0),
+        (0, budget.max_model_cost_micros + 1),
+    ] {
+        let model = Overspending {
+            used_tokens,
+            cost_micros,
+            answer: sound.clone(),
+        };
+        assert_eq!(
+            run_work_context_expert(&model, &policy(), invocation(), work())
+                .await
+                .unwrap_err(),
+            AgentFailure::BudgetExceeded
+        );
+    }
+
+    // An answer inside the budget but past the Expert's own output bound is
+    // refused too, before anything tries to read it.
+    let mut invocation = invocation();
+    invocation.max_output_bytes = 8;
+    let model = Overspending {
+        used_tokens: 1,
+        cost_micros: 1,
+        answer: sound,
+    };
+    assert_eq!(
+        run_work_context_expert(&model, &policy(), invocation, work())
+            .await
+            .unwrap_err(),
+        AgentFailure::BudgetExceeded
     );
 }

@@ -8,14 +8,12 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, SessionProtection};
+use floe_agent_contract::{
+    AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    SessionProtection,
+};
 use floe_context_contract::{CalendarContextView, CommunicationView, ContextEvidence, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, calendar_context_evidence, communication_context_evidence, validate_calendar_context_view, validate_communication_view};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
-use floe_conversation::{
-    AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep, UsageLedger,
-    generate_with_recovery,
-};
-use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::prompts::PromptAssembly;
 
 /// How many findings one communication-backed Expert may report.
@@ -23,7 +21,6 @@ pub(crate) const MAX_MAIL_EXPERT_FINDINGS: usize = 16;
 
 /// One assignment handed to an Expert that reads a communication view.
 pub struct MailExpertInvocation {
-    pub usage: UsageLedger,
     pub person_id: PersonId,
     pub invocation_id: Uuid,
     pub assignment: String,
@@ -39,7 +36,6 @@ pub struct MailExpertInvocation {
 
 /// One assignment handed to an Expert that reads a work or logistics view.
 pub struct PortfolioExpertInvocation {
-    pub usage: UsageLedger,
     pub person_id: PersonId,
     pub invocation_id: Uuid,
     pub assignment: String,
@@ -54,7 +50,6 @@ pub struct PortfolioExpertInvocation {
 
 /// One assignment handed to an Expert that reads the Person's own views.
 pub struct PersonalExpertInvocation {
-    pub usage: UsageLedger,
     pub person_id: PersonId,
     pub invocation_id: Uuid,
     pub assignment: String,
@@ -89,10 +84,9 @@ fn admissible(
 /// The one bounded model call an Expert makes, with its context authorized for
 /// the placement it is about to run on.
 #[allow(clippy::too_many_arguments)]
-async fn run_expert_model<Model: ModelRunner>(
+async fn run_expert_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
-    usage: &UsageLedger,
     person_id: PersonId,
     invocation_id: Uuid,
     assignment: &str,
@@ -104,57 +98,45 @@ async fn run_expert_model<Model: ModelRunner>(
     max_output_bytes: usize,
     deadline: Instant,
     cancellation: &floe_execution::Cancellation,
-) -> Result<ModelResponse, AgentFailure> {
+) -> Result<ExpertModelAnswer, AgentFailure> {
     policy.authorize(
         model.placement(),
         SessionProtection::Encrypted,
         &context,
         u64::try_from(current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
     )?;
-    let turn_id = Uuid::new_v4();
-    let response = generate_with_recovery(
-        model,
-        ModelRequest {
-            usage: usage.clone(),
-            replay: vec![],
-            schema_version: AGENT_VERSION,
-            prompt,
+    let answer = model
+        .answer(ExpertModelCall {
             person_id,
-            session_id: invocation_id,
-            turn_id,
+            invocation_id,
+            prompt,
             policy: policy.clone(),
             context,
-            messages: vec![AgentMessage::User {
-                turn_id,
-                text: assignment.to_owned(),
-            }],
-            capabilities: vec![],
-            active_agents: vec![],
-            remaining_tokens: max_model_tokens,
-            remaining_cost_micros: max_model_cost_micros,
+            assignment: assignment.to_owned(),
             max_output_bytes: max_output_bytes.min(8192),
+            max_tokens: max_model_tokens,
+            max_cost_micros: max_model_cost_micros,
             deadline,
             cancellation: cancellation.clone(),
-        },
-    )
-    .await?;
-    if response.schema_version != AGENT_VERSION
-        || response.used_tokens > max_model_tokens
-        || response.cost_micros > max_model_cost_micros
+        })
+        .await?;
+    if answer.schema_version != AGENT_VERSION
+        || answer.used_tokens > max_model_tokens
+        || answer.cost_micros > max_model_cost_micros
     {
         return Err(AgentFailure::BudgetExceeded);
     }
-    Ok(response)
+    Ok(answer)
 }
 
 /// Run the model for an Expert whose evidence is one communication view.
-pub(crate) async fn run_mail_model<Model: ModelRunner>(
+pub(crate) async fn run_mail_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &MailExpertInvocation,
     prompt: PromptAssembly,
     mut context: AgentContext,
-) -> Result<ModelResponse, AgentFailure> {
+) -> Result<ExpertModelAnswer, AgentFailure> {
     admissible(
         &invocation.assignment,
         invocation.max_output_bytes,
@@ -174,7 +156,6 @@ pub(crate) async fn run_mail_model<Model: ModelRunner>(
     run_expert_model(
         model,
         policy,
-        &invocation.usage,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -191,7 +172,7 @@ pub(crate) async fn run_mail_model<Model: ModelRunner>(
 }
 
 /// Run the model for an Expert whose evidence is one portfolio view.
-pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ModelRunner>(
+pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &PortfolioExpertInvocation,
@@ -207,10 +188,9 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ModelRu
     )?;
     let mut context = invocation.context.clone();
     context.evidence.push(evidence);
-    let response = run_expert_model(
+    let answer = run_expert_model(
         model,
         policy,
-        &invocation.usage,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -224,11 +204,11 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ModelRu
         &invocation.cancellation,
     )
     .await?;
-    decode_answer(&response, invocation.max_output_bytes)
+    decode_answer(&answer, invocation.max_output_bytes)
 }
 
 /// Run the model for an Expert whose evidence is the Person's own views.
-pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ModelRunner>(
+pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &PersonalExpertInvocation,
@@ -244,10 +224,9 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ModelRun
     )?;
     let mut context = invocation.context.clone();
     context.evidence.extend(evidence);
-    let response = run_expert_model(
+    let answer = run_expert_model(
         model,
         policy,
-        &invocation.usage,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -261,21 +240,18 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ModelRun
         &invocation.cancellation,
     )
     .await?;
-    decode_answer(&response, invocation.max_output_bytes)
+    decode_answer(&answer, invocation.max_output_bytes)
 }
 
-/// The single answer step an Expert's model call must have produced.
+/// The judgment an Expert's one answer carries.
 pub(crate) fn decode_answer<Output: for<'de> Deserialize<'de>>(
-    response: &ModelResponse,
+    answer: &ExpertModelAnswer,
     maximum_bytes: usize,
 ) -> Result<Output, AgentFailure> {
-    let [ModelStep::Answer { text }] = response.output.as_slice() else {
-        return Err(AgentFailure::InvalidModelOutput);
-    };
-    if text.len() > maximum_bytes.min(8192) {
+    if answer.answer.len() > maximum_bytes.min(8192) {
         return Err(AgentFailure::BudgetExceeded);
     }
-    serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)
+    serde_json::from_str(&answer.answer).map_err(|_| AgentFailure::InvalidModelOutput)
 }
 
 /// Add the calendar views an Expert was granted to its evidence, keeping every

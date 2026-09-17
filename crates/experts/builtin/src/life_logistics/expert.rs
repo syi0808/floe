@@ -7,7 +7,7 @@ use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
 use floe_context_contract::{LogisticsView, logistics_context_evidence, validate_logistics_view};
 use floe_agent_contract::{InferencePolicyDecision};
-use floe_conversation::ModelRunner;
+use floe_agent_contract::ExpertModel;
 
 use crate::prompts::{life_logistics_expert_prompt};
 use crate::shared::{PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary};
@@ -47,7 +47,7 @@ struct LogisticsOutput {
     preparations: Vec<LogisticsPreparation>,
 }
 
-pub async fn run_life_logistics_expert<Model: ModelRunner>(
+pub async fn run_life_logistics_expert<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: PortfolioExpertInvocation,

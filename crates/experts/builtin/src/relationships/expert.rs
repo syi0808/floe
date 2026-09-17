@@ -7,7 +7,7 @@ use floe_agent_contract::{AgentFailure, DataClass};
 use floe_agent_contract::AGENT_VERSION;
 use floe_context_contract::{AttentionView, CONFIRMED_INTERACTION_VIEW_ID, CalendarContextView, ConfirmedInteraction, ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence, validate_confirmed_interaction_view, validate_people_view};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
-use floe_conversation::ModelRunner;
+use floe_agent_contract::ExpertModel;
 
 use crate::prompts::{relationships_expert_prompt};
 use crate::shared::{validate_summary, PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, valid_handle, validate_judgment};
@@ -47,7 +47,7 @@ struct RelationshipsOutput {
     follow_ups: Vec<RelationshipFollowUp>,
 }
 
-pub async fn run_relationships_expert_with_views<Model: ModelRunner>(
+pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: PersonalExpertInvocation,

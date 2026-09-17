@@ -8,14 +8,13 @@
 
 use std::{future::Future, pin::Pin};
 
-use floe_agent_contract::AgentFailure;
+use floe_agent_contract::{AgentFailure, ExpertModel};
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, NativeContextView, PeopleView,
     WellbeingView, WorkContextView,
 };
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
-use floe_context_contract::{ContextDependency, SourceGrant};
-use floe_conversation::{ModelRunner, UsageLedger};
+use floe_context_contract::{ContextDependency, MemoryContextSnapshot, SourceGrant};
 use floe_execution::Cancellation;
 use floe_agent_contract::PersonId;
 use tokio::time::Instant;
@@ -44,7 +43,6 @@ pub struct BuiltinExpertRequest {
     pub current_time_unix_ms: i64,
     /// The conversation context this Expert is allowed to see.
     pub context: AgentContext,
-    pub usage: UsageLedger,
     pub max_output_bytes: usize,
     pub deadline: Instant,
     pub cancellation: Cancellation,
@@ -57,7 +55,6 @@ impl BuiltinExpertRequest {
         view: CommunicationView,
     ) -> MailExpertInvocation {
         MailExpertInvocation {
-            usage: self.usage.clone(),
             person_id: self.person_id,
             invocation_id: self.invocation_id,
             assignment: self.assignment.clone(),
@@ -74,7 +71,6 @@ impl BuiltinExpertRequest {
 
     pub fn portfolio_invocation(&self, context: AgentContext) -> PortfolioExpertInvocation {
         PortfolioExpertInvocation {
-            usage: self.usage.clone(),
             person_id: self.person_id,
             invocation_id: self.invocation_id,
             assignment: self.assignment.clone(),
@@ -90,7 +86,6 @@ impl BuiltinExpertRequest {
 
     pub fn personal_invocation(&self, context: AgentContext) -> PersonalExpertInvocation {
         PersonalExpertInvocation {
-            usage: self.usage.clone(),
             person_id: self.person_id,
             invocation_id: self.invocation_id,
             assignment: self.assignment.clone(),
@@ -132,7 +127,7 @@ impl BuiltinExpertOutput {
 
 /// The host an Expert runs inside.
 pub trait BuiltinExpertHost: Sync {
-    type Model: ModelRunner + Sync;
+    type Model: ExpertModel;
 
     /// One source read this Expert holds open while it reasons over it.
     type SourceRead: AuthorizedRead;
@@ -212,7 +207,7 @@ pub trait BuiltinExpertHost: Sync {
     fn conversation_context_available(&self) -> bool;
 
     /// The confirmed memories this Person has, for an Expert granted them.
-    fn memory_context<'a>(&'a self) -> Acquiring<'a, floe_context_contract::MemoryContextSnapshot>;
+    fn memory_context<'a>(&'a self) -> Acquiring<'a, MemoryContextSnapshot>;
 
     /// The Person's own task view, for an Expert granted it.
     fn task_view<'a>(&'a self) -> Acquiring<'a, NativeContextView>;

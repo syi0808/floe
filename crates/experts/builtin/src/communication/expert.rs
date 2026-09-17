@@ -7,7 +7,7 @@ use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
 use floe_context_contract::{CommunicationView};
 use floe_agent_contract::{InferencePolicyDecision};
-use floe_conversation::ModelRunner;
+use floe_agent_contract::ExpertModel;
 
 use crate::prompts::{communication_expert_prompt};
 use crate::shared::{MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary};
@@ -61,7 +61,7 @@ struct CommunicationModelOutput {
     assessments: Vec<CommunicationAssessment>,
 }
 
-pub async fn run_communication_expert<Model: ModelRunner>(
+pub async fn run_communication_expert<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: MailExpertInvocation,

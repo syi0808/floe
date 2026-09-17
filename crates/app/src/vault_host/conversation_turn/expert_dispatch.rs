@@ -22,8 +22,8 @@ pub(in crate::vault_host) mod schedule;
 ///
 /// Registration is static: the composition root never picks an Expert from what
 /// a request appears to mean.
-pub(super) fn registered_experts<'host>() -> floe_experts::ExpertDispatchTable<
-    ConversationExperts<'host>,
+pub(super) fn registered_experts<'turn, 'host>() -> floe_experts::ExpertDispatchTable<
+    DelegatedMessageExperts<'turn, 'host>,
     BuiltinExpertRequest,
     BuiltinExpertOutput,
 > {
@@ -31,7 +31,7 @@ pub(super) fn registered_experts<'host>() -> floe_experts::ExpertDispatchTable<
     let registrations: [(
         BuiltinExpertKind,
         floe_experts::ExpertRun<
-            ConversationExperts<'host>,
+            DelegatedMessageExperts<'turn, 'host>,
             BuiltinExpertRequest,
             BuiltinExpertOutput,
         >,
@@ -233,7 +233,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 cards,
                 grants,
                 task_runners: &[],
-                registrations,
             };
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
@@ -345,11 +344,6 @@ pub(crate) struct ConversationExperts<'model> {
     /// Experts that answer on the Task path, by the agent id they are registered
     /// under.
     pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
-    pub(super) registrations: floe_experts::ExpertDispatchTable<
-        ConversationExperts<'model>,
-        BuiltinExpertRequest,
-        BuiltinExpertOutput,
-    >,
 }
 
 impl<'model> ConversationExperts<'model> {
@@ -376,24 +370,35 @@ impl<'model> ConversationExperts<'model> {
     }
 }
 
-impl BuiltinExpertHost for ConversationExperts<'_> {
-    type Model = Model;
+/// One delegated message's Expert host.
+///
+/// Everything an Expert may read belongs to the turn and comes straight from
+/// the turn's host. What belongs to the message alone is the ledger its model
+/// attempts are charged to: it arrives with the message, and is bound to the
+/// model here for exactly as long as that message runs.
+pub(super) struct DelegatedMessageExperts<'turn, 'model> {
+    experts: &'turn ConversationExperts<'model>,
+    model: super::ExpertModelHost<'turn, Model>,
+}
+
+impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model> {
+    type Model = super::ExpertModelHost<'turn, Model>;
     type SourceRead = floe_context::SourceView<serde_json::Value>;
 
     fn model(&self) -> &Self::Model {
-        self.model
+        &self.model
     }
 
     fn server_model(&self) -> Option<&Self::Model> {
-        matches!(self.model, Model::Server(_)).then_some(self.model)
+        matches!(self.experts.model, Model::Server(_)).then_some(&self.model)
     }
 
     fn device_model(&self) -> Option<&Self::Model> {
-        matches!(self.model, Model::Foundation(_)).then_some(self.model)
+        matches!(self.experts.model, Model::Foundation(_)).then_some(&self.model)
     }
 
     fn policy(&self) -> &InferencePolicyDecision {
-        self.policy
+        self.experts.policy
     }
 
     /// The grant the registry recorded for this Expert and source.
@@ -402,7 +407,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         agent_id: &str,
         source: BuiltinContextSource,
     ) -> floe_context_contract::SourceGrant {
-        self.grants.grant(agent_id, source.source_id())
+        self.experts.grants.grant(agent_id, source.source_id())
     }
 
     fn read_source_view<'a>(
@@ -413,7 +418,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::SourceView<serde_json::Value>> {
         Box::pin(async move {
             super::read_context_source(
-                self.remote_reader
+                self.experts.remote_reader
                     .ok_or(AgentFailure::CapabilityUnavailable)?,
                 request.person_id,
                 view_id,
@@ -432,7 +437,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         result_id: Uuid,
         dependency: floe_context_contract::ContextDependency,
     ) -> Result<(), AgentFailure> {
-        self.recorder
+        self.experts.recorder
             .ok_or(AgentFailure::CapabilityUnavailable)?
             .record(turn_id, result_id, dependency)
     }
@@ -442,7 +447,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::CalendarContextView>> {
         Box::pin(async move {
-            self.personal_views(request, ASSISTANT_CONSUMER)
+            self.experts.personal_views(request, ASSISTANT_CONSUMER)
                 .calendar_views(request.deadline, &request.cancellation)
                 .await
         })
@@ -453,7 +458,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::WorkContextView>> {
         Box::pin(async move {
-            self.personal_views(request, ASSISTANT_CONSUMER)
+            self.experts.personal_views(request, ASSISTANT_CONSUMER)
                 .work_context_views(request.deadline, &request.cancellation)
                 .await
         })
@@ -464,7 +469,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::PeopleView> {
         Box::pin(async move {
-            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            self.experts.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
             .people_view(request.deadline, &request.cancellation)
             .await
         })
@@ -477,7 +482,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::ConfirmedInteractionView>>
     {
         Box::pin(async move {
-            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            self.experts.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
             .confirmed_interaction_views(people, request.deadline, &request.cancellation)
             .await
         })
@@ -488,7 +493,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::WellbeingView> {
         Box::pin(async move {
-            self.personal_views(request, ASSISTANT_CONSUMER)
+            self.experts.personal_views(request, ASSISTANT_CONSUMER)
                 .wellbeing_view(request.deadline, &request.cancellation)
                 .await
         })
@@ -505,7 +510,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
         ),
     > {
         Box::pin(async move {
-            self.attention
+            self.experts.attention
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .read(
                     request.person_id,
@@ -520,14 +525,14 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
     }
 
     fn conversation_context_available(&self) -> bool {
-        self.context_reader.is_some()
+        self.experts.context_reader.is_some()
     }
 
     fn memory_context<'a>(
         &'a self,
     ) -> floe_experts_builtin::Acquiring<'a, floe_knowledge::MemoryContextSnapshot> {
         Box::pin(async move {
-            self.context_reader
+            self.experts.context_reader
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .memory()
                 .await
@@ -536,7 +541,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
 
     fn task_view<'a>(&'a self) -> floe_experts_builtin::Acquiring<'a, NativeContextView> {
         Box::pin(async move {
-            self.context_reader
+            self.experts.context_reader
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .tasks()
                 .await
@@ -544,7 +549,7 @@ impl BuiltinExpertHost for ConversationExperts<'_> {
     }
 
     fn staged_task_views(&self) -> &[NativeContextView] {
-        self.task_views
+        self.experts.task_views
     }
 }
 
@@ -589,14 +594,20 @@ impl InProcessAgent for ConversationExperts<'_> {
             current_time_unix_ms: i64::try_from(now.as_millis())
                 .map_err(|_| AgentFailure::StaleContext)?,
             context: self.context.clone(),
-            usage: request.usage.clone(),
             max_output_bytes: request.max_output_bytes,
             deadline: request.deadline,
             cancellation: request.cancellation.clone(),
         };
-        let output = self
-            .registrations
-            .run(&request.agent_id, self, &expert_request)
+        // This message's attempts are charged to the ledger it carries.
+        let host = DelegatedMessageExperts {
+            experts: self,
+            model: super::ExpertModelHost {
+                model: self.model,
+                usage: request.usage.clone(),
+            },
+        };
+        let output = registered_experts()
+            .run(&request.agent_id, &host, &expert_request)
             .await?;
         let task = floe_experts::completed_expert_task(
             request,

@@ -7,7 +7,7 @@ use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
 use floe_context_contract::{CalendarContextView, ContextEvidence, WellbeingView, personal_context_evidence, validate_wellbeing_view};
 use floe_agent_contract::{InferencePolicyDecision};
-use floe_conversation::ModelRunner;
+use floe_agent_contract::ExpertModel;
 
 use crate::prompts::{wellbeing_expert_prompt};
 use crate::shared::{PersonalExpertInvocation, add_schedule_views, run_personal_model, validate_judgment};
@@ -51,7 +51,7 @@ struct WellbeingOutput {
     evidence_handles: Vec<String>,
 }
 
-pub async fn run_wellbeing_expert_with_views<Model: ModelRunner>(
+pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: PersonalExpertInvocation,

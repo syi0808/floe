@@ -2,16 +2,17 @@ use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context_contract::{NativeContextItem, NativeContextView, TaskContextPriority};
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{
+    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    InferencePolicyDecision,
+};
 use floe_agent_contract::AGENT_VERSION;
-use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_execution::{Cancellation};
 use floe_context_contract::{CalendarContextItem, CalendarContextView, CommunicationView};
 use floe_experts_builtin::commitments::{CommitmentEvidenceSource, CommitmentsContextViews, FindingEpistemicStatus, run_commitments_expert_with_views};
 use floe_experts_builtin::communication::{CommunicationResultKind, run_communication_expert};
 use floe_experts_builtin::{MailExpertInvocation};
 use floe_context_contract::{CommunicationItem};
-use floe_conversation::UsageLedger;
 use floe_agent_contract::prompts::PromptRole;
 use floe_context_contract::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind};
 use floe_agent_contract::PersonId;
@@ -37,7 +38,7 @@ struct Scenario {
 struct Model {
     placement: ModelPlacement,
     outputs: Mutex<VecDeque<String>>,
-    requests: Mutex<Vec<ModelRequest>>,
+    calls: Mutex<Vec<ExpertModelCall>>,
 }
 
 impl Model {
@@ -45,33 +46,35 @@ impl Model {
         Self {
             placement: ModelPlacement::DeviceLocal,
             outputs: Mutex::new(outputs.into_iter().map(|value| value.to_string()).collect()),
-            requests: Mutex::new(vec![]),
+            calls: Mutex::new(vec![]),
         }
     }
 }
 
-impl ModelRunner for Model {
+impl ExpertModel for Model {
     fn placement(&self) -> ModelPlacement {
         self.placement
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        self.requests.lock().unwrap().push(request);
-        Ok(ModelResponse {
-            replay: None,
-            schema_version: AGENT_VERSION,
-            output: vec![ModelStep::Answer {
-                text: self.outputs.lock().unwrap().pop_front().unwrap(),
-            }],
-            used_tokens: 64,
-            cost_micros: 0,
+    fn answer<'a>(
+        &'a self,
+        call: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+        let answer = self.outputs.lock().unwrap().pop_front().unwrap();
+        self.calls.lock().unwrap().push(call);
+        Box::pin(async move {
+            Ok(ExpertModelAnswer {
+                schema_version: AGENT_VERSION,
+                answer,
+                used_tokens: 64,
+                cost_micros: 0,
+            })
         })
     }
 }
 
 fn invocation(assignment: &str, item: CommunicationItem) -> MailExpertInvocation {
     MailExpertInvocation {
-        usage: UsageLedger::default(),
         person_id: PersonId::new(),
         invocation_id: Uuid::new_v4(),
         assignment: assignment.into(),
@@ -155,18 +158,13 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
             communication.assessments[0].requires_review,
             communication.assessments[0].draft.is_some()
         );
-        let requests = model.requests.lock().unwrap();
-        assert_eq!(requests[0].prompt.role, PromptRole::CommitmentsExpert);
-        assert_eq!(requests[1].prompt.role, PromptRole::CommunicationExpert);
-        for request in requests.iter() {
-            assert_eq!(request.context.evidence.len(), 1);
-            assert!(request.capabilities.is_empty());
-            assert!(
-                request.context.evidence[0]
-                    .untrusted_text
-                    .contains("subject")
-            );
-            assert!(!request.prompt.render().contains("mail.send"));
+        let calls = model.calls.lock().unwrap();
+        assert_eq!(calls[0].prompt.role, PromptRole::CommitmentsExpert);
+        assert_eq!(calls[1].prompt.role, PromptRole::CommunicationExpert);
+        for call in calls.iter() {
+            assert_eq!(call.context.evidence.len(), 1);
+            assert!(call.context.evidence[0].untrusted_text.contains("subject"));
+            assert!(!call.prompt.render().contains("mail.send"));
         }
     }
 }
@@ -276,10 +274,9 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
     let round_trip: floe_experts_builtin::commitments::CommitmentsExpertResult =
         serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
     assert_eq!(round_trip, result);
-    let requests = model.requests.lock().unwrap();
-    assert_eq!(requests[0].context.evidence.len(), 3);
-    assert_eq!(requests[0].context.memories.len(), 1);
-    assert!(requests[0].capabilities.is_empty());
+    let calls = model.calls.lock().unwrap();
+    assert_eq!(calls[0].context.evidence.len(), 3);
+    assert_eq!(calls[0].context.memories.len(), 1);
 }
 
 #[tokio::test]

@@ -297,7 +297,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         recorder: Some(&result_recorder),
     };
     let experts = ConversationExperts {
-        registrations: expert_dispatch::registered_experts(),
         model: &model,
         source_client: source_client.as_ref(),
         policy: &policy,
@@ -660,6 +659,72 @@ impl ModelRunner for Model {
             ),
         }
         result
+    }
+}
+
+/// The model an Expert reasons on, as the Expert's own contract states it.
+///
+/// An Expert asks one question and is owed one answer. Turning that into the
+/// conversation's model request, recovering a failed attempt, and charging what
+/// it spent to this turn's ledger are the model owner's work, so they happen
+/// here rather than inside the Expert.
+pub(crate) struct ExpertModelHost<'a, Runner: ModelRunner = Model> {
+    pub(crate) model: &'a Runner,
+    pub(crate) usage: floe_conversation::UsageLedger,
+}
+
+impl<Runner: ModelRunner + Sync> floe_agent_contract::ExpertModel
+    for ExpertModelHost<'_, Runner>
+{
+    fn placement(&self) -> ModelPlacement {
+        self.model.placement()
+    }
+
+    fn answer<'a>(
+        &'a self,
+        call: floe_agent_contract::ExpertModelCall,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<floe_agent_contract::ExpertModelAnswer, AgentFailure>>
+    {
+        Box::pin(async move {
+            let turn_id = Uuid::new_v4();
+            let response = floe_conversation::generate_with_recovery(
+                self.model,
+                ModelRequest {
+                    usage: self.usage.clone(),
+                    replay: vec![],
+                    schema_version: floe_agent_contract::AGENT_VERSION,
+                    prompt: call.prompt,
+                    person_id: call.person_id,
+                    session_id: call.invocation_id,
+                    turn_id,
+                    policy: call.policy,
+                    context: call.context,
+                    messages: vec![floe_conversation::AgentMessage::User {
+                        turn_id,
+                        text: call.assignment,
+                    }],
+                    capabilities: vec![],
+                    active_agents: vec![],
+                    remaining_tokens: call.max_tokens,
+                    remaining_cost_micros: call.max_cost_micros,
+                    max_output_bytes: call.max_output_bytes,
+                    deadline: call.deadline,
+                    cancellation: call.cancellation,
+                },
+            )
+            .await?;
+            // One question, one reply: a preamble, a capability call or a
+            // delegation is not an answer to an Expert's assignment.
+            let [floe_conversation::ModelStep::Answer { text }] = response.output.as_slice() else {
+                return Err(AgentFailure::InvalidModelOutput);
+            };
+            Ok(floe_agent_contract::ExpertModelAnswer {
+                schema_version: response.schema_version,
+                answer: text.clone(),
+                used_tokens: response.used_tokens,
+                cost_micros: response.cost_micros,
+            })
+        })
     }
 }
 
