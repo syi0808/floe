@@ -1,7 +1,14 @@
 use chrono::{Duration, TimeZone, Utc};
-use floe_app::{FloeCore};
-use floe_vault::StoreErrorCode as ErrorCode;
-// FIXME(stage-2): glob import of the retired floe-domain crate
+use floe_context_contract::{CalendarProvider, CalendarScope};
+use floe_day::{
+    AllDaySchedule, CalendarConnection, CalendarFailure, CalendarRange, CalendarRecord,
+    CalendarSelection, DaySnapshot, SourceAuthority,
+    DayErrorCode as ErrorCode, DayService, EventSchedule, PersonId, SourceRef, TimedSchedule,
+    TimelineItem, TimelineRepository,
+};
+
+mod support;
+use support::TestTimelineRepository;
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 4, 0, 0, 0).unwrap()
@@ -34,9 +41,10 @@ fn record(identifier: &str, day: i64) -> CalendarRecord {
     }
 }
 
-async fn fixture() -> (FloeCore, PersonId, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!("floe-calendar-{}.db", uuid::Uuid::new_v4()));
-    let core = FloeCore::open(&path).await.unwrap();
+async fn fixture(
+    timeline: &TestTimelineRepository,
+) -> (DayService<'_, TestTimelineRepository>, PersonId) {
+    let core = DayService::new(timeline);
     let person = PersonId::new();
     core.select_calendar(
         person,
@@ -46,12 +54,13 @@ async fn fixture() -> (FloeCore, PersonId, std::path::PathBuf) {
     )
     .await
     .unwrap();
-    (core, person, path)
+    (core, person)
 }
 
 #[tokio::test]
 async fn authority_survives_sync_but_not_permission_or_scope_changes() {
-    let (core, person, path) = fixture().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
     assert!(initial.source_authority.is_valid());
     let mut obsolete = serde_json::to_value(&initial).unwrap();
@@ -127,8 +136,6 @@ async fn authority_survives_sync_but_not_permission_or_scope_changes() {
     .unwrap();
     let changed = core.calendar_connection(person).await.unwrap().unwrap();
     assert_ne!(changed.source_authority, renamed.source_authority);
-    drop(core);
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -148,7 +155,11 @@ fn selection(identifier: &str) -> Vec<CalendarSelection> {
     }]
 }
 
-async fn snapshot(core: &FloeCore, person: PersonId, day: i64) -> DaySnapshot {
+async fn snapshot<R: TimelineRepository + ?Sized>(
+    core: &DayService<'_, R>,
+    person: PersonId,
+    day: i64,
+) -> DaySnapshot {
     core.day_snapshot(person, range(day).start_date, 32_400, now())
         .await
         .unwrap()
@@ -156,7 +167,8 @@ async fn snapshot(core: &FloeCore, person: PersonId, day: i64) -> DaySnapshot {
 
 #[tokio::test]
 async fn multiple_selection_rejects_invalid_sources_and_stale_reads() {
-    let (core, person, path) = fixture().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     let calendars = vec![
         CalendarSelection {
             calendar_id: "calendar-1".into(),
@@ -206,17 +218,12 @@ async fn multiple_selection_rejects_invalid_sources_and_stale_reads() {
             .code,
         ErrorCode::Conflict
     );
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn connection_revision_is_monotonic_and_equal_revision_is_exactly_idempotent() {
-    let path = std::env::temp_dir().join(format!(
-        "floe-calendar-revision-{}.db",
-        uuid::Uuid::new_v4()
-    ));
-    let core = FloeCore::open(&path).await.unwrap();
+    let timeline = TestTimelineRepository::new();
+    let core = DayService::new(&timeline);
     let person = PersonId::new();
     let connection_id = "00000000-0000-4000-8000-000000000010";
     core.set_calendar_scope(
@@ -293,13 +300,12 @@ async fn connection_revision_is_monotonic_and_equal_revision_is_exactly_idempote
     let connection = core.calendar_connection(person).await.unwrap().unwrap();
     assert_eq!(connection.revision, 8);
     assert_eq!(connection.scope, CalendarScope::All);
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn repeated_import_is_idempotent_and_updates_preserve_identity() {
-    let (core, person, path) = fixture().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     core.import_calendar(person, 1, range(0), vec![record("external", 0)], now())
         .await
         .unwrap();
@@ -332,13 +338,12 @@ async fn repeated_import_is_idempotent_and_updates_preserve_identity() {
     assert!(
         matches!(&event.source, SourceRef::Calendar(source) if source.external_revision == "v2")
     );
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn deletion_is_range_scoped_and_person_scoped() {
-    let (core, person, path) = fixture().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     core.create_note(person, "Local note", now()).await.unwrap();
     core.import_calendar(person, 1, range(0), vec![record("today", 0)], now())
         .await
@@ -353,13 +358,12 @@ async fn deletion_is_range_scoped_and_person_scoped() {
     assert!(matches!(today.items.as_slice(), [TimelineItem::Note(_)]));
     assert_eq!(snapshot(&core, person, 1).await.items.len(), 1);
     assert!(snapshot(&core, PersonId::new(), 1).await.items.is_empty());
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn invalid_and_stale_batches_never_partially_replace_cache() {
-    let (core, person, path) = fixture().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     core.import_calendar(person, 1, range(0), vec![record("today", 0)], now())
         .await
         .unwrap();
@@ -398,21 +402,18 @@ async fn invalid_and_stale_batches_never_partially_replace_cache() {
         ErrorCode::Conflict
     );
     assert!(snapshot(&core, person, 0).await.items.is_empty());
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
-async fn failure_and_cached_events_survive_reopen_and_retry() {
-    let (core, person, path) = fixture().await;
+async fn recorded_failure_keeps_cached_events_and_a_later_import_clears_it() {
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     core.import_calendar(person, 1, range(0), vec![record("today", 0)], now())
         .await
         .unwrap();
     core.record_calendar_failure(person, 2, CalendarFailure::PermissionDenied, now())
         .await
         .unwrap();
-    drop(core);
-    let core = FloeCore::open(&path).await.unwrap();
     let cached = snapshot(&core, person, 0).await;
     assert_eq!(cached.items.len(), 1);
     let connection = cached.calendar.unwrap();
@@ -424,13 +425,12 @@ async fn failure_and_cached_events_survive_reopen_and_retry() {
     let connection = snapshot(&core, person, 0).await.calendar.unwrap();
     assert_eq!(connection.error, None);
     assert_eq!(connection.error_at, None);
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn all_day_exclusive_end_and_utc_boundary_project_correctly() {
-    let (core, person, path) = fixture().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = fixture(&timeline).await;
     let mut all_day = record("all-day", 0);
     all_day.schedule = EventSchedule::AllDay(
         AllDaySchedule::new(range(0).start_date, range(0).end_date_exclusive).unwrap(),
@@ -450,6 +450,4 @@ async fn all_day_exclusive_end_and_utc_boundary_project_correctly() {
     assert_eq!(snapshot(&core, person, 0).await.items.len(), 2);
     assert!(snapshot(&core, person, -1).await.items.is_empty());
     assert!(snapshot(&core, person, 1).await.items.is_empty());
-    drop(core);
-    let _ = std::fs::remove_file(path);
 }

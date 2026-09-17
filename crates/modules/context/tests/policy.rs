@@ -1,4 +1,10 @@
-// FIXME(stage-2): glob import of the retired floe-agent crate
+use floe_agent_contract::SessionProtection;
+use floe_context::*;
+use floe_context_contract::{
+    ContextIssue, ContextIssueReason, ContextSource, DataClass, EpistemicStatus,
+    LearningEvidenceRef, ModelPlacement, PersonalMemoryKind, TransferConsent,
+};
+use floe_kernel::AgentFailure;
 
 fn policy(class: DataClass) -> InferencePolicyDecision {
     InferencePolicyDecision {

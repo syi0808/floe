@@ -16,4 +16,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+floe-context-contract = { path = "../../contracts/context" }
 tempfile = "3.23.0"

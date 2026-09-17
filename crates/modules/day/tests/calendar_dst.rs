@@ -1,16 +1,19 @@
 use chrono::{Duration, TimeZone, Utc};
-use floe_app::FloeCore;
-// FIXME(stage-2): glob import of the retired floe-domain crate
+use floe_context_contract::CalendarProvider;
+use floe_day::{
+    CalendarRange, CalendarRecord, DayService, EventSchedule, PersonId, TimedSchedule,
+};
+
+mod support;
+use support::TestTimelineRepository;
 
 #[tokio::test]
 async fn dst_days_import_and_project_the_exact_23_or_25_hour_interval() {
     for (month, day, start_offset, end_offset, hours) in
         [(3, 8, -28800, -25200, 23), (11, 1, -25200, -28800, 25)]
     {
-        let directory = tempfile::tempdir().unwrap();
-        let core = FloeCore::open(directory.path().join("dst.db"))
-            .await
-            .unwrap();
+        let timeline = TestTimelineRepository::new();
+        let core = DayService::new(&timeline);
         let person = PersonId::new();
         core.select_calendar(
             person,

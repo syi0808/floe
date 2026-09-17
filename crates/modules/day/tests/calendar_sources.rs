@@ -1,7 +1,12 @@
 use chrono::{Duration, TimeZone, Utc};
-use floe_app::{FloeCore};
-use floe_vault::StoreErrorCode as ErrorCode;
-// FIXME(stage-2): glob import of the retired floe-domain crate
+use floe_context_contract::{CalendarProvider, CalendarScope};
+use floe_day::{
+    CalendarBatch, CalendarFailure, CalendarRange, CalendarRecord, CalendarSelection,
+    DayErrorCode as ErrorCode, DayService, EventSchedule, PersonId, TimedSchedule, TimelineItem,
+};
+
+mod support;
+use support::TestTimelineRepository;
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 5, 1, 0, 0).unwrap()
@@ -33,11 +38,10 @@ fn batch(calendar: &str, title: &str) -> CalendarBatch {
     }
 }
 
-async fn setup() -> (tempfile::TempDir, FloeCore, PersonId) {
-    let directory = tempfile::tempdir().unwrap();
-    let core = FloeCore::open(directory.path().join("sources.db"))
-        .await
-        .unwrap();
+async fn setup(
+    timeline: &TestTimelineRepository,
+) -> (DayService<'_, TestTimelineRepository>, PersonId) {
+    let core = DayService::new(timeline);
     let person = PersonId::new();
     core.select_calendars(
         person,
@@ -64,12 +68,13 @@ async fn setup() -> (tempfile::TempDir, FloeCore, PersonId) {
     )
     .await
     .unwrap();
-    (directory, core, person)
+    (core, person)
 }
 
 #[tokio::test]
 async fn disconnect_removes_imports_and_reconnect_never_reuses_a_revision() {
-    let (_directory, core, person) = setup().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = setup(&timeline).await;
     core.disconnect_calendar(person, 2).await.unwrap();
     let snapshot = core
         .day_snapshot(person, now().date_naive(), 0, now())
@@ -115,7 +120,8 @@ async fn disconnect_removes_imports_and_reconnect_never_reuses_a_revision() {
 
 #[tokio::test]
 async fn permission_epoch_tracks_new_denials_even_when_another_source_was_already_denied() {
-    let (_directory, core, person) = setup().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = setup(&timeline).await;
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
     core.import_calendar_sources(
         person,
@@ -160,7 +166,8 @@ async fn permission_epoch_tracks_new_denials_even_when_another_source_was_alread
 
 #[tokio::test]
 async fn partial_success_commits_only_healthy_source_and_survives_restart() {
-    let (directory, core, person) = setup().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = setup(&timeline).await;
     let baseline = core
         .day_snapshot(person, now().date_naive(), 0, now())
         .await
@@ -180,10 +187,6 @@ async fn partial_success_commits_only_healthy_source_and_survives_restart() {
     )
     .await
     .unwrap();
-    drop(core);
-    let core = FloeCore::open(directory.path().join("sources.db"))
-        .await
-        .unwrap();
     let after = core
         .day_snapshot(person, now().date_naive(), 0, now())
         .await
@@ -230,7 +233,8 @@ async fn partial_success_commits_only_healthy_source_and_survives_restart() {
 
 #[tokio::test]
 async fn invalid_source_is_preserved_while_healthy_empty_result_deletes_only_its_source() {
-    let (_directory, core, person) = setup().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = setup(&timeline).await;
     let mut invalid = batch("work", "Invalid");
     invalid.records[0].calendar_id = "home".into();
     core.import_calendar_sources(
@@ -266,7 +270,8 @@ async fn invalid_source_is_preserved_while_healthy_empty_result_deletes_only_its
 
 #[tokio::test]
 async fn missing_source_is_not_empty_and_stale_or_incomplete_batches_are_rejected() {
-    let (_directory, core, person) = setup().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = setup(&timeline).await;
     for batches in [
         vec![batch("home", "No")],
         vec![batch("home", "No"), batch("home", "No")],
@@ -339,7 +344,8 @@ async fn missing_source_is_not_empty_and_stale_or_incomplete_batches_are_rejecte
 
 #[tokio::test]
 async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart() {
-    let (directory, core, person) = setup().await;
+    let timeline = TestTimelineRepository::new();
+    let (core, person) = setup(&timeline).await;
     let new_calendar = CalendarSelection {
         calendar_id: "new".into(),
         calendar_name: "New".into(),
@@ -369,10 +375,6 @@ async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart
     .await
     .unwrap();
     core.discover_calendars(person, 3, vec![new_calendar.clone()])
-        .await
-        .unwrap();
-    drop(core);
-    let core = FloeCore::open(directory.path().join("sources.db"))
         .await
         .unwrap();
     let snapshot = core

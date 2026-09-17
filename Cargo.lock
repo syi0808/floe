@@ -884,6 +884,7 @@ dependencies = [
  "floe-context-contract",
  "floe-day",
  "floe-execution",
+ "floe-kernel",
  "floe-knowledge",
  "serde",
  "serde_json",
