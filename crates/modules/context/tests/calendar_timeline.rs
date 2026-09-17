@@ -1,13 +1,54 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+//! The bounded calendar timeline view one Expert reads under one grant.
+//!
+//! Context owns the order of this read: Access judges the grant, the source
+//! performs the acquisition, and Context re-checks between them and bounds what
+//! comes back. These tests give it a stored mirror and a source it controls, so
+//! what they assert is that ordering and those bounds.
 
-use chrono::{Duration as TimeDelta, TimeZone};
-// FIXME(stage-2): glob import of the retired floe-agent crate
-// FIXME(stage-2): glob import of the retired floe-domain crate
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
-use super::*;
+use chrono::{DateTime, Duration as TimeDelta, TimeZone, Utc};
+use floe_access::{
+    CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission,
+};
+use floe_agent_contract::{
+    AgentFailure, DataClass, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
+    MAX_TIMELINE_VIEW_ITEMS, TimelineViewRead,
+};
+use floe_context::{
+    CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
+    CalendarTimelineViews, ProjectedCalendarItem, ProjectedCalendarObservation,
+    SourceLeaseRegistry,
+};
+use floe_context_contract::CalendarProvider;
+use floe_day::{
+    AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirror, CalendarRange, CalendarRecord,
+    CalendarSelection, CalendarTimelineGrant, DayService, EventSchedule, PersonId, TimedSchedule,
+    TimelineRepository, range_bounds,
+};
+use floe_execution::Cancellation;
+use tokio::time::Instant;
+use uuid::Uuid;
+
+mod support;
+use support::TestTimelineRepository;
+
+/// The payload bound the mirror port promises its readers, which the Vault
+/// adapter enforces when it loads a stored mirror.
+const MAX_MIRROR_BYTES: usize = 4_194_304;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2050, 1, 15, 9, 0, 0).unwrap()
+}
+
+fn milliseconds(time: DateTime<Utc>) -> Result<u64, AgentFailure> {
+    u64::try_from(time.timestamp_millis()).map_err(|_| AgentFailure::InvalidInput)
 }
 
 fn day() -> CalendarRange {
@@ -37,58 +78,70 @@ fn record(calendar: &str, identifier: &str, title: &str, start: i64, end: i64) -
     }
 }
 
+/// The stored calendar state a read stands on, and the lease registry that
+/// bounds how much of it may be held live at once.
 struct Fixture {
-    core: FloeCore,
+    timeline: TestTimelineRepository,
     person: PersonId,
-    root: tempfile::TempDir,
+    leases: Arc<SourceLeaseRegistry>,
 }
 
 impl Fixture {
     async fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        let core = FloeCore::open(root.path().join("view.db")).await.unwrap();
-        let person = PersonId::new();
-        core.select_calendars(
-            person,
-            CalendarProvider::Fixture,
-            vec![
-                CalendarSelection {
-                    calendar_id: "home-secret-id".into(),
-                    calendar_name: "Private home calendar".into(),
-                },
-                CalendarSelection {
-                    calendar_id: "work-secret-id".into(),
-                    calendar_name: "Private work calendar".into(),
-                },
-            ],
-        )
-        .await
-        .unwrap();
-        core.import_calendar(
-            person,
-            1,
-            day(),
-            vec![
-                record(
-                    "home-secret-id",
-                    "private-provider-id",
-                    "Home appointment",
-                    30,
-                    90,
-                ),
-                record(
-                    "work-secret-id",
-                    "work-native-id",
-                    "Hidden work title",
-                    90,
-                    120,
-                ),
-            ],
-            now(),
-        )
-        .await
-        .unwrap();
-        Self { core, person, root }
+        let fixture = Self {
+            timeline: TestTimelineRepository::new(),
+            person: PersonId::new(),
+            leases: Arc::new(SourceLeaseRegistry::new()),
+        };
+        fixture
+            .day()
+            .select_calendars(
+                fixture.person,
+                CalendarProvider::Fixture,
+                vec![
+                    CalendarSelection {
+                        calendar_id: "home-secret-id".into(),
+                        calendar_name: "Private home calendar".into(),
+                    },
+                    CalendarSelection {
+                        calendar_id: "work-secret-id".into(),
+                        calendar_name: "Private work calendar".into(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        fixture
+            .day()
+            .import_calendar(
+                fixture.person,
+                1,
+                day(),
+                vec![
+                    record(
+                        "home-secret-id",
+                        "private-provider-id",
+                        "Home appointment",
+                        30,
+                        90,
+                    ),
+                    record(
+                        "work-secret-id",
+                        "work-native-id",
+                        "Hidden work title",
+                        90,
+                        120,
+                    ),
+                ],
+                now(),
+            )
+            .await
+            .unwrap();
+        fixture
+    }
+
+    fn day(&self) -> DayService<'_, TestTimelineRepository> {
+        DayService::new(&self.timeline)
     }
 
     fn grant(&self) -> CalendarTimelineGrant {
@@ -107,6 +160,31 @@ impl Fixture {
     }
 }
 
+/// The mirror as a store hands it back: absent, oversized, or whole.
+impl CalendarMirrorReader for Fixture {
+    async fn bounded_calendar_mirror(
+        &self,
+        person_id: PersonId,
+    ) -> Result<CalendarMirror, AgentFailure> {
+        let mirror = self
+            .timeline
+            .calendar_mirror(person_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        if serde_json::to_string(&mirror)
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .len()
+            > MAX_MIRROR_BYTES
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        Ok(mirror)
+    }
+}
+
+/// A source that only stamps the native subject, so the read falls back to the
+/// stored mirror.
 #[derive(Default)]
 struct Access {
     calls: AtomicUsize,
@@ -120,7 +198,9 @@ struct Access {
     child: Mutex<Option<Cancellation>>,
 }
 
-impl CalendarReadAccess for Access {
+impl CalendarReadAdmission for Access {}
+
+impl CalendarSource for Access {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -164,15 +244,65 @@ impl CalendarReadAccess for Access {
     }
 }
 
+/// A source that answers the read itself with raw batches.
 struct ObservationAccess {
     calendar_id: String,
     record: CalendarRecord,
     subject_change_during_read: bool,
 }
 
+impl CalendarReadAdmission for ObservationAccess {}
+
+impl CalendarSource for ObservationAccess {
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        Ok(CalendarReadAccessStamp {
+            schema_version: 1,
+            person_id: request.person_id,
+            device_id: request.device_id,
+            provider: request.provider,
+            calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: "c".repeat(64),
+            generation: "live-observation".into(),
+        })
+    }
+
+    async fn observe(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        Ok(Some(CalendarObservation {
+            stamp: CalendarReadAccessStamp {
+                schema_version: 1,
+                person_id: request.person_id,
+                device_id: request.device_id,
+                provider: request.provider,
+                calendar_ids: request.calendar_ids,
+                native_subject_fingerprint: if self.subject_change_during_read {
+                    "d".repeat(64)
+                } else {
+                    "c".repeat(64)
+                },
+                generation: "live-observation".into(),
+            },
+            observed_at: now(),
+            batches: vec![CalendarBatch {
+                calendar_id: self.calendar_id.clone(),
+                records: vec![self.record.clone()],
+                failure: None,
+            }],
+        }))
+    }
+}
+
+/// A remote producer that returns a projection it already bounded.
 struct ProjectedObservationAccess;
 
-impl CalendarReadAccess for ProjectedObservationAccess {
+impl CalendarReadAdmission for ProjectedObservationAccess {}
+
+impl CalendarSource for ProjectedObservationAccess {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -219,50 +349,6 @@ impl CalendarReadAccess for ProjectedObservationAccess {
     }
 }
 
-impl CalendarReadAccess for ObservationAccess {
-    async fn check(
-        &self,
-        request: CalendarReadAccessRequest,
-    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
-        Ok(CalendarReadAccessStamp {
-            schema_version: 1,
-            person_id: request.person_id,
-            device_id: request.device_id,
-            provider: request.provider,
-            calendar_ids: request.calendar_ids,
-            native_subject_fingerprint: "c".repeat(64),
-            generation: "live-observation".into(),
-        })
-    }
-
-    async fn observe(
-        &self,
-        request: CalendarObserveRequest,
-    ) -> Result<Option<CalendarObservation>, AgentFailure> {
-        Ok(Some(CalendarObservation {
-            stamp: CalendarReadAccessStamp {
-                schema_version: 1,
-                person_id: request.person_id,
-                device_id: request.device_id,
-                provider: request.provider,
-                calendar_ids: request.calendar_ids,
-                native_subject_fingerprint: if self.subject_change_during_read {
-                    "d".repeat(64)
-                } else {
-                    "c".repeat(64)
-                },
-                generation: "live-observation".into(),
-            },
-            observed_at: now(),
-            batches: vec![CalendarBatch {
-                calendar_id: self.calendar_id.clone(),
-                records: vec![self.record.clone()],
-                failure: None,
-            }],
-        }))
-    }
-}
-
 fn request(grant: &CalendarTimelineGrant) -> TimelineViewRead {
     TimelineViewRead {
         person_id: grant.person_id,
@@ -276,13 +362,12 @@ fn request(grant: &CalendarTimelineGrant) -> TimelineViewRead {
         cancellation: Cancellation::default(),
     }
 }
-
 #[tokio::test]
 async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_metadata() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let projected = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(projected.items.len(), 1);
     assert_eq!(projected.items[0].untrusted_title, "Home appointment");
@@ -310,7 +395,6 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
     assert_eq!(access.calls.load(Ordering::SeqCst), 2);
     let again = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(again, projected);
-    assert!(fixture.root.path().join("view.db").exists());
 }
 
 #[tokio::test]
@@ -318,7 +402,7 @@ async fn read_range_is_request_scoped_within_the_authorized_source() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let range_start = now() + TimeDelta::minutes(75);
     let range_end = now() + TimeDelta::minutes(105);
     let projected = views
@@ -345,7 +429,7 @@ async fn read_range_is_request_scoped_within_the_authorized_source() {
         milliseconds(range_start).unwrap()
     );
 
-    let expanded = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
+    let expanded = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now)
         .unwrap()
         .timeline(TimelineViewRead {
             range_start_unix_ms: Some(
@@ -379,7 +463,7 @@ async fn request_scoped_observation_does_not_depend_on_page_mirror_coverage() {
         ),
         subject_change_during_read: false,
     };
-    let view = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
+    let view = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now)
         .unwrap()
         .timeline(TimelineViewRead {
             range_start_unix_ms: Some(milliseconds(requested_start).unwrap()),
@@ -413,7 +497,7 @@ async fn native_subject_change_during_read_denies_projection() {
         ),
         subject_change_during_read: true,
     };
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::StaleContext)
@@ -425,7 +509,8 @@ async fn projected_observation_preserves_server_coverage_and_opaque_provenance()
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let views = CalendarTimelineViews::new(
-        &fixture.core,
+        &fixture.leases,
+        &fixture,
         &ProjectedObservationAccess,
         grant.clone(),
         now,
@@ -457,7 +542,7 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
         end_timezone_offset_seconds: None,
     };
     fixture
-        .core
+        .day()
         .import_calendar(
             fixture.person,
             2,
@@ -503,7 +588,7 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
         expires_at: now() + TimeDelta::minutes(2),
     };
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let projected = views
         .timeline(TimelineViewRead {
             max_items: MAX_TIMELINE_VIEW_ITEMS,
@@ -551,7 +636,7 @@ async fn unknown_scope_identity_budgets_and_permission_are_denied_before_project
         if mode == 2 {
             grant.calendar_ids = vec!["unselected".into()];
         }
-        let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+        let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
         let mut read = request(&grant);
         match mode {
             0 => read.person_id = PersonId::new(),
@@ -578,7 +663,7 @@ async fn unknown_scope_identity_budgets_and_permission_are_denied_before_project
 async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
     let fixture = Fixture::new().await;
     fixture
-        .core
+        .day()
         .import_calendar_sources(
             fixture.person,
             2,
@@ -602,7 +687,7 @@ async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
     let access = Access::default();
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert!(
         views
             .timeline(request(&grant))
@@ -612,7 +697,7 @@ async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
             .is_empty()
     );
     grant.calendar_ids.push("work-secret-id".into());
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityDenied)
@@ -646,13 +731,13 @@ async fn stale_cache_uncovered_ranges_revisions_and_revocation_never_return_empt
         }
         if mode == 3 {
             fixture
-                .core
+                .day()
                 .disconnect_calendar(fixture.person, 2)
                 .await
                 .unwrap();
         }
         let views =
-            CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), clock).unwrap();
+            CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), clock).unwrap();
         assert_eq!(
             views.timeline(request(&grant)).await,
             Err(AgentFailure::StaleContext)
@@ -668,13 +753,13 @@ async fn access_generation_change_and_later_calendar_change_invalidate_a_read_le
         change_on_second: true,
         ..Access::default()
     };
-    let views = CalendarTimelineViews::new(&fixture.core, &changed, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &changed, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::StaleContext)
     );
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     views.timeline(request(&grant)).await.unwrap();
     views
         .revalidate(
@@ -684,7 +769,7 @@ async fn access_generation_change_and_later_calendar_change_invalidate_a_read_le
         .await
         .unwrap();
     fixture
-        .core
+        .day()
         .import_calendar(fixture.person, 2, day(), vec![], now())
         .await
         .unwrap();
@@ -707,7 +792,7 @@ async fn native_subject_change_invalidates_cached_read_before_egress() {
         subject_change_on_call: Some(2),
         ..Access::default()
     };
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     views.timeline(request(&grant)).await.unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
@@ -723,7 +808,7 @@ async fn missing_native_subject_fingerprint_denies_calendar_read() {
         invalid_subject: true,
         ..Access::default()
     };
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityDenied)
@@ -738,7 +823,7 @@ async fn all_day_and_long_events_block_the_entire_requested_window_without_false
         AllDaySchedule::new(day().start_date, day().end_date_exclusive).unwrap(),
     );
     fixture
-        .core
+        .day()
         .import_calendar(
             fixture.person,
             2,
@@ -751,7 +836,7 @@ async fn all_day_and_long_events_block_the_entire_requested_window_without_false
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let view = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(view.items.len(), 2);
     assert!(
@@ -766,7 +851,7 @@ async fn all_day_and_long_events_block_the_entire_requested_window_without_false
 async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_truncated() {
     let fixture = Fixture::new().await;
     fixture
-        .core
+        .day()
         .import_calendar(
             fixture.person,
             2,
@@ -785,7 +870,7 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let view = views.timeline(request(&grant)).await.unwrap();
     assert!(view.items[0].untrusted_title.len() <= 256);
     assert!(view.items[0].untrusted_title.ends_with('…'));
@@ -793,12 +878,12 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
         .map(|index| record("home-secret-id", &format!("busy-{index}"), "Busy", 60, 90))
         .collect();
     fixture
-        .core
+        .day()
         .import_calendar(fixture.person, 3, day(), records, now())
         .await
         .unwrap();
     grant.connection_revision = 4;
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::BudgetExceeded)
@@ -847,7 +932,7 @@ async fn cancelled_and_expired_reads_do_not_start_authority_work() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let read = request(&grant);
     read.cancellation.cancel();
     assert_eq!(views.timeline(read).await, Err(AgentFailure::Cancelled));
@@ -869,7 +954,7 @@ async fn pending_access_is_cancelled_on_stop_deadline_and_dropped_view_future() 
             pending: true,
             ..Access::default()
         };
-        let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+        let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
         let mut read = request(&grant);
         if mode == 1 {
             read.deadline = Instant::now() + Duration::from_millis(50);
@@ -916,7 +1001,7 @@ async fn mirror_size_and_invalid_grant_limits_fail_without_partial_projection() 
         assert_eq!(grant.validate(now()), Err(AgentFailure::InvalidInput));
     }
     fixture
-        .core
+        .day()
         .import_calendar(
             fixture.person,
             2,
@@ -935,7 +1020,7 @@ async fn mirror_size_and_invalid_grant_limits_fail_without_partial_projection() 
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::BudgetExceeded)
@@ -946,7 +1031,7 @@ async fn mirror_size_and_invalid_grant_limits_fail_without_partial_projection() 
 async fn native_eventkit_without_observation_does_not_use_mirror_payload() {
     let fixture = Fixture::new().await;
     fixture
-        .core
+        .day()
         .select_calendar(
             fixture.person,
             CalendarProvider::EventKit,
@@ -956,7 +1041,7 @@ async fn native_eventkit_without_observation_does_not_use_mirror_payload() {
         .await
         .unwrap();
     fixture
-        .core
+        .day()
         .import_calendar(
             fixture.person,
             3,
@@ -976,195 +1061,10 @@ async fn native_eventkit_without_observation_does_not_use_mirror_payload() {
     grant.provider = CalendarProvider::EventKit;
     grant.connection_revision = 4;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityUnavailable)
     );
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encrypted_s3_bridge() {
-    use crate::*;
-    use std::os::unix::fs::PermissionsExt;
-    #[derive(Default)]
-    struct Keys(Mutex<Option<(PersonId, Uuid, [u8; 32])>>);
-    impl VaultKeyProvider for Keys {
-        fn load(&self, person: PersonId, vault: Uuid) -> Result<VaultKey, AgentFailure> {
-            self.0
-                .lock()
-                .unwrap()
-                .as_ref()
-                .filter(|(owner, identifier, _)| *owner == person && *identifier == vault)
-                .map(|(_, _, key)| VaultKey::from_bytes(*key))
-                .ok_or(AgentFailure::VaultUnavailable)
-        }
-        fn insert(
-            &self,
-            person: PersonId,
-            vault: Uuid,
-            key: &VaultKey,
-        ) -> Result<(), AgentFailure> {
-            *self.0.lock().unwrap() = Some((person, vault, *key.as_bytes()));
-            Ok(())
-        }
-    }
-    let fixture = Fixture::new().await;
-    std::fs::set_permissions(fixture.root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let vault = EncryptedAgentVault::create(fixture.root.path(), fixture.person, Keys::default())
-        .await
-        .unwrap();
-    let sample = crate::agent_fixture::FixtureCapabilities::new_with_instance(
-        fixture.person,
-        vault.registry_instance_id(),
-    )
-    .unwrap();
-    let mut snapshot = sample.snapshot().unwrap();
-    snapshot.calendar_views.push(CalendarViewBinding {
-        handle: snapshot.assignments[0].granted_view_handles[0],
-        person_id: fixture.person,
-        provider: CalendarProvider::Fixture,
-        device_id: "test-device".into(),
-        calendar_ids: fixture.grant().calendar_ids,
-        connection_scope: floe_context_contract::CalendarScope::Selected,
-        connection_revision: fixture.grant().connection_revision,
-        source_authority: Some(floe_context_contract::SourceAuthority::new()),
-        enabled: true,
-    });
-    vault.initialize_expert_registry(&snapshot).await.unwrap();
-    let assignment = snapshot
-        .assignments
-        .iter()
-        .find(|assignment| !assignment.granted_tool_assignments.is_empty())
-        .unwrap();
-    let mut grant = fixture.grant();
-    grant.handle = assignment.granted_view_handles[0];
-    let assignment_id = assignment.id;
-    let revision = snapshot.revision;
-    let registry =
-        Mutex::new(AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap());
-    let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
-    let mut session = vault.create_sample_session().await.unwrap();
-    let turn_id = Uuid::new_v4();
-    let invocation_id = Uuid::new_v4();
-    session.active_turn = Some(turn_id);
-    session.revision = 1;
-    session.messages.push(AgentMessage::User {
-        turn_id,
-        text: "Find a focus interval in the granted calendars".into(),
-    });
-    vault.compare_and_swap(&session, 0).await.unwrap();
-    let result = ExpertHost {
-        registry: &registry,
-        views: &views,
-    }
-    .invoke(ExpertInvocation {
-        usage: Default::default(),
-        context: AgentContext {
-            projection_version: 1,
-            persona: None,
-            optional_context_issues: vec![],
-            memories: vec![],
-            evidence: vec![],
-        },
-        schema_version: 1,
-        invocation_id,
-        instance_id: vault.registry_instance_id(),
-        person_id: fixture.person,
-        assignment_id,
-        expected_registry_revision: revision,
-        granted_view_handles: vec![grant.handle],
-        allowed_data_classes: vec![DataClass::Synthetic],
-        current_time_unix_ms: milliseconds(now()).unwrap(),
-        timezone_offset_seconds: grant.day.timezone_offset_seconds,
-        suggested_range_start_unix_ms: Some(milliseconds(grant.starts_at).unwrap()),
-        suggested_range_end_unix_ms: Some(milliseconds(grant.ends_at).unwrap()),
-        input: ExpertInput::ProposeFocus { focus_minutes: 60 },
-        budget: ExpertBudget::default(),
-        deadline: Instant::now() + Duration::from_secs(5),
-        cancellation: Cancellation::default(),
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        result.action_proposals[0].starts_at_unix_ms,
-        milliseconds(now() + TimeDelta::minutes(90)).unwrap()
-    );
-    assert_eq!(
-        result.insights[0],
-        ExpertInsight::Commitment {
-            evidence_handle: views.timeline(request(&grant)).await.unwrap().items[0]
-                .evidence_handle,
-            untrusted_title: "Home appointment".into(),
-            starts_at_unix_ms: milliseconds(grant.starts_at).unwrap(),
-            ends_at_unix_ms: milliseconds(now() + TimeDelta::minutes(90)).unwrap()
-        }
-    );
-    views
-        .revalidate(
-            Instant::now() + Duration::from_secs(1),
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    session.revision = 2;
-    let context_id = Uuid::new_v4();
-    session.messages.push(AgentMessage::Delegation {
-        turn_id,
-        task: A2ATask {
-            id: invocation_id,
-            context_id,
-            agent_id: result.package.id.clone(),
-            state: A2ATaskState::Completed,
-            history: vec![A2AMessage {
-                message_id: Uuid::new_v4(),
-                context_id,
-                task_id: Some(invocation_id),
-                role: A2AMessageRole::User,
-                parts: vec![A2APart::Text {
-                    text: "Prepare a bounded scheduling proposal.".into(),
-                }],
-            }],
-            artifacts: vec![A2AArtifact {
-                artifact_id: Uuid::new_v4(),
-                name: "Schedule expert result".into(),
-                parts: vec![A2APart::Data {
-                    media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
-                    data: serde_json::to_string(&result).unwrap(),
-                }],
-            }],
-            failure: None,
-        },
-    });
-    let staged = registry.lock().unwrap().snapshot();
-    vault
-        .commit_expert_session(&session, 1, revision, &staged)
-        .await
-        .unwrap();
-    let publication = fixture
-        .core
-        .prepare_expert_calendar_action(
-            &vault,
-            ExpertCalendarRequest {
-                reference: ExpertProposalReference {
-                    person_id: fixture.person,
-                    session_id: session.id,
-                    invocation_id,
-                },
-                destination: ExpertCalendarDestination {
-                    provider: CalendarProvider::Fixture,
-                    calendar_id: "home-secret-id".into(),
-                    connection_revision: 2,
-                    timezone: "UTC".into(),
-                },
-                cancellation: Cancellation::default(),
-                deadline: Instant::now() + Duration::from_secs(2),
-            },
-            now,
-        )
-        .await;
-    assert_eq!(publication, Err(AgentFailure::PolicyDenied));
-    assert_eq!(vault.expert_registry().await.unwrap().unwrap(), staged);
-}
