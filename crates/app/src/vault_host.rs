@@ -41,7 +41,6 @@ use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use floe_protocol::wire::{WireResult, agent_failure, check_version, parse_id, parse_person};
 use crate::local_context::LocalContextStore;
 use crate::{FloeCore, diagnostics};
 
@@ -163,6 +162,16 @@ pub struct VaultBridge {
     app_events: Arc<crate::events::AppEventBuffer>,
 }
 
+/// A vault request that could not complete, and where it stopped.
+///
+/// Which stage a request reached is what a caller needs to report it; turning
+/// that into an error on a wire is the caller's own business.
+pub struct VaultRequestFailure {
+    pub failure: AgentFailure,
+    pub request_id: Uuid,
+    pub stage: &'static str,
+}
+
 impl VaultBridge {
     pub(crate) fn new(
         database_path: &str,
@@ -178,23 +187,25 @@ impl VaultBridge {
         }
     }
 
+    /// Run one request against this Person's vault worker.
+    ///
+    /// The operation is still the worker's own envelope, which R003 07
+    /// replaces; what this no longer does is read it off the wire or decide
+    /// what a failure looks like on one.
     pub fn request(
         &self,
-        request: AgentVaultRequestDto,
-    ) -> WireResult<AgentVaultResultDto> {
-        check_version(request.schema_version)?;
-        let person = parse_person(&request.person_id)?;
-        let id = parse_id(&request.request_id, "request_id", |id| id)?;
-        let operation = operation_name(&request.operation);
-        let worker = self.worker().map_err(agent_failure)?;
-        worker
-            .request(person, id, request.operation)
+        person: PersonId,
+        request_id: Uuid,
+        operation: AgentVaultOperationDto,
+    ) -> Result<AgentVaultResultDto, VaultRequestFailure> {
+        let stage = operation_name(&operation);
+        self.worker()
+            .and_then(|worker| worker.request(person, request_id, operation))
             .and_then(VaultJobResult::into_protocol)
-            .map_err(|failure| {
-                let mut error = agent_failure(failure);
-                error.metadata.insert("request_id".into(), id.to_string());
-                error.metadata.insert("stage".into(), operation.into());
-                error
+            .map_err(|failure| VaultRequestFailure {
+                failure,
+                request_id,
+                stage,
             })
     }
 

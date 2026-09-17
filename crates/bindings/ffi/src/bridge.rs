@@ -4,10 +4,12 @@
 //! Naming a failure on the wire is the binding's own work: the app reports its
 //! own error, and this is where that error becomes the shape the caller reads.
 
-use floe_app::{AppComposition, AppHost, AppOpenError, CoreError, ErrorCode, HostError};
+use floe_app::{
+    AppComposition, AppHost, AppOpenError, CoreError, ErrorCode, HostError, VaultRequestFailure,
+};
 use floe_protocol::{
     ErrorCodeDto, ErrorDto,
-    wire::{error, invalid},
+    wire::{agent_failure, error, invalid},
 };
 
 /// One opened app, held for as long as its caller holds it.
@@ -65,4 +67,14 @@ pub fn open_error(value: AppOpenError) -> ErrorDto {
             error(ErrorCodeDto::Internal, message)
         }
     }
+}
+
+/// Report a vault request that could not complete, naming the stage it reached.
+pub fn vault_request_failure(value: VaultRequestFailure) -> ErrorDto {
+    let mut error = agent_failure(value.failure);
+    error
+        .metadata
+        .insert("request_id".into(), value.request_id.to_string());
+    error.metadata.insert("stage".into(), value.stage.into());
+    error
 }

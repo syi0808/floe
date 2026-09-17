@@ -54,4 +54,4 @@ pub use services::{
     ConversationCommands, ProfileSelection, ServiceError, StartTurn, TurnMode,
 };
 #[cfg(unix)]
-pub use vault_host::{ConversationQuery, VaultBridge};
+pub use vault_host::{ConversationQuery, VaultBridge, VaultRequestFailure};

@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use super::*;
-use crate::bridge::open_error;
+use crate::bridge::{open_error, vault_request_failure};
 use serde::de::DeserializeOwned;
 
 #[cfg(unix)]
@@ -200,7 +200,15 @@ pub unsafe extern "C" fn floe_core_agent_vault(
         let handle = handle.services();
         #[cfg(unix)]
         {
-            handle.agent_vault().request(request)
+            check_version(request.schema_version)?;
+            handle
+                .agent_vault()
+                .request(
+                    parse_person(&request.person_id)?,
+                    parse_id(&request.request_id, "request_id", |id| id)?,
+                    request.operation,
+                )
+                .map_err(vault_request_failure)
         }
         #[cfg(not(unix))]
         {
