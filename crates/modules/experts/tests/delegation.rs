@@ -11,7 +11,8 @@ use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentDefinition, AgentEndpoint,
     AgentFailure, AllowedCatalog, BoundedContext, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, EndpointInvocation, EngineRequest, ExecutionJournal, ExpertReport,
-    JournalAck, JournalEvent, ModelPort, ModelRequest, ModelResponse, ModelStep, ModelUsage,
+    JournalAck, JournalEvent, ModelPlacement, ModelPort, ModelRequest, ModelResponse, ModelStep,
+    ModelUsage,
     RoleSpec, TaskId, TaskSnapshot, TaskState, ToolCall, ToolPort, ToolResult,
 };
 use floe_agent_runtime::Engine;
@@ -240,6 +241,7 @@ fn definition(id: &str, revision: u64) -> AgentDefinition {
             description: format!("{id} expert"),
             domain_tags: vec![],
             skills: vec!["analyze an admitted request".into()],
+            supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
         },
         definition_revision: revision,
     }

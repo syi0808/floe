@@ -6,7 +6,18 @@ use std::{
     },
 };
 
-// FIXME(stage-2): glob import of the retired floe-agent crate
+use floe_agent_contract::{
+    AgentContext, InferencePolicyDecision, SessionProtection,
+    prompts::{PersonaProfile, PromptComponentKind, PromptRole},
+};
+use floe_context_contract::{
+    ContextEvidence, ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass,
+    EpistemicStatus, LearningEvidenceRef, ModelPlacement, PersonalMemoryKind, TransferConsent,
+};
+use floe_execution::{CancelReason, Cancellation};
+use floe_kernel::AgentFailure;
+use floe_conversation::{prompts::manager_prompt, *};
+use floe_inference::ModelAttemptState;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
@@ -852,7 +863,7 @@ impl CapabilityHost for NestedModelHost<'_> {
                 usage: invocation.usage,
                 replay: vec![],
                 schema_version: AGENT_VERSION,
-                prompt: schedule_expert_prompt(),
+                prompt: manager_prompt(None).unwrap(),
                 person_id: invocation.person_id,
                 session_id: invocation.call_id,
                 turn_id: invocation.call_id,

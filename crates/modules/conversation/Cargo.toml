@@ -23,4 +23,8 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+floe-agent-contract = { path = "../../contracts/agent" }
+floe-context-contract = { path = "../../contracts/context" }
+floe-execution = { path = "../../runtime/execution" }
+floe-inference = { path = "../inference" }
 tempfile = "3.23.0"

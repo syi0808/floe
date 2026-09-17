@@ -206,7 +206,7 @@ fn strict_wire_contract_rejects_unknown_fields() {
 fn go_gmail_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/gmail/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/gmail/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_000_000_000).is_empty());
@@ -231,7 +231,7 @@ fn go_gmail_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_github_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/github/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/github/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_012_800_000).is_empty());
@@ -243,7 +243,7 @@ fn go_github_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_home_assistant_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/homeassistant/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/homeassistant/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_012_800_000).is_empty());
@@ -255,7 +255,7 @@ fn go_home_assistant_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_slack_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/slack/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/slack/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
@@ -267,7 +267,7 @@ fn go_slack_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_google_drive_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/googledrive/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/googledrive/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
@@ -279,7 +279,7 @@ fn go_google_drive_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_microsoft_mail_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/microsoftmail/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/microsoftmail/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
@@ -299,7 +299,7 @@ fn go_microsoft_mail_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_google_calendar_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/googlecalendar/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/googlecalendar/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
@@ -319,7 +319,7 @@ fn go_google_calendar_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_microsoft_calendar_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/microsoftcalendar/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/microsoftcalendar/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
@@ -339,7 +339,7 @@ fn go_microsoft_calendar_descriptor_conforms_to_the_shared_rust_contract() {
 fn go_microsoft_teams_descriptor_conforms_to_the_shared_rust_contract() {
     let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../server/internal/connectors/microsoftteams/testdata/ready_snapshot.json"
+        "/../../../server/internal/connectors/microsoftteams/testdata/ready_snapshot.json"
     )))
     .unwrap();
     assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
@@ -359,7 +359,7 @@ fn android_context_descriptors_conform_to_the_shared_contract() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../apps/client/android/fixtures/calendar_snapshot.json"
+                "/../../../apps/client/android/fixtures/calendar_snapshot.json"
             )),
             "calendar.android",
             "android_calendar",
@@ -367,7 +367,7 @@ fn android_context_descriptors_conform_to_the_shared_contract() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../apps/client/android/fixtures/contacts_snapshot.json"
+                "/../../../apps/client/android/fixtures/contacts_snapshot.json"
             )),
             "contacts.android",
             "android_contacts",
@@ -375,7 +375,7 @@ fn android_context_descriptors_conform_to_the_shared_contract() {
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../apps/client/android/fixtures/health_connect_snapshot.json"
+                "/../../../apps/client/android/fixtures/health_connect_snapshot.json"
             )),
             "health.android",
             "health_connect",

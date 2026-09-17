@@ -1,10 +1,10 @@
-use floe_agent_contract::{AgentFailure};
-use floe_conversation::{AgentUsage};
-use floe_inference::{UsageLedger};
+use floe_execution::budget::ModelUsage;
+use floe_inference::UsageLedger;
+use floe_kernel::AgentFailure;
 
 #[test]
 fn reservations_are_replaced_by_reported_usage() {
-    let ledger = UsageLedger::new(100, 7, AgentUsage::default());
+    let ledger = UsageLedger::new(100, 7, ModelUsage::default());
     let mut tokens = 1000;
     let mut cost = 100;
     let mut attempt = ledger.begin(&mut tokens, &mut cost).unwrap();
@@ -26,7 +26,7 @@ fn reservations_are_replaced_by_reported_usage() {
 
 #[test]
 fn dropped_attempts_keep_estimates_and_release_the_single_dispatch_slot() {
-    let ledger = UsageLedger::new(10_000, 0, AgentUsage::default());
+    let ledger = UsageLedger::new(10_000, 0, ModelUsage::default());
     let mut tokens = 10_000;
     let mut cost = 0;
     let mut attempt = ledger.begin(&mut tokens, &mut cost).unwrap();
@@ -45,7 +45,7 @@ fn dropped_attempts_keep_estimates_and_release_the_single_dispatch_slot() {
 
 #[test]
 fn exhausted_budget_never_records_an_attempt() {
-    let ledger = UsageLedger::new(0, 0, AgentUsage::default());
+    let ledger = UsageLedger::new(0, 0, ModelUsage::default());
     assert!(ledger.begin(&mut 100, &mut 0).is_err());
     assert_eq!(ledger.snapshot().attempts, 0);
 }
