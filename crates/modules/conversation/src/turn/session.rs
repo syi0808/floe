@@ -173,6 +173,25 @@ pub enum AgentMessage {
 }
 
 impl AgentMessage {
+    /// Whether this message carries something a source read could have produced.
+    ///
+    /// An answer, a capability result that succeeded, and a delegation that
+    /// completed may all be derived from what a source said; the read behind
+    /// them has to still hold when they are committed. A preamble, a compaction
+    /// pointer, and what the Person themselves said do not.
+    pub fn may_derive_from_source(&self) -> bool {
+        match self {
+            Self::Assistant { .. } | Self::Capability { result: Ok(_), .. } => true,
+            Self::Delegation { task, .. } => {
+                task.state == floe_experts::A2ATaskState::Completed
+            }
+            Self::Compaction { .. }
+            | Self::Preamble { .. }
+            | Self::User { .. }
+            | Self::Capability { result: Err(_), .. } => false,
+        }
+    }
+
     pub fn turn_id(&self) -> Uuid {
         match self {
             Self::Compaction { turn_id, .. }

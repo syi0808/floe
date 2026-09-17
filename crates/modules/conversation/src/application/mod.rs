@@ -24,7 +24,8 @@ pub use history_projection::{HistoryProjection, narrow_by_source_boundary, proje
 pub use query::{get_command, get_run};
 pub use recovery::project_continuation;
 pub use session::{
-    admitted_session, get_session, recovered_session, resume_session, start_session,
+    admit_unscoped_session, admitted_session, get_session, recovered_session, resume_session,
+    start_session,
 };
 
 #[cfg(test)]

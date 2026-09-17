@@ -14,7 +14,7 @@ pub use api::{
     TurnRequest,
 };
 pub use application::{
-    CancelCommandRequest, CancelRunAdmission, admitted_session, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
+    CancelCommandRequest, CancelRunAdmission, admit_unscoped_session, admitted_session, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationService, GovernedSessionRepository, GovernedSessionStore,
     HistoryProjection, PreparedTurn, RunCancellationRegistry, TurnPrecheck,
     TurnPrecheckRequest, TurnPreparationRequest, cancel_run_command, prepare_turn, compact_session, continuation, get_command, get_run,

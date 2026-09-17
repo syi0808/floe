@@ -101,3 +101,14 @@ where
     }
     Ok(session)
 }
+
+/// That a Session is not bound to one Expert's own scope.
+///
+/// A scoped Session answers for that Expert alone; a turn raised outside it is
+/// not the Session's to take.
+pub fn admit_unscoped_session(session: &AgentSession) -> Result<(), AgentFailure> {
+    if session.scope.is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}

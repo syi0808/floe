@@ -313,9 +313,7 @@ impl FloeCore {
             };
             let deadline = Instant::now() + Duration::from_millis(effective_budget.deadline_ms);
             check_running(deadline, &request.cancellation)?;
-            if saved.scope.is_some() {
-                return Err(AgentFailure::PolicyDenied);
-            }
+            floe_conversation::admit_unscoped_session(&saved)?;
             let guarded_access = GrantBoundCalendarAccess {
                 core: self,
                 vault,
@@ -1066,14 +1064,7 @@ impl<
     ) -> Result<(), AgentFailure> {
         let previous = self.vault.load(session.person_id, session.id).await?;
         let appended = session.messages.get(previous.messages.len());
-        let dependent = matches!(
-            appended,
-            Some(AgentMessage::Assistant { .. } | AgentMessage::Capability { result: Ok(_), .. })
-        ) || matches!(
-            appended,
-            Some(AgentMessage::Delegation { task, .. })
-                if task.state == A2ATaskState::Completed
-        );
+        let dependent = appended.is_some_and(AgentMessage::may_derive_from_source);
         if appended.is_some() {
             self.check_running()?;
             if self.views.source_denial_requires_halt() {
