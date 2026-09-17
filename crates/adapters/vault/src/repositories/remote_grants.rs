@@ -5,8 +5,9 @@
 //! transaction. It makes no admission judgment of its own.
 
 use floe_access::{
-    DataAccessGrant, RemoteGrantBinding, RemoteGrantStore, RemotePairingIdentity,
-    RemoteProducerIdentity, RemoteSourceQuery, RemoteViewSourceReference, SignedSourcePreview,
+    DataAccessGrant, RemoteCalendarQuery, RemoteCalendarSourceReference, RemoteGrantBinding,
+    RemoteGrantStore, RemotePairingIdentity, RemoteProducerIdentity, RemoteSourceQuery,
+    RemoteViewSourceReference, SignedCalendarPreview, SignedSourcePreview,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture};
 use floe_access::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding, SourceAuthority};
@@ -72,6 +73,57 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
             )
             .await
         })
+    }
+
+    fn verify_calendar_source_preview<'a>(
+        &'a self,
+        preview: &'a SignedCalendarPreview,
+        pairing: RemotePairingIdentity<'a>,
+        query: RemoteCalendarQuery<'a>,
+    ) -> BoxFuture<'a, Result<RemoteCalendarSourceReference, AgentFailure>> {
+        Box::pin(async move {
+            self.verify_remote_calendar_source_preview(
+                &preview.descriptor_b64url,
+                &preview.producer_signature,
+                pairing.person_id,
+                pairing.client_id,
+                pairing.device_id,
+                query.connector_id,
+                query.connection_id,
+                query.resource,
+            )
+            .await
+        })
+    }
+
+    fn activate_calendar_grant<'a>(
+        &'a self,
+        grant_id: GrantId,
+        expected: Option<GrantAuthority>,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+        Box::pin(async move {
+            self.review_and_activate_remote_calendar_grant(
+                grant_id, expected, source, scope, None,
+            )
+            .await
+        })
+    }
+
+    fn calendar_grant<'a>(
+        &'a self,
+        grant_id: GrantId,
+    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+        Box::pin(async move { self.get_data_access_grant(grant_id).await })
+    }
+
+    fn pause_calendar_grant<'a>(
+        &'a self,
+        grant_id: GrantId,
+        expected: GrantAuthority,
+    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+        Box::pin(async move { self.pause_remote_calendar_grant(grant_id, expected).await })
     }
 
     fn view_grant_binding<'a>(

@@ -939,6 +939,32 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
             })
         })
     }
+
+    fn calendar_source_preview<'a>(
+        &'a self,
+        query: floe_access::RemoteCalendarQuery<'a>,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>>
+    {
+        Box::pin(async move {
+            let preview = self
+                .client
+                .authorization_client()?
+                .calendar_source_preview(
+                    query.connector_id,
+                    query.connection_id,
+                    query.resource,
+                    window.deadline,
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(floe_access::SignedCalendarPreview {
+                descriptor_b64url: preview.descriptor_b64url,
+                producer_signature: preview.producer_signature,
+                producer: observed_producer(&preview.producer),
+            })
+        })
+    }
 }
 
 impl<Keys: RemoteAuthorizationKeys> floe_context::RemoteViewTransport

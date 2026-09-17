@@ -5,8 +5,9 @@ use floe_access::GrantState;
 /// The remote authority values this vault stores. Who a producer is and what a
 /// signed source names are Access's; this module holds and signs the records.
 pub use floe_access::{
-    RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
-    RemotePairingChallenge, RemoteProducerIdentity, RemoteViewSourceReference,
+    RemoteCalendarAuthorizationExpectation, RemoteCalendarSourceReference,
+    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
+    RemoteProducerIdentity, RemoteViewSourceReference,
 };
 use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 use ring::{
@@ -29,21 +30,6 @@ const MAX_PRODUCER_PROOF_BYTES: usize = 4 * 1024;
 const OWNER_WRAP_CONTEXT: &[u8] = b"floe.remote.owner-key.wrap.v1\0";
 const PRODUCER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.producer.v1\0";
 const OWNER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.authorization.v1\0";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteCalendarSourceReference {
-    pub person_id: String,
-    pub client_id: String,
-    pub device_id: String,
-    pub audience: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub execution_owner: String,
-    pub source_authority: SourceAuthority,
-    pub resource: String,
-    pub provider_identity: String,
-}
-
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

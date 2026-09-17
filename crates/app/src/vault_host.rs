@@ -36,14 +36,10 @@ use crate::{
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
-use floe_access::RemoteProducerIdentity;
-use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle};
 use floe_context_contract::CalendarProvider;
 use floe_kernel::PersonId;
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
-use floe_provider_adapters::control::authorization::{
-    RemoteAuthorityEndpoint, RemoteAuthorizationClient, access_producer_identity,
-};
+use floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint;
 #[cfg(not(target_os = "macos"))]
 use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
 use floe_knowledge::KnowledgeActor;
@@ -1885,89 +1881,35 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            if pairing.person_id != job.person.to_string()
-                || pairing.client_id.trim().is_empty()
-                || pairing.device_id.trim().is_empty()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let client = RemoteAuthorizationClient::new(&route.route)?;
-            let producer = Box::pin(client.producer_identity(
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
-            ))
-            .await?;
-            let source_preview = Box::pin(client.calendar_source_preview(
-                connector_id,
-                connection_id,
-                resource,
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
-            ))
-            .await?;
-            let connection = core
-                .calendar_connection(job.person)
-                .await
-                .map_err(|_| AgentFailure::StorageUnavailable)?
-                .ok_or(AgentFailure::AccessReviewRequired)?;
-            if connection.disconnected
-                || connection.connection_id != *connection_id
-                || connector_id
-                    != match connection.provider {
-                        CalendarProvider::Google => "calendar.google",
-                        CalendarProvider::Microsoft => "calendar.microsoft",
-                        _ => return Err(AgentFailure::PolicyDenied),
-                    }
-                || !connection
-                    .calendars
-                    .iter()
-                    .any(|calendar| calendar.calendar_id == *resource)
-            {
-                return Err(AgentFailure::StaleContext);
-            }
-            let pinned = RemoteProducerIdentity {
-                schema_version: producer.schema_version,
-                instance_id: producer.instance_id.clone(),
-                execution_owner: producer.execution_owner.clone(),
-                audience: producer.audience.clone(),
-                key_id: producer.key_id.clone(),
-                public_key: producer.public_key.clone(),
-                fingerprint: producer.fingerprint.clone(),
-            };
-            if vault.remote_pinned_producer().await? != pinned {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let source = vault
-                .verify_remote_calendar_source_preview(
-                    &source_preview.descriptor_b64url,
-                    &source_preview.producer_signature,
-                    &pairing.person_id,
-                    &pairing.client_id,
-                    &pairing.device_id,
+            let vault = vault.vault.as_ref();
+            let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
+            let evidence = calendar_access::remote_calendar_evidence(core, job.person).await?;
+            let preview = Box::pin(floe_access::preview_remote_calendar_grant(
+                vault,
+                &transport,
+                floe_access::RemoteCalendarGrantRequest {
+                    person_id: job.person,
+                    pairing: access_pairing_identity(pairing),
                     connector_id,
                     connection_id,
                     resource,
-                )
-                .await?;
-            if source.audience != producer.audience
-                || source.execution_owner != producer.execution_owner
-                || source.provider_identity.is_empty()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
+                },
+                evidence.as_access(),
+                &remote_authority::authority_window(job.cancellation.clone()),
+            ))
+            .await?;
             Ok(VaultExecutionResult {
                 remote_calendar_preview: Some(crate::RemoteCalendarGrantPreview {
                     person_id: job.person,
-                    connector_id: connector_id.clone(),
-                    connection_id: connection_id.clone(),
-                    resource: resource.clone(),
-                    source_authority: source.source_authority,
-                    provider_identity: source.provider_identity,
-                    execution_owner: source.execution_owner,
-                    producer: access_producer_identity(&producer),
-                    consumer: "calendar.expert".into(),
-                    // A calendar source read on this device never leaves it.
-                    recipient: "local_only".into(),
+                    connector_id: preview.reference.connector_id,
+                    connection_id: preview.reference.connection_id,
+                    resource: preview.reference.resource,
+                    source_authority: preview.reference.source_authority,
+                    provider_identity: preview.reference.provider_identity,
+                    execution_owner: preview.reference.execution_owner,
+                    producer: preview.producer,
+                    consumer: preview.consumer,
+                    recipient: preview.recipient,
                 }),
                 ..VaultExecutionResult::ready()
             })
@@ -1981,101 +1923,24 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            if pairing.person_id != job.person.to_string()
-                || pairing.client_id.trim().is_empty()
-                || pairing.device_id.trim().is_empty()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let client = RemoteAuthorizationClient::new(&route.route)?;
-            let producer = Box::pin(client.producer_identity(
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
-            ))
-            .await?;
-            let source_preview = Box::pin(client.calendar_source_preview(
-                connector_id,
-                connection_id,
-                resource,
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
-            ))
-            .await?;
-            if producer.fingerprint != *expected_producer_fingerprint
-                || vault.remote_pinned_producer().await?.fingerprint != producer.fingerprint
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let connection = core
-                .calendar_connection(job.person)
-                .await
-                .map_err(|_| AgentFailure::StorageUnavailable)?
-                .ok_or(AgentFailure::AccessReviewRequired)?;
-            let expected_connector = match connection.provider {
-                CalendarProvider::Google => "calendar.google",
-                CalendarProvider::Microsoft => "calendar.microsoft",
-                _ => return Err(AgentFailure::PolicyDenied),
-            };
-            if connector_id != expected_connector
-                || connection.connection_id != *connection_id
-                || !connection
-                    .calendars
-                    .iter()
-                    .any(|calendar| calendar.calendar_id == *resource)
-            {
-                return Err(AgentFailure::StaleContext);
-            }
-            let source = vault
-                .verify_remote_calendar_source_preview(
-                    &source_preview.descriptor_b64url,
-                    &source_preview.producer_signature,
-                    &pairing.person_id,
-                    &pairing.client_id,
-                    &pairing.device_id,
+            let vault = vault.vault.as_ref();
+            let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
+            let evidence = calendar_access::remote_calendar_evidence(core, job.person).await?;
+            let grant = Box::pin(floe_access::review_and_activate_remote_calendar_grant(
+                vault,
+                &transport,
+                floe_access::RemoteCalendarGrantRequest {
+                    person_id: job.person,
+                    pairing: access_pairing_identity(pairing),
                     connector_id,
                     connection_id,
                     resource,
-                )
-                .await?;
-            if source.audience != producer.audience
-                || source.execution_owner != producer.execution_owner
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let source = GrantSourceBinding::try_new(
-                job.person,
-                ConnectionId::try_new(connection.connection_id.clone())
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-                ConnectorId::try_new(connector_id.clone())
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-                ExecutionOwnerId::try_new(producer.execution_owner.clone())
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-                source.source_authority,
-            )
-            .map_err(|_| AgentFailure::InvalidInput)?;
-            let consumer = GrantConsumer::builtin("calendar.expert")
-                .map_err(|_| AgentFailure::InvalidInput)?;
-            let scope = GrantScope::try_new(
-                vec![
-                    ResourceHandle::try_new(resource.clone())
-                        .map_err(|_| AgentFailure::InvalidInput)?,
-                ],
-                vec![GrantDataCategory::Content],
-                vec![GrantOperation::Read],
-                vec![GrantPurpose::Assistant],
-                vec![consumer],
-                ProcessingRestriction::LocalOnly,
-            )
-            .map_err(|_| AgentFailure::InvalidInput)?;
-            let grant = vault
-                .review_and_activate_remote_calendar_grant(
-                    floe_context_contract::GrantId::new(),
-                    None,
-                    source,
-                    scope,
-                    None,
-                )
-                .await?;
+                },
+                evidence.as_access(),
+                expected_producer_fingerprint,
+                &remote_authority::authority_window(job.cancellation.clone()),
+            ))
+            .await?;
             Ok(VaultExecutionResult {
                 remote_calendar_grant: Some(RemoteGrantOverview {
                     grant,
@@ -2086,7 +1951,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         WorkerAction::RemoteCalendarGrantStatus { grant_id } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = vault.get_data_access_grant(*grant_id).await?;
+            let grant =
+                floe_access::remote_calendar_grant(vault.vault.as_ref(), *grant_id).await?;
             Ok(VaultExecutionResult {
                 remote_calendar_grant: Some(RemoteGrantOverview {
                     grant,
@@ -2100,9 +1966,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             expected_authority,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = vault
-                .pause_remote_calendar_grant(*grant_id, *expected_authority)
-                .await?;
+            let grant = floe_access::pause_remote_calendar_grant(
+                vault.vault.as_ref(),
+                *grant_id,
+                *expected_authority,
+            )
+            .await?;
             Ok(VaultExecutionResult {
                 remote_calendar_grant: Some(RemoteGrantOverview {
                     grant,

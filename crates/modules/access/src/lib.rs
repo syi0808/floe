@@ -29,6 +29,13 @@ pub use application::{
     inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
 };
 pub use application::{
+    REMOTE_CALENDAR_CONSUMER, REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection,
+    RemoteCalendarGrantPreview, RemoteCalendarGrantRequest, RemoteCalendarSourceReference,
+    admits_remote_calendar_connection, hosted_calendar_connector, pause_remote_calendar_grant,
+    preview_remote_calendar_grant, remote_calendar_grant, remote_calendar_scope,
+    remote_calendar_source, review_and_activate_remote_calendar_grant,
+};
+pub use application::{
     AccessGrantMutation, FeasibilityGrantQuery, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
     ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
     RemoteViewApproval, RemoteViewGrantExpectation, RemoteViewGrantPreview,
@@ -61,8 +68,9 @@ pub use ports::personal_grants::{
     PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };
 pub use ports::remote_grants::{
-    BoxFuture, RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport,
-    RemotePairingIdentity, RemoteSourceQuery, SignedSourcePreview,
+    BoxFuture, RemoteCalendarQuery, RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore,
+    RemoteGrantTransport, RemotePairingIdentity, RemoteSourceQuery, SignedCalendarPreview,
+    SignedSourcePreview,
 };
 pub use ports::remote_authorization::{
     RemoteAuthorityStore, RemoteAuthorityTransport, RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,

@@ -261,3 +261,49 @@ impl<Keys: VaultKeyProvider> CalendarSetupStore for VaultCalendarSetups<'_, Keys
         })
     }
 }
+
+/// What this device records about the calendar connection a remote grant would
+/// name, with nothing judged about it.
+pub(super) struct RemoteCalendarEvidence {
+    provider: floe_context_contract::CalendarProvider,
+    connection_id: String,
+    calendar_ids: Vec<String>,
+    disconnected: bool,
+}
+
+impl RemoteCalendarEvidence {
+    /// The same evidence, stated the way Access reads one.
+    pub(super) fn as_access(&self) -> floe_access::RemoteCalendarConnection<'_> {
+        floe_access::RemoteCalendarConnection {
+            provider: self.provider,
+            connection_id: &self.connection_id,
+            calendar_ids: &self.calendar_ids,
+            disconnected: self.disconnected,
+        }
+    }
+}
+
+/// Read what this device currently records about the Person's calendar.
+///
+/// Having no connection at all is a review they owe rather than a storage
+/// failure: nothing on this device says which calendar a grant would name.
+pub(super) async fn remote_calendar_evidence(
+    core: &FloeCore,
+    person_id: PersonId,
+) -> Result<RemoteCalendarEvidence, AgentFailure> {
+    let connection = core
+        .calendar_connection(person_id)
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)?
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+    Ok(RemoteCalendarEvidence {
+        provider: connection.provider,
+        connection_id: connection.connection_id,
+        calendar_ids: connection
+            .calendars
+            .into_iter()
+            .map(|calendar| calendar.calendar_id)
+            .collect(),
+        disconnected: connection.disconnected,
+    })
+}

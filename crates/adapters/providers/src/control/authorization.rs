@@ -1747,3 +1747,73 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteAuthorityTransport
         })
     }
 }
+
+impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
+    for RemoteAuthorityEndpoint<'_, Keys>
+{
+    fn producer_identity<'a>(
+        &'a self,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_access::BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>> {
+        Box::pin(async move {
+            let producer = self
+                .client
+                .producer_identity(
+                    bounded(window, PRODUCER_IDENTITY_BUDGET),
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(access_producer_identity(&producer))
+        })
+    }
+
+    fn view_source_preview<'a>(
+        &'a self,
+        query: floe_access::RemoteSourceQuery<'a>,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_access::BoxFuture<'a, Result<floe_access::SignedSourcePreview, AgentFailure>> {
+        Box::pin(async move {
+            let preview = self
+                .client
+                .view_source_preview(
+                    query.view_id,
+                    query.connector_id,
+                    query.connection_id,
+                    query.resource,
+                    bounded(window, PRODUCER_IDENTITY_BUDGET),
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(floe_access::SignedSourcePreview {
+                descriptor_b64url: preview.descriptor_b64url,
+                producer_signature: preview.producer_signature,
+                connection_revision: preview.connection_revision,
+                producer: access_producer_identity(&preview.producer),
+            })
+        })
+    }
+
+    fn calendar_source_preview<'a>(
+        &'a self,
+        query: floe_access::RemoteCalendarQuery<'a>,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_access::BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>> {
+        Box::pin(async move {
+            let preview = self
+                .client
+                .calendar_source_preview(
+                    query.connector_id,
+                    query.connection_id,
+                    query.resource,
+                    bounded(window, PRODUCER_IDENTITY_BUDGET),
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(floe_access::SignedCalendarPreview {
+                descriptor_b64url: preview.descriptor_b64url,
+                producer_signature: preview.producer_signature,
+                producer: access_producer_identity(&preview.producer),
+            })
+        })
+    }
+}

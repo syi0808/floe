@@ -13,6 +13,7 @@ use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
 use tokio::time::Instant;
 
+use crate::application::remote_calendar::RemoteCalendarSourceReference;
 use crate::application::remote_view::{RemoteProducerIdentity, RemoteViewSourceReference};
 use crate::data_access_grant::DataAccessGrant;
 
@@ -31,6 +32,24 @@ pub struct SignedSourcePreview {
     pub producer_signature: String,
     pub connection_revision: u64,
     pub producer: RemoteProducerIdentity,
+}
+
+/// One signed calendar source descriptor, exactly as the producer returned it.
+///
+/// A calendar descriptor names no view and no connection revision: the calendar
+/// is the source, and the connection it is served over is named by the grant.
+pub struct SignedCalendarPreview {
+    pub descriptor_b64url: String,
+    pub producer_signature: String,
+    pub producer: RemoteProducerIdentity,
+}
+
+/// Which calendar a preview is being asked about.
+#[derive(Clone, Copy)]
+pub struct RemoteCalendarQuery<'a> {
+    pub connector_id: &'a str,
+    pub connection_id: &'a str,
+    pub resource: &'a str,
 }
 
 /// Which source a preview is being asked about.
@@ -69,6 +88,12 @@ pub trait RemoteGrantTransport: Sync {
         query: RemoteSourceQuery<'a>,
         window: &'a RemoteCallWindow,
     ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>>;
+
+    fn calendar_source_preview<'a>(
+        &'a self,
+        query: RemoteCalendarQuery<'a>,
+        window: &'a RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<SignedCalendarPreview, AgentFailure>>;
 }
 
 /// The Person's own record of who they trust and what they have granted.
@@ -105,6 +130,34 @@ pub trait RemoteGrantStore: Sync {
         expected: Option<GrantAuthority>,
         source: GrantSourceBinding,
         scope: GrantScope,
+    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
+
+    /// Check the producer's signature over a calendar descriptor, and read out
+    /// what it names.
+    fn verify_calendar_source_preview<'a>(
+        &'a self,
+        preview: &'a SignedCalendarPreview,
+        pairing: RemotePairingIdentity<'a>,
+        query: RemoteCalendarQuery<'a>,
+    ) -> BoxFuture<'a, Result<RemoteCalendarSourceReference, AgentFailure>>;
+
+    fn activate_calendar_grant<'a>(
+        &'a self,
+        grant_id: GrantId,
+        expected: Option<GrantAuthority>,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
+
+    fn calendar_grant<'a>(
+        &'a self,
+        grant_id: GrantId,
+    ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
+
+    fn pause_calendar_grant<'a>(
+        &'a self,
+        grant_id: GrantId,
+        expected: GrantAuthority,
     ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
 
     fn view_grant_binding<'a>(
