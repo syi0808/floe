@@ -1597,7 +1597,6 @@ mod tests {
         },
     };
 
-    // FIXME(stage-2): glob import of the retired floe-domain crate
     use tempfile::tempdir;
 
     use super::*;

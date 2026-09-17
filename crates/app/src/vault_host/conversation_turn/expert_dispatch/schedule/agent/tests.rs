@@ -8,7 +8,6 @@ use std::{
 };
 
 use chrono::{Duration as TimeDelta, TimeZone};
-// FIXME(stage-2): glob import of the retired floe-domain crate
 
 use super::*;
 
