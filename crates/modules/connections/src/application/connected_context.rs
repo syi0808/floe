@@ -84,6 +84,21 @@ pub enum ConnectionState {
     Unsupported,
 }
 
+impl ConnectionState {
+    /// Whether this connection is answering reads right now.
+    ///
+    /// A degraded connection still answers; how good the answer is belongs to
+    /// the reader, not to whether the source is there at all.
+    pub const fn is_serving(self) -> bool {
+        matches!(self, Self::Ready | Self::Degraded)
+    }
+
+    /// Whether the Person has this connection but has taken it back.
+    pub const fn is_withheld(self) -> bool {
+        matches!(self, Self::Disconnected | Self::Revoked)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceFailureKind {

@@ -254,7 +254,35 @@ pub enum BuiltinContextSource {
     Logistics,
 }
 
+/// What has to be answering for a builtin source to serve a run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BuiltinSourceRequirement {
+    /// This device's own connection to the source serves it.
+    DeviceConnection,
+    /// This device serves it with nothing to connect to.
+    Device,
+    /// Only the Person's paired server serves it.
+    PairedServer,
+    /// Nothing serves it yet.
+    Unserved,
+}
+
 impl BuiltinContextSource {
+    /// What has to be answering for this source to serve a run.
+    pub const fn requirement(self) -> BuiltinSourceRequirement {
+        match self {
+            Self::Calendar => BuiltinSourceRequirement::DeviceConnection,
+            Self::Tasks | Self::ConfirmedMemory => BuiltinSourceRequirement::Device,
+            Self::Mail
+            | Self::ConfirmedInteractions
+            | Self::WorkContext
+            | Self::Logistics => BuiltinSourceRequirement::PairedServer,
+            Self::Contacts | Self::Attention | Self::Wellbeing => {
+                BuiltinSourceRequirement::Unserved
+            }
+        }
+    }
+
     /// The stable id this source is bound under in the registry.
     pub const fn source_id(self) -> &'static str {
         match self {

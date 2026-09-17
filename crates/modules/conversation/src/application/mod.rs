@@ -8,7 +8,10 @@ mod query;
 mod recovery;
 mod session;
 
-pub use admission::{TurnPrecheck, TurnPrecheckRequest, precheck_turn};
+pub use admission::{
+    PreparedTurn, TurnPrecheck, TurnPrecheckRequest, TurnPreparationRequest, precheck_turn,
+    prepare_turn,
+};
 pub use archive::{compact_session, read_archive};
 pub use cancellation::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,

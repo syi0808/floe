@@ -81,6 +81,8 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     >,
     schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     builtin_expert_endpoint: &'a expert_dispatch::BuiltinExpertEndpoint<Keys>,
+    /// The Run this turn continues, as Conversation admitted it.
+    mode: floe_conversation::TurnMode,
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
@@ -103,42 +105,22 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     on_admitted: impl FnMut(&floe_conversation::RunReceipt),
     emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_conversation::AgentSession, AgentFailure> {
-    let text = request.text.trim();
-    if text.is_empty()
-        || text.len() > 8_192
-        || request.device_id.trim().is_empty()
-        || request.device_id.len() > 128
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let session_id = request.session_id;
-    let session = vault.load(person_id, session_id).await?;
-    let existing_continuation = if request.continuation {
-        floe_conversation::get_command(
-            conversation_repository.as_ref(),
-            floe_conversation::CommandQuery {
-                principal: person_id.to_string(),
-                command_id,
-            },
-        )
-        .await?
-    } else {
-        None
-    };
-    if session.scope.is_some()
-        || session.data_classes != [DataClass::Personal]
-        || (request.continuation
-            && session.revision != request.expected_revision
-            && existing_continuation.is_none())
-    {
-        return Err(AgentFailure::Conflict);
-    }
-    if request.continuation && floe_conversation::carries_source_history(
-        &session.messages,
-        &floe_experts_builtin::schedule::CalendarHistoryBoundary,
-    ) {
-        return Err(AgentFailure::StaleContext);
-    }
+    let prepared = floe_conversation::prepare_turn(
+        conversation_repository.as_ref(),
+        vault,
+        floe_conversation::TurnPreparationRequest {
+            principal: person_id.to_string(),
+            person_id,
+            command_id,
+            session_id: request.session_id,
+            expected_revision: request.expected_revision,
+            text: &request.text,
+            device_id: &request.device_id,
+            continuation: request.continuation,
+            boundary: &floe_experts_builtin::schedule::CalendarHistoryBoundary,
+        },
+    )
+    .await?;
     let context = AgentContext {
         projection_version: 1,
         persona: None,
@@ -158,6 +140,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         task_coordinator,
         schedule_endpoint,
         builtin_expert_endpoint,
+        mode: prepared.mode,
     };
     Box::pin(expert_dispatch::run(
         &inputs,
@@ -410,43 +393,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         };
         let execution_profile =
             floe_vault::execution_profile(floe_inference::ModelTransport::placement(&model));
-        let mode = if request.continuation {
-            if let Some(existing) = floe_conversation::get_command(
-                inputs.conversation_repository.as_ref(),
-                floe_conversation::CommandQuery {
-                    principal: person_id.to_string(),
-                    command_id: inputs.command_id,
-                },
-            )
-            .await?
-            {
-                let source_run_id = existing.continuation_of.ok_or(AgentFailure::Conflict)?;
-                floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {
-                    run_id: source_run_id,
-                    executor_generation: existing
-                        .continuation_executor_generation
-                        .ok_or(AgentFailure::Conflict)?,
-                    level: existing.continuation_level,
-                })
-            } else {
-                let session = vault.load(person_id, session_id).await?;
-                let legacy_reference = session.continuation.ok_or(AgentFailure::Conflict)?;
-                let snapshot = floe_conversation::continuation(
-                    inputs.conversation_repository.as_ref(),
-                    floe_agent_contract::RunId::from_uuid(legacy_reference.turn_id)
-                        .ok_or(AgentFailure::Conflict)?,
-                    &person_id.to_string(),
-                )
-                .await?;
-                if legacy_reference.level.checked_add(1) != Some(snapshot.reference.level)
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                floe_conversation::TurnMode::Continue(snapshot.reference)
-            }
-        } else {
-            floe_conversation::TurnMode::New
-        };
         let retry_of = request
             .retry_of
             .map(|run_id| {
@@ -462,7 +408,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     expected_session_revision: request.expected_revision,
                     principal: person_id.to_string(),
                     prompt: request.text.clone(),
-                    mode,
+                    mode: inputs.mode.clone(),
                     retry_of,
                     profile,
                     execution_profile: execution_profile.into(),

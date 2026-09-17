@@ -16,8 +16,8 @@ pub use api::{
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationService, GovernedSessionRepository, GovernedSessionStore,
-    RunCancellationRegistry, TurnPrecheck,
-    TurnPrecheckRequest, cancel_run_command, compact_session, continuation, get_command, get_run,
+    PreparedTurn, RunCancellationRegistry, TurnPrecheck,
+    TurnPrecheckRequest, TurnPreparationRequest, cancel_run_command, prepare_turn, compact_session, continuation, get_command, get_run,
     get_session, precheck_turn, project_continuation, read_archive, recover_session,
     resume_session, start_session,
 };

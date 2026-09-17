@@ -6,6 +6,7 @@
 
 mod a2a;
 mod assignments;
+mod builtin_setup;
 mod calendar_access;
 mod directory;
 mod dispatch;
@@ -17,6 +18,10 @@ pub use a2a::{
     A2A_PROTOCOL_VERSION, A2AArtifact, A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ARouter,
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard,
     EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
+};
+pub use builtin_setup::{
+    BuiltinExpertRefresh, BuiltinExpertStore, BuiltinSourceEvidence, ExpertRefreshOutcome,
+    ensure_builtin_experts, expert_refresh_outcome,
 };
 pub use calendar_access::{
     AdmittedCalendarSource, BoxFuture, CalendarAccessSource, CalendarSetupStore, CalendarSourceAdmission,

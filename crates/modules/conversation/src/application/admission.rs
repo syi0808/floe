@@ -116,3 +116,125 @@ async fn verify_source<Repository: ConversationRepository>(
     }
     Ok(())
 }
+
+/// One caller turn, as the host asks Conversation to prepare it.
+pub struct TurnPreparationRequest<'a> {
+    pub principal: String,
+    pub person_id: floe_kernel::PersonId,
+    pub command_id: CommandId,
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    /// What the Person asked for, and which of their devices asked.
+    pub text: &'a str,
+    pub device_id: &'a str,
+    /// Whether the caller says this turn continues the Session's last Run.
+    pub continuation: bool,
+    /// Which results in the transcript carry source data.
+    pub boundary: &'a dyn floe_agent_contract::SourceHistoryBoundary,
+}
+
+/// The Session a prepared turn runs against, and the Run it continues.
+pub struct PreparedTurn {
+    pub session: crate::turn::AgentSession,
+    pub mode: TurnMode,
+}
+
+/// The longest device identity a turn may name.
+const MAX_DEVICE_ID_BYTES: usize = 128;
+
+/// Prepare one root turn against the Session it names.
+///
+/// Whether the Session may take this turn at all is Conversation's: a scoped
+/// Session or one holding anything but the Person's own data is not a root
+/// conversation, a continuation has to meet the revision it was admitted at
+/// unless the command already exists, and a continuation whose transcript still
+/// carries source-derived history is reading something the new turn is not
+/// authorized for.
+pub async fn prepare_turn<Repository, Store>(
+    repository: &Repository,
+    sessions: &Store,
+    request: TurnPreparationRequest<'_>,
+) -> Result<PreparedTurn, AgentFailure>
+where
+    Repository: ConversationRepository,
+    Store: crate::turn::SessionStore,
+{
+    let text = request.text.trim();
+    if text.is_empty()
+        || text.len() > crate::domain::MAX_TURN_TEXT_BYTES
+        || request.device_id.trim().is_empty()
+        || request.device_id.len() > MAX_DEVICE_ID_BYTES
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let session = sessions
+        .load(request.person_id, request.session_id)
+        .await?;
+    let existing = if request.continuation {
+        super::query::get_command(
+            repository,
+            CommandQuery {
+                principal: request.principal.clone(),
+                command_id: request.command_id,
+            },
+        )
+        .await?
+    } else {
+        None
+    };
+    if session.scope.is_some()
+        || session.data_classes != [floe_agent_contract::DataClass::Personal]
+        || (request.continuation
+            && session.revision != request.expected_revision
+            && existing.is_none())
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    if request.continuation
+        && crate::turn::carries_source_history(&session.messages, request.boundary)
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    let mode = if request.continuation {
+        TurnMode::Continue(continued_run(repository, &request, &session, existing).await?)
+    } else {
+        TurnMode::New
+    };
+    Ok(PreparedTurn { session, mode })
+}
+
+/// The Run a continuation resumes.
+///
+/// A command that was already admitted says which Run it continues; a
+/// first-time continuation takes the Session's own last Run, which has to be
+/// exactly one level behind the snapshot Conversation projects for it.
+async fn continued_run<Repository: ConversationRepository>(
+    repository: &Repository,
+    request: &TurnPreparationRequest<'_>,
+    session: &crate::turn::AgentSession,
+    existing: Option<RunReceipt>,
+) -> Result<ContinuationRef, AgentFailure> {
+    if let Some(receipt) = existing {
+        return Ok(ContinuationRef {
+            run_id: receipt.continuation_of.ok_or(AgentFailure::Conflict)?,
+            executor_generation: receipt
+                .continuation_executor_generation
+                .ok_or(AgentFailure::Conflict)?,
+            level: receipt.continuation_level,
+        });
+    }
+    let reference = session
+        .continuation
+        .as_ref()
+        .ok_or(AgentFailure::Conflict)?;
+    let snapshot = super::coordinator::continuation(
+        repository,
+        floe_kernel::RunId::from_uuid(reference.turn_id).ok_or(AgentFailure::Conflict)?,
+        &request.principal,
+    )
+    .await?;
+    if reference.level.checked_add(1) != Some(snapshot.reference.level) {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(snapshot.reference)
+}

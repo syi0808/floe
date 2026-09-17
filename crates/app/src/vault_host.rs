@@ -17,14 +17,13 @@ use std::{
 #[cfg(target_os = "android")]
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use floe_agent_contract::AgentFailure;
-use floe_connections::ConnectionState;
 use floe_conversation::{AgentEvent, AgentSession, SessionStore};
 // What the regressions below read off a finished turn.
 #[cfg(test)]
 use floe_conversation::AgentOutcome;
 use floe_execution::Cancellation;
-use floe_experts::{BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState};
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
+use floe_experts::{BuiltinSourceBinding, BuiltinSourceEvidence};
+use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement};
 #[cfg(not(target_os = "android"))]
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use crate::{
@@ -49,9 +48,10 @@ use crate::{FloeCore, diagnostics};
 
 mod calendar_access;
 mod conversation_turn;
-mod remote_authority;
+mod expert_setup;
 mod learner_worker;
 mod personal_grants;
+mod remote_authority;
 mod remote_views;
 
 use floe_vault::{VaultConversationRepository, VaultTaskRepository};
@@ -1188,27 +1188,24 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     job: &Job,
     request: &ConversationTurnRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
-    if vault.builtin_expert_overview().await?.is_some()
-        && let Err(failure) = Box::pin(ensure_builtin_experts(
-            vault,
-            core,
-            local_context,
-            job.person,
-            request.remote_route.as_ref(),
-            job.cancellation.clone(),
-        ))
-        .await
-    {
-        match failure {
-            AgentFailure::Cancelled
-            | AgentFailure::VaultUnavailable
-            | AgentFailure::StorageUnavailable => return Err(failure),
-            _ => tracing::warn!(
-                failure = ?failure,
-                stage = "refresh_builtin_experts",
-                "conversation_turn_degraded"
-            ),
-        }
+    let refreshed = Box::pin(ensure_builtin_experts(
+        vault,
+        core,
+        local_context,
+        job.person,
+        request.remote_route.as_ref(),
+        job.cancellation.clone(),
+        floe_experts::BuiltinExpertRefresh::ExistingOnly,
+    ))
+    .await;
+    match floe_experts::expert_refresh_outcome(refreshed) {
+        floe_experts::ExpertRefreshOutcome::Ready => {}
+        floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
+            failure = ?failure,
+            stage = "refresh_builtin_experts",
+            "conversation_turn_degraded"
+        ),
+        floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
     }
     vault.sync_expert_directory().await?;
     let session = match Box::pin(conversation_turn::run(
@@ -1547,17 +1544,16 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {
                 ConversationSessionOperation::Start => {
-                    if vault.builtin_expert_overview().await?.is_none() {
-                        ensure_builtin_experts(
-                            vault,
-                            core,
-                            local_context,
-                            job.person,
-                            None,
-                            job.cancellation.clone(),
-                        )
-                        .await?;
-                    }
+                    ensure_builtin_experts(
+                        vault,
+                        core,
+                        local_context,
+                        job.person,
+                        None,
+                        job.cancellation.clone(),
+                        floe_experts::BuiltinExpertRefresh::InstallIfAbsent,
+                    )
+                    .await?;
                     let receipt = floe_conversation::start_session(
                         vault.conversation_repository.as_ref(),
                         floe_conversation::SessionRequest {
@@ -2220,10 +2216,39 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     person_id: PersonId,
     remote_route: Option<&RemoteTurnRoute>,
     cancellation: Cancellation,
+    when: floe_experts::BuiltinExpertRefresh,
 ) -> Result<(), AgentFailure> {
     let _ = local_context;
-    let remote_available =
-        remote_route.is_some_and(|route| !route.route.external || route.route.allow_external);
+    floe_experts::ensure_builtin_experts(
+        &expert_setup::VaultBuiltinExperts {
+            vault,
+            specs: builtin_setup_specs(),
+            cancellation,
+        },
+        builtin_source_bindings(core, person_id, remote_route).await,
+        BuiltinExpertKind::BUILTIN_SETUP.len(),
+        when,
+    )
+    .await
+}
+
+/// What each builtin source is bound to, and how well it is being served.
+///
+/// Which source needs what is the builtin Experts' own declaration and what a
+/// connection state means is Connections'; this reads the two together into the
+/// bindings the registry records.
+async fn builtin_source_bindings(
+    core: &FloeCore,
+    person_id: PersonId,
+    remote_route: Option<&RemoteTurnRoute>,
+) -> Vec<BuiltinSourceBinding> {
+    let paired_server = if remote_route
+        .is_some_and(|route| !route.route.external || route.route.allow_external)
+    {
+        BuiltinSourceEvidence::Serving
+    } else {
+        BuiltinSourceEvidence::Absent
+    };
     let calendar = core
         .calendar_connector_snapshot(
             person_id,
@@ -2232,34 +2257,14 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
         )
         .await
         .ok()
-        .flatten();
-    let calendar_state = match calendar.as_ref().map(|snapshot| snapshot.connection.state) {
-        Some(ConnectionState::Ready | ConnectionState::Degraded) => BuiltinSourceState::Available,
-        Some(ConnectionState::Disconnected | ConnectionState::Revoked) => {
-            BuiltinSourceState::Disabled
-        }
-        _ => BuiltinSourceState::Unavailable,
+        .flatten()
+        .map(|snapshot| snapshot.connection.state);
+    let device_connection = match calendar {
+        Some(state) if state.is_serving() => BuiltinSourceEvidence::Serving,
+        Some(state) if state.is_withheld() => BuiltinSourceEvidence::Withheld,
+        _ => BuiltinSourceEvidence::Absent,
     };
-    let state = |source| match source {
-        BuiltinContextSource::Calendar => calendar_state,
-        BuiltinContextSource::Tasks | BuiltinContextSource::ConfirmedMemory => {
-            BuiltinSourceState::Available
-        }
-        BuiltinContextSource::Contacts
-        | BuiltinContextSource::Attention
-        | BuiltinContextSource::Wellbeing => BuiltinSourceState::Unavailable,
-        BuiltinContextSource::Mail
-        | BuiltinContextSource::ConfirmedInteractions
-        | BuiltinContextSource::WorkContext
-        | BuiltinContextSource::Logistics => {
-            if remote_available {
-                BuiltinSourceState::Available
-            } else {
-                BuiltinSourceState::Unavailable
-            }
-        }
-    };
-    let sources = [
+    [
         BuiltinContextSource::Calendar,
         BuiltinContextSource::Mail,
         BuiltinContextSource::Tasks,
@@ -2275,68 +2280,15 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     .map(|source| BuiltinSourceBinding {
         source: source_id(source),
         view_handle: builtin_source_handle(person_id, source),
-        state: state(source),
+        state: match source.requirement() {
+            BuiltinSourceRequirement::DeviceConnection => device_connection,
+            BuiltinSourceRequirement::Device => BuiltinSourceEvidence::Serving,
+            BuiltinSourceRequirement::PairedServer => paired_server,
+            BuiltinSourceRequirement::Unserved => BuiltinSourceEvidence::Absent,
+        }
+        .state(),
     })
-    .collect::<Vec<_>>();
-    let existing = vault.builtin_expert_overview().await?;
-    let ensured = if let Some(existing) = existing {
-        if existing.setup.sources == sources {
-            Ok(existing)
-        } else {
-            vault
-                .refresh_builtin_expert_sources(
-                    existing.registry.revision,
-                    sources.clone(),
-                    cancellation.clone(),
-                )
-                .await
-        }
-    } else {
-        let revision = vault
-            .registry_overview()
-            .await?
-            .map_or(0, |registry| registry.revision);
-        vault
-            .install_builtin_experts_enabled(
-                BuiltinExpertSetup {
-                    instance_id: vault.registry_instance_id(),
-                    expected_revision: revision,
-                    setup_id: Uuid::new_v5(
-                        &vault.registry_instance_id(),
-                        b"floe.builtin.experts.v1",
-                    ),
-                    sources: sources.clone(),
-                },
-                &builtin_setup_specs(),
-                cancellation.clone(),
-            )
-            .await
-    };
-    let result = match ensured {
-        Ok(result) => result,
-        Err(AgentFailure::Conflict) => {
-            let latest = vault
-                .builtin_expert_overview()
-                .await?
-                .ok_or(AgentFailure::Conflict)?;
-            if latest.setup.sources == sources {
-                latest
-            } else {
-                vault
-                    .refresh_builtin_expert_sources(
-                        latest.registry.revision,
-                        sources,
-                        cancellation.clone(),
-                    )
-                    .await?
-            }
-        }
-        Err(failure) => return Err(failure),
-    };
-    if result.setup.assignments.len() != BuiltinExpertKind::BUILTIN_SETUP.len() {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    Ok(())
+    .collect()
 }
 
 /// The registry identity of one builtin source.
