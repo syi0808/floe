@@ -42,4 +42,12 @@ apple-native-keyring-store = { version = "1.0.2", default-features = false, feat
 apple-native-keyring-store = { version = "1.0.2", default-features = false, features = ["protected"] }
 
 [dev-dependencies]
+floe-agent-contract = { path = "../../contracts/agent" }
+floe-context-contract = { path = "../../contracts/context" }
+floe-conversation = { path = "../../modules/conversation" }
+floe-day = { path = "../../modules/day" }
+floe-execution = { path = "../../runtime/execution" }
+floe-experts = { path = "../../modules/experts" }
+floe-kernel = { path = "../../contracts/kernel" }
+floe-knowledge = { path = "../../modules/knowledge" }
 tempfile = "3.23.0"

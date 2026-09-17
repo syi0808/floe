@@ -1,4 +1,15 @@
 use super::*;
+use floe_actions::ActionBlockReason;
+use floe_actions::ActionFailure;
+use floe_actions::CalendarAction;
+use floe_actions::CalendarActionState;
+use floe_actions::ExpertCalendarInspection;
+use floe_agent_contract::AgentFailure;
+use floe_agent_contract::Cancellation;
+use floe_context_contract::CalendarProvider;
+use floe_context_contract::PersonId;
+use floe_experts::AgentRegistry;
+use uuid::Uuid;
 
 impl Fixture {
     fn inspection(&self) -> ExpertCalendarInspection {
@@ -29,6 +40,7 @@ async fn inspection_of_unprepared_evidence_does_not_publish_initialize_or_modify
     assert!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()
@@ -82,7 +94,12 @@ async fn inspection_recovers_original_action_after_reopen_revocation_and_connect
     assert_eq!(fixture.prepare().await, Err(AgentFailure::CapabilityDenied));
     assert_eq!(fixture.inspect().await.unwrap(), Some(action.clone()));
     assert_eq!(
-        fixture.core.calendar_actions(fixture.person).await.unwrap(),
+        fixture
+            .core
+            .actions()
+            .calendar_actions(fixture.person)
+            .await
+            .unwrap(),
         [action]
     );
     let encoded = serde_json::to_string(&fixture.inspect().await.unwrap()).unwrap();
@@ -124,16 +141,18 @@ async fn inspection_preserves_all_recorded_s3_states_and_execution_identity_with
     ] {
         let mut stored = previous.clone();
         stored.state = state;
-        fixture
-            .core
-            .store
-            .save_calendar_action(&stored, Some(&previous))
-            .await
-            .unwrap();
+        floe_actions::ActionRepository::save_calendar_action(
+            &fixture.core.store,
+            &stored,
+            Some(&previous),
+        )
+        .await
+        .unwrap();
         assert_eq!(fixture.inspect().await.unwrap(), Some(stored.clone()));
         assert_eq!(
             fixture
                 .core
+                .actions()
                 .calendar_action(fixture.person, stored.id)
                 .await
                 .unwrap(),
@@ -210,12 +229,13 @@ async fn inspection_fails_closed_for_mismatched_or_oversized_action_records() {
             5 => forged.title = "unrelated action".into(),
             _ => forged.calendar_name = "x".repeat(65_536),
         }
-        fixture
-            .core
-            .store
-            .save_calendar_action(&forged, Some(&previous))
-            .await
-            .unwrap();
+        floe_actions::ActionRepository::save_calendar_action(
+            &fixture.core.store,
+            &forged,
+            Some(&previous),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             fixture.inspect().await,
             Err(if mode == 6 {
@@ -227,6 +247,7 @@ async fn inspection_fails_closed_for_mismatched_or_oversized_action_records() {
         assert_eq!(
             fixture
                 .core
+                .actions()
                 .calendar_action(fixture.person, forged.id)
                 .await
                 .unwrap(),
@@ -271,7 +292,12 @@ async fn inspection_honors_cancellation_deadline_and_key_loss_without_writing_or
     fixture.keys.0.fail_on_read.store(3, Ordering::Release);
     assert_eq!(fixture.inspect().await, Err(AgentFailure::VaultUnavailable));
     assert_eq!(
-        fixture.core.calendar_actions(fixture.person).await.unwrap(),
+        fixture
+            .core
+            .actions()
+            .calendar_actions(fixture.person)
+            .await
+            .unwrap(),
         std::slice::from_ref(&action)
     );
     fixture.keys.0.blocked.store(false, Ordering::Release);

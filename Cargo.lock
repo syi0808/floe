@@ -1125,6 +1125,7 @@ dependencies = [
  "floe-actions",
  "floe-agent-contract",
  "floe-context",
+ "floe-context-contract",
  "floe-conversation",
  "floe-day",
  "floe-execution",

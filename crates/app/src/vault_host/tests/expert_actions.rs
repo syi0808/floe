@@ -10,12 +10,71 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-// FIXME(stage-2): glob import of the retired floe-agent crate
-// FIXME(stage-2): glob import of the retired floe-domain crate
 use tokio::time::Instant;
 
+use floe_experts_builtin::schedule::{ExpertHost, ExpertViews};
+use floe_vault::*;
+
 use super::*;
-use crate::*;
+
+/// An Expert invocation records its capability calls before dispatch; these
+/// regressions run one that makes none.
+struct NoJournal;
+
+impl floe_agent_contract::CapabilityJournal for NoJournal {
+    fn record<'a>(
+        &'a self,
+        _record: floe_agent_contract::CapabilityExecution,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+use floe_actions::ActionAuthorityMode;
+use floe_actions::ActionFailure;
+use floe_actions::CalendarAction;
+use floe_actions::CalendarActionPolicy;
+use floe_actions::CalendarActionProvider;
+use floe_actions::CalendarActionState;
+use floe_actions::CalendarCreateReceipt;
+use floe_actions::CalendarPreflight;
+use floe_actions::ExpertCalendarDestination;
+use floe_actions::ExpertCalendarRequest;
+use floe_actions::ExpertProposalReference;
+use floe_agent_contract::AgentContext;
+use floe_agent_contract::AgentFailure;
+use floe_agent_contract::Cancellation;
+use floe_agent_contract::TimelineViewRead;
+use floe_context_contract::CalendarProvider;
+use floe_context_contract::CalendarScope;
+use floe_context_contract::ContextDependency;
+use floe_context_contract::DataClass;
+use floe_context_contract::ExpertTimelineView;
+use floe_context_contract::GrantConsumer;
+use floe_context_contract::GrantOperation;
+use floe_context_contract::GrantPurpose;
+use floe_context_contract::PersonId;
+use floe_context_contract::ProcessingRestriction;
+use floe_context_contract::SourceAuthority;
+use floe_context_contract::TimelineViewItem;
+use floe_conversation::AgentMessage;
+use floe_day::Event;
+use floe_experts::A2AArtifact;
+use floe_experts::A2AMessage;
+use floe_experts::A2AMessageRole;
+use floe_experts::A2APart;
+use floe_experts::A2ATask;
+use floe_experts::A2ATaskState;
+use floe_experts::AgentRegistry;
+use floe_experts::CalendarAccessChange;
+use floe_experts::CalendarAccessConfiguration;
+use floe_experts::CalendarExpertSetup;
+use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
+use floe_experts::ExpertBudget;
+use floe_experts::ExpertInput;
+use floe_experts::ExpertInvocation;
+use floe_experts::ExpertResult;
+use floe_experts::PackageImplementation;
+use uuid::Uuid;
 
 mod inspection;
 
@@ -204,12 +263,15 @@ impl Fixture {
         });
         vault.compare_and_swap(&session, 0).await.unwrap();
         let invocation_id = Uuid::new_v4();
+        let assignments = floe_experts::RegistryAssignments::new(&registry);
         let evidence = ExpertHost {
-            registry: &registry,
+            assignments: &assignments,
             views: &views,
         }
         .invoke(ExpertInvocation {
-            usage: Default::default(),
+            // This Expert's own capability calls leave no durable record here;
+            // what is under test is the proposal it produces.
+            capabilities: std::sync::Arc::new(NoJournal),
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
@@ -422,28 +484,31 @@ async fn committed_expert_proposal_uses_s3_review_and_one_shot_execution_after_r
     assert_eq!(
         fixture
             .core
+            .actions()
             .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
             .await
             .unwrap_err()
             .code,
-        ErrorCode::Conflict
+        floe_actions::ActionErrorCode::Conflict
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
     fixture = fixture.reopen().await;
     assert_eq!(fixture.prepare().await.unwrap(), action);
     fixture
         .core
+        .actions()
         .decide_calendar_action(fixture.person, action.id, true, now())
         .await
         .expect_err("agent actions require the vault owner decision path");
     assert_eq!(
         fixture
             .core
+            .actions()
             .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
             .await
             .unwrap_err()
             .code,
-        ErrorCode::Conflict
+        floe_actions::ActionErrorCode::Conflict
     );
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
 }
@@ -453,6 +518,7 @@ async fn delegated_actions_require_vault_owner_approval() {
     let fixture = Fixture::new().await;
     fixture
         .core
+        .actions()
         .set_action_authority(fixture.person, ActionAuthorityMode::Allow)
         .await
         .unwrap();
@@ -461,10 +527,11 @@ async fn delegated_actions_require_vault_owner_approval() {
     let provider = Provider::default();
     let denied = fixture
         .core
+        .actions()
         .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
         .await
         .unwrap_err();
-    assert_eq!(denied.code, ErrorCode::Conflict);
+    assert_eq!(denied.code, floe_actions::ActionErrorCode::Conflict);
     assert_eq!(provider.preflights.load(Ordering::SeqCst), 0);
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
 }
@@ -490,6 +557,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
         .vault
         .install_calendar_expert_with_connection(
             setup.clone(),
+            &crate::vault_host::schedule_packaging(),
             "eventkit-connection".into(),
             Cancellation::default(),
         )
@@ -556,23 +624,23 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
     action.state = CalendarActionState::Pending;
     let previous_projection = fixture
         .core
+        .actions()
         .calendar_action(fixture.person, action.id)
         .await
         .unwrap();
-    fixture
-        .core
-        .store
-        .save_calendar_action(&action, Some(&previous_projection))
-        .await
-        .unwrap();
+    floe_actions::ActionRepository::save_calendar_action(
+        &fixture.core.store,
+        &action,
+        Some(&previous_projection),
+    )
+    .await
+    .unwrap();
     let envelope = AgentActionEnvelope {
         action: action.clone(),
         dependency,
         write_approval: false,
     };
-    fixture
-        .vault
-        .store_agent_action_envelope(envelope)
+    floe_actions::ExpertActionStore::store_agent_action_envelope(&fixture.vault, envelope)
         .await
         .unwrap();
     let approved = fixture
@@ -587,26 +655,34 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
         .await
         .unwrap();
     assert_eq!(approved.state, CalendarActionState::Approved);
-    let approved_admission = fixture
-        .vault
-        .agent_action_admission(action.execution_id)
-        .await
-        .unwrap();
-    let admitted = fixture
-        .vault
-        .admit_agent_action_dispatch(action.execution_id, &approved_admission.digest, now())
+    let approved_admission = floe_actions::ExpertActionStore::agent_action_admission(
+        &fixture.vault,
+        action.execution_id,
+    )
+    .await
+    .unwrap();
+    let admitted =
+        floe_actions::ExpertActionStore::admit_agent_action_dispatch_with_cancellation_and_fence(
+            &fixture.vault,
+            action.execution_id,
+            &approved_admission.digest,
+            now(),
+            floe_execution::Cancellation::default(),
+            || Ok(()),
+        )
         .await
         .unwrap();
     assert_eq!(
         admitted.envelope.action.state,
         CalendarActionState::Executing
     );
-    fixture
-        .core
-        .store
-        .save_calendar_action(&admitted.envelope.action, Some(&approved))
-        .await
-        .unwrap();
+    floe_actions::ActionRepository::save_calendar_action(
+        &fixture.core.store,
+        &admitted.envelope.action,
+        Some(&approved),
+    )
+    .await
+    .unwrap();
     let provider = Provider::default();
     let receipt = CalendarCreateReceipt {
         execution_id: action.execution_id,
@@ -618,22 +694,22 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
         schedule: action.schedule.clone(),
     };
     *provider.receipt.lock().unwrap() = Some(receipt);
-    let unknown = fixture
-        .vault
-        .settle_agent_action(
-            &admitted,
-            CalendarActionState::Unknown {
-                reason: ActionFailure::Timeout,
-            },
-        )
-        .await
-        .unwrap();
-    fixture
-        .core
-        .store
-        .save_calendar_action(&unknown, Some(&admitted.envelope.action))
-        .await
-        .unwrap();
+    let unknown = floe_actions::ExpertActionStore::settle_agent_action(
+        &fixture.vault,
+        &admitted,
+        CalendarActionState::Unknown {
+            reason: ActionFailure::Timeout,
+        },
+    )
+    .await
+    .unwrap();
+    floe_actions::ActionRepository::save_calendar_action(
+        &fixture.core.store,
+        &unknown,
+        Some(&admitted.envelope.action),
+    )
+    .await
+    .unwrap();
     let recovered = fixture
         .core
         .recover_expert_calendar_action(
@@ -721,6 +797,7 @@ async fn reference_destination_freshness_and_budgets_reject_before_creating_an_a
     assert_eq!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()
@@ -774,6 +851,7 @@ async fn only_explicit_committed_proposals_with_current_grants_can_be_published(
     assert!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()
@@ -787,10 +865,11 @@ async fn rejected_intents_are_not_resurrected_or_retargeted_on_retry() {
     let action = fixture.prepare().await.unwrap();
     let rejected = fixture
         .core
+        .actions()
         .decide_calendar_action(fixture.person, action.id, false, now())
         .await
         .unwrap_err();
-    assert_eq!(rejected.code, ErrorCode::Conflict);
+    assert_eq!(rejected.code, floe_actions::ActionErrorCode::Conflict);
     assert_eq!(fixture.prepare().await.unwrap(), action);
     let mut changed = fixture.request();
     changed.destination.connection_revision = action.connection_revision;
@@ -805,6 +884,7 @@ async fn rejected_intents_are_not_resurrected_or_retargeted_on_retry() {
     assert_eq!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()
@@ -823,7 +903,12 @@ async fn unavailable_key_cannot_publish_and_post_publish_key_loss_reconciles_one
             .fail_on_read
             .store(fail_on_read, Ordering::Release);
         assert_eq!(fixture.prepare().await, Err(AgentFailure::VaultUnavailable));
-        let before = fixture.core.calendar_actions(fixture.person).await.unwrap();
+        let before = fixture
+            .core
+            .actions()
+            .calendar_actions(fixture.person)
+            .await
+            .unwrap();
         assert!(before.is_empty());
         fixture.keys.0.blocked.store(false, Ordering::Release);
         assert_eq!(fixture.prepare().await, Err(AgentFailure::VaultUnavailable));
@@ -837,6 +922,7 @@ async fn unavailable_key_cannot_publish_and_post_publish_key_loss_reconciles_one
         assert_eq!(
             fixture
                 .core
+                .actions()
                 .calendar_actions(fixture.person)
                 .await
                 .unwrap()
@@ -878,6 +964,7 @@ async fn copied_session_output_without_its_bound_receipt_cannot_mint_an_intent()
     assert!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()
@@ -955,12 +1042,22 @@ async fn cancellation_after_publication_reports_uncertainty_without_replacing_th
             .await,
         Err(AgentFailure::Cancelled)
     );
-    let saved = fixture.core.calendar_actions(fixture.person).await.unwrap();
+    let saved = fixture
+        .core
+        .actions()
+        .calendar_actions(fixture.person)
+        .await
+        .unwrap();
     assert!(saved.is_empty());
     let published = fixture.prepare().await.unwrap();
     assert_eq!(published.person_id, fixture.person);
     assert_eq!(
-        fixture.core.calendar_actions(fixture.person).await.unwrap(),
+        fixture
+            .core
+            .actions()
+            .calendar_actions(fixture.person)
+            .await
+            .unwrap(),
         vec![published]
     );
 }
@@ -1006,6 +1103,7 @@ async fn personal_projection_uses_the_same_bridge_but_sensitive_classes_cannot_e
             assert!(
                 fixture
                     .core
+                    .actions()
                     .calendar_actions(fixture.person)
                     .await
                     .unwrap()
@@ -1058,6 +1156,7 @@ async fn cancellation_deadline_and_clock_changes_before_publish_leave_no_intent(
     assert!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()
@@ -1082,7 +1181,12 @@ async fn concurrent_publication_reconciles_one_stable_action_and_execution_id() 
         }
     }
     assert_eq!(
-        fixture.core.calendar_actions(fixture.person).await.unwrap(),
+        fixture
+            .core
+            .actions()
+            .calendar_actions(fixture.person)
+            .await
+            .unwrap(),
         vec![committed]
     );
 }
@@ -1093,12 +1197,14 @@ async fn dropped_publish_scope_releases_registry_authority_without_a_state_chang
     let baseline = fixture.vault.expert_registry().await.unwrap().unwrap();
     let reached = tokio::sync::Notify::new();
     {
-        let operation = fixture
-            .vault
-            .with_expert_proposal(&fixture.reference, |_| async {
+        let operation = floe_actions::ExpertActionStore::with_expert_proposal(
+            &fixture.vault,
+            &fixture.reference,
+            |_| async {
                 reached.notify_one();
                 std::future::pending::<Result<(), AgentFailure>>().await
-            });
+            },
+        );
         tokio::pin!(operation);
         tokio::select! {
             _ = &mut operation => panic!("publisher should be waiting"),
@@ -1127,6 +1233,7 @@ async fn dropped_publish_scope_releases_registry_authority_without_a_state_chang
     assert!(
         fixture
             .core
+            .actions()
             .calendar_actions(fixture.person)
             .await
             .unwrap()

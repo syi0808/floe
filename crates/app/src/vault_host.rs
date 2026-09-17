@@ -2365,6 +2365,7 @@ mod tests {
     };
 
     mod calendar_experts;
+    mod expert_actions;
     mod learner_worker;
     mod memory_review;
     mod proposals;
