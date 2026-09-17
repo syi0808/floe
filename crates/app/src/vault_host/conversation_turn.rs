@@ -1696,7 +1696,11 @@ mod tests {
         },
     };
 
+    use crate::LocalContextCommand;
     use floe_conversation::{AgentMessage, ModelStep};
+    use floe_provider_adapters::sources::native_acquisition::{
+        AttentionAcquisitionMode, AttentionAcquisitionResult,
+    };
     use floe_experts_builtin::prompts::focus_expert_prompt;
 use floe_execution::{Cancellation};
     use floe_vault::{VaultKey, VaultKeyProvider};
@@ -1920,25 +1924,25 @@ use floe_execution::{Cancellation};
         read_count: Arc<AtomicUsize>,
     ) {
         while !stop.load(Ordering::Acquire) {
-            if let Ok(result) = local_context.request(
+            if let Ok(result) = local_context.execute(
                 person_id,
-                LocalContextOperationDto::PollAttentionAcquisitions {
+                LocalContextCommand::PollAttentionAcquisitions {
                     host_epoch: host_epoch.clone(),
                 },
+                None,
             ) {
                 for request in result.attention_acquisitions {
                     match request.mode {
-                        LocalContextAttentionAcquisitionModeDto::InspectSubject => {
+                        AttentionAcquisitionMode::InspectSubject => {
                             inspect_count.fetch_add(1, Ordering::AcqRel);
                         }
-                        LocalContextAttentionAcquisitionModeDto::ReadProjection => {
+                        AttentionAcquisitionMode::ReadProjection => {
                             read_count.fetch_add(1, Ordering::AcqRel);
                         }
                     }
-                    let view = (request.mode
-                        == LocalContextAttentionAcquisitionModeDto::ReadProjection)
+                    let view = (request.mode == AttentionAcquisitionMode::ReadProjection)
                         .then(|| serde_json::to_value(attention_test_view()).unwrap());
-                    let completion = LocalContextAttentionAcquisitionResultDto {
+                    let completion = AttentionAcquisitionResult {
                         request_id: request.request_id,
                         host_epoch: request.host_epoch,
                         person_id: request.person_id,
@@ -1949,12 +1953,13 @@ use floe_execution::{Cancellation};
                         permission_class: "session_observation".into(),
                         view,
                     };
-                    let _ = local_context.request(
+                    let _ = local_context.execute(
                         person_id,
-                        LocalContextOperationDto::CompleteAttentionAcquisition {
+                        LocalContextCommand::CompleteAttentionAcquisition {
                             host_epoch: host_epoch.clone(),
-                            result: completion,
+                            result: Box::new(completion),
                         },
+                        None,
                     );
                 }
             }
@@ -2644,8 +2649,8 @@ use floe_execution::{Cancellation};
         assert_eq!(body.as_object().unwrap().len(), 8);
     }
 
-    fn test_calendar_connections() -> Vec<AgentRemoteCalendarConnectionDto> {
-        vec![AgentRemoteCalendarConnectionDto {
+    fn test_calendar_connections() -> Vec<floe_connections::CalendarConnectionRef> {
+        vec![floe_connections::CalendarConnectionRef {
             connector_id: "calendar.google".into(),
             connection_id: "00000000-0000-4000-8000-000000000010".into(),
             connection_revision: 7,

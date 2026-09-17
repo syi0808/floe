@@ -1,8 +1,11 @@
 use floe_conversation::AgentMessage;
+use floe_conversation::ProfileSelection;
 use floe_experts::{
     CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup, RegistryConfiguration,
     RegistryConfigurationTarget,
 };
+
+use crate::{ConversationSessionOperation, ConversationTurnRequest};
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
@@ -202,7 +205,7 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     );
     assert_eq!(session.failure, None);
@@ -231,7 +234,7 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
             text: "Your calendar is clear.".into(),
         },
     ]);
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "calendar-expert-test".into(),
         person_id: person.to_string(),
         device_id: "iphone".into(),
@@ -241,16 +244,16 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
             &worker,
             person,
             WorkerAction::ConversationTurn {
-                request: floe_protocol::AgentConversationTurnRequestDto {
-                    session_id: session.id.to_string(),
+                request: Box::new(ConversationTurnRequest {
+                    session_id: session.id,
                     expected_revision: session.revision,
                     text: text.into(),
                     device_id: "iphone".into(),
-                    profile: floe_protocol::AppProfileSelectionDto::Auto,
+                    profile: ProfileSelection::Auto,
                     continuation: false,
                     retry_of: None,
                     remote_route: Some(route.clone()),
-                },
+                }),
             },
         )
     };
@@ -386,7 +389,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
@@ -413,7 +416,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
             text: "You have an open hour.".into(),
         },
     ]);
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "calendar-expert-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
@@ -422,16 +425,16 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: floe_protocol::AgentConversationTurnRequestDto {
-                session_id: session.id.to_string(),
+            request: Box::new(ConversationTurnRequest {
+                session_id: session.id,
                 expected_revision: session.revision,
                 text: "Find an open hour".into(),
                 device_id: "mac-local".into(),
-                profile: floe_protocol::AppProfileSelectionDto::Auto,
+                profile: ProfileSelection::Auto,
                 continuation: false,
                 retry_of: None,
                 remote_route: Some(route),
-            },
+            }),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -482,7 +485,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
@@ -490,30 +493,30 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "conversation-replay-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
     let action = WorkerAction::ConversationTurn {
-        request: floe_protocol::AgentConversationTurnRequestDto {
-            session_id: session.id.to_string(),
+        request: Box::new(ConversationTurnRequest {
+            session_id: session.id,
             expected_revision: session.revision,
             text: "Answer once".into(),
             device_id: "mac-local".into(),
-            profile: floe_protocol::AppProfileSelectionDto::Auto,
+            profile: ProfileSelection::Auto,
             continuation: false,
             retry_of: None,
             remote_route: Some(route),
-        },
+        }),
     };
     let request_id = Uuid::new_v4();
     worker
         .request(
             person,
             request_id,
-            AgentVaultOperationDto::Submit {
-                action: action.clone(),
+            WorkerOperation::Submit {
+                action: Box::new(action.clone()),
             },
         )
         .unwrap();
@@ -528,11 +531,11 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         .clone();
     assert!(!completed_job_cancellation.is_cancelled());
     worker
-        .request(person, request_id, AgentVaultOperationDto::Stop {})
+        .request(person, request_id, WorkerOperation::Stop)
         .unwrap();
     assert!(!completed_job_cancellation.is_cancelled());
     worker
-        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .request(person, request_id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(first.failure, None, "first: {first:?}");
 
@@ -540,14 +543,14 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         .request(
             person,
             request_id,
-            AgentVaultOperationDto::Submit {
-                action: action.clone(),
+            WorkerOperation::Submit {
+                action: Box::new(action.clone()),
             },
         )
         .unwrap();
     let replay = wait(&worker, person, request_id);
     worker
-        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .request(person, request_id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(replay.failure, None, "replay: {replay:?}");
     assert_eq!(replay.session, first.session);
@@ -561,12 +564,12 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         .request(
             person,
             request_id,
-            AgentVaultOperationDto::Submit { action: changed },
+            WorkerOperation::Submit { action: Box::new(changed) },
         )
         .unwrap();
     let conflict = wait(&worker, person, request_id);
     worker
-        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .request(person, request_id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(conflict.failure, Some(AgentFailure::Conflict));
     assert_eq!(server.join().unwrap().len(), 1);
@@ -582,7 +585,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
@@ -595,7 +598,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             text: "Second durable answer".into(),
         },
     ]);
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "conversation-release-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
@@ -605,18 +608,18 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
         .request(
             person,
             first_id,
-            AgentVaultOperationDto::Submit {
+            WorkerOperation::Submit {
                 action: WorkerAction::ConversationTurn {
-                    request: floe_protocol::AgentConversationTurnRequestDto {
-                        session_id: session.id.to_string(),
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
                         expected_revision: session.revision,
                         text: "Answer first".into(),
                         device_id: "mac-local".into(),
-                        profile: floe_protocol::AppProfileSelectionDto::Auto,
+                        profile: ProfileSelection::Auto,
                         continuation: false,
                         retry_of: None,
                         remote_route: Some(route.clone()),
-                    },
+                    }),
                 },
             },
         )
@@ -630,18 +633,18 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
         .request(
             person,
             second_id,
-            AgentVaultOperationDto::Submit {
+            WorkerOperation::Submit {
                 action: WorkerAction::ConversationTurn {
-                    request: floe_protocol::AgentConversationTurnRequestDto {
-                        session_id: session.id.to_string(),
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
                         expected_revision: first_session.revision,
                         text: "Answer second".into(),
                         device_id: "mac-local".into(),
-                        profile: floe_protocol::AppProfileSelectionDto::Auto,
+                        profile: ProfileSelection::Auto,
                         continuation: false,
                         retry_of: None,
                         remote_route: Some(route),
-                    },
+                    }),
                 },
             },
         )
@@ -653,16 +656,16 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
         .request(
             person,
             first_id,
-            AgentVaultOperationDto::Poll { after_sequence: 0 },
+            WorkerOperation::Poll { after_sequence: 0 },
         )
         .unwrap();
     assert!(retained.done);
     assert_eq!(retained.session.unwrap(), first_session);
     worker
-        .request(person, first_id, AgentVaultOperationDto::Release {})
+        .request(person, first_id, WorkerOperation::Release)
         .unwrap();
     worker
-        .request(person, second_id, AgentVaultOperationDto::Release {})
+        .request(person, second_id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(server.join().unwrap().len(), 2);
 }
@@ -722,13 +725,13 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
     .unwrap();
     let (mut route, entered, release, server) = blocking_answer_server();
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "conversation-concurrency-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
@@ -739,18 +742,18 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(
             person,
             conversation_id,
-            AgentVaultOperationDto::Submit {
+            WorkerOperation::Submit {
                 action: WorkerAction::ConversationTurn {
-                    request: floe_protocol::AgentConversationTurnRequestDto {
-                        session_id: session.id.to_string(),
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
                         expected_revision: session.revision,
                         text: "Wait for the model".into(),
                         device_id: "mac-local".into(),
-                        profile: floe_protocol::AppProfileSelectionDto::Auto,
+                        profile: ProfileSelection::Auto,
                         continuation: false,
                         retry_of: None,
                         remote_route: Some(route),
-                    },
+                    }),
                 },
             },
         )
@@ -774,18 +777,18 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(
             person,
             competing_id,
-            AgentVaultOperationDto::Submit {
+            WorkerOperation::Submit {
                 action: WorkerAction::ConversationTurn {
-                    request: floe_protocol::AgentConversationTurnRequestDto {
-                        session_id: session.id.to_string(),
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
                         expected_revision: session.revision,
                         text: "Compete for the same session".into(),
                         device_id: "mac-local".into(),
-                        profile: floe_protocol::AppProfileSelectionDto::Auto,
+                        profile: ProfileSelection::Auto,
                         continuation: false,
                         retry_of: None,
                         remote_route: Some(competing_route),
-                    },
+                    }),
                 },
             },
         )
@@ -799,8 +802,8 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(
             person,
             preview_id,
-            AgentVaultOperationDto::Submit {
-                action: WorkerAction::CalendarExperts { setup: None },
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::CalendarExperts { setup: None }),
             },
         )
         .unwrap();
@@ -814,7 +817,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(
             person,
             revoke_id,
-            AgentVaultOperationDto::Submit {
+            WorkerOperation::Submit {
                 action: WorkerAction::CalendarAccess {
                     change: Box::new(CalendarAccessConfiguration {
                         instance_id: current.registry.instance_id,
@@ -844,8 +847,8 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(
             person,
             query_id,
-            AgentVaultOperationDto::Submit {
-                action: WorkerAction::Connections,
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::Connections),
             },
         )
         .unwrap();
@@ -858,7 +861,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             .request(
                 person,
                 conversation_id,
-                AgentVaultOperationDto::Poll { after_sequence: 0 },
+                WorkerOperation::Poll { after_sequence: 0 },
             )
             .unwrap()
             .done
@@ -872,23 +875,23 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(
             person,
             competing_id,
-            AgentVaultOperationDto::Release {},
+            WorkerOperation::Release,
         )
         .unwrap();
     worker
-        .request(person, preview_id, AgentVaultOperationDto::Release {})
+        .request(person, preview_id, WorkerOperation::Release)
         .unwrap();
     worker
-        .request(person, revoke_id, AgentVaultOperationDto::Release {})
+        .request(person, revoke_id, WorkerOperation::Release)
         .unwrap();
     worker
-        .request(person, query_id, AgentVaultOperationDto::Release {})
+        .request(person, query_id, WorkerOperation::Release)
         .unwrap();
     worker
         .request(
             person,
             conversation_id,
-            AgentVaultOperationDto::Release {},
+            WorkerOperation::Release,
         )
         .unwrap();
     server.join().unwrap();
@@ -908,24 +911,24 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
     .unwrap();
     let (mut route, entered, release, server) = blocking_answer_server();
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "conversation-cancel-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
     let request_id = Uuid::new_v4();
     let request = floe_protocol::AgentConversationTurnRequestDto {
-        session_id: session.id.to_string(),
+        session_id: session.id,
         expected_revision: session.revision,
         text: "Cancel this run".into(),
         device_id: "mac-local".into(),
-        profile: floe_protocol::AppProfileSelectionDto::Auto,
+        profile: ProfileSelection::Auto,
         continuation: false,
         retry_of: None,
         remote_route: Some(route),
@@ -1040,7 +1043,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         Some(command)
     );
     worker
-        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .request(person, request_id, WorkerOperation::Release)
         .unwrap();
     release.store(true, Ordering::Release);
     server.join().unwrap();
@@ -1074,8 +1077,8 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Get {
-                session_id: session.id.to_string(),
+            operation: ConversationSessionOperation::Get {
+                session_id: session.id,
             },
         },
     );
@@ -1085,7 +1088,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Resume {},
+            operation: ConversationSessionOperation::Resume,
         },
     );
     assert_eq!(resumed.failure, None);
@@ -1093,7 +1096,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "General answer without experts".into(),
     }]);
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "conversation-without-builtins-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
@@ -1102,16 +1105,16 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: floe_protocol::AgentConversationTurnRequestDto {
-                session_id: session.id.to_string(),
+            request: Box::new(ConversationTurnRequest {
+                session_id: session.id,
                 expected_revision: session.revision,
                 text: "Answer without expert setup".into(),
                 device_id: "mac-local".into(),
-                profile: floe_protocol::AppProfileSelectionDto::Auto,
+                profile: ProfileSelection::Auto,
                 continuation: false,
                 retry_of: None,
                 remote_route: Some(route),
-            },
+            }),
         },
     );
     assert_eq!(result.failure, None, "general turn: {result:?}");
@@ -1144,7 +1147,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
@@ -1199,36 +1202,36 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
     let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "Continued once".into(),
     }]);
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "conversation-continuation-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
     let action = WorkerAction::ConversationTurn {
-        request: floe_protocol::AgentConversationTurnRequestDto {
-            session_id: session.id.to_string(),
+        request: Box::new(ConversationTurnRequest {
+            session_id: session.id,
             expected_revision: session.revision + 2,
             text: "Finish after the deadline".into(),
             device_id: "mac-local".into(),
-            profile: floe_protocol::AppProfileSelectionDto::Auto,
+            profile: ProfileSelection::Auto,
             continuation: true,
             retry_of: None,
             remote_route: Some(route),
-        },
+        }),
     };
     let request_id = Uuid::new_v4();
     worker
         .request(
             person,
             request_id,
-            AgentVaultOperationDto::Submit {
-                action: action.clone(),
+            WorkerOperation::Submit {
+                action: Box::new(action.clone()),
             },
         )
         .unwrap();
     let result = wait(&worker, person, request_id);
     worker
-        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .request(person, request_id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(result.failure, None, "continuation: {result:?}");
     let continued = result.session.clone().unwrap();
@@ -1250,12 +1253,12 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         .request(
             person,
             request_id,
-            AgentVaultOperationDto::Submit { action },
+            WorkerOperation::Submit { action: Box::new(action) },
         )
         .unwrap();
     let replay = wait(&worker, person, request_id);
     worker
-        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .request(person, request_id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(replay.failure, None, "continuation replay: {replay:?}");
     assert_eq!(replay.session, result.session);
@@ -1277,13 +1280,13 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         &worker,
         person,
         WorkerAction::ConversationSession {
-            operation: AgentConversationSessionOperationDto::Start {},
+            operation: ConversationSessionOperation::Start,
         },
     )
     .session
     .unwrap();
     let (mut route, server) = commitments_denial_server();
-    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+    route.route.pairing = Some(floe_inference::RoutePairing {
         client_id: "commitments-expert-test".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
@@ -1292,16 +1295,16 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: floe_protocol::AgentConversationTurnRequestDto {
-                session_id: session.id.to_string(),
+            request: Box::new(ConversationTurnRequest {
+                session_id: session.id,
                 expected_revision: session.revision,
                 text: "Review my commitments".into(),
                 device_id: "mac-local".into(),
-                profile: floe_protocol::AppProfileSelectionDto::Auto,
+                profile: ProfileSelection::Auto,
                 continuation: false,
                 retry_of: None,
                 remote_route: Some(route),
-            },
+            }),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -1344,7 +1347,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
 }
 
 fn commitments_denial_server() -> (
-    floe_protocol::AgentRemoteRouteDto,
+    crate::RemoteTurnRoute,
     std::thread::JoinHandle<Vec<String>>,
 ) {
     use std::io::{Read, Write};
@@ -1455,15 +1458,17 @@ fn commitments_denial_server() -> (
         requests
     });
     (
-        floe_protocol::AgentRemoteRouteDto {
-            base_url: format!("http://{address}"),
-            bearer_token: "a".repeat(32),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
+        crate::RemoteTurnRoute {
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "a".repeat(32),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
             calendar_connections: vec![],
-            pairing: None,
         },
         server,
     )
@@ -1472,7 +1477,7 @@ fn commitments_denial_server() -> (
 fn answer_server(
     steps: Vec<floe_conversation::ModelStep>,
 ) -> (
-    floe_protocol::AgentRemoteRouteDto,
+    crate::RemoteTurnRoute,
     std::thread::JoinHandle<Vec<String>>,
 ) {
     use std::io::{Read, Write};
@@ -1543,22 +1548,24 @@ fn answer_server(
         requests
     });
     (
-        floe_protocol::AgentRemoteRouteDto {
-            base_url: format!("http://{address}"),
-            bearer_token: "a".repeat(32),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
+        crate::RemoteTurnRoute {
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "a".repeat(32),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
             calendar_connections: vec![],
-            pairing: None,
         },
         server,
     )
 }
 
 fn blocking_answer_server() -> (
-    floe_protocol::AgentRemoteRouteDto,
+    crate::RemoteTurnRoute,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     std::thread::JoinHandle<()>,
@@ -1628,15 +1635,17 @@ fn blocking_answer_server() -> (
         );
     });
     (
-        floe_protocol::AgentRemoteRouteDto {
-            base_url: format!("http://{address}"),
-            bearer_token: "a".repeat(32),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
+        crate::RemoteTurnRoute {
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "a".repeat(32),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
             calendar_connections: vec![],
-            pairing: None,
         },
         entered,
         release,
@@ -1701,8 +1710,8 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         .request(
             person,
             id,
-            AgentVaultOperationDto::Submit {
-                action: action.clone(),
+            WorkerOperation::Submit {
+                action: Box::new(action.clone()),
             },
         )
         .unwrap();
@@ -1712,7 +1721,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             .request(
                 person,
                 id,
-                AgentVaultOperationDto::Submit {
+                WorkerOperation::Submit {
                     action: action.clone()
                 }
             )
@@ -1723,7 +1732,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         worker.request(
             PersonId::new(),
             id,
-            AgentVaultOperationDto::Poll { after_sequence: 0 }
+            WorkerOperation::Poll { after_sequence: 0 }
         ),
         Err(AgentFailure::NotFound)
     );
@@ -1741,7 +1750,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             .all(|entry| !entry.enabled)
     );
     worker
-        .request(person, id, AgentVaultOperationDto::Release {})
+        .request(person, id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(
         perform(&worker, person, action.clone())
@@ -1840,7 +1849,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         .request(
             person,
             id,
-            AgentVaultOperationDto::Submit {
+            WorkerOperation::Submit {
                 action: WorkerAction::CalendarExperts {
                     setup: Some(Box::new(request.clone())),
                 },
@@ -1854,20 +1863,20 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
     }
     assert!(
         !worker
-            .request(person, id, AgentVaultOperationDto::Stop {})
+            .request(person, id, WorkerOperation::Stop)
             .unwrap()
             .done
     );
     assert_eq!(
-        worker.request(person, id, AgentVaultOperationDto::Release {}),
+        worker.request(person, id, WorkerOperation::Release),
         Err(AgentFailure::Conflict)
     );
     assert_eq!(
         worker.request(
             person,
             Uuid::new_v4(),
-            AgentVaultOperationDto::Submit {
-                action: inspect()
+            WorkerOperation::Submit {
+                action: Box::new(inspect())
             }
         ),
         Err(AgentFailure::Conflict)
@@ -1878,7 +1887,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
     assert_eq!(cancelled.failure, Some(AgentFailure::Cancelled));
     assert!(cancelled.calendar_experts.is_none());
     worker
-        .request(person, id, AgentVaultOperationDto::Release {})
+        .request(person, id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(
         perform(&worker, person, inspect()).calendar_experts.as_ref(),

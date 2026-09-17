@@ -16,8 +16,6 @@ use floe_experts::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigura
 use crate::vault_host::conversation_turn::expert_dispatch::schedule::agent::CalendarAgentTurnRequest;
 
 use super::*;
-use crate::vault_host::tests::proposals::AppEventBuffer;
-use crate::events::AppEventBuffer;
 use floe_conversation::AgentCommand;
 
 struct Access;
@@ -308,8 +306,8 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         invocation_id: evidence.invocation_id,
     };
     let inspect = || WorkerAction::InspectProposal {
-        session_id: session.id.to_string(),
-        invocation_id: evidence.invocation_id.to_string(),
+        session_id: session.id,
+        invocation_id: evidence.invocation_id,
     };
     let worker = Worker::with_core(
         root.clone(),
@@ -325,7 +323,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     );
     perform(&worker, person, WorkerAction::Unlock);
     let absent = perform(&worker, person, inspect());
-    assert_eq!(absent.state, Some(AgentVaultStateDto::Ready));
+    assert_eq!(absent.state, Some(VaultState::Ready));
     assert!(absent.proposal.unwrap().action.is_none());
     assert!(
         runtime
@@ -382,8 +380,8 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         },
     );
     let id = Uuid::new_v4();
-    let submit = AgentVaultOperationDto::Submit {
-        action: inspect(),
+    let submit = WorkerOperation::Submit {
+        action: Box::new(inspect()),
     };
     worker.request(person, id, submit.clone()).unwrap();
     let result = wait(&worker, person, id);
@@ -393,14 +391,14 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     assert_eq!(projection.session_id, session.id.to_string());
     assert!(projection.action.is_none());
     worker
-        .request(person, id, AgentVaultOperationDto::Release {})
+        .request(person, id, WorkerOperation::Release)
         .unwrap();
     let invalid = perform(
         &worker,
         person,
         WorkerAction::InspectProposal {
             session_id: "not-a-uuid".into(),
-            invocation_id: evidence.invocation_id.to_string(),
+            invocation_id: evidence.invocation_id,
         },
     );
     assert_eq!(invalid.failure, Some(AgentFailure::InvalidInput));
@@ -414,7 +412,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         person,
         WorkerAction::Session {
             operation: AgentFixtureOperationDto::Get {
-                session_id: session.id.to_string(),
+                session_id: session.id,
             },
         },
     )
@@ -442,14 +440,14 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
     *keys.0.paused.lock().unwrap() = true;
     let id = Uuid::new_v4();
     let inspect = || WorkerAction::InspectProposal {
-        session_id: Uuid::new_v4().to_string(),
-        invocation_id: Uuid::new_v4().to_string(),
+        session_id: Uuid::new_v4(),
+        invocation_id: Uuid::new_v4(),
     };
     worker
         .request(
             person,
             id,
-            AgentVaultOperationDto::Submit { action: inspect() },
+            WorkerOperation::Submit { action: Box::new(inspect()) },
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -459,13 +457,13 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
     }
     assert!(
         !worker
-            .request(person, id, AgentVaultOperationDto::Stop {})
+            .request(person, id, WorkerOperation::Stop)
             .unwrap()
             .done
     );
     assert_eq!(
         worker
-            .request(person, id, AgentVaultOperationDto::Release {})
+            .request(person, id, WorkerOperation::Release)
             .unwrap_err(),
         AgentFailure::Conflict
     );

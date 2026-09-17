@@ -46,7 +46,9 @@ use uuid::Uuid;
 use crate::local_context::LocalContextHost;
 use floe_provider_adapters::models::{FoundationModelRunner, ServerModelRunner};
 
-mod agent;
+// The legacy calendar turn's own request type is named by the host regressions
+// that still cover that path; the module stays inside the vault host.
+pub(in crate::vault_host) mod agent;
 
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 
@@ -2093,7 +2095,7 @@ use floe_context_contract::CalendarScope;
                                 external: false,
                                 allow_external: false,
                                 recipient: None,
-                                pairing: Some(floe_protocol::AgentRemotePairingDto {
+                                pairing: Some(floe_inference::RoutePairing {
                     client_id: "fixture-client".into(),
                     person_id: person_id.to_string(),
                     device_id: "device-a".into(),
@@ -2160,8 +2162,8 @@ use floe_context_contract::CalendarScope;
     fn schedule_model_uses_current_external_transfer_consent() {
         let (_, _, connection) = active_identity(CalendarProvider::EventKit);
         let mut route = remote_route("calendar.google", &connection);
-        route.external = true;
-        route.allow_external = true;
+        route.route.external = true;
+        route.route.allow_external = true;
 
         assert_eq!(
             external_transfer_consent(ModelPlacement::Remote, Some(&route)),
@@ -2172,7 +2174,7 @@ use floe_context_contract::CalendarScope;
             TransferConsent::NotGranted
         );
 
-        route.allow_external = false;
+        route.route.allow_external = false;
         assert_eq!(
             external_transfer_consent(ModelPlacement::Remote, Some(&route)),
             TransferConsent::NotGranted

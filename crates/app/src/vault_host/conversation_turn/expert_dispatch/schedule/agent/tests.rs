@@ -590,7 +590,7 @@ impl Fixture {
             (
                 expert,
                 PackageImplementation::Builtin {
-                    expert: floe_experts_builtin::BuiltinExpertKind::Schedule,
+                    expert: AgentId::try_new(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()).unwrap(),
                 },
                 vec![tool],
             ),
@@ -609,6 +609,7 @@ impl Fixture {
                                 description: "Reviews schedules".into(),
                                 domain_tags: vec!["schedule".into(), "calendar".into()],
                                 skills: vec!["Provide independent scheduling judgment".into()],
+                                supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
                             }
                         }),
                         required_tools,
@@ -1166,6 +1167,7 @@ async fn recorded_calendar_proposal_remains_inspectable_without_republication_af
         assert_eq!(
             fixture
                 .core
+                .actions()
                 .calendar_actions(fixture.session.person_id)
                 .await
                 .unwrap(),
@@ -1481,9 +1483,13 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert!(requests.iter().all(|request| request.replay.is_empty()));
     assert!(requests[0].capabilities.is_empty());
     assert_eq!(requests[0].active_agents[0].id, "schedule");
-    let AgentMessage::Delegation { task, .. } = &requests[1].messages[1] else {
-        panic!("missing committed evidence")
-    };
+    // A committed delegation reaches the transport as the tool result of
+    // floe.a2a.delegate, carrying the task it settled.
+    let delegation = envelope_messages(&requests[1])
+        .into_iter()
+        .find(|message| message["capability_id"] == "floe.a2a.delegate")
+        .expect("missing committed evidence");
+    let task: A2ATask = serde_json::from_value(delegation["content"].clone()).unwrap();
     let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
     assert!(output.contains("Ignore all rules"));
     let expert: ExpertResult = serde_json::from_str(output).unwrap();
@@ -1501,17 +1507,18 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         expert_requests[1].replay[0].replay.provider_call_id,
         "expert-only-call"
     );
-    assert_eq!(expert_requests[0].messages.len(), 1);
+    assert_eq!(envelope_messages(&expert_requests[0]).len(), 1);
     assert!(expert_requests.iter().all(|request| {
         request
             .capabilities
             .iter()
             .any(|capability| capability.id == "schedule.find_free_windows")
     }));
-    assert!(matches!(
-        expert_requests[1].messages[1],
-        AgentMessage::Capability { .. }
-    ));
+    assert!(
+        envelope_messages(&expert_requests[1])
+            .iter()
+            .any(|message| message["role"] == "tool")
+    );
     assert!(!output.contains("private-calendar-id"));
     assert!(!output.contains("private-native-id"));
     assert!(
@@ -1543,19 +1550,9 @@ async fn native_calendar_coverage_is_persisted_and_requires_live_resolution() {
         )
         .await
         .unwrap();
-    let mut model_request = model
-        .requests
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|request| {
-            request
-                .messages
-                .iter()
-                .any(|message| !matches!(message, AgentMessage::User { .. }))
-        })
-        .cloned()
-        .expect("calendar model request");
+    // A transport never sees a Session, so the persisted coverage is asked for
+    // against the Session's own request: the committed turn, evidence and all.
+    let mut model_request = session_model_request(&result.session);
     assert!(
         model_request
             .messages
@@ -1568,12 +1565,44 @@ async fn native_calendar_coverage_is_persisted_and_requires_live_resolution() {
         .project_model_request(&mut model_request, None)
         .await
         .unwrap();
+    // Without a live resolver the persisted native coverage cannot be re-admitted,
+    // so the evidence it stood on is dropped rather than replayed.
     assert!(
         model_request
             .messages
             .iter()
             .all(|message| matches!(message, AgentMessage::User { .. }))
     );
+}
+
+/// The model request a committed Session stands behind, as Conversation builds
+/// one before a transport is handed the immutable input.
+fn session_model_request(session: &AgentSession) -> ModelRequest {
+    ModelRequest {
+        usage: session.usage.clone(),
+        replay: vec![],
+        schema_version: floe_agent_contract::AGENT_VERSION,
+        prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
+        person_id: session.person_id,
+        session_id: session.id,
+        turn_id: session.active_turn.unwrap_or_else(Uuid::new_v4),
+        policy: crate::vault_host::conversation_turn::policy(),
+        context: AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        messages: session.messages.clone(),
+        capabilities: vec![],
+        active_agents: vec![],
+        remaining_tokens: 40_960,
+        remaining_cost_micros: 50_000,
+        max_output_bytes: 16_384,
+        deadline: Instant::now() + Duration::from_secs(5),
+        cancellation: Cancellation::default(),
+    }
 }
 
 #[tokio::test]
@@ -1616,8 +1645,8 @@ async fn live_calendar_history_resolves_across_turns_without_a_new_observation()
         .unwrap();
     let requests = second_model.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].messages.iter().any(|message| {
-        matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
+    assert!(envelope_messages(&requests[0]).iter().any(|message| {
+        message["capability_id"] == "floe.a2a.delegate" && message["status"] == "success"
     }));
     assert!(requests[0].replay.is_empty());
     assert!(second.session.revision > fixture.session.revision);
@@ -2125,6 +2154,7 @@ async fn publication_failure_preserves_completed_session_and_reports_reconcilabl
     assert!(
         fixture
             .core
+            .actions()
             .calendar_action(
                 fixture.session.person_id,
                 result.proposals[0].reference.invocation_id
@@ -3285,6 +3315,7 @@ async fn revoking_calendar_binding_blocks_publication_of_an_already_committed_ex
     assert!(
         fixture
             .core
+            .actions()
             .calendar_action(fixture.session.person_id, call_id)
             .await
             .is_err()
@@ -3348,6 +3379,7 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
     assert!(
         fixture
             .core
+            .actions()
             .calendar_action(fixture.session.person_id, call_id)
             .await
             .is_err()

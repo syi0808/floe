@@ -2386,6 +2386,7 @@ mod tests {
     // fixtures they stand up are stated on the binding's wire.
     use floe_protocol::*;
     use floe_vault::VaultKey;
+    use crate::AgentFixturePrompt;
     use sha2::{Digest, Sha256};
     use ring::signature::{self, Ed25519KeyPair, KeyPair};
     use serde_json::json;
@@ -2519,7 +2520,7 @@ mod tests {
                         },
                         calendar_connections: vec![],
                     };
-        let producer = RemoteProducerIdentityDto {
+        let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
             execution_owner: Uuid::new_v4().to_string(),
@@ -2531,7 +2532,10 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer },
+            WorkerAction::RemoteAuthorityReviewAndEnroll {
+                route: Box::new(route),
+                producer: Box::new(producer),
+            },
         );
         assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
     }
@@ -2563,7 +2567,7 @@ mod tests {
                         },
                         calendar_connections: vec![],
                     };
-        let producer = RemoteProducerIdentityDto {
+        let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
             execution_owner: Uuid::new_v4().to_string(),
@@ -2575,7 +2579,10 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer },
+            WorkerAction::RemoteAuthorityReviewAndEnroll {
+                route: Box::new(route),
+                producer: Box::new(producer),
+            },
         );
         assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
     }
@@ -2603,7 +2610,7 @@ mod tests {
         let producer_execution_owner = "00000000-0000-4000-8000-000000000002";
         let producer_key_id = "00000000-0000-4000-8000-000000000003";
         let producer_audience = format!("floe.server:{producer_instance}");
-        let producer = RemoteProducerIdentityDto {
+        let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: producer_instance.into(),
             execution_owner: producer_execution_owner.into(),
@@ -2637,7 +2644,10 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer },
+            WorkerAction::RemoteAuthorityReviewAndEnroll {
+                route: Box::new(route),
+                producer: Box::new(producer),
+            },
         );
         let server_result = server.join().unwrap();
         assert!(
@@ -2906,8 +2916,8 @@ mod tests {
             .request(
                 person,
                 id,
-                AgentVaultOperationDto::Submit {
-                    action: WorkerAction::Status {},
+                WorkerOperation::Submit {
+                    action: Box::new(WorkerAction::Status {}),
                 },
             )
             .unwrap();
@@ -2915,7 +2925,7 @@ mod tests {
         assert!(learner.is_cancelled());
         wait(&worker, person, id);
         worker
-            .request(person, id, AgentVaultOperationDto::Release {})
+            .request(person, id, WorkerOperation::Release)
             .unwrap();
     }
 
@@ -2942,7 +2952,7 @@ mod tests {
                 person,
                 WorkerAction::ConversationSession {
                     operation: ConversationSessionOperation::Recover {
-                        session_id: created.id.to_string(),
+                        session_id: created.id,
                         expected_revision: created.revision + 1,
                     },
                 },
@@ -2956,7 +2966,7 @@ mod tests {
                 person,
                 WorkerAction::ConversationSession {
                     operation: ConversationSessionOperation::Recover {
-                        session_id: created.id.to_string(),
+                        session_id: created.id,
                         expected_revision: created.revision,
                     },
                 },
@@ -3045,9 +3055,9 @@ mod tests {
             person,
             WorkerAction::Session {
                 operation: FixtureOperation::Turn {
-                    session_id: session.id.to_string(),
+                    session_id: session.id,
                     expected_revision: 0,
-                    prompt: AgentFixturePromptDto::Today,
+                    prompt: AgentFixturePrompt::Today,
                 },
             },
         );
@@ -3078,7 +3088,7 @@ mod tests {
             .request(
                 person,
                 id,
-                AgentVaultOperationDto::Submit { action: action() },
+                WorkerOperation::Submit { action: Box::new(action()) },
             )
             .unwrap();
         let done = wait(&worker, person, id);
@@ -3087,7 +3097,7 @@ mod tests {
                 .request(
                     person,
                     id,
-                    AgentVaultOperationDto::Submit {
+                    WorkerOperation::Submit {
                         action: action.clone()
                     }
                 )
@@ -3098,7 +3108,7 @@ mod tests {
             worker.request(
                 PersonId::new(),
                 id,
-                AgentVaultOperationDto::Poll { after_sequence: 0 }
+                WorkerOperation::Poll { after_sequence: 0 }
             ),
             Err(AgentFailure::NotFound)
         );
@@ -3114,7 +3124,7 @@ mod tests {
                 .enabled
         );
         worker
-            .request(person, id, AgentVaultOperationDto::Release {})
+            .request(person, id, WorkerOperation::Release)
             .unwrap();
         assert_eq!(
             perform(&worker, person, action).failure,
@@ -3146,9 +3156,9 @@ mod tests {
             person,
             WorkerAction::Session {
                 operation: FixtureOperation::Turn {
-                    session_id: session.id.to_string(),
+                    session_id: session.id,
                     expected_revision: 0,
-                    prompt: AgentFixturePromptDto::Today,
+                    prompt: AgentFixturePrompt::Today,
                 },
             },
         )
@@ -3200,10 +3210,10 @@ mod tests {
         );
         for operation in [
             FixtureOperation::Get {
-                session_id: session.id.to_string(),
+                session_id: session.id,
             },
             FixtureOperation::Recover {
-                session_id: session.id.to_string(),
+                session_id: session.id,
                 expected_revision: session.revision,
             },
         ] {
@@ -3252,9 +3262,9 @@ mod tests {
                 person,
                 WorkerAction::Session {
                     operation: FixtureOperation::Turn {
-                        session_id: session.id.to_string(),
+                        session_id: session.id,
                         expected_revision: 0,
-                        prompt: AgentFixturePromptDto::Today,
+                        prompt: AgentFixturePrompt::Today,
                     },
                 },
             )
@@ -3386,12 +3396,12 @@ mod tests {
         .session
         .unwrap();
         let id = Uuid::new_v4();
-        let operation = AgentVaultOperationDto::Submit {
+        let operation = WorkerOperation::Submit {
             action: WorkerAction::Session {
                 operation: FixtureOperation::Turn {
-                    session_id: session.id.to_string(),
+                    session_id: session.id,
                     expected_revision: session.revision,
-                    prompt: AgentFixturePromptDto::Today,
+                    prompt: AgentFixturePrompt::Today,
                 },
             },
         };
@@ -3413,10 +3423,10 @@ mod tests {
             worker.request(
                 person,
                 Uuid::new_v4(),
-                AgentVaultOperationDto::Submit {
+                WorkerOperation::Submit {
                     action: WorkerAction::Session {
                         operation: FixtureOperation::Recover {
-                            session_id: session.id.to_string(),
+                            session_id: session.id,
                             expected_revision: 1
                         }
                     }
@@ -3425,11 +3435,11 @@ mod tests {
             Err(AgentFailure::Conflict)
         );
         assert_eq!(
-            worker.request(PersonId::new(), id, AgentVaultOperationDto::Stop {}),
+            worker.request(PersonId::new(), id, WorkerOperation::Stop),
             Err(AgentFailure::NotFound)
         );
         worker
-            .request(person, id, AgentVaultOperationDto::Stop {})
+            .request(person, id, WorkerOperation::Stop)
             .unwrap();
         let result = wait(&worker, person, id);
         assert_eq!(
@@ -3443,14 +3453,14 @@ mod tests {
             worker.request(
                 person,
                 id,
-                AgentVaultOperationDto::Poll {
+                WorkerOperation::Poll {
                     after_sequence: result.next_sequence + 1
                 }
             ),
             Err(AgentFailure::InvalidInput)
         );
         worker
-            .request(person, id, AgentVaultOperationDto::Release {})
+            .request(person, id, WorkerOperation::Release)
             .unwrap();
         let resumed = perform(
             &worker,
@@ -3477,8 +3487,8 @@ mod tests {
             .request(
                 person,
                 id,
-                AgentVaultOperationDto::Submit {
-                    action: WorkerAction::Status {},
+                WorkerOperation::Submit {
+                    action: Box::new(WorkerAction::Status {}),
                 },
             )
             .unwrap();
@@ -3493,14 +3503,14 @@ mod tests {
                 .request(
                     person,
                     id,
-                    AgentVaultOperationDto::Poll { after_sequence: 0 }
+                    WorkerOperation::Poll { after_sequence: 0 }
                 )
                 .unwrap()
                 .done
         );
         assert!(
             !worker
-                .request(person, id, AgentVaultOperationDto::Stop {})
+                .request(person, id, WorkerOperation::Stop)
                 .unwrap()
                 .done
         );
