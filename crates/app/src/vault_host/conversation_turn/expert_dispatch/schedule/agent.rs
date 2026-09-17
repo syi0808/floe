@@ -22,7 +22,12 @@ use floe_actions::{
 use floe_agent_contract::{AgentFailure, CancelReason, ModelPlacement, SessionProtection};
 // What the regressions below stand a task and a registry up with.
 #[cfg(test)]
-use floe_agent_contract::{TaskId, TaskSnapshot};
+use floe_agent_contract::{ContextEvidence, DataClass, TaskId, TaskSnapshot};
+#[cfg(test)]
+use floe_context_contract::views::personal::{
+    FEASIBILITY_VIEW_ID, WELLBEING_VIEW_ID, personal_context_evidence, validate_feasibility_view,
+    validate_wellbeing_view,
+};
 #[cfg(test)]
 use floe_experts::RegistrySnapshot;
 use floe_context::{

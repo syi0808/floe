@@ -214,6 +214,8 @@ pub(crate) fn day_error(error: floe_day::DayError) -> CoreError {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use floe_context_contract::CalendarProvider;
+    use floe_day::{CalendarBatch, CalendarRange, SourceRef};
 
     #[tokio::test]
     async fn capture_classification_persists_across_reopen() {

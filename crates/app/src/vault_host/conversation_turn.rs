@@ -42,7 +42,7 @@ use floe_experts_builtin::{
     BuiltinExpertKind, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
 };
 #[cfg(test)]
-use floe_protocol::AgentRemoteCalendarConnectionDto;
+use floe_connections::CalendarConnectionRef;
 use floe_conversation::GovernedSessionStore;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use floe_kernel::PersonId;
@@ -1697,6 +1697,7 @@ mod tests {
     };
 
     use floe_conversation::{AgentMessage, ModelStep};
+    use floe_experts_builtin::prompts::focus_expert_prompt;
 use floe_execution::{Cancellation};
     use floe_vault::{VaultKey, VaultKeyProvider};
     use floe_protocol::{
@@ -2489,15 +2490,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn schedule_delegation_uses_registered_task_runner() {
         let model = Model::new(Some(RemoteTurnRoute {
-            base_url: "http://127.0.0.1:1".into(),
-            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        }))
+                                        route: floe_inference::RemoteRoute {
+                                            base_url: "http://127.0.0.1:1".into(),
+                                            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
+                                            purpose: "everyday_assistance".into(),
+                                            external: false,
+                                            allow_external: false,
+                                            recipient: None,
+                                            pairing: None,
+                                        },
+                                        calendar_connections: vec![],
+                                    }))
         .unwrap();
         let policy = policy(&model, None);
         let context = AgentContext {
@@ -2581,14 +2584,14 @@ use floe_execution::{Cancellation};
         registry
             .install_builtin_experts(
                 person_id,
-                &floe_experts_builtin::BuiltinExpertSetup {
+                &floe_experts::BuiltinExpertSetup {
                     instance_id,
                     expected_revision: 0,
                     setup_id: uuid::Uuid::new_v4(),
-                    sources: vec![floe_experts_builtin::BuiltinSourceBinding {
+                    sources: vec![floe_experts::BuiltinSourceBinding {
                         source,
                         view_handle: uuid::Uuid::new_v4(),
-                        state: floe_experts_builtin::BuiltinSourceState::Available,
+                        state: floe_experts::BuiltinSourceState::Available,
                     }],
                 },
             )
@@ -2672,15 +2675,17 @@ use floe_execution::{Cancellation};
     #[test]
     fn configured_daily_route_takes_priority_over_the_device_model() {
         let model = Model::new(Some(RemoteTurnRoute {
-            base_url: "http://127.0.0.1:8431".into(),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        }))
+                                        route: floe_inference::RemoteRoute {
+                                            base_url: "http://127.0.0.1:8431".into(),
+                                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                                            purpose: "everyday_assistance".into(),
+                                            external: false,
+                                            allow_external: false,
+                                            recipient: None,
+                                            pairing: None,
+                                        },
+                                        calendar_connections: vec![],
+                                    }))
         .unwrap();
         assert!(matches!(model, Model::Server(_)));
     }
@@ -2867,7 +2872,7 @@ use floe_execution::{Cancellation};
             usage: floe_conversation::turn::UsageLedger::default(),
             replay: vec![],
             schema_version: AGENT_VERSION,
-            prompt: floe_experts_builtin::focus_expert_prompt(),
+            prompt: focus_expert_prompt(),
             person_id,
             session_id: session.id,
             turn_id,
@@ -2969,15 +2974,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn remote_expert_requires_an_admitted_reader() {
         let model = Model::new(Some(RemoteTurnRoute {
-            base_url: "http://127.0.0.1:1".into(),
-            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        }))
+                                        route: floe_inference::RemoteRoute {
+                                            base_url: "http://127.0.0.1:1".into(),
+                                            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
+                                            purpose: "everyday_assistance".into(),
+                                            external: false,
+                                            allow_external: false,
+                                            recipient: None,
+                                            pairing: None,
+                                        },
+                                        calendar_connections: vec![],
+                                    }))
         .unwrap();
         let policy = policy(&model, None);
         let context = AgentContext {
@@ -3096,15 +3103,17 @@ use floe_execution::{Cancellation};
     #[test]
     fn server_route_exposes_only_bounded_context_observe_capabilities() {
         let model = Model::new(Some(RemoteTurnRoute {
-            base_url: "http://127.0.0.1:8431".into(),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        }))
+                                        route: floe_inference::RemoteRoute {
+                                            base_url: "http://127.0.0.1:8431".into(),
+                                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                                            purpose: "everyday_assistance".into(),
+                                            external: false,
+                                            allow_external: false,
+                                            recipient: None,
+                                            pairing: None,
+                                        },
+                                        calendar_connections: vec![],
+                                    }))
         .unwrap();
         let policy = policy(&model, None);
         let local_context = LocalContextHost::default();
@@ -3238,15 +3247,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn mail_capability_rejects_authority_escalation_before_io() {
         let model = Model::new(Some(RemoteTurnRoute {
-            base_url: "http://127.0.0.1:1".into(),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        }))
+                                        route: floe_inference::RemoteRoute {
+                                            base_url: "http://127.0.0.1:1".into(),
+                                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                                            purpose: "everyday_assistance".into(),
+                                            external: false,
+                                            allow_external: false,
+                                            recipient: None,
+                                            pairing: None,
+                                        },
+                                        calendar_connections: vec![],
+                                    }))
         .unwrap();
         let policy = policy(&model, None);
         let local_context = LocalContextHost::default();
@@ -3363,15 +3374,17 @@ use floe_execution::{Cancellation};
             .await;
         });
         let route = RemoteTurnRoute {
-            base_url: format!("http://{address}"),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: test_calendar_connections(),
-            pairing: None,
-        };
+                        route: floe_inference::RemoteRoute {
+                            base_url: format!("http://{address}"),
+                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: None,
+                        },
+                        calendar_connections: test_calendar_connections(),
+                    };
         let model = Model::new(Some(route.clone())).unwrap();
         let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let person_id = PersonId::new();
@@ -3553,15 +3566,17 @@ use floe_execution::{Cancellation};
             .await;
         });
         let route = RemoteTurnRoute {
-            base_url: format!("http://{address}"),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: test_calendar_connections(),
-            pairing: None,
-        };
+                        route: floe_inference::RemoteRoute {
+                            base_url: format!("http://{address}"),
+                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: None,
+                        },
+                        calendar_connections: test_calendar_connections(),
+                    };
         let model = Model::new(Some(route.clone())).unwrap();
         let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let policy = policy(&model, Some(&route));
@@ -3782,15 +3797,17 @@ use floe_execution::{Cancellation};
             }
         });
         let route = RemoteTurnRoute {
-            base_url: format!("http://{address}"),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        };
+                        route: floe_inference::RemoteRoute {
+                            base_url: format!("http://{address}"),
+                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: None,
+                        },
+                        calendar_connections: vec![],
+                    };
         let model = Model::new(Some(route.clone())).unwrap();
         let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let person_id = PersonId::new();
@@ -4061,15 +4078,17 @@ use floe_execution::{Cancellation};
             }
         });
         let route = RemoteTurnRoute {
-            base_url: format!("http://{address}"),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: test_calendar_connections(),
-            pairing: None,
-        };
+                        route: floe_inference::RemoteRoute {
+                            base_url: format!("http://{address}"),
+                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: None,
+                        },
+                        calendar_connections: test_calendar_connections(),
+                    };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
         let context = AgentContext {
@@ -4131,15 +4150,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
         let route = RemoteTurnRoute {
-            base_url: "http://127.0.0.1:1".into(),
-            bearer_token: "daily_route_token_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: test_calendar_connections(),
-            pairing: None,
-        };
+                        route: floe_inference::RemoteRoute {
+                            base_url: "http://127.0.0.1:1".into(),
+                            bearer_token: "daily_route_token_that_is_long_enough".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: None,
+                        },
+                        calendar_connections: test_calendar_connections(),
+                    };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
         let context = AgentContext {

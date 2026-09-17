@@ -1939,18 +1939,20 @@ use floe_context_contract::CalendarScope;
         connection: &CalendarConnection,
     ) -> crate::RemoteTurnRoute {
         crate::RemoteTurnRoute {
-            base_url: "http://127.0.0.1:8080/".into(),
-            bearer_token: "a".repeat(32),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![floe_protocol::AgentRemoteCalendarConnectionDto {
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:8080/".into(),
+                bearer_token: "a".repeat(32),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![floe_connections::CalendarConnectionRef {
                 connector_id: connector_id.into(),
                 connection_id: connection.connection_id.clone(),
                 connection_revision: connection.revision,
             }],
-            pairing: None,
         }
     }
 
@@ -2084,19 +2086,21 @@ use floe_context_contract::CalendarScope;
                 )
             });
             let route = crate::RemoteTurnRoute {
-                base_url: format!("http://127.0.0.1:{}/", address.port()),
-                bearer_token: "fixture-token-that-is-long-enough".into(),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                calendar_connections: vec![],
-                pairing: Some(floe_protocol::AgentRemotePairingDto {
+                            route: floe_inference::RemoteRoute {
+                                base_url: format!("http://127.0.0.1:{}/", address.port()),
+                                bearer_token: "fixture-token-that-is-long-enough".into(),
+                                purpose: "everyday_assistance".into(),
+                                external: false,
+                                allow_external: false,
+                                recipient: None,
+                                pairing: Some(floe_protocol::AgentRemotePairingDto {
                     client_id: "fixture-client".into(),
                     person_id: person_id.to_string(),
                     device_id: "device-a".into(),
                 }),
-            };
+                            },
+                            calendar_connections: vec![],
+                        };
             let backend = VaultRemoteCalendarBackend::new(
                 &vault,
                 &core,
@@ -2308,7 +2312,7 @@ use floe_context_contract::CalendarScope;
             route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
             route
                 .calendar_connections
-                .push(floe_protocol::AgentRemoteCalendarConnectionDto {
+                .push(floe_connections::CalendarConnectionRef {
                     connector_id: "calendar.microsoft".into(),
                     connection_id: Uuid::new_v4().to_string(),
                     connection_revision: 12,
@@ -2385,7 +2389,7 @@ use floe_context_contract::CalendarScope;
             );
             let mut multi_provider_route = route.clone();
             multi_provider_route.calendar_connections.push(
-                floe_protocol::AgentRemoteCalendarConnectionDto {
+                floe_connections::CalendarConnectionRef {
                     connector_id: match provider {
                         CalendarProvider::Google => "calendar.microsoft".into(),
                         CalendarProvider::Microsoft => "calendar.google".into(),

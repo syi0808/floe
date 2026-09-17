@@ -1,16 +1,28 @@
 use chrono::TimeZone;
-// FIXME(stage-2): glob import of the retired floe-agent crate
-use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
-use floe_context::CalendarSource;
+use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission};
+use floe_agent_contract::{
+    AgentContext, DataClass, ExpertResult, InferencePolicyDecision, prompts::PromptRole,
+};
+use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
 use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
-use floe_day::CalendarTimelineGrant;
-use floe_experts_builtin::CalendarAgentTurnRequest;
-use floe_day::CalendarRange;
-use floe_context_contract::CalendarProvider;
+use floe_context::CalendarSource;
+use floe_context_contract::{CalendarProvider, ModelPlacement, TransferConsent};
+use floe_conversation::{
+    AgentBudget, AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+};
+use floe_day::{CalendarRange, CalendarTimelineGrant};
+use floe_experts::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget};
+
+use crate::vault_host::conversation_turn::expert_dispatch::schedule::agent::CalendarAgentTurnRequest;
 
 use super::*;
+use crate::vault_host::tests::proposals::AppEventBuffer;
+use crate::events::AppEventBuffer;
+use floe_conversation::AgentCommand;
 
 struct Access;
+
+impl CalendarReadAdmission for Access {}
 
 impl CalendarSource for Access {
     async fn check(
@@ -295,7 +307,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         session_id: session.id,
         invocation_id: evidence.invocation_id,
     };
-    let inspect = WorkerAction::InspectProposal {
+    let inspect = || WorkerAction::InspectProposal {
         session_id: session.id.to_string(),
         invocation_id: evidence.invocation_id.to_string(),
     };
@@ -304,15 +316,15 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         keys.clone(),
         core.clone(),
         Arc::new(LocalContextHost::default()),
-        Arc::new(crate::app_events::AppEventBuffer::default()),
+        Arc::new(crate::events::AppEventBuffer::default()),
     )
     .unwrap();
     assert_eq!(
-        perform(&worker, person, inspect.clone()).failure,
+        perform(&worker, person, inspect()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
     perform(&worker, person, WorkerAction::Unlock);
-    let absent = perform(&worker, person, inspect.clone());
+    let absent = perform(&worker, person, inspect());
     assert_eq!(absent.state, Some(AgentVaultStateDto::Ready));
     assert!(absent.proposal.unwrap().action.is_none());
     assert!(
@@ -371,7 +383,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     );
     let id = Uuid::new_v4();
     let submit = AgentVaultOperationDto::Submit {
-        action: inspect.clone(),
+        action: inspect(),
     };
     worker.request(person, id, submit.clone()).unwrap();
     let result = wait(&worker, person, id);
@@ -394,7 +406,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     assert_eq!(invalid.failure, Some(AgentFailure::InvalidInput));
     assert!(invalid.proposal.is_none());
     assert_eq!(
-        perform(&worker, PersonId::new(), inspect.clone()).failure,
+        perform(&worker, PersonId::new(), inspect()).failure,
         Some(AgentFailure::NotFound)
     );
     let saved = perform(
@@ -414,7 +426,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         Vec::<floe_actions::CalendarAction>::new()
     );
     keys.0.unavailable.store(true, Ordering::Release);
-    let unavailable = perform(&worker, person, inspect);
+    let unavailable = perform(&worker, person, inspect());
     assert_eq!(unavailable.failure, Some(AgentFailure::VaultUnavailable));
     assert!(unavailable.proposal.is_none());
 }
@@ -429,7 +441,7 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
     keys.0.entered.store(false, Ordering::Release);
     *keys.0.paused.lock().unwrap() = true;
     let id = Uuid::new_v4();
-    let inspect = WorkerAction::InspectProposal {
+    let inspect = || WorkerAction::InspectProposal {
         session_id: Uuid::new_v4().to_string(),
         invocation_id: Uuid::new_v4().to_string(),
     };
@@ -437,7 +449,7 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
         .request(
             person,
             id,
-            AgentVaultOperationDto::Submit { action: inspect },
+            AgentVaultOperationDto::Submit { action: inspect() },
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);

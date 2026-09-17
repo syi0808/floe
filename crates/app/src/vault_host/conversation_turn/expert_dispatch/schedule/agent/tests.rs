@@ -11,8 +11,27 @@ use chrono::{Duration as TimeDelta, TimeZone};
 // FIXME(stage-2): glob import of the retired floe-domain crate
 
 use super::*;
-use floe_agent_contract::DataClass;
-use floe_experts::ExpertTaskCompletion as CalendarExpertTaskCompletion;
+
+use floe_access::CalendarScope;
+use floe_actions::{CalendarActionState, ExpertCalendarInspection};
+use floe_agent_contract::{
+    DataClass, PackageKind, PackageRef, TimelineViewRead, prompts::PromptRole,
+};
+use floe_context::{CapacityState, FeasibilityItem, RecoveryState, WeatherImpact};
+use floe_context_contract::TransferConsent;
+use floe_conversation::{AgentEventKind, ModelStep};
+use floe_day::{
+    CalendarBatch, CalendarRange, CalendarRecord, CalendarSelection, EventSchedule, TimedSchedule,
+};
+use floe_experts::{
+    AgentPackage, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup,
+    ExpertMetadata, ExpertTaskCompletion as CalendarExpertTaskCompletion, PackageImplementation,
+    RegistryConfiguration, RegistryConfigurationTarget,
+};
+use floe_inference::{ModelAttemptState, ModelTransport, ModelTransportRequest, ModelTransportResponse};
+use floe_vault::{VaultKey, VaultTaskRecord};
+
+use crate::recover_agent_sample;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2050, 1, 15, 9, 0, 0).unwrap()
@@ -167,6 +186,8 @@ struct NativeObserveAccess {
     rollback_clock: Option<Arc<AtomicI64>>,
 }
 
+impl CalendarReadAdmission for Access {}
+
 impl CalendarSource for Access {
     async fn check(
         &self,
@@ -231,6 +252,8 @@ impl CalendarSource for Access {
         Ok(None)
     }
 }
+
+impl CalendarReadAdmission for NativeObserveAccess {}
 
 impl CalendarSource for NativeObserveAccess {
     async fn check(
@@ -306,8 +329,8 @@ impl CalendarSource for NativeObserveAccess {
 
 struct Model<'effect> {
     steps: Mutex<VecDeque<ModelStep>>,
-    requests: Mutex<Vec<ModelRequest>>,
-    expert_requests: Mutex<Vec<ModelRequest>>,
+    requests: Mutex<Vec<ModelTransportRequest>>,
+    expert_requests: Mutex<Vec<ModelTransportRequest>>,
     placement: ModelPlacement,
     effect: Box<dyn Fn(usize) + Send + Sync + 'effect>,
     pending: bool,
@@ -336,33 +359,51 @@ impl Default for Model<'_> {
     }
 }
 
-impl ModelRunner for Model<'_> {
+/// The messages one attempt was dispatched with, as the envelope carries them.
+///
+/// A transport never sees a Session, so a capability result reaches it as a
+/// `tool` message rather than a typed AgentMessage.
+fn envelope_messages(request: &ModelTransportRequest) -> Vec<&serde_json::Value> {
+    request
+        .envelope
+        .conversation
+        .history
+        .iter()
+        .chain(request.envelope.conversation.current_turn.iter())
+        .collect()
+}
+
+fn tool_results(request: &ModelTransportRequest) -> usize {
+    envelope_messages(request)
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .count()
+}
+
+impl ModelTransport for Model<'_> {
     fn placement(&self) -> ModelPlacement {
         self.placement
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         if request.prompt.role == PromptRole::ScheduleExpert {
-            let has_tool_result = request
-                .messages
-                .iter()
-                .any(|message| matches!(message, AgentMessage::Capability { .. }));
+            let tool_results = tool_results(&request);
+            let has_tool_result = tool_results > 0;
             self.expert_requests.lock().unwrap().push(request.clone());
-            let tool_results = request
-                .messages
-                .iter()
-                .filter(|message| matches!(message, AgentMessage::Capability { .. }))
-                .count();
-            let coverage = request.messages.iter().find_map(|message| match message {
-                AgentMessage::User { text, .. } => serde_json::from_str::<serde_json::Value>(text)
-                    .ok()
+            let coverage = envelope_messages(&request).into_iter().find_map(|message| {
+                (message["role"] == "user")
+                    .then(|| message["content"].as_str())
+                    .flatten()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
                     .map(|task| {
                         (
                             task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
                             task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
                         )
-                    }),
-                _ => None,
+                    })
             });
             let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
                 coverage.ok_or(AgentFailure::InvalidModelOutput)?
@@ -384,8 +425,8 @@ impl ModelRunner for Model<'_> {
                     .to_string(),
                 }
             };
-            return Ok(ModelResponse {
-                replay: (!has_tool_result).then(|| floe_conversation::ProviderReplay {
+            return Ok(ModelTransportResponse {
+                replay: (!has_tool_result).then(|| floe_agent_contract::ProviderReplay {
                     gateway: "http://127.0.0.1:8431".into(),
                     purpose: "everyday_assistance".into(),
                     external: false,
@@ -411,7 +452,7 @@ impl ModelRunner for Model<'_> {
         if self.pending {
             std::future::pending::<()>().await;
         }
-        Ok(ModelResponse {
+        Ok(ModelTransportResponse {
             replay: None,
             schema_version: 1,
             output: vec![
@@ -1589,15 +1630,20 @@ async fn historical_calendar_revocation_during_model_blocks_new_answer_and_prese
         calls: AtomicUsize,
     }
 
-    impl ModelRunner for RevokeHistory<'_> {
+    impl ModelTransport for RevokeHistory<'_> {
         fn placement(&self) -> ModelPlacement {
             ModelPlacement::DeviceLocal
         }
 
-        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        async fn generate(
+            &self,
+            request: ModelTransportRequest,
+        ) -> Result<ModelTransportResponse, AgentFailure> {
             self.calls.fetch_add(1, Ordering::AcqRel);
-            assert!(request.messages.iter().any(|message| {
-                matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
+            // A completed delegation reaches a transport as a successful
+            // `floe.a2a.delegate` tool result, not as a typed Session message.
+            assert!(envelope_messages(&request).iter().any(|message| {
+                message["capability_id"] == "floe.a2a.delegate" && message["status"] == "success"
             }));
             let grant = self
                 .vault
@@ -2432,8 +2478,14 @@ async fn native_lease_reuses_exact_query_payload_after_observation_generation_ch
         remote_processing: false,
     };
     let views =
-        CalendarTimelineViews::new(&fixture.core, &guarded_access, fixture.grant.clone(), now)
-            .unwrap();
+        CalendarTimelineViews::new(
+            &fixture.core.lease_registry,
+            &fixture.core.store,
+            &guarded_access,
+            fixture.grant.clone(),
+            now,
+        )
+        .unwrap();
     let request = || TimelineViewRead {
         person_id: fixture.grant.person_id,
         handle: fixture.grant.handle,
@@ -2468,6 +2520,8 @@ async fn cached_native_view_expiring_during_authorization_is_not_returned() {
         clock: Arc<AtomicI64>,
         advance_to: AtomicI64,
     }
+    impl CalendarReadAdmission for AdvancingAccess {}
+
 
     impl CalendarSource for AdvancingAccess {
         async fn check(
@@ -2510,7 +2564,8 @@ async fn cached_native_view_expiring_during_authorization_is_not_returned() {
         remote_processing: false,
     };
     let views = CalendarTimelineViews::new(
-        &fixture.core,
+        &fixture.core.lease_registry,
+        &fixture.core.store,
         &guarded_access,
         fixture.grant.clone(),
         || DateTime::from_timestamp_millis(clock.load(Ordering::Acquire)).unwrap(),
@@ -2557,7 +2612,8 @@ async fn native_lease_rejects_wall_clock_rollback_during_acquisition() {
         remote_processing: false,
     };
     let views = CalendarTimelineViews::new(
-        &fixture.core,
+        &fixture.core.lease_registry,
+        &fixture.core.store,
         &guarded_access,
         fixture.grant.clone(),
         move || DateTime::from_timestamp_millis(clock_millis.load(Ordering::Acquire)).unwrap(),
@@ -2733,6 +2789,7 @@ async fn consumer_policy_disable_reenable_invalidates_a_pinned_native_read() {
 
 struct RevokingModel<'host> {
     vault: &'host EncryptedAgentVault<Keys>,
+    person: PersonId,
     assignment: Uuid,
     model: Model<'static>,
 }
@@ -2745,6 +2802,7 @@ struct PausingGrantModel<'host> {
 struct ExpandingGrantModel<'host> {
     core: &'host FloeCore,
     vault: &'host EncryptedAgentVault<Keys>,
+    person: PersonId,
     model: Model<'static>,
 }
 
@@ -2754,12 +2812,15 @@ struct UnrelatedRegistryModel<'host> {
     model: Model<'static>,
 }
 
-impl ModelRunner for UnrelatedRegistryModel<'_> {
+impl ModelTransport for UnrelatedRegistryModel<'_> {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         let response = self.model.generate(request).await?;
         let request_count = self.model.requests.lock().unwrap().len();
         if request_count <= 2 {
@@ -2784,13 +2845,16 @@ impl ModelRunner for UnrelatedRegistryModel<'_> {
     }
 }
 
-impl ModelRunner for RevokingModel<'_> {
+impl ModelTransport for RevokingModel<'_> {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        let person = request.person_id;
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
+        let person = self.person;
         let response = self.model.generate(request).await?;
         if self.model.requests.lock().unwrap().len() == 2 {
             let snapshot = self.vault.expert_registry().await?.unwrap();
@@ -2805,12 +2869,15 @@ impl ModelRunner for RevokingModel<'_> {
     }
 }
 
-impl ModelRunner for PausingGrantModel<'_> {
+impl ModelTransport for PausingGrantModel<'_> {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         let response = self.model.generate(request).await?;
         if self.model.expert_requests.lock().unwrap().len() == 2 {
             let overview = self.vault.calendar_expert_overview().await?;
@@ -2836,13 +2903,16 @@ impl ModelRunner for PausingGrantModel<'_> {
     }
 }
 
-impl ModelRunner for ExpandingGrantModel<'_> {
+impl ModelTransport for ExpandingGrantModel<'_> {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        let person_id = request.person_id;
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
+        let person_id = self.person;
         let response = self.model.generate(request).await?;
         if self.model.expert_requests.lock().unwrap().len() == 2 {
             self.core
@@ -2904,6 +2974,7 @@ async fn registry_revocation_during_generation_wins_and_does_not_get_overwritten
     let fixture = Fixture::new().await;
     let model = RevokingModel {
         vault: &fixture.vault,
+        person: fixture.session.person_id,
         assignment: fixture.assignment,
         model: Model::default(),
     };
@@ -2981,6 +3052,7 @@ async fn native_grant_scope_expansion_after_a_successful_read_blocks_second_egre
     let model = ExpandingGrantModel {
         core: &fixture.core,
         vault: &fixture.vault,
+        person: fixture.session.person_id,
         model: Model::default(),
     };
     fixture.configure_model(&model.model);

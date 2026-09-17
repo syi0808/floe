@@ -1,6 +1,8 @@
 use floe_conversation::AgentMessage;
-use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration, RegistryConfiguration, RegistryConfigurationTarget};
-use floe_experts_builtin::CalendarExpertSetup;
+use floe_experts::{
+    CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup, RegistryConfiguration,
+    RegistryConfigurationTarget,
+};
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
@@ -59,7 +61,7 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
         Keys::default(),
         core.clone(),
         Arc::new(LocalContextHost::default()),
-        Arc::new(crate::app_events::AppEventBuffer::default()),
+        Arc::new(crate::events::AppEventBuffer::default()),
     )
     .unwrap();
     assert!(
@@ -67,8 +69,8 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
             .failure
             .is_none()
     );
-    let inspect = WorkerAction::CalendarExperts { setup: None };
-    let empty = perform(&worker, person, inspect.clone())
+    let inspect = || WorkerAction::CalendarExperts { setup: None };
+    let empty = perform(&worker, person, inspect())
         .calendar_experts
         .unwrap();
     let request = CalendarExpertSetup {
@@ -331,7 +333,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         keys.clone(),
         Arc::clone(&core),
         Arc::new(LocalContextHost::default()),
-        Arc::new(crate::app_events::AppEventBuffer::default()),
+        Arc::new(crate::events::AppEventBuffer::default()),
     )
     .unwrap();
     assert_eq!(
@@ -899,7 +901,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
     assert_eq!(
         worker.app_events.read(7, None, None, 16),
-        crate::app_events::EventRead::ResyncRequired { snapshot_cursor: 0 }
+        crate::events::EventRead::ResyncRequired { snapshot_cursor: 0 }
     );
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
@@ -938,13 +940,13 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     assert_eq!(admitted.state, floe_conversation::RunState::Working);
     assert!(matches!(
         worker.app_events.read(7, Some(7), Some(0), 16),
-        crate::app_events::EventRead::Events {
+        crate::events::EventRead::Events {
             next_cursor: 1,
             events
         } if matches!(
             events.as_slice(),
-            [crate::app_events::BufferedEvent {
-                payload: crate::app_events::EventPayload::CommandUpdated { run_id, .. },
+            [crate::events::BufferedEvent {
+                payload: crate::events::EventPayload::CommandUpdated { run_id, .. },
                 ..
             }] if *run_id == admitted.run_id
         )
@@ -1005,13 +1007,13 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     assert_eq!(command.state, floe_conversation::RunState::Cancelled);
     assert!(matches!(
         worker.app_events.read(7, Some(7), Some(1), 16),
-        crate::app_events::EventRead::Events {
+        crate::events::EventRead::Events {
             next_cursor: 2,
             events
         } if matches!(
             events.as_slice(),
-            [crate::app_events::BufferedEvent {
-                payload: crate::app_events::EventPayload::RunUpdated(run),
+            [crate::events::BufferedEvent {
+                payload: crate::events::EventPayload::RunUpdated(run),
                 ..
             }] if run.run_id == admitted.run_id
                 && run.state == floe_conversation::RunState::Cancelled
@@ -1658,14 +1660,14 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
     let person = PersonId::new();
     let keys = Keys::default();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-    let inspect = WorkerAction::CalendarExperts { setup: None };
+    let inspect = || WorkerAction::CalendarExperts { setup: None };
     assert_eq!(
-        perform(&worker, person, inspect.clone()).failure,
+        perform(&worker, person, inspect()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
     assert!(!root.exists());
     perform(&worker, person, WorkerAction::Create);
-    let empty = perform(&worker, person, inspect.clone())
+    let empty = perform(&worker, person, inspect())
         .calendar_experts
         .unwrap();
     assert_eq!(empty.registry.revision, 0);
@@ -1761,7 +1763,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         Some(AgentFailure::Conflict)
     );
     for enabled in [true, false] {
-        let current = perform(&worker, person, inspect.clone())
+        let current = perform(&worker, person, inspect())
             .calendar_experts
             .unwrap();
         let result = perform(
@@ -1782,7 +1784,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         );
         assert!(result.failure.is_none());
     }
-    let before = perform(&worker, person, inspect.clone())
+    let before = perform(&worker, person, inspect())
         .calendar_experts
         .unwrap();
     perform(&worker, person, WorkerAction::Lock);
@@ -1794,16 +1796,16 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         Some(&before)
     );
     assert_eq!(
-        perform(&worker, PersonId::new(), inspect.clone()).failure,
+        perform(&worker, PersonId::new(), inspect()).failure,
         Some(AgentFailure::NotFound)
     );
     keys.0.unavailable.store(true, Ordering::Release);
-    let denied = perform(&worker, person, inspect.clone());
+    let denied = perform(&worker, person, inspect());
     assert_eq!(denied.failure, Some(AgentFailure::VaultUnavailable));
     assert!(denied.calendar_experts.is_none());
     keys.0.unavailable.store(false, Ordering::Release);
     assert_eq!(
-        perform(&worker, person, inspect).failure,
+        perform(&worker, person, inspect()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
 }
@@ -1815,8 +1817,8 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
     let worker = Worker::new(directory.path().join("vaults"), keys.clone()).unwrap();
     let person = PersonId::new();
     perform(&worker, person, WorkerAction::Create);
-    let inspect = WorkerAction::CalendarExperts { setup: None };
-    let empty = perform(&worker, person, inspect.clone())
+    let inspect = || WorkerAction::CalendarExperts { setup: None };
+    let empty = perform(&worker, person, inspect())
         .calendar_experts
         .unwrap();
     let request = CalendarExpertSetup {
@@ -1865,7 +1867,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             person,
             Uuid::new_v4(),
             AgentVaultOperationDto::Submit {
-                action: inspect.clone()
+                action: inspect()
             }
         ),
         Err(AgentFailure::Conflict)
@@ -1879,7 +1881,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         .request(person, id, AgentVaultOperationDto::Release {})
         .unwrap();
     assert_eq!(
-        perform(&worker, person, inspect).calendar_experts.as_ref(),
+        perform(&worker, person, inspect()).calendar_experts.as_ref(),
         Some(&empty)
     );
     let retry = perform(

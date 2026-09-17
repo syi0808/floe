@@ -2508,15 +2508,17 @@ mod tests {
             created.failure
         );
         let route = RemoteTurnRoute {
-            base_url: "http://not-loopback.invalid".into(),
-            bearer_token: "not-a-real-token".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: None,
-        };
+                        route: floe_inference::RemoteRoute {
+                            base_url: "http://not-loopback.invalid".into(),
+                            bearer_token: "not-a-real-token".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: None,
+                        },
+                        calendar_connections: vec![],
+                    };
         let producer = RemoteProducerIdentityDto {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
@@ -2546,19 +2548,21 @@ mod tests {
             created.failure
         );
         let route = RemoteTurnRoute {
-            base_url: "http://not-loopback.invalid".into(),
-            bearer_token: "not-a-real-token".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: Some(AgentRemotePairingDto {
+                        route: floe_inference::RemoteRoute {
+                            base_url: "http://not-loopback.invalid".into(),
+                            bearer_token: "not-a-real-token".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: Some(AgentRemotePairingDto {
                 client_id: "saved-client".into(),
                 person_id: PersonId::new().to_string(),
                 device_id: "saved-device".into(),
             }),
-        };
+                        },
+                        calendar_connections: vec![],
+                    };
         let producer = RemoteProducerIdentityDto {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
@@ -2615,19 +2619,21 @@ mod tests {
             serve_signed_enrollment(listener, producer_key, server_producer, person)
         });
         let route = RemoteTurnRoute {
-            base_url: format!("http://127.0.0.1:{}", address.port()),
-            bearer_token: "secret_token_value_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            recipient: None,
-            calendar_connections: vec![],
-            pairing: Some(AgentRemotePairingDto {
+                        route: floe_inference::RemoteRoute {
+                            base_url: format!("http://127.0.0.1:{}", address.port()),
+                            bearer_token: "secret_token_value_that_is_long_enough".into(),
+                            purpose: "everyday_assistance".into(),
+                            external: false,
+                            allow_external: false,
+                            recipient: None,
+                            pairing: Some(AgentRemotePairingDto {
                 client_id: "client-1".into(),
                 person_id: person.to_string(),
                 device_id: "device-1".into(),
             }),
-        };
+                        },
+                        calendar_connections: vec![],
+                    };
         let result = perform(
             &worker,
             person,
@@ -3057,7 +3063,7 @@ mod tests {
             .iter()
             .find(|assignment| assignment.granted_tool_count == 1)
             .unwrap();
-        let action = WorkerAction::Registry {
+        let action = || WorkerAction::Registry {
             change: Some(RegistryConfiguration {
                 instance_id: before.instance_id,
                 expected_revision: before.revision,
@@ -3072,9 +3078,7 @@ mod tests {
             .request(
                 person,
                 id,
-                AgentVaultOperationDto::Submit {
-                    action: action.clone(),
-                },
+                AgentVaultOperationDto::Submit { action: action() },
             )
             .unwrap();
         let done = wait(&worker, person, id);
