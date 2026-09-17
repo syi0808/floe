@@ -23,7 +23,7 @@ pub use governed_session::{GovernedSessionRepository, GovernedSessionStore};
 pub use history_projection::{HistoryProjection, narrow_by_source_boundary, project_history_into};
 pub use query::{get_command, get_run};
 pub use recovery::project_continuation;
-pub use session::{get_session, resume_session, start_session};
+pub use session::{admitted_session, get_session, resume_session, start_session};
 
 #[cfg(test)]
 mod tests;

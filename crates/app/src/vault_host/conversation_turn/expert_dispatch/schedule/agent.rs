@@ -105,7 +105,6 @@ pub const CALENDAR_EXPERT_SETTLEMENT_OWNER: &str = "floe.builtin.schedule/v1";
 
 /// The Schedule Expert settles through the common Task settlement.
 pub type CalendarExpertSettlement = floe_experts::ExpertSettlement;
-pub type CalendarExpertTaskCompletion = floe_experts::ExpertTaskCompletion;
 
 
 impl FloeCore {

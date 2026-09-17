@@ -1561,7 +1561,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         },
                     )
                     .await?;
-                    conversation_session_view(vault, job.person, receipt).await?
+                    floe_conversation::admitted_session(&***vault, job.person, receipt).await?
                 }
                 ConversationSessionOperation::Resume => {
                     let receipt = floe_conversation::resume_session(
@@ -1571,7 +1571,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         },
                     )
                     .await?;
-                    conversation_session_view(vault, job.person, receipt).await?
+                    floe_conversation::admitted_session(&***vault, job.person, receipt).await?
                 }
                 ConversationSessionOperation::Get { session_id } => {
                     let receipt = floe_conversation::get_session(
@@ -1582,7 +1582,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         },
                     )
                     .await?;
-                    conversation_session_view(vault, job.person, receipt).await?
+                    floe_conversation::admitted_session(&***vault, job.person, receipt).await?
                 }
                 ConversationSessionOperation::Recover {
                     session_id,
@@ -1662,7 +1662,9 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let snapshot = vault.memory_overview_snapshot(100).await?;
+            let snapshot = vault
+                .memory_overview_snapshot(floe_knowledge::MAX_MEMORY_OVERVIEW_ITEMS)
+                .await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
@@ -2095,27 +2097,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
     }
 }
 
-async fn conversation_session_view<Keys: VaultKeyProvider>(
-    vault: &EncryptedAgentVault<Keys>,
-    person_id: PersonId,
-    receipt: floe_conversation::SessionReceipt,
-) -> Result<AgentSession, AgentFailure> {
-    receipt.validate()?;
-    if receipt.principal != person_id.to_string() {
-        return Err(AgentFailure::CapabilityDenied);
-    }
-    let session = vault.load(person_id, receipt.session_id).await?;
-    if session.id != receipt.session_id
-        || session.person_id != person_id
-        || session.revision != receipt.session_revision
-        || session.scope.is_some()
-        || session.data_classes != [floe_agent_contract::DataClass::Personal]
-    {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    Ok(session)
-}
-
 async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
@@ -2182,12 +2163,9 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
                 core.recover_expert_calendar_action(vault, person_id, action_id, &provider)
                     .await?
             } else {
-                let policy = floe_actions::CalendarActionPolicy {
-                    person_id,
-                    provider: stored.provider,
-                    allowed_calendar_ids: vec![stored.calendar_id.clone()],
-                    allow_create: floe_provider_adapters::sources::native_calendar::NativeCalendar::enabled(),
-                };
+                let policy = stored.expert_proposal_policy(
+                    floe_provider_adapters::sources::native_calendar::NativeCalendar::enabled(),
+                );
                 core.execute_expert_calendar_action_with_cancellation(
                     vault,
                     person_id,

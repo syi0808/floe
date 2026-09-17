@@ -76,6 +76,36 @@ pub struct CalendarActionPolicy {
     pub allow_create: bool,
 }
 
+impl CalendarAction {
+    /// That this stored action is one the Person may review as an Expert's
+    /// proposal.
+    ///
+    /// Only an Expert's own proposal, raised for this Person, is a proposal to
+    /// decide on; what the Person did directly is already theirs.
+    pub fn admit_expert_proposal(
+        &self,
+        person_id: PersonId,
+    ) -> Result<(), floe_agent_contract::AgentFailure> {
+        if self.person_id != person_id || self.agent_origin.is_none() || self.direct {
+            return Err(floe_agent_contract::AgentFailure::PolicyDenied);
+        }
+        Ok(())
+    }
+
+    /// The policy this Expert proposal executes under.
+    ///
+    /// A proposal may touch only the calendar it named, on the provider it named
+    /// and for the Person it was raised for.
+    pub fn expert_proposal_policy(&self, provider_can_write: bool) -> CalendarActionPolicy {
+        CalendarActionPolicy {
+            person_id: self.person_id,
+            provider: self.provider,
+            allowed_calendar_ids: vec![self.calendar_id.clone()],
+            allow_create: provider_can_write,
+        }
+    }
+}
+
 impl CalendarActionPolicy {
     /// The policy one action executes under.
     ///
