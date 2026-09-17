@@ -10,12 +10,12 @@ This is the only mutable refactoring progress record. The [active document editi
 | Active plan | **R003**, [PLAN](versions/r003-structure-first/PLAN.md) / [execution](versions/r003-structure-first/EXECUTION_PLAN.md) |
 | Current stage | **A — structural refactoring; not complete** |
 | Execution | One coding agent, one sequential change set; product Manager/Expert A2A retained |
-| Current change | Stage-A ownership placement, third pass: give the Expert its own execution contract, send the personal and remote source bodies to Context and Access, and take the scripted fixture run off App's wire |
-| Runtime changes in this refresh | None intended. The Expert model contract, the registry admission and settlement, the transcript projection, the four personal reads and the remote view review are the same rules in a different crate. Two things are now stated structurally rather than checked at runtime, with the same outcome: an Expert's step type has no delegation variant (the binding refuses one, where the Expert used to), and an Expert invocation no longer carries the turn ledger (the model port does). App wire schema remains 2 |
-| Contract validation in this refresh | `cargo check --workspace` clean; 231 unit tests pass across twenty crates, including `floe-provider-adapters` (40), `floe-context` (39), `floe-conversation` (26), `floe-execution` (24), `floe-knowledge` (21), `floe-access` (15); `floe-experts-builtin` passes 69 with its integration targets and `floe-protocol` 25 including `--test app_wire_v2`; `python3 tools/architecture/check_boundaries.py .` reports 18 errors, down from 26; every package's test targets build at least as well as before this refresh, package for package (floe-app 157 -> 152 errors, floe-ffi unchanged at 36, floe-experts-builtin still 0); `git diff --check` passes |
+| Current change | Stage-A ownership placement, fourth pass: fix the grant a feasibility read runs under, send the remote read and both dependency re-validation paths to their owners, take the vault request off App's wire, and correct the contract-reference policy |
+| Runtime changes in this refresh | One intended, and it is a fix: a feasibility read now runs its whole flow against the single grant it selected, where the previous refresh's shared flow selected the grant a second time and compared only the second against the third. A Person re-reviewing mid-read could leave one grant's query authorized under another's. Everything else — the two dependency re-validation paths, the remote read's judgments and provenance, the vault request envelope — is the same rule in a different crate. App wire schema remains 2 |
+| Contract validation in this refresh | `cargo check --workspace` clean; 232 unit tests pass across twenty crates, including `floe-provider-adapters` (40), `floe-context` (40), `floe-conversation` (26), `floe-execution` (24), `floe-knowledge` (21), `floe-access` (15); `floe-experts-builtin` passes 69 with its integration targets and `floe-protocol` 25 including `--test app_wire_v2`; `python3 tools/architecture/check_boundaries.py .` reports 12 errors, down from 18, four of them from the v0.3 policy correction; every package's test targets build as well as before this refresh, package for package; `git diff --check` passes. `tools/architecture/test_check_boundaries.py` has one failing case, unchanged: it asserts the real repository is already clean |
 | Product validation in this refresh | `not_run` |
 | Latest recorded app observation | Normal macOS debug app ended in VaultUnavailable before route selection; cause not confirmed; unchanged by this refresh |
-| Next code task | R003 07: split `AgentVaultActionDto` so the conversation turn request, the remote route and the native acquisition requests stop being wire types, which is the whole of App's remaining reach into floe-protocol — first file `crates/bindings/protocol/src/dto/agent.rs`. Restoring the broken integration targets is not this stage's work and must not precede it |
+| Next code task | R003 07: split `AgentVaultActionDto` and `LocalContextOperationDto` so the vault worker's actions and the native acquisition callbacks stop being wire types. That is the whole of App's and the provider adapters' remaining reach into floe-protocol, and the native driver's final placement depends on it — first file `crates/bindings/protocol/src/dto/agent.rs`. Restoring the broken integration targets is not this stage's work and must not precede it |
 
 The SHA is a fixed review anchor. A later implementation session must inspect its actual HEAD and dirty diff. Document publication is not completion of the contract work.
 
@@ -261,6 +261,70 @@ This entry records all three.
   the integration targets in floe-connections, floe-day, floe-context,
   floe-actions, floe-experts and floe-ffi, still do not build; this refresh
   broke none of them further and floe-app's is five errors better.
+
+### R003 stage-A ownership placement, fourth pass
+
+Review of the third pass closed three items — the Expert execution boundary,
+the personal source reads and the fixture wire — and found one regression the
+consolidation had introduced, plus the remote and transport bodies still in App.
+
+- **A feasibility read runs under one grant.** Folding the four personal reads
+  into one flow lost a comparison: the read asked one grant what query it
+  admits, the shared flow selected the grant again for the device subject, and
+  only the second and third selections were compared. A Person re-reviewing in
+  between left one grant's query authorized under another's. The grant is chosen
+  once now, and the query, the reviewed subject and the after-the-read check all
+  ask that grant. The regression swaps the grant between reads and expects a
+  refusal; without the fix the read gets past the grant check.
+- **Dependency re-validation.** Whether a stored personal dependency still
+  describes a read this host made, and whether the Person's grant still admits
+  it, are floe-context's — the same place the reads are, and what a later turn
+  asks. The driver port grows the two observations it reads back and an
+  attention acquisition that asks only which subject would answer. The remote
+  half splits the same way: Access answers whether the dependency is live,
+  whether the grant still admits it, whether the producer and recipient are
+  still the ones approved, and whether the binding is still the one it names;
+  Context reads back which view and connection a resource handle names.
+- **The remote read.** Access admits the signed descriptor against the grant and
+  the binding against the selected grant; Context composes the dependency; and
+  `ServerSourceClient::read_admitted_view` builds the admission the paired
+  server checks, which is the transport's shape rather than its caller's. App
+  selects the grant, verifies the descriptor through the vault, asks the
+  provider and hands the answer on.
+- **The vault request.** `VaultBridge::request` took a DTO, checked the schema
+  version, parsed the identifiers and decided what a failure looks like on a
+  wire. It takes a Person, a request id and the worker's operation now and
+  reports the stage a failure reached; the binding reads the envelope. The
+  operation payload is still the worker's own envelope, which R003 07 replaces.
+- **Policy, v0.3.** Naming a pure contract crate directly is not a violation for
+  a crate whose own API or stored records carry those values: the composition
+  root, the vault adapter and Actions. Routing any of them through a module
+  re-export would hide the dependency rather than remove it. It does not extend
+  to floe-protocol, which carries a wire, nor to any execution or storage
+  implementation. Actions also stopped naming floe-experts — the Expert result
+  and package it records are contract values now — and Experts' agent-runtime
+  dependency is a dev one, which is all its regressions ever needed.
+- **Checks:** `cargo check --workspace` clean; 232 unit tests across twenty
+  crates; floe-experts-builtin 69 and floe-protocol 25 with their integration
+  targets. `git diff --check` passes.
+- **Behavior:** `not_run`; no live macOS app, Keychain/Vault diagnosis, OAuth,
+  provider or model behavior was exercised. The feasibility fix is a code-level
+  correction; no reproduction of the bypass in a running app was attempted.
+- **Boundary checker, 18 -> 12, and all twelve are real.** App and the provider
+  adapters reach floe-protocol for the vault worker and native acquisition
+  envelopes and the remote route; the provider adapters reach floe-vault,
+  floe-conversation and floe-knowledge; floe-vault reaches floe-context for the
+  coverage projection it drives inside the governed store; and Access,
+  Connections, Experts, Conversation and Protocol reach floe-day. None of these
+  is a contract reference and none is answered by the v0.3 note.
+- **Unfinished.** `LocalContextStore` is still App's and still speaks
+  `LocalContext*Dto`: the native driver's final placement waits on that split,
+  as does App's last reach into floe-protocol. The coverage projection the vault
+  drives is a Context use case with the vault as its repository, and is the one
+  remaining case of an adapter running an owner's flow. floe-app's and
+  floe-vault's test targets, and the integration targets in floe-connections,
+  floe-day, floe-context, floe-actions, floe-experts and floe-ffi, still do not
+  build; this refresh broke none of them further.
 
 [Full ledger through 89452eb](history/migration-ledger-through-89452eb.md) preserves the original inventory/P/T/code/test records. [R002 snapshot](versions/r002-sequential/MIGRATION_SNAPSHOT.md) preserves the previous concise current ledger without changes. Both are historical, not competing mutable records.
 
