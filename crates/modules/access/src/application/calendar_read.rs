@@ -167,9 +167,9 @@ pub trait CalendarReadAccess: Sync {
 ///
 /// Access does not know which Expert's view this is; it only checks that the
 /// scope and the dependency still match what was admitted.
-pub fn admission_matches<View: serde::Serialize>(
+pub fn admission_matches(
     admission: &CalendarReadAccessAdmission,
-    view: &floe_context::SourceView<View>,
+    view: &impl floe_context_contract::HeldGrant,
 ) -> bool {
     admission.scope == *view.scope() && admission_matches_dependency(admission, view.dependency())
 }

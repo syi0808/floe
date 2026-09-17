@@ -16,6 +16,7 @@ pub mod application {
 
 pub mod ports {
     pub mod archive_reader;
+    pub mod personal_source;
     pub mod evidence_reader;
     pub mod source_reader;
 }

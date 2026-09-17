@@ -4,7 +4,7 @@
 //! confirmed memory, tasks and calendars — and how it composes them. Acquiring
 //! each view stays behind the host port.
 
-use floe_context_contract::AuthorizedRead;
+use floe_context_contract::{AuthorizedRead, HeldGrant};
 use floe_agent_contract::{AgentFailure, ContextSource};
 use floe_agent_contract::AGENT_VERSION;
 

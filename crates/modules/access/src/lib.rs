@@ -3,10 +3,13 @@ mod data_access_grant;
 pub mod ports;
 
 pub use application::{
-    AccessGrantMutation, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
-    ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, ReplayRequest, ReplayTrust,
-    active_read_grant, active_resource_grant, admit_release, admit_replay, apply_grant_mutation, authorize_grant,
-    consume_release, create_grant, grant_unchanged, subject_unchanged,
+    AccessGrantMutation, FeasibilityGrantQuery, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
+    ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
+    RemoteViewApproval, RemoteViewGrantReview, RemoteViewSourceReference, ReplayRequest,
+    ReplayTrust, active_read_grant, active_resource_grant, admit_release, admit_replay,
+    apply_grant_mutation, authorize_grant, consume_release, create_grant, grant_unchanged,
+    matches_review, producer_is_pinned, remote_view_scope, remote_view_source,
+    review_remote_view_grant, source_matches_producer, subject_unchanged,
     valid_subject_fingerprint, validate_grant_dependency, validate_read_authority,
     validate_read_continuity,
 };

@@ -1,6 +1,10 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_agent_contract::AgentFailure;
-use floe_access::{GrantState};
+use floe_access::GrantState;
+
+/// The remote authority values this vault stores. Who a producer is and what a
+/// signed source names are Access's; this module holds and signs the records.
+pub use floe_access::{RemoteProducerIdentity, RemoteViewSourceReference};
 use floe_context_contract::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 use ring::{
     aead, hkdf,
@@ -22,18 +26,6 @@ const MAX_PRODUCER_PROOF_BYTES: usize = 4 * 1024;
 const OWNER_WRAP_CONTEXT: &[u8] = b"floe.remote.owner-key.wrap.v1\0";
 const PRODUCER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.producer.v1\0";
 const OWNER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.authorization.v1\0";
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteProducerIdentity {
-    pub schema_version: u32,
-    pub instance_id: String,
-    pub execution_owner: String,
-    pub audience: String,
-    pub key_id: String,
-    pub public_key: String,
-    pub fingerprint: String,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -96,21 +88,6 @@ pub struct RemoteCalendarSourceReference {
     pub provider_identity: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteViewSourceReference {
-    pub view_id: String,
-    pub person_id: String,
-    pub client_id: String,
-    pub device_id: String,
-    pub audience: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub connection_revision: u64,
-    pub execution_owner: String,
-    pub source_authority: SourceAuthority,
-    pub resource: String,
-    pub provider_identity: String,
-}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

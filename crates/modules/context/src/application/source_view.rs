@@ -446,12 +446,19 @@ mod tests {
     }
 }
 
-/// A held source read, as any reader outside Context sees it.
-impl floe_context_contract::AuthorizedRead for SourceView<serde_json::Value> {
+/// What any held read was admitted under, whatever it carries.
+impl<Payload: Serialize> floe_context_contract::HeldGrant for SourceView<Payload> {
+    fn scope(&self) -> &GrantScope {
+        &self.scope
+    }
+
     fn dependency(&self) -> &ContextDependency {
         &self.dependency
     }
+}
 
+/// A held source read, as any reader outside Context sees it.
+impl floe_context_contract::AuthorizedRead for SourceView<serde_json::Value> {
     fn payload(&self) -> &serde_json::Value {
         &self.payload
     }

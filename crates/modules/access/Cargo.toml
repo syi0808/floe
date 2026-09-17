@@ -8,7 +8,6 @@ rust-version.workspace = true
 [dependencies]
 chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }
-floe-context = { path = "../context" }
 floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-kernel = { path = "../../contracts/kernel" }
@@ -18,3 +17,8 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# The lease registry is Context's; the regressions here check that an
+# admission and a real lease agree.
+floe-context = { path = "../context" }

@@ -878,6 +878,7 @@ name = "floe-context"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-access",
  "floe-agent-contract",
  "floe-connections",
  "floe-context-contract",

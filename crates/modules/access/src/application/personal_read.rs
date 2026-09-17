@@ -13,6 +13,7 @@ use floe_context_contract::{
     ProcessingRestriction,
 };
 use floe_kernel::AgentFailure;
+use serde::{Deserialize, Serialize};
 
 use crate::{DataAccessGrant, GrantState};
 
@@ -333,5 +334,53 @@ mod tests {
             ),
             Err(AgentFailure::AccessReviewRequired)
         );
+    }
+}
+
+/// The query one feasibility grant admits.
+///
+/// The Person reviewed a specific event, at a specific destination, in a
+/// specific window. A read that asks for anything else is not the one they
+/// granted.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FeasibilityGrantQuery {
+    pub event_handle: String,
+    pub evidence_handles: Vec<String>,
+    pub destination_latitude: f64,
+    pub destination_longitude: f64,
+    pub event_start_unix_ms: i64,
+    pub event_end_unix_ms: i64,
+    pub travel_mode: String,
+}
+
+impl FeasibilityGrantQuery {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.event_handle.is_empty()
+            || self.event_handle.len() > 128
+            || self.event_handle.chars().any(char::is_whitespace)
+            || self.evidence_handles.is_empty()
+            || self.evidence_handles.len() > 8
+            || self
+                .evidence_handles
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || self.evidence_handles.iter().any(|handle| {
+                handle.is_empty() || handle.len() > 128 || handle.chars().any(char::is_whitespace)
+            })
+            || !self.destination_latitude.is_finite()
+            || !(-90.0..=90.0).contains(&self.destination_latitude)
+            || !self.destination_longitude.is_finite()
+            || !(-180.0..=180.0).contains(&self.destination_longitude)
+            || self.event_start_unix_ms < 0
+            || self.event_end_unix_ms <= self.event_start_unix_ms
+            || self.event_end_unix_ms - self.event_start_unix_ms > 86_400_000
+            || !matches!(
+                self.travel_mode.as_str(),
+                "automobile" | "transit" | "walking"
+            )
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
     }
 }

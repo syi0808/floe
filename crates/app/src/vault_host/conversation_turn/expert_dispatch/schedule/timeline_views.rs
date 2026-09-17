@@ -251,7 +251,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             let Some(admission) = admission else {
                 return Err(AgentFailure::StaleContext);
             };
-            if !admission_matches(admission, lease) {
+            if !admission_matches(admission, lease.as_ref()) {
                 return Err(AgentFailure::StaleContext);
             }
         }
@@ -571,7 +571,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             let Some(admission) = before.admission.as_ref() else {
                 return Err(AgentFailure::StaleContext);
             };
-            if admission_matches(admission, &lease) {
+            if admission_matches(admission, lease.as_ref()) {
                 if !lease.is_fresh() || lease.dependency().expires_at() <= (self.clock)() {
                     return Err(AgentFailure::StaleContext);
                 }

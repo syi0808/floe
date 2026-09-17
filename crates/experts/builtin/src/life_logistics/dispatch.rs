@@ -1,6 +1,6 @@
 //! The Life Logistics Expert's own execution.
 
-use floe_context_contract::AuthorizedRead;
+use floe_context_contract::{AuthorizedRead, HeldGrant};
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
 

@@ -8,7 +8,11 @@ use floe_context::{
     remote_view_resource, validate_remote_view, validate_remote_view_query,
 };
 use floe_vault::{EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, RemoteCalendarAuthorizationExpectation, RemoteProducerIdentity, RemoteViewSourceReference, VaultKeyProvider};
-use floe_access::{DataAccessGrant, GrantState, active_resource_grant};
+use floe_access::{
+    DataAccessGrant, GrantState, RemoteViewApproval, RemoteViewGrantReview, active_resource_grant,
+    matches_review, producer_is_pinned, remote_view_scope, remote_view_source,
+    review_remote_view_grant, source_matches_producer,
+};
 use floe_context_contract::{ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope, ProcessingRestriction, ResourceHandle};
 
 const ASSISTANT_PURPOSE: GrantPurpose = GrantPurpose::Assistant;
@@ -63,19 +67,18 @@ pub(crate) async fn preview_remote_view_grant<Keys: VaultKeyProvider>(
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
     let client = floe_provider_adapters::control::RemoteAuthorizationClient::new(route)?;
     let producer = client.producer_identity(deadline, cancellation).await?;
-    let pinned = vault.remote_pinned_producer().await?;
-    let observed = RemoteProducerIdentity {
-        schema_version: producer.schema_version,
-        instance_id: producer.instance_id.clone(),
-        execution_owner: producer.execution_owner.clone(),
-        audience: producer.audience.clone(),
-        key_id: producer.key_id.clone(),
-        public_key: producer.public_key.clone(),
-        fingerprint: producer.fingerprint.clone(),
-    };
-    if pinned != observed {
-        return Err(AgentFailure::PolicyDenied);
-    }
+    producer_is_pinned(
+        &vault.remote_pinned_producer().await?,
+        &RemoteProducerIdentity {
+            schema_version: producer.schema_version,
+            instance_id: producer.instance_id.clone(),
+            execution_owner: producer.execution_owner.clone(),
+            audience: producer.audience.clone(),
+            key_id: producer.key_id.clone(),
+            public_key: producer.public_key.clone(),
+            fingerprint: producer.fingerprint.clone(),
+        },
+    )?;
     let preview = client
         .view_source_preview(
             view_id,
@@ -99,12 +102,7 @@ pub(crate) async fn preview_remote_view_grant<Keys: VaultKeyProvider>(
             resource,
         )
         .await?;
-    if reference.execution_owner != producer.execution_owner
-        || reference.audience != producer.audience
-        || reference.connection_revision != preview.connection_revision
-    {
-        return Err(AgentFailure::PolicyDenied);
-    }
+    source_matches_producer(&reference, &observed_producer(&producer), preview.connection_revision)?;
     let _ = consumer;
     Ok(RemoteViewGrantPreview {
         reference,
@@ -144,51 +142,40 @@ pub(crate) async fn review_and_activate_remote_view_grant<Keys: VaultKeyProvider
         cancellation,
     )
     .await?;
-    let producer = &preview.producer;
-    if producer.fingerprint != expected_producer_fingerprint {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    if preview.reference.source_authority != expected_source_authority
-        || preview.connection_revision != expected_connection_revision
-        || preview.reference.provider_identity != expected_provider_identity
-        || preview.producer.audience != expected_recipient
-    {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let category = remote_view_data_category(view_id);
-    let scope = GrantScope::try_new(
-        vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
-        vec![category.clone()],
-        vec![GrantOperation::Read],
-        vec![ASSISTANT_PURPOSE],
-        vec![consumer],
-        ProcessingRestriction::ApprovedRecipient {
-            recipient: preview.producer.audience.clone(),
-            categories: vec![category],
+    matches_review(
+        &RemoteViewApproval {
+            producer_fingerprint: expected_producer_fingerprint,
+            source_authority: expected_source_authority,
+            connection_revision: expected_connection_revision,
+            provider_identity: expected_provider_identity,
+            recipient: expected_recipient,
         },
-    )
-    .map_err(|_| AgentFailure::InvalidInput)?;
-    let source = reference_to_source(&preview.reference)?;
+        &preview.reference,
+        &observed_producer(&preview.producer),
+        preview.connection_revision,
+    )?;
+    let scope = remote_view_scope(
+        resource,
+        remote_view_data_category(view_id),
+        GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?,
+        preview.producer.audience.clone(),
+    )?;
+    let source = remote_view_source(&preview.reference)?;
     let existing = vault
         .find_remote_view_grant(view_id, &source, consumer_name)
         .await?;
-    if let Some(grant) = existing.as_ref() {
-        if grant.state() == GrantState::Active {
-            if grant.scope() == &scope {
-                return Ok(grant.clone());
-            }
-            return Err(AgentFailure::PolicyDenied);
+    match review_remote_view_grant(existing.as_ref(), &scope)? {
+        RemoteViewGrantReview::AlreadyGranted => {
+            existing.ok_or(AgentFailure::PolicyDenied)
+        }
+        RemoteViewGrantReview::Activate { grant_id, expected } => {
+            vault
+                .review_and_activate_remote_view_grant(
+                    view_id, grant_id, expected, source, scope, None,
+                )
+                .await
         }
     }
-    let expected = existing.as_ref().map(|grant| grant.authority());
-    let grant_id = existing
-        .as_ref()
-        .map(|grant| grant.id())
-        .unwrap_or_else(floe_context_contract::GrantId::new);
-    vault
-        .review_and_activate_remote_view_grant(view_id, grant_id, expected, source, scope, None)
-        .await
 }
 
 impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_, Keys> {
@@ -355,7 +342,7 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
             self.person_id,
             binding.grant.id(),
             binding.grant.authority(),
-            reference_to_source(&reference)?,
+            remote_view_source(&reference)?,
             vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
             binding.grant.scope().categories().to_vec(),
             GrantOperation::Read,
@@ -505,27 +492,6 @@ fn check_window(
     Ok(())
 }
 
-fn reference_to_source(
-    reference: &RemoteViewSourceReference,
-) -> Result<floe_context_contract::GrantSourceBinding, AgentFailure> {
-    floe_context_contract::GrantSourceBinding::try_new(
-        floe_kernel::PersonId(
-            reference
-                .person_id
-                .parse()
-                .map_err(|_| AgentFailure::InvalidInput)?,
-        ),
-        floe_context_contract::ConnectionId::try_new(reference.connection_id.clone())
-            .map_err(|_| AgentFailure::InvalidInput)?,
-        floe_context_contract::ConnectorId::try_new(reference.connector_id.clone())
-            .map_err(|_| AgentFailure::InvalidInput)?,
-        floe_context_contract::ExecutionOwnerId::try_new(reference.execution_owner.clone())
-            .map_err(|_| AgentFailure::InvalidInput)?,
-        reference.source_authority,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)
-}
-
 /// The resource handle a grant must name to admit this view from this source.
 fn remote_view_grant_resource(
     view_id: &str,
@@ -534,4 +500,19 @@ fn remote_view_grant_resource(
     (is_remote_view(view_id)
         && remote_view_connector_admissible(view_id, source.connector().as_str()))
     .then(|| remote_view_resource(view_id, source.connection_id().as_str()))
+}
+
+/// The producer identity the control client observed, as Access states it.
+fn observed_producer(
+    producer: &floe_provider_adapters::control::authorization::ProducerIdentityResponse,
+) -> RemoteProducerIdentity {
+    RemoteProducerIdentity {
+        schema_version: producer.schema_version,
+        instance_id: producer.instance_id.clone(),
+        execution_owner: producer.execution_owner.clone(),
+        audience: producer.audience.clone(),
+        key_id: producer.key_id.clone(),
+        public_key: producer.public_key.clone(),
+        fingerprint: producer.fingerprint.clone(),
+    }
 }
