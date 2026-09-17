@@ -10,7 +10,7 @@ chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }
 floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
-floe-experts = { path = "../experts" }
+floe-agent-contract = { path = "../../contracts/agent" }
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 sha2.workspace = true

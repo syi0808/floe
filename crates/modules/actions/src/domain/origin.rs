@@ -1,6 +1,6 @@
 use floe_context_contract::DataClass;
 use floe_day::{CalendarProvider, PersonId};
-use floe_experts::{PackageKind, PackageRef};
+use floe_agent_contract::{PackageKind, PackageRef};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
