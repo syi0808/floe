@@ -10,7 +10,7 @@ use floe_app::{
     CalendarProposalInspection, CalendarSubjectPreview, CalendarSubjectRequest,
     ContactsAccessChange, ContactsAccessConfiguration, ConversationSessionOperation,
     ConversationTurnRequest, FeasibilityGrantQuery, FixtureOperation, GrantState,
-    MemoryReviewDecision, MemoryReviewOverview, PairingIssuer, PairingStatus,
+    MemoryReviewDecision, MemoryReviewResult, PairingIssuer, PairingStatus,
     PersonalAccessChange, PersonalAccessConfiguration, PersonId, ProcessingRestriction,
     RemoteCalendarGrantPreview, RemoteEnrollmentStatus, RemoteOwnerPublicKey,
     RemotePairingChallenge, RemoteProducerIdentity, RemoteTurnRoute, VaultState, WorkerAction,
@@ -760,7 +760,7 @@ fn proposal_dto(proposal: CalendarProposalInspection) -> AgentProposalInspection
 }
 
 fn memory_review_dto(
-    review: MemoryReviewOverview,
+    review: MemoryReviewResult,
 ) -> Result<AgentMemoryReviewOverviewDto, AgentFailure> {
     Ok(AgentMemoryReviewOverviewDto {
         schema_version: PROTOCOL_VERSION,

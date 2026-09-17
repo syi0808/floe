@@ -6,7 +6,7 @@ pub mod ports {
 }
 pub use application::learner::validate_learner_input;
 pub use ports::evidence::EvidenceReader;
-pub use ports::repository::{LearnerJobRepository, MemoryContextReader};
+pub use ports::repository::{LearnerJobRepository, MemoryContextReader, MemoryReviewRepository};
 pub use application::learner_service::LearnerService;
 pub use application::learner_scheduling::{LearnerLease, LearnerScheduling};
 pub mod application {
@@ -56,6 +56,7 @@ pub use application::playbooks::{
     PlaybookIndexEntry, PlaybookRef, PlaybookRegistry, PlaybookSession,
 };
 pub use application::review::{
-    ReviewAdmission, ReviewPlan, plan_review, validate_approval_candidate,
+    MemoryReviewDecision, MemoryReviewResult, ReviewAdmission, ReviewPlan, plan_review,
+    review_memory, validate_approval_candidate,
     validate_memory_review_candidate, validate_review_actor, validate_review_candidate,
 };

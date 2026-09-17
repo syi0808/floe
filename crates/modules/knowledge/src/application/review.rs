@@ -4,6 +4,59 @@ use uuid::Uuid;
 
 use crate::{EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState};
 
+/// One decision the Person made about a learned memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryReviewDecision {
+    pub candidate_id: Uuid,
+    pub kind: KnowledgeDecisionKind,
+}
+
+/// What the Person is shown about the memories they have under review.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryReviewResult {
+    pub snapshot: crate::MemoryReviewSnapshot,
+    pub decision: Option<KnowledgeDecisionResult>,
+}
+
+/// Show the Person their memories under review, and record one decision.
+///
+/// A decision counts only on a candidate that is still pending, and only under
+/// the Person's own hand: nothing else may approve what was learned about them.
+/// The snapshot is taken again afterwards so that what they are shown is the
+/// state their decision left behind.
+pub async fn review_memory(
+    repository: &impl crate::ports::repository::MemoryReviewRepository,
+    decision: Option<MemoryReviewDecision>,
+    decided_at: DateTime<Utc>,
+) -> Result<MemoryReviewResult, AgentFailure> {
+    let pending = repository.memory_review_snapshot().await?;
+    let Some(request) = decision else {
+        return Ok(MemoryReviewResult {
+            snapshot: pending,
+            decision: None,
+        });
+    };
+    if !pending
+        .candidates
+        .iter()
+        .any(|candidate| candidate.id == request.candidate_id)
+    {
+        return Err(AgentFailure::NotFound);
+    }
+    let decision = repository
+        .decide_memory_candidate(
+            request.candidate_id,
+            request.kind,
+            KnowledgeActor::User,
+            decided_at,
+        )
+        .await?;
+    Ok(MemoryReviewResult {
+        snapshot: repository.memory_review_snapshot().await?,
+        decision: Some(decision),
+    })
+}
+
 pub struct ReviewAdmission {
     pub target_id: Uuid,
     pub target_exists: bool,

@@ -95,12 +95,11 @@ pub struct CalendarActionProposal {
     pub delete: bool,
 }
 
-/// One decision the Person made about a learned memory.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MemoryReviewDecision {
-    pub candidate_id: Uuid,
-    pub kind: floe_knowledge::KnowledgeDecisionKind,
-}
+/// One decision the Person made about a learned memory, and what they are
+/// shown afterwards.
+///
+/// Both are Knowledge's own values; the worker only carries them.
+pub use floe_knowledge::{MemoryReviewDecision, MemoryReviewResult};
 
 /// What the device reports about the calendar a grant would name.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -140,13 +139,6 @@ pub struct CalendarProposalInspection {
     pub session_id: Uuid,
     pub invocation_id: Uuid,
     pub action: Option<floe_actions::CalendarAction>,
-}
-
-/// What the Person is being shown about their learned memories under review.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MemoryReviewOverview {
-    pub snapshot: floe_knowledge::MemoryReviewSnapshot,
-    pub decision: Option<floe_knowledge::KnowledgeDecisionResult>,
 }
 
 /// One remote grant, with the connection revision it was last previewed at.
@@ -416,7 +408,7 @@ pub struct WorkerResult {
     pub calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     pub calendar_subject_preview: Option<CalendarSubjectPreview>,
     pub proposal: Option<CalendarProposalInspection>,
-    pub memory_review: Option<MemoryReviewOverview>,
+    pub memory_review: Option<MemoryReviewResult>,
     pub memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
     pub connections: Option<Vec<floe_connections::ConnectorSnapshot>>,
     pub remote_producer: Option<floe_access::RemoteProducerIdentity>,

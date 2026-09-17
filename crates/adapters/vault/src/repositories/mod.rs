@@ -9,6 +9,8 @@ mod conversation;
 #[cfg(unix)]
 mod expert_actions;
 #[cfg(unix)]
+mod memory_review;
+#[cfg(unix)]
 mod personal_grants;
 #[cfg(unix)]
 mod remote_grants;

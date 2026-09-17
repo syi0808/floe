@@ -76,7 +76,7 @@ pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute};
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
     CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation,
-    FixtureOperation, MemoryReviewDecision, MemoryReviewOverview, RemoteCalendarGrantPreview,
+    FixtureOperation, MemoryReviewDecision, MemoryReviewResult, RemoteCalendarGrantPreview,
     RemoteGrantOverview, RemotePairingChallenge, VaultState, WorkerAction, WorkerOperation,
     WorkerResult,
 };

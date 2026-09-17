@@ -30,7 +30,7 @@ use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use crate::{
     CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
     ConversationSessionOperation, ConversationTurnRequest,
-    FixtureOperation, MemoryReviewOverview, RemoteGrantOverview, RemoteTurnRoute, VaultState,
+    FixtureOperation, RemoteGrantOverview, RemoteTurnRoute, VaultState,
     WorkerAction, WorkerOperation, WorkerResult,
 };
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
@@ -42,7 +42,6 @@ use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
 use floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint;
 #[cfg(not(target_os = "macos"))]
 use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
-use floe_knowledge::KnowledgeActor;
 use uuid::Uuid;
 
 use crate::local_context::LocalContextHost;
@@ -401,7 +400,7 @@ struct Progress {
     calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
-    memory_review: Option<MemoryReviewOverview>,
+    memory_review: Option<floe_knowledge::MemoryReviewResult>,
     memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
     connections: Option<Vec<floe_connections::ConnectorSnapshot>>,
     remote_producer: Option<floe_access::RemoteProducerIdentity>,
@@ -1048,7 +1047,7 @@ struct VaultExecutionResult {
     calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
-    memory_review: Option<MemoryReviewOverview>,
+    memory_review: Option<floe_knowledge::MemoryReviewResult>,
     memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
     remote_producer: Option<floe_access::RemoteProducerIdentity>,
     remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
@@ -1648,40 +1647,17 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let pending = vault.memory_review_snapshot().await?;
+            let review = floe_knowledge::review_memory(
+                vault.vault.as_ref(),
+                *decision,
+                chrono::Utc::now(),
+            )
+            .await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let decision = match decision {
-                Some(request) => {
-                    // A decision only counts on a candidate that is still pending.
-                    if !pending
-                        .candidates
-                        .iter()
-                        .any(|candidate| candidate.id == request.candidate_id)
-                    {
-                        return Err(AgentFailure::NotFound);
-                    }
-                    Some(
-                        vault
-                            .decide_knowledge_candidate(
-                                request.candidate_id,
-                                request.kind,
-                                KnowledgeActor::User,
-                                chrono::Utc::now(),
-                            )
-                            .await?,
-                    )
-                }
-                None => None,
-            };
-            let snapshot = if decision.is_some() {
-                vault.memory_review_snapshot().await?
-            } else {
-                pending
-            };
             Ok(VaultExecutionResult {
-                memory_review: Some(MemoryReviewOverview { snapshot, decision }),
+                memory_review: Some(review),
                 ..VaultExecutionResult::ready()
             })
         }
