@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_kernel::{AGENT_VERSION, PersonId};
+use floe_agent_contract::{AGENT_VERSION, PersonId};
 
 use super::{
     AgentPackage, AgentRegistry, CalendarExpertSetupReceipt, CalendarViewBinding, ExpertMetadata,
@@ -79,7 +79,7 @@ pub struct CalendarExpertSetup {
     pub connection_scope: CalendarScope,
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<floe_context_contract::SourceAuthority>,
+    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_native_subject_fingerprint: Option<String>,
 }
@@ -114,7 +114,7 @@ pub enum CalendarAccessChange {
         connection_scope: CalendarScope,
         connection_revision: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        source_authority: Option<floe_context_contract::SourceAuthority>,
+        source_authority: Option<floe_agent_contract::SourceAuthority>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reviewed_native_subject_fingerprint: Option<String>,
     },

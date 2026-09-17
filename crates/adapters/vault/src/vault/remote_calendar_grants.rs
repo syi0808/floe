@@ -1,6 +1,6 @@
 use floe_agent_contract::AgentFailure;
 use floe_access::{DataAccessGrant};
-use floe_context_contract::{ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
+use floe_access::{ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         connector: &str,
         connection_id: &str,
-        source_authority: floe_context_contract::SourceAuthority,
+        source_authority: floe_access::SourceAuthority,
         resource: &str,
     ) -> Result<RemoteCalendarGrantBinding, AgentFailure> {
         if connector.is_empty() || connection_id.is_empty() || resource.is_empty() {

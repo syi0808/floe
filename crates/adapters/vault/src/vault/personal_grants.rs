@@ -4,7 +4,7 @@ use floe_access::DataAccessGrant;
 /// What a feasibility grant admits reading is part of the grant, so Access owns
 /// it; this module stores and reads the record.
 pub use floe_access::FeasibilityGrantQuery;
-use floe_context_contract::{ConsumerPolicyAuthority, GrantConsumer, GrantId, SourceAuthority};
+use floe_access::{ConsumerPolicyAuthority, GrantConsumer, GrantId, SourceAuthority};
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 
@@ -32,7 +32,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
     use uuid::Uuid;
 
     use super::*;
@@ -394,7 +394,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn validate_current_authority_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_context_contract::ContextDependency,
+        dependency: &floe_access::ContextDependency,
     ) -> Result<(), AgentFailure> {
         let connector = dependency.source().connector().as_str();
         if connector == ATTENTION_CONNECTOR {
@@ -417,9 +417,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn validate_context_dependency_coverage_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        coverage: &floe_context_contract::DependencyCoverage,
+        coverage: &floe_access::DependencyCoverage,
     ) -> Result<(), AgentFailure> {
-        let floe_context_contract::DependencyCoverage::Dependent { dependencies } = coverage else {
+        let floe_access::DependencyCoverage::Dependent { dependencies } = coverage else {
             return Ok(());
         };
         for dependency in dependencies {
@@ -438,7 +438,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     async fn validate_calendar_dependency_policy_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_context_contract::ContextDependency,
+        dependency: &floe_access::ContextDependency,
     ) -> Result<(), AgentFailure> {
         let grant_id = dependency.grant_id().as_uuid().to_string();
         let person_id = self.person_id.to_string();
@@ -466,7 +466,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     async fn validate_access_grant_dependency_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_context_contract::ContextDependency,
+        dependency: &floe_access::ContextDependency,
     ) -> Result<(), AgentFailure> {
         let grant = self
             .read_data_access_grant_in_transaction(transaction, dependency.grant_id())
@@ -481,7 +481,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     async fn validate_attention_dependency_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_context_contract::ContextDependency,
+        dependency: &floe_access::ContextDependency,
     ) -> Result<(), AgentFailure> {
         self.validate_access_grant_dependency_in_transaction(transaction, dependency)
             .await?;
@@ -515,7 +515,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn pause_personal_grant(
         &self,
         grant_id: GrantId,
-        expected: floe_context_contract::GrantAuthority,
+        expected: floe_access::GrantAuthority,
     ) -> Result<DataAccessGrant, AgentFailure> {
         let mut connection = self.connection()?;
         let transaction = transaction_start(&mut connection).await?;
@@ -545,10 +545,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn review_personal_grant(
         &self,
-        source: floe_context_contract::GrantSourceBinding,
-        scope: floe_context_contract::GrantScope,
+        source: floe_access::GrantSourceBinding,
+        scope: floe_access::GrantScope,
         reviewed_subject_fingerprint: &str,
-        expected: Option<(GrantId, floe_context_contract::GrantAuthority)>,
+        expected: Option<(GrantId, floe_access::GrantAuthority)>,
     ) -> Result<DataAccessGrant, AgentFailure> {
         self.review_personal_grant_with_selection(
             source,
@@ -562,10 +562,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn review_personal_grant_with_selection(
         &self,
-        source: floe_context_contract::GrantSourceBinding,
-        scope: floe_context_contract::GrantScope,
+        source: floe_access::GrantSourceBinding,
+        scope: floe_access::GrantScope,
         reviewed_subject_fingerprint: &str,
-        expected: Option<(GrantId, floe_context_contract::GrantAuthority)>,
+        expected: Option<(GrantId, floe_access::GrantAuthority)>,
         selected_handles: &[String],
     ) -> Result<DataAccessGrant, AgentFailure> {
         self.review_personal_grant_with_selection_and_query(
@@ -581,10 +581,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn review_personal_grant_with_feasibility_query(
         &self,
-        source: floe_context_contract::GrantSourceBinding,
-        scope: floe_context_contract::GrantScope,
+        source: floe_access::GrantSourceBinding,
+        scope: floe_access::GrantScope,
         reviewed_subject_fingerprint: &str,
-        expected: Option<(GrantId, floe_context_contract::GrantAuthority)>,
+        expected: Option<(GrantId, floe_access::GrantAuthority)>,
         query: FeasibilityGrantQuery,
     ) -> Result<DataAccessGrant, AgentFailure> {
         query.validate()?;
@@ -601,10 +601,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     async fn review_personal_grant_with_selection_and_query(
         &self,
-        source: floe_context_contract::GrantSourceBinding,
-        scope: floe_context_contract::GrantScope,
+        source: floe_access::GrantSourceBinding,
+        scope: floe_access::GrantScope,
         reviewed_subject_fingerprint: &str,
-        expected: Option<(GrantId, floe_context_contract::GrantAuthority)>,
+        expected: Option<(GrantId, floe_access::GrantAuthority)>,
         selected_handles: &[String],
         feasibility_query: Option<FeasibilityGrantQuery>,
     ) -> Result<DataAccessGrant, AgentFailure> {
@@ -669,7 +669,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         && !same_review
                         && grant.source().source_authority() == source.source_authority()
                     {
-                        floe_context_contract::GrantSourceBinding::try_new(
+                        floe_access::GrantSourceBinding::try_new(
                             source.person_id(),
                             source.connection_id(),
                             source.connector().clone(),
@@ -826,7 +826,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     async fn personal_grant_mapping_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        source: &floe_context_contract::GrantSourceBinding,
+        source: &floe_access::GrantSourceBinding,
     ) -> Result<Option<GrantId>, AgentFailure> {
         let mut rows = transaction
             .query(
@@ -1044,11 +1044,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if row.get::<String>(1).map_err(storage)? != self.person_id.to_string() {
                 return Err(AgentFailure::VaultUnavailable);
             }
-            floe_context_contract::ConnectorId::try_new(row.get::<String>(2).map_err(storage)?)
+            floe_access::ConnectorId::try_new(row.get::<String>(2).map_err(storage)?)
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
-            floe_context_contract::ConnectionId::try_new(row.get::<String>(3).map_err(storage)?)
+            floe_access::ConnectionId::try_new(row.get::<String>(3).map_err(storage)?)
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
-            floe_context_contract::ExecutionOwnerId::try_new(row.get::<String>(4).map_err(storage)?)
+            floe_access::ExecutionOwnerId::try_new(row.get::<String>(4).map_err(storage)?)
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
             validate_subject_fingerprint(&row.get::<String>(5).map_err(storage)?)
                 .map_err(|_| AgentFailure::VaultUnavailable)?;

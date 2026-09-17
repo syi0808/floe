@@ -15,7 +15,7 @@ use floe_context_contract::{
     MAX_PORTFOLIO_VIEW_BYTES, WorkContextView, validate_communication_view,
     validate_logistics_view, validate_work_context_view,
 };
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
 pub const MAIL_VIEW: &str = "mail.communication";
 pub const WORK_VIEW: &str = "work.context";

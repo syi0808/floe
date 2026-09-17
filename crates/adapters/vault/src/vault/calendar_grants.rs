@@ -4,7 +4,7 @@ use floe_experts::AgentRegistry;
 use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration, RegistrySnapshot};
 use floe_experts::{CalendarExpertSetup, CalendarExpertSetupReceipt};
 use floe_access::{DataAccessGrant, GrantState};
-use floe_context_contract::{ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+use floe_access::{ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
 use floe_day::{CalendarProvider};
 use serde::{Deserialize, Serialize};
 use turso::{Row, transaction::TransactionBehavior};
@@ -909,7 +909,7 @@ fn calendar_source(
     device_id: &str,
     source_authority: SourceAuthority,
 ) -> Result<GrantSourceBinding, AgentFailure> {
-    let connection_id = floe_context_contract::ConnectionId::try_new(connection_id.to_owned())
+    let connection_id = floe_access::ConnectionId::try_new(connection_id.to_owned())
         .map_err(|_| AgentFailure::InvalidInput)?;
     let execution_owner =
         ExecutionOwnerId::try_new(device_id.to_owned()).map_err(|_| AgentFailure::InvalidInput)?;
@@ -999,7 +999,7 @@ fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
         Uuid::parse_str(&row.get::<String>(3).map_err(storage)?)
             .map_err(|_| AgentFailure::VaultUnavailable)?,
     );
-    let connection_id = floe_context_contract::ConnectionId::try_new(row.get::<String>(4).map_err(storage)?)
+    let connection_id = floe_access::ConnectionId::try_new(row.get::<String>(4).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     let connector = ConnectorId::try_new(row.get::<String>(5).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
@@ -1058,7 +1058,7 @@ fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
 mod tests {
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, sync::Mutex};
 
-    use floe_context_contract::ConnectionId;
+    use floe_access::ConnectionId;
 
     use super::*;
 

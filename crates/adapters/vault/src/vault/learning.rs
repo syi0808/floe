@@ -1044,7 +1044,7 @@ async fn evidence_is_independent(
                 reference.turn_id,
             )
             .await?,
-            floe_context_contract::DependencyCoverage::Independent
+            floe_access::DependencyCoverage::Independent
         ) {
             return Ok(false);
         }
@@ -1070,7 +1070,7 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
             return Err(AgentFailure::PolicyDenied);
         }
         let session = self.vault.session_on(self.transaction, session_id).await?;
-        let mut coverage = floe_context_contract::DependencyCoverage::Independent;
+        let mut coverage = floe_access::DependencyCoverage::Independent;
         for turn_id in turn_ids {
             let current = super::context_dependencies::read_context_dependency_coverage(
                 self.transaction,

@@ -1,6 +1,6 @@
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context::{AgentContext, InferencePolicyDecision};
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 use floe_conversation::{AgentMessage, AgentUsage, ModelRequest, ModelRunner, ModelStep};
 use floe_conversation::{UsageLedger, generate_with_recovery};
 use floe_knowledge::prompts::{learner_prompt};

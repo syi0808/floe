@@ -104,7 +104,7 @@ mod tests {
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
-    use floe_kernel::PersonId;
+    use floe_context_contract::PersonId;
     use uuid::Uuid;
 
     fn fixture() -> (ContextDependency, GrantScope) {

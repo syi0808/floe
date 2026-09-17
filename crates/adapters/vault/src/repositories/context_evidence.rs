@@ -1,6 +1,6 @@
 use floe_agent_contract::AgentFailure;
 use floe_context::EvidenceReader;
-use floe_context_contract::DependencyCoverage;
+use floe_access::DependencyCoverage;
 use uuid::Uuid;
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};

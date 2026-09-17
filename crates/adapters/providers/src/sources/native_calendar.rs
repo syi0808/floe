@@ -12,7 +12,7 @@ use floe_actions::{ActionFailure, CalendarAction, CalendarActionProvider, Calend
 
 use floe_context_contract::{ContextDependency};
 use floe_day::{AllDaySchedule, CalendarBatch, CalendarFailure, CalendarProvider, CalendarRecord, Event, EventSchedule, TimedSchedule};
-use floe_kernel::{PersonId};
+use floe_agent_contract::PersonId;
 use floe_protocol::{CalendarBatchDto, CalendarFailureDto, EventScheduleDto, PROTOCOL_VERSION};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};

@@ -69,7 +69,7 @@ mod tests {
         ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
-    use floe_kernel::PersonId;
+    use floe_context_contract::PersonId;
     use uuid::Uuid;
 
     use super::*;

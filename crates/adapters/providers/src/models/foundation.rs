@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -334,7 +334,7 @@ use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
 use floe_conversation::prompts::manager_prompt;
 use floe_conversation::{AgentMessage, CapabilityDescriptor};
 use floe_execution::{Cancellation};
-    use floe_kernel::PersonId;
+    use floe_agent_contract::PersonId;
 
     use super::*;
 

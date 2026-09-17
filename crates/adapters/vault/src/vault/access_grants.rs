@@ -934,7 +934,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use floe_context_contract::{GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle};
+    use floe_access::{GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle};
 
     use super::*;
 
@@ -1005,7 +1005,7 @@ mod tests {
             vec![GrantDataCategory::Metadata],
             vec![GrantOperation::Read],
             vec![GrantPurpose::Scheduling],
-            vec![floe_context_contract::GrantConsumer::builtin("calendar").unwrap()],
+            vec![floe_access::GrantConsumer::builtin("calendar").unwrap()],
             ProcessingRestriction::LocalOnly,
         )
         .unwrap();
@@ -1557,7 +1557,7 @@ mod tests {
             vec![GrantDataCategory::Metadata],
             vec![GrantOperation::Read],
             vec![GrantPurpose::Scheduling],
-            vec![floe_context_contract::GrantConsumer::builtin("calendar").unwrap()],
+            vec![floe_access::GrantConsumer::builtin("calendar").unwrap()],
             ProcessingRestriction::LocalOnly,
         )
         .unwrap();

@@ -7,7 +7,7 @@
 use floe_agent_contract::{
     AgentFailure, BoxFuture, DependencyCoverage, EndpointInvocation, ExpertReport,
 };
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 use uuid::Uuid;
 
 use crate::{
@@ -170,7 +170,7 @@ pub trait TaskCoverageRecorder: Send + Sync {
         &self,
         turn_id: Uuid,
         result_id: Uuid,
-        dependency: floe_context_contract::ContextDependency,
+        dependency: floe_agent_contract::ContextDependency,
     ) -> Result<(), AgentFailure>;
 }
 
@@ -188,7 +188,7 @@ pub async fn delegate_expert_task<Repository: crate::TaskRepository>(
         ExecutionScope,
         budget::{BudgetConfig, BudgetLedger},
     };
-    use floe_kernel::{RunId, TraceContext};
+    use floe_agent_contract::{RunId, TraceContext};
 
     let task_uuid = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
     let task_id = TaskId::from_uuid(task_uuid).ok_or(AgentFailure::InvalidInput)?;

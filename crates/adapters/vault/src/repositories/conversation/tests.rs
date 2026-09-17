@@ -310,7 +310,7 @@ fn request(
 
 fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
     use chrono::{Duration, Utc};
-    use floe_context_contract::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
 
     let now = Utc::now();
     floe_context::ContextDependency::try_new(

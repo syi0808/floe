@@ -1221,7 +1221,7 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use floe_vault::{VaultKey, VaultKeyProvider};
-    use floe_kernel::PersonId;
+    use floe_agent_contract::PersonId;
     use tokio::io::AsyncWriteExt;
     use uuid::Uuid;
 

@@ -1,6 +1,6 @@
 use floe_agent_contract::{AgentFailure};
 use floe_conversation::{AgentSession};
-use floe_context_contract::{DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
+use floe_access::{DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
 use turso::{Row, transaction::Transaction};
 use uuid::Uuid;
 
@@ -686,7 +686,7 @@ mod tests {
     use floe_agent_contract::{AgentFailure};
 use floe_conversation::{AgentMessage, CapabilityExecution, CapabilityExecutionState, ProviderReplay};
     use floe_access::{DataAccessGrant};
-use floe_context_contract::{ConnectionId, ConnectorId, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+use floe_access::{ConnectionId, ConnectorId, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
 
     use super::super::context_dependencies::merge_context_dependency_coverage;
     use super::*;
@@ -794,7 +794,7 @@ use floe_context_contract::{ConnectionId, ConnectorId, ContextDependency, Depend
             GrantPurpose::Scheduling,
             GrantConsumer::builtin("calendar").unwrap(),
             ProcessingRestriction::LocalOnly,
-            floe_context_contract::ConsumerPolicyAuthority::new(),
+            floe_access::ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             query_fingerprint,
             Uuid::new_v4(),
@@ -857,7 +857,7 @@ use floe_context_contract::{ConnectionId, ConnectorId, ContextDependency, Depend
             GrantPurpose::Scheduling,
             GrantConsumer::builtin("calendar").unwrap(),
             ProcessingRestriction::LocalOnly,
-            floe_context_contract::ConsumerPolicyAuthority::new(),
+            floe_access::ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"cleanup-query".to_vec(),
             Uuid::new_v4(),
@@ -954,7 +954,7 @@ use floe_context_contract::{ConnectionId, ConnectorId, ContextDependency, Depend
             GrantPurpose::Scheduling,
             GrantConsumer::builtin("calendar").unwrap(),
             ProcessingRestriction::LocalOnly,
-            floe_context_contract::ConsumerPolicyAuthority::new(),
+            floe_access::ConsumerPolicyAuthority::new(),
             Uuid::new_v4(),
             b"cleanup-query-b".to_vec(),
             Uuid::new_v4(),

@@ -1,6 +1,6 @@
 use floe_agent_contract::AgentFailure;
 use floe_access::{DataAccessGrant};
-use floe_context_contract::{ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
+use floe_access::{ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 
@@ -119,7 +119,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn validate_remote_view_dependency_policy_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        dependency: &floe_context_contract::ContextDependency,
+        dependency: &floe_access::ContextDependency,
     ) -> Result<(), AgentFailure> {
         let mut rows = transaction
             .query(
@@ -159,7 +159,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         view_id: &str,
         connector: &str,
         connection_id: &str,
-        source_authority: floe_context_contract::SourceAuthority,
+        source_authority: floe_access::SourceAuthority,
     ) -> Result<RemoteViewGrantBinding, AgentFailure> {
         if !valid_view_id(view_id) || connector.is_empty() || connection_id.is_empty() {
             return Err(AgentFailure::InvalidInput);
@@ -397,7 +397,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
 use floe_kernel::{PersonId};
     use uuid::Uuid;
 

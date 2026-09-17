@@ -30,14 +30,14 @@ pub struct SessionSearchHit {
 pub struct SessionCompactionResult {
     pub session: AgentSession,
     pub recovery: SessionRecoveryPointer,
-    pub summary_coverage: floe_context_contract::DependencyCoverage,
+    pub summary_coverage: floe_access::DependencyCoverage,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionArchiveSnapshot {
     pub session: AgentSession,
     pub recovery: SessionRecoveryPointer,
-    pub coverage_by_turn: BTreeMap<Uuid, floe_context_contract::DependencyCoverage>,
+    pub coverage_by_turn: BTreeMap<Uuid, floe_access::DependencyCoverage>,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -154,7 +154,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .iter()
                 .map(AgentMessage::turn_id)
                 .collect();
-            let mut archived_coverage: Option<floe_context_contract::DependencyCoverage> = None;
+            let mut archived_coverage: Option<floe_access::DependencyCoverage> = None;
             for turn_id in &archived_turns {
                 let coverage = read_context_dependency_coverage(
                     &transaction,

@@ -1,10 +1,10 @@
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
 use floe_day::CalendarScope;
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
 mod calendar_setup;
 mod expert_setup;
@@ -76,7 +76,7 @@ pub struct BuiltinExpertAssignmentReceipt {
     pub granted_view_handles: Vec<Uuid>,
 }
 
-pub use floe_context_contract::SourceGrant;
+pub use floe_agent_contract::SourceGrant;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,7 +95,7 @@ pub struct CalendarExpertSetupReceipt {
     pub connection_scope: CalendarScope,
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<floe_context_contract::SourceAuthority>,
+    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_native_subject_fingerprint: Option<String>,
     pub view_handle: Uuid,
@@ -140,13 +140,13 @@ pub struct ExpertMetadata {
     pub skills: Vec<String>,
     /// Where this Expert's judgment can run, as its owning crate declared it.
     #[serde(default = "every_placement")]
-    pub supported_placements: Vec<floe_context_contract::ModelPlacement>,
+    pub supported_placements: Vec<floe_agent_contract::ModelPlacement>,
 }
 
-fn every_placement() -> Vec<floe_context_contract::ModelPlacement> {
+fn every_placement() -> Vec<floe_agent_contract::ModelPlacement> {
     vec![
-        floe_context_contract::ModelPlacement::DeviceLocal,
-        floe_context_contract::ModelPlacement::Remote,
+        floe_agent_contract::ModelPlacement::DeviceLocal,
+        floe_agent_contract::ModelPlacement::Remote,
     ]
 }
 
@@ -283,7 +283,7 @@ pub struct CalendarViewBinding {
     pub connection_scope: floe_day::CalendarScope,
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<floe_context_contract::SourceAuthority>,
+    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
     pub enabled: bool,
 }
 
@@ -816,7 +816,7 @@ impl AgentRegistry {
         mut calendar_ids: Vec<String>,
         connection_scope: floe_day::CalendarScope,
         connection_revision: u64,
-        source_authority: Option<floe_context_contract::SourceAuthority>,
+        source_authority: Option<floe_agent_contract::SourceAuthority>,
     ) -> Result<Uuid, AgentFailure> {
         self.check_revision(expected_revision)?;
         if self.snapshot.calendar_views.len() >= 256 {

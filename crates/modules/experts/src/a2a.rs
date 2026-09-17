@@ -1,6 +1,6 @@
 use std::{collections::HashMap, future::Future, sync::Mutex};
 
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -10,7 +10,7 @@ use floe_execution::{Cancellation};
 use floe_inference::UsageLedger;
 
 #[cfg(test)]
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 
 pub use floe_agent_contract::{A2A_PROTOCOL_VERSION, AgentCard};
 pub const EXPERT_RESULT_MEDIA_TYPE: &str = "application/vnd.floe.expert-result+json;version=1";

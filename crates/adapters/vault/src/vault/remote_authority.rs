@@ -5,7 +5,7 @@ use floe_access::GrantState;
 /// The remote authority values this vault stores. Who a producer is and what a
 /// signed source names are Access's; this module holds and signs the records.
 pub use floe_access::{RemoteProducerIdentity, RemoteViewSourceReference};
-use floe_context_contract::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
+use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 use ring::{
     aead, hkdf,
     rand::{SecureRandom, SystemRandom},

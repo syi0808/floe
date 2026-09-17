@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, EndpointSettlement, TaskId, TaskSnapshot};
-use floe_context_contract::ContextDependency;
+use floe_agent_contract::ContextDependency;
 
 use crate::RegistrySnapshot;
 

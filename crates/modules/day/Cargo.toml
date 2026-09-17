@@ -8,7 +8,6 @@ rust-version.workspace = true
 [dependencies]
 chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }
-floe-execution = { path = "../../runtime/execution" }
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
 serde_json.workspace = true

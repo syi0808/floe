@@ -18,9 +18,9 @@ pub use floe_context_contract::{
     ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ContextDependencyError,
     DependencyCoverage, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
     GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, GrantValidationError,
-    MAX_CONNECTOR_ID_BYTES, MAX_CONSUMER_ID_BYTES, MAX_CONSUMERS, MAX_EXECUTION_OWNER_BYTES,
-    MAX_RESOURCE_HANDLE_BYTES, MAX_RESOURCE_HANDLES, MAX_SCOPE_BYTES, ProcessingRestriction,
-    ResourceHandle, SourceAuthority,
+    MAX_CONNECTOR_ID_BYTES, MAX_CONSUMER_ID_BYTES, MAX_CONSUMERS, MAX_CONTEXT_DEPENDENCIES,
+    MAX_CONTEXT_DEPENDENCY_BYTES, MAX_EXECUTION_OWNER_BYTES, MAX_RESOURCE_HANDLE_BYTES,
+    MAX_RESOURCE_HANDLES, MAX_SCOPE_BYTES, ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
 pub use floe_kernel::PersonId;
 pub use ports::CurrentAuthority;

@@ -5,7 +5,7 @@ use std::{
 };
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
-use floe_kernel::AGENT_VERSION;
+use floe_agent_contract::AGENT_VERSION;
 use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_execution::limits::{CallLimiter, CallLimits};
 use floe_connections::ConnectorCatalogObservation;
@@ -1054,7 +1054,7 @@ mod tests {
             replay: vec![],
             schema_version: 1,
             prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
-            person_id: floe_kernel::PersonId::new(),
+            person_id: floe_agent_contract::PersonId::new(),
             session_id: uuid::Uuid::new_v4(),
             turn_id,
             policy: floe_context::InferencePolicyDecision {

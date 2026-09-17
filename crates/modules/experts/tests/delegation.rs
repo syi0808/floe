@@ -23,7 +23,7 @@ use floe_experts::{
     Directory, DirectoryEntry, DirectoryQuery, TaskActivation, TaskAdmission, TaskCoordinator,
     TaskRecord, TaskRepository,
 };
-use floe_kernel::{RunId, TraceContext};
+use floe_agent_contract::{RunId, TraceContext};
 use tokio::time::Instant;
 use uuid::Uuid;
 

@@ -5,8 +5,8 @@ use crate::{
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_day::{Priority, TimelineRepository};
-use floe_kernel::AGENT_VERSION;
-use floe_kernel::PersonId;
+use floe_agent_contract::AGENT_VERSION;
+use floe_context_contract::PersonId;
 use uuid::Uuid;
 
 const NATIVE_CONTEXT_TTL: chrono::Duration = chrono::Duration::minutes(5);

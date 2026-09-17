@@ -19,7 +19,6 @@ floe-execution = { path = "../../runtime/execution" }
 floe-inference = { path = "../../modules/inference" }
 floe-vault = { path = "../vault" }
 floe-conversation = { path = "../../modules/conversation" }
-floe-kernel = { path = "../../contracts/kernel" }
 floe-knowledge = { path = "../../modules/knowledge" }
 floe-native = { path = "../../platform/native" }
 floe-protocol = { path = "../../bindings/protocol" }

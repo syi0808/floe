@@ -12,7 +12,7 @@ use std::{
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
 use floe_kernel::AGENT_VERSION;
 use floe_conversation::{AgentBudget, AgentSession, SessionStore};
-use floe_context_contract::{ContextDependency, DependencyCoverage};
+use floe_access::{ContextDependency, DependencyCoverage};
 use floe_kernel::{PersonId};
 use subtle::ConstantTimeEq;
 use turso::{Builder, EncryptionOpts};

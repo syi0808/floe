@@ -134,7 +134,7 @@ mod tests {
 
     fn attention() -> AttentionView {
         AttentionView {
-            schema_version: floe_kernel::AGENT_VERSION,
+            schema_version: floe_agent_contract::AGENT_VERSION,
             view_id: "attention.coarse".into(),
             source_handle: "attention.macos:session_idle".into(),
             observed_at_unix_ms: 1_000,

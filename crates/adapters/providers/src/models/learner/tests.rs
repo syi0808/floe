@@ -6,7 +6,7 @@ use floe_knowledge::{
 use chrono::{DateTime, Utc};
 use floe_execution::{Cancellation};
 use floe_knowledge::{KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, LearningObservationKind, StageMemoryCandidate};
-use floe_kernel::PersonId;
+use floe_agent_contract::PersonId;
 use floe_knowledge::PersonalMemoryValue;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;

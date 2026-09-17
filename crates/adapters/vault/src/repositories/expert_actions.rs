@@ -8,7 +8,7 @@ use floe_actions::{
     CalendarActionState, ExpertActionStore, ExpertProposalReference,
 };
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::ContextDependency;
+use floe_access::ContextDependency;
 use floe_execution::Cancellation;
 use floe_experts::ExpertResult;
 use uuid::Uuid;

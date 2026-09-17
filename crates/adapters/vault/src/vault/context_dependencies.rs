@@ -1,5 +1,5 @@
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{ContextDependencyError, DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
+use floe_access::{ContextDependencyError, DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
 use floe_kernel::{PersonId};
 use turso::transaction::Transaction;
 use uuid::Uuid;
@@ -326,7 +326,7 @@ use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_kernel::AGENT_VERSION;
 use floe_conversation::{AgentBudget, AgentMessage, ModelReplay, ModelRequest, ProviderReplay, SessionStore, manager_prompt};
 use floe_execution::{Cancellation};
-    use floe_context_contract::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES, ProcessingRestriction, ResourceHandle, SourceAuthority};
 
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);

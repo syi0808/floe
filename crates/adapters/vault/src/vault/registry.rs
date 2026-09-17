@@ -1,7 +1,7 @@
 use floe_conversation::{AgentMessage};
 use floe_experts::{AgentRegistry, ExpertResult, RegistrySnapshot};
 use floe_agent_contract::{TaskId, TaskSnapshot, TaskState};
-use floe_context_contract::DependencyCoverage;
+use floe_access::DependencyCoverage;
 use turso::transaction::TransactionBehavior;
 
 use super::tasks::VaultTaskRecord;

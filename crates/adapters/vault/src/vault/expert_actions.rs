@@ -2,7 +2,7 @@ use std::future::Future;
 
 use floe_conversation::{AgentMessage};
 use floe_experts::{AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertResult};
-use floe_context_contract::DependencyCoverage;
+use floe_access::DependencyCoverage;
 use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
 
@@ -18,7 +18,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(crate) async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
-    ) -> Result<floe_context_contract::ContextDependency, AgentFailure> {
+    ) -> Result<floe_access::ContextDependency, AgentFailure> {
         if reference.person_id != self.person_id {
             return Err(AgentFailure::NotFound);
         }

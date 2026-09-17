@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, PackageKind};
-use floe_kernel::{AGENT_VERSION, PersonId};
+use floe_agent_contract::{AGENT_VERSION, PersonId};
 
 use super::{
     AgentId, AgentPackage, AgentRegistry, BuiltinExpertAssignmentReceipt,
@@ -490,7 +490,7 @@ impl SourceGrants {
 /// from what an agent id looks like.
 pub fn eligible_cards(
     cards: &[crate::AgentCard],
-    placement: floe_context_contract::ModelPlacement,
+    placement: floe_agent_contract::ModelPlacement,
 ) -> Vec<crate::AgentCard> {
     cards
         .iter()

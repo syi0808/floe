@@ -10,7 +10,7 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
         calendar_ids: vec!["setup-private-calendar-canary".into()],
         connection_scope: floe_day::CalendarScope::Selected,
         connection_revision: 1,
-        source_authority: Some(floe_context_contract::SourceAuthority::new()),
+        source_authority: Some(floe_access::SourceAuthority::new()),
         reviewed_native_subject_fingerprint: Some("a".repeat(64)),
     }
 }
@@ -94,7 +94,7 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
                 calendar_ids: vec!["work".into(), "home".into()],
                 connection_scope: floe_day::CalendarScope::All,
                 connection_revision: 2,
-                source_authority: Some(floe_context_contract::SourceAuthority::new()),
+                source_authority: Some(floe_access::SourceAuthority::new()),
                 reviewed_native_subject_fingerprint: Some("a".repeat(64)),
             },
         ),

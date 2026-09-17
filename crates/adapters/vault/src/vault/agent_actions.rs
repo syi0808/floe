@@ -6,7 +6,7 @@ use floe_actions::{
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure};
 use floe_execution::{Cancellation};
-use floe_context_contract::{ContextDependency, DependencyCoverage};
+use floe_access::{ContextDependency, DependencyCoverage};
 use floe_day::{CalendarProvider};
 use floe_kernel::{PersonId};
 use turso::transaction::TransactionBehavior;
@@ -21,8 +21,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn invalidate_agent_actions_for_grant_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
-        grant_id: floe_context_contract::GrantId,
-        authority: floe_context_contract::GrantAuthority,
+        grant_id: floe_access::GrantId,
+        authority: floe_access::GrantAuthority,
     ) -> Result<(), AgentFailure> {
         self.ensure_agent_action_schema(transaction).await?;
         let mut rows = transaction
@@ -97,12 +97,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let mut authorities = Vec::new();
         while let Some(row) = rows.next().await.map_err(storage)? {
-            let grant_id = floe_context_contract::GrantId::from_uuid(
+            let grant_id = floe_access::GrantId::from_uuid(
                 Uuid::parse_str(&row.get::<String>(1).map_err(storage)?)
                     .map_err(|_| AgentFailure::VaultUnavailable)?,
             )
             .ok_or(AgentFailure::VaultUnavailable)?;
-            let authority = floe_context_contract::GrantAuthority::from_parts(
+            let authority = floe_access::GrantAuthority::from_parts(
                 Uuid::parse_str(&row.get::<String>(2).map_err(storage)?)
                     .map_err(|_| AgentFailure::VaultUnavailable)?,
                 std::num::NonZeroU64::new(
