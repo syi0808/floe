@@ -46,7 +46,9 @@ pub use floe_context_contract::{
     OptionalSource, acquire_optional_source, record_source_issue,
 };
 pub use application::consumed::ConsumedLineage;
-pub use application::coverage::{CoverageAccumulator, CoverageMessageFact, CoverageRegistry};
+pub use application::coverage::{
+    CoverageAccumulator, CoverageMessageFact, CoverageRegistry, message_coverage,
+};
 pub use application::history::read_history_coverage;
 pub use floe_agent_contract::{HistoryMessageSize, bounded_history_start};
 pub use application::leases::{

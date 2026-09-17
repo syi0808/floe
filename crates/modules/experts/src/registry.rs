@@ -1224,6 +1224,22 @@ impl AgentRegistry {
         Ok(AdmittedExpertInvocation { card, revision })
     }
 
+    /// That this registry still admits an invocation already running.
+    ///
+    /// A card that stops admitting mid-run is the Person having changed their
+    /// registry underneath it, which is a conflict rather than a denial.
+    pub fn still_admits_registered_expert_invocation(
+        &self,
+        request: RegisteredExpertInvocation<'_>,
+    ) -> Result<(), AgentFailure> {
+        self.admit_registered_expert_invocation(request)
+            .map(|_| ())
+            .map_err(|failure| match failure {
+                AgentFailure::CapabilityDenied => AgentFailure::Conflict,
+                failure => failure,
+            })
+    }
+
     /// Stage this registry for the settlement of one registered invocation.
     ///
     /// The Task owner commits the staged registry and the Expert's result

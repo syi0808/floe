@@ -435,3 +435,31 @@ mod tests {
         );
     }
 }
+
+/// The coverage one committed message stands on.
+///
+/// A message that consumed nothing, from a run where a source was nonetheless
+/// observed, cannot be shown to be independent of it; one where nothing was
+/// observed at all can.
+pub fn message_coverage(
+    dependencies: Vec<ContextDependency>,
+    source_was_observed: bool,
+) -> Result<DependencyCoverage, AgentFailure> {
+    if dependencies.is_empty() {
+        if source_was_observed {
+            return Ok(DependencyCoverage::Unknown);
+        }
+        let mut accumulator = CoverageAccumulator::new();
+        accumulator
+            .record_host_independent()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        return Ok(accumulator.coverage());
+    }
+    let mut accumulator = CoverageAccumulator::new();
+    for dependency in dependencies {
+        accumulator
+            .record_host_dependency(dependency)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+    }
+    Ok(accumulator.coverage())
+}

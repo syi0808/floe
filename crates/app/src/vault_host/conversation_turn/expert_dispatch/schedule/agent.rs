@@ -26,7 +26,7 @@ use floe_agent_contract::{TaskId, TaskSnapshot};
 #[cfg(test)]
 use floe_experts::RegistrySnapshot;
 use floe_context::{
-    AgentContext, CoverageAccumulator, FeasibilityView, InferencePolicyDecision, WellbeingView,
+    AgentContext, FeasibilityView, InferencePolicyDecision, WellbeingView,
 };
 use floe_conversation::{
     AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentOutcome, AgentRuntime, AgentSession,
@@ -920,23 +920,8 @@ impl<
                 .iter()
                 .cloned(),
         );
-        if !dependencies.is_empty() {
-            let mut accumulator = CoverageAccumulator::new();
-            for dependency in dependencies {
-                accumulator
-                    .record_host_dependency(dependency)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-            }
-            return Ok((turn_id, accumulator.coverage()));
-        }
-        if self.views.source_was_observed() {
-            return Ok((turn_id, DependencyCoverage::Unknown));
-        }
-        let mut accumulator = CoverageAccumulator::new();
-        accumulator
-            .record_host_independent()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        let coverage = accumulator.coverage();
+        let coverage =
+            floe_context::message_coverage(dependencies, self.views.source_was_observed())?;
         Ok((turn_id, coverage))
     }
 
@@ -1033,18 +1018,13 @@ impl<
                 .expert_registry()
                 .await?
                 .ok_or(AgentFailure::CapabilityDenied)?;
-            let registry = AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
-            registry
-                .expert_card(
-                    self.views.grant().person_id,
+            AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?
+                .still_admits_registered_expert_invocation(calendar_invocation(
+                    self.views.grant(),
                     self.assignment_id,
-                    registry.revision(),
-                    self.views.grant().handle,
-                )
-                .map_err(|failure| match failure {
-                    AgentFailure::CapabilityDenied => AgentFailure::Conflict,
-                    failure => failure,
-                })?;
+                    None,
+                    None,
+                ))?;
             self.views
                 .revalidate(self.deadline, self.cancellation.clone())
                 .await?;
