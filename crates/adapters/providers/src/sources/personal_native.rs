@@ -78,12 +78,8 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                     .feasibility
                     .map(|query| query.evidence_handles.clone())
                     .unwrap_or_default(),
-                destination_latitude: request
-                    .feasibility
-                    .map(|query| query.destination_latitude),
-                destination_longitude: request
-                    .feasibility
-                    .map(|query| query.destination_longitude),
+                destination_latitude: request.feasibility.map(|query| query.destination_latitude),
+                destination_longitude: request.feasibility.map(|query| query.destination_longitude),
                 event_start_unix_ms: request.feasibility.map(|query| query.event_start_unix_ms),
                 event_end_unix_ms: request.feasibility.map(|query| query.event_end_unix_ms),
                 travel_mode: request.feasibility.map(|query| query.travel_mode.clone()),
@@ -114,12 +110,8 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                 person_id: request.person_id,
                 device_id: request.device_id.to_owned(),
                 mode: match request.mode {
-                    AttentionAcquisitionMode::ReadProjection => {
-                        NativeAttentionMode::ReadProjection
-                    }
-                    AttentionAcquisitionMode::InspectSubject => {
-                        NativeAttentionMode::InspectSubject
-                    }
+                    AttentionAcquisitionMode::ReadProjection => NativeAttentionMode::ReadProjection,
+                    AttentionAcquisitionMode::InspectSubject => NativeAttentionMode::InspectSubject,
                 },
                 // An attention read never waits longer than half a minute.
                 deadline_unix_ms: chrono::Utc::now()

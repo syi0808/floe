@@ -3,11 +3,14 @@ use crate::{
     LearnerReviewOutput, LearnerRuntime, MemoryCandidateSink, explicit_learning_signal,
 };
 
-use chrono::{DateTime, Utc};
-use floe_execution::{Cancellation};
-use crate::{KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, LearningObservationKind, StageMemoryCandidate};
-use floe_agent_contract::PersonId;
 use crate::PersonalMemoryValue;
+use crate::{
+    KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, LearningObservationKind,
+    StageMemoryCandidate,
+};
+use chrono::{DateTime, Utc};
+use floe_agent_contract::PersonId;
+use floe_execution::Cancellation;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -16,8 +19,11 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use crate::{
+    EpistemicStatus, KnowledgeCandidateState, KnowledgeKind, KnowledgeOperation, KnowledgePayload,
+    LearningEvidenceRef, PersonalMemoryKind,
+};
 use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
-use crate::{EpistemicStatus, KnowledgeCandidateState, KnowledgeKind, KnowledgeOperation, KnowledgePayload, LearningEvidenceRef, PersonalMemoryKind};
 
 use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_inference::{DataRecipient, ExecutionLocation, ModelProfile, PlannedRoute};
@@ -66,7 +72,10 @@ impl ModelTransport for Runner {
         self.placement
     }
 
-    async fn generate(&self, request: ModelTransportRequest) -> Result<ModelTransportResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         self.requests.lock().unwrap().push(request);
         Ok(self.response.clone())
     }
@@ -221,7 +230,13 @@ async fn foundation_adapter_rejects_a_different_profile_before_generation() {
         data_recipient: profile.data_recipient,
     };
     assert_eq!(
-        review_with_model(&runner, FOUNDATION_LEARNER_PROFILE, route, model_request(input())).await,
+        review_with_model(
+            &runner,
+            FOUNDATION_LEARNER_PROFILE,
+            route,
+            model_request(input())
+        )
+        .await,
         Err(AgentFailure::PolicyDenied)
     );
     assert!(runner.requests.lock().unwrap().is_empty());

@@ -19,13 +19,14 @@ pub use a2a::{
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard,
     EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
 };
+pub use assignments::RegistryAssignments;
 pub use builtin_setup::{
     BuiltinExpertRefresh, BuiltinExpertStore, BuiltinSourceEvidence, ExpertRefreshOutcome,
     ensure_builtin_experts, expert_refresh_outcome,
 };
 pub use calendar_access::{
-    AdmittedCalendarSource, BoxFuture, CalendarAccessSource, CalendarSetupStore, CalendarSourceAdmission,
-    apply_calendar_access, install_calendar_expert,
+    AdmittedCalendarSource, BoxFuture, CalendarAccessSource, CalendarSetupStore,
+    CalendarSourceAdmission, apply_calendar_access, install_calendar_expert,
 };
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
 pub use dispatch::{
@@ -39,17 +40,17 @@ pub use floe_agent_contract::{
     ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
     MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef, ViewCancellation, check_running,
 };
-pub use assignments::RegistryAssignments;
 pub use registry::{
     AdmittedExpertInvocation, AgentId, AgentPackage, AgentRegistry, AssignmentOverview,
-    CalendarSourceBinding, CalendarViewClaim, RegisteredExpertInvocation, BuiltinExpertAssignmentReceipt,
-    BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, BuiltinSourceBinding,
-    BuiltinSourceState, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview,
-    CalendarExpertSetup, CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarViewBinding,
-    ExpertMetadata, ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec,
-    NoSetupValidator, PackageAssignment, PackageImplementation, PackageInstallation,
-    RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
-    RegistrySnapshot, ResolvedExpert, SetupValidator, SourceGrant, SourceGrants, eligible_cards,
+    BuiltinExpertAssignmentReceipt, BuiltinExpertSetup, BuiltinExpertSetupReceipt,
+    BuiltinExpertSetupResult, BuiltinSourceBinding, BuiltinSourceState, CalendarAccessChange,
+    CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
+    CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarSourceBinding,
+    CalendarViewBinding, CalendarViewClaim, ExpertMetadata, ExpertPackaging, ExpertPrivateState,
+    ExpertRule, ExpertSetupSpec, NoSetupValidator, PackageAssignment, PackageImplementation,
+    PackageInstallation, RegisteredExpertInvocation, RegistryConfiguration,
+    RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, ResolvedExpert,
+    SetupValidator, SourceGrant, SourceGrants, eligible_cards,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

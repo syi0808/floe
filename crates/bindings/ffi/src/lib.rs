@@ -155,11 +155,13 @@ pub fn agent_fixture(
                 .agent_runs()
                 .ensure_idle(person_id, session_id)
                 .map_err(agent_failure)?;
-            handle.runtime().block_on(handle.core().recover_agent_fixture(
-                person_id,
-                session_id,
-                expected_revision,
-            ))
+            handle
+                .runtime()
+                .block_on(handle.core().recover_agent_fixture(
+                    person_id,
+                    session_id,
+                    expected_revision,
+                ))
         }
         AgentFixtureOperationDto::Turn {
             session_id,
@@ -281,11 +283,7 @@ pub fn calendar_actions(
         .map_err(core_error)
 }
 
-fn timed_schedule(
-    starts_at: &str,
-    ends_at: &str,
-    timezone: &str,
-) -> WireResult<TimedSchedule> {
+fn timed_schedule(starts_at: &str, ends_at: &str, timezone: &str) -> WireResult<TimedSchedule> {
     TimedSchedule::new(
         parse_time(starts_at, "starts_at")?,
         parse_time(ends_at, "ends_at")?,
@@ -617,11 +615,9 @@ pub fn agent_fixture_run(
 ) -> WireResult<AgentFixtureRunDto> {
     check_version(request.schema_version)?;
     let command = match request.operation {
-        AgentFixtureRunOperationDto::Begin { prompt } => {
-            floe_app::AgentFixtureRunCommand::Begin {
-                prompt: fixture_prompt(prompt),
-            }
-        }
+        AgentFixtureRunOperationDto::Begin { prompt } => floe_app::AgentFixtureRunCommand::Begin {
+            prompt: fixture_prompt(prompt),
+        },
         AgentFixtureRunOperationDto::Poll { after_sequence } => {
             floe_app::AgentFixtureRunCommand::Poll { after_sequence }
         }
@@ -648,7 +644,15 @@ pub fn agent_fixture_run(
             .collect::<Result<Vec<_>, _>>()?,
         next_sequence: snapshot.next_sequence,
         done: snapshot.done,
-        session: snapshot.session.as_ref().map(protocol_payload).transpose()?,
-        failure: snapshot.failure.as_ref().map(protocol_payload).transpose()?,
+        session: snapshot
+            .session
+            .as_ref()
+            .map(protocol_payload)
+            .transpose()?,
+        failure: snapshot
+            .failure
+            .as_ref()
+            .map(protocol_payload)
+            .transpose()?,
     })
 }

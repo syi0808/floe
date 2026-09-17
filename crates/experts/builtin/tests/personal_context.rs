@@ -1,6 +1,10 @@
-use floe_agent_contract::{AgentFailure};
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{AttentionState, AttentionView, CapacityState, FeasibilityView, PeopleIdentity, PeopleView, RecoveryState, WellbeingView, personal_context_evidence, validate_attention_view, validate_people_view, validate_wellbeing_view};
+use floe_agent_contract::AgentFailure;
+use floe_context_contract::{
+    AttentionState, AttentionView, CapacityState, FeasibilityView, PeopleIdentity, PeopleView,
+    RecoveryState, WellbeingView, personal_context_evidence, validate_attention_view,
+    validate_people_view, validate_wellbeing_view,
+};
 use floe_context_contract::{FeasibilityItem, WeatherImpact, validate_feasibility_view};
 
 const NOW: i64 = 1_789_000_000_000;

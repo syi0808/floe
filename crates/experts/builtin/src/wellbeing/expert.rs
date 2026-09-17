@@ -3,14 +3,18 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{CalendarContextView, WellbeingView, personal_context_evidence, validate_wellbeing_view};
-use floe_agent_contract::{InferencePolicyDecision};
+use floe_agent_contract::AgentFailure;
 use floe_agent_contract::ExpertModel;
+use floe_agent_contract::InferencePolicyDecision;
+use floe_context_contract::{
+    CalendarContextView, WellbeingView, personal_context_evidence, validate_wellbeing_view,
+};
 
-use crate::prompts::{wellbeing_expert_prompt};
-use crate::shared::{PersonalExpertInvocation, add_schedule_views, run_personal_model, validate_judgment};
+use crate::prompts::wellbeing_expert_prompt;
+use crate::shared::{
+    PersonalExpertInvocation, add_schedule_views, run_personal_model, validate_judgment,
+};
 
 #[derive(Clone, Debug)]
 pub struct WellbeingContextViews {

@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use floe_connections::{ConnectionState, ConnectorSnapshot, ViewSnapshot, validate_connector_snapshot};
+use floe_connections::{
+    ConnectionState, ConnectorSnapshot, ViewSnapshot, validate_connector_snapshot,
+};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -265,11 +267,14 @@ fn route_logical_views_inner(
         ) else {
             continue;
         };
-        let reports_disagreement = snapshot
-            .connection
-            .last_failure
-            .as_ref()
-            .is_some_and(|failure| failure.kind == floe_connections::SourceFailureKind::SourceDisagreement);
+        let reports_disagreement =
+            snapshot
+                .connection
+                .last_failure
+                .as_ref()
+                .is_some_and(|failure| {
+                    failure.kind == floe_connections::SourceFailureKind::SourceDisagreement
+                });
         candidates
             .entry(&route.logical_source_id)
             .or_default()

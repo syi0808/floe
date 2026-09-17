@@ -73,7 +73,10 @@ impl TimelineRepository for TestTimelineRepository {
         expected: Revision,
     ) -> Result<(), DayError> {
         let mut state = self.state()?;
-        check_revision(state.events.get(&value.id).map(|event| event.revision), expected)?;
+        check_revision(
+            state.events.get(&value.id).map(|event| event.revision),
+            expected,
+        )?;
         state.events.insert(value.id, value.clone());
         Ok(())
     }
@@ -85,7 +88,10 @@ impl TimelineRepository for TestTimelineRepository {
 
     async fn put_task_if_revision(&self, value: &Task, expected: Revision) -> Result<(), DayError> {
         let mut state = self.state()?;
-        check_revision(state.tasks.get(&value.id).map(|task| task.revision), expected)?;
+        check_revision(
+            state.tasks.get(&value.id).map(|task| task.revision),
+            expected,
+        )?;
         state.tasks.insert(value.id, value.clone());
         Ok(())
     }
@@ -97,7 +103,10 @@ impl TimelineRepository for TestTimelineRepository {
 
     async fn put_note_if_revision(&self, value: &Note, expected: Revision) -> Result<(), DayError> {
         let mut state = self.state()?;
-        check_revision(state.notes.get(&value.id).map(|note| note.revision), expected)?;
+        check_revision(
+            state.notes.get(&value.id).map(|note| note.revision),
+            expected,
+        )?;
         state.notes.insert(value.id, value.clone());
         Ok(())
     }
@@ -183,8 +192,8 @@ impl TimelineRepository for TestTimelineRepository {
         let stored = state.mirrors.get(&person_id);
         // The store admits the write only against the mirror the caller read.
         match (stored, previous) {
-            (Some(stored), Some(previous)) if stored.connection.revision
-                != previous.connection.revision =>
+            (Some(stored), Some(previous))
+                if stored.connection.revision != previous.connection.revision =>
             {
                 return Err(DayError::conflict("stale calendar mirror"));
             }

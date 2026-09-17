@@ -17,7 +17,10 @@ pub trait PersonalGrantRecords: Sync {
     fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
 
     /// The device subject the Person reviewed this grant against.
-    fn reviewed_subject<'a>(&'a self, grant: GrantId) -> BoxFuture<'a, Result<String, AgentFailure>>;
+    fn reviewed_subject<'a>(
+        &'a self,
+        grant: GrantId,
+    ) -> BoxFuture<'a, Result<String, AgentFailure>>;
 
     /// The consumer policy recorded with the grant.
     fn consumer_policy<'a>(

@@ -1,7 +1,7 @@
-use floe_kernel::AgentFailure;
+use floe_context_contract::CalendarProvider;
 use floe_context_contract::ContextDependency;
 use floe_day::PersonId;
-use floe_context_contract::CalendarProvider;
+use floe_kernel::AgentFailure;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

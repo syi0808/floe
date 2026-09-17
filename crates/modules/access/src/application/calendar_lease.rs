@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
+use floe_context_contract::ContextDependency;
 use floe_kernel::AgentFailure;
-use floe_context_contract::{ContextDependency};
-use floe_kernel::{PersonId};
+use floe_kernel::PersonId;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -60,7 +60,11 @@ pub fn calendar_lease_dependency(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use floe_context_contract::{ConnectorId, ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_context_contract::{
+        ConnectorId, ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory,
+        GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
+        ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
     use tokio::time::Instant;
 
     fn sample_dependency(process_incarnation: Uuid) -> ContextDependency {

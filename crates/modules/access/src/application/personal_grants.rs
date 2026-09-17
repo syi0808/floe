@@ -205,10 +205,7 @@ fn same_source(grant: &DataAccessGrant, source: &GrantSourceBinding) -> bool {
         && binding.execution_owner() == source.execution_owner()
 }
 
-fn scope_for(
-    resource: &str,
-    consumer_names: Vec<String>,
-) -> Result<GrantScope, AgentFailure> {
+fn scope_for(resource: &str, consumer_names: Vec<String>) -> Result<GrantScope, AgentFailure> {
     let consumers = consumer_names
         .into_iter()
         .map(GrantConsumer::builtin)
@@ -286,7 +283,9 @@ fn canonical_consumers(
 fn feasibility_scope(consumer_names: Vec<String>) -> Result<GrantScope, AgentFailure> {
     if consumer_names.is_empty()
         || consumer_names.len() > 1
-        || consumer_names.iter().any(|consumer| consumer != "assistant")
+        || consumer_names
+            .iter()
+            .any(|consumer| consumer != "assistant")
     {
         return Err(AgentFailure::InvalidInput);
     }
@@ -310,7 +309,14 @@ async fn inspected_subject(
     cancellation: Cancellation,
 ) -> Result<String, AgentFailure> {
     let evidence = inspector
-        .inspect(person_id, device_id, probe, expected.clone(), None, cancellation)
+        .inspect(
+            person_id,
+            device_id,
+            probe,
+            expected.clone(),
+            None,
+            cancellation,
+        )
         .await?;
     if let Some(expected) = expected
         && (evidence.before != expected || evidence.after != expected)
@@ -428,7 +434,12 @@ async fn apply_attention(
             )?;
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
             let grant = store
-                .review_grant(source, scope, &expected_native_subject_fingerprint, expected)
+                .review_grant(
+                    source,
+                    scope,
+                    &expected_native_subject_fingerprint,
+                    expected,
+                )
                 .await?;
             Ok(report(
                 Some(&grant),

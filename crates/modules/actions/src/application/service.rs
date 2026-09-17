@@ -2,7 +2,11 @@ use chrono::{DateTime, Duration, Utc};
 use floe_day::{EventId, EventSchedule, PersonId, Revision, SourceRef, TimedSchedule};
 use uuid::Uuid;
 
-use crate::{ActionAuthority, ActionAuthorityMode, ActionBlockReason, ActionError, ActionFailure, ActionRepository, CalendarAction, CalendarActionPolicy, CalendarActionProvider, CalendarActionState, CalendarMutation};
+use crate::{
+    ActionAuthority, ActionAuthorityMode, ActionBlockReason, ActionError, ActionFailure,
+    ActionRepository, CalendarAction, CalendarActionPolicy, CalendarActionProvider,
+    CalendarActionState, CalendarMutation,
+};
 
 /// Owner of proposal admission, approval decisions, external dispatch and the
 /// uncertain-result recovery path for calendar writes.
@@ -145,7 +149,9 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
                 .cloned()
                 .ok_or_else(|| ActionError::not_found("event not found"))?;
             if original.revision != revision {
-                return Err(ActionError::conflict("event changed; reload before editing"));
+                return Err(ActionError::conflict(
+                    "event changed; reload before editing",
+                ));
             }
             if !matches!(&original.source, SourceRef::Calendar(source)
                 if source.calendar_id == calendar_id && source.can_modify)
@@ -231,7 +237,10 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
         let executing = self
             .transition(&action, CalendarActionState::Executing)
             .await?;
-        if let Some(reason) = self.action_block_reason(&executing, policy, clock()).await? {
+        if let Some(reason) = self
+            .action_block_reason(&executing, policy, clock())
+            .await?
+        {
             return self
                 .transition(&executing, CalendarActionState::Blocked { reason })
                 .await;
@@ -256,7 +265,10 @@ impl<'a, Repository: ActionRepository + ?Sized> ActionService<'a, Repository> {
             {
                 Some(ActionBlockReason::ScheduleConflict)
             }
-            Ok(_) => self.action_block_reason(&executing, policy, clock()).await?,
+            Ok(_) => {
+                self.action_block_reason(&executing, policy, clock())
+                    .await?
+            }
         };
         if let Some(reason) = reason {
             return self

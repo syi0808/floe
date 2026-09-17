@@ -98,9 +98,8 @@ pub trait RemoteGrantTransport: Sync {
 
 /// The Person's own record of who they trust and what they have granted.
 pub trait RemoteGrantStore: Sync {
-    fn pinned_producer<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>>;
+    fn pinned_producer<'a>(&'a self)
+    -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>>;
 
     /// Check the producer's signature over the descriptor, and read out what it
     /// names. A descriptor that does not name this pairing and this source is
@@ -112,8 +111,10 @@ pub trait RemoteGrantStore: Sync {
         query: RemoteSourceQuery<'a>,
     ) -> BoxFuture<'a, Result<RemoteViewSourceReference, AgentFailure>>;
 
-    fn grants<'a>(&'a self, limit: usize)
-    -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
+    fn grants<'a>(
+        &'a self,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
 
     fn find_view_grant<'a>(
         &'a self,

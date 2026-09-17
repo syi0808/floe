@@ -9,8 +9,7 @@ use std::future::Future;
 
 use floe_agent_contract::{
     AgentCard, AgentContext, AgentFailure, CapabilityDescriptor, ContextEnvelope,
-    InferencePolicyDecision, ModelPlacement, ModelReplay, ProviderReplay,
-    prompts::PromptAssembly,
+    InferencePolicyDecision, ModelPlacement, ModelReplay, ProviderReplay, prompts::PromptAssembly,
 };
 use floe_execution::Cancellation;
 use serde::{Deserialize, Serialize};

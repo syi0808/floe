@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use crate::BuiltinExpertKind;
 use crate::prompts::schedule_expert_prompt;
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::InferencePolicyDecision;
 use floe_agent_contract::{
     AgentFailure, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState, DataClass,
     ExpertAssignments, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation,
@@ -16,9 +18,7 @@ use floe_agent_contract::{
     ExpertTranscriptEntry, ModelPlacement, ModelReplay, ViewCancellation, check_running,
 };
 use floe_agent_runtime::execute_recorded;
-use floe_agent_contract::InferencePolicyDecision;
 use floe_execution::Cancellation;
-use floe_agent_contract::AGENT_VERSION;
 
 pub use floe_agent_contract::{
     ExpertTimelineView, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,

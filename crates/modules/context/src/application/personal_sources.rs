@@ -142,11 +142,7 @@ async fn acquire_personal_source(
         )
         .await?;
     within_read_window(read.deadline, cancellation)?;
-    subject_unchanged(
-        &subject,
-        &acquired.subject_before,
-        &acquired.subject_after,
-    )?;
+    subject_unchanged(&subject, &acquired.subject_before, &acquired.subject_after)?;
     let value = acquired.view.ok_or(AgentFailure::CapabilityUnavailable)?;
     // The Person can revoke or re-review while the device is answering, so the
     // grant the read started under has to be the one it finished under.
@@ -230,8 +226,7 @@ pub async fn read_people(
         source,
         resource: PEOPLE_RESOURCE,
         domain: PersonalDomain::People,
-        consumer: GrantConsumer::builtin(consumer_name)
-            .map_err(|_| AgentFailure::InvalidInput)?,
+        consumer: GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?,
         same_authority: true,
         reject_ambiguous: false,
         selected_handles: selected_handles.to_vec(),
@@ -284,8 +279,7 @@ pub async fn read_feasibility(
     cancellation: &Cancellation,
 ) -> Result<(FeasibilityView, ContextDependency), AgentFailure> {
     within_read_window(deadline, cancellation)?;
-    let consumer =
-        GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
     let source = feasibility_source(person_id, device_id, SourceAuthority::new())?;
     let read = PersonalRead {
         person_id,
@@ -357,8 +351,7 @@ pub async fn read_wellbeing(
     deadline: Instant,
     cancellation: &Cancellation,
 ) -> Result<(WellbeingView, ContextDependency), AgentFailure> {
-    let consumer =
-        GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
     // Wellbeing is the Person's own; no Expert reads it on their behalf.
     if consumer.identifier() != crate::ASSISTANT_CONSUMER {
         return Err(AgentFailure::PolicyDenied);
@@ -472,8 +465,13 @@ pub async fn admit_attention(
         return Err(AgentFailure::AccessReviewRequired);
     }
     let policy = records.consumer_policy(current_grant.id()).await?;
-    let (observation_id, process_incarnation_id) =
-        driver.commit_attention_projection(person_id, &host_epoch, device_id, &view, &native_subject)?;
+    let (observation_id, process_incarnation_id) = driver.commit_attention_projection(
+        person_id,
+        &host_epoch,
+        device_id,
+        &view,
+        &native_subject,
+    )?;
     let dependency = ContextDependency::try_new(
         person_id,
         current_grant.id(),
@@ -518,14 +516,13 @@ pub fn personal_dependency_holds(
     device_id: &str,
     dependency: &ContextDependency,
 ) -> Result<(), AgentFailure> {
-    if dependency.person_id() != person_id
-        || dependency.source().person_id() != person_id
-    {
+    if dependency.person_id() != person_id || dependency.source().person_id() != person_id {
         return Err(AgentFailure::PolicyDenied);
     }
     if dependency.source().connector().as_str() == ATTENTION_CONNECTOR {
         if dependency.source().connection_id().as_str() != ATTENTION_CONNECTION
-            || dependency.source().execution_owner().as_str() != attention_execution_owner(device_id)
+            || dependency.source().execution_owner().as_str()
+                != attention_execution_owner(device_id)
             || !matches!(
                 dependency.consumer().identifier(),
                 crate::ASSISTANT_CONSUMER | ATTENTION_EXPERT_CONSUMER
@@ -557,8 +554,7 @@ pub fn personal_dependency_holds(
     }
     if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
         if dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
-            || dependency.source().execution_owner().as_str()
-                != apple_execution_owner(device_id)
+            || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
             || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
@@ -587,8 +583,7 @@ pub fn personal_dependency_holds(
     }
     if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
         if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
-            || dependency.source().execution_owner().as_str()
-                != apple_execution_owner(device_id)
+            || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
             || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
@@ -621,10 +616,7 @@ pub fn personal_dependency_holds(
     ) || dependency.source().connection_id().as_str()
         != contacts_connection(dependency.source().connector().as_str())
         || dependency.source().execution_owner().as_str()
-            != contacts_execution_owner(
-                dependency.source().connector().as_str(),
-                device_id,
-            )
+            != contacts_execution_owner(dependency.source().connector().as_str(), device_id)
         || !matches!(
             dependency.consumer().identifier(),
             "assistant" | "contacts.expert"
@@ -633,8 +625,7 @@ pub fn personal_dependency_holds(
         || dependency.purpose() != GrantPurpose::Assistant
         || dependency.processing() != &ProcessingRestriction::LocalOnly
         || dependency.resources()
-            != [ResourceHandle::try_new(PEOPLE_RESOURCE)
-                .map_err(|_| AgentFailure::PolicyDenied)?]
+            != [ResourceHandle::try_new(PEOPLE_RESOURCE).map_err(|_| AgentFailure::PolicyDenied)?]
         || dependency.categories() != [GrantDataCategory::Derived]
     {
         return Err(AgentFailure::PolicyDenied);
@@ -680,10 +671,7 @@ pub async fn authorize_personal_dependency(
             || dependency.source().connection_id().as_str()
                 != contacts_connection(dependency.source().connector().as_str())
             || dependency.source().execution_owner().as_str()
-                != contacts_execution_owner(
-                    dependency.source().connector().as_str(),
-                    device_id,
-                )
+                != contacts_execution_owner(dependency.source().connector().as_str(), device_id)
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
             || dependency.processing() != &ProcessingRestriction::LocalOnly
@@ -716,7 +704,8 @@ pub async fn authorize_personal_dependency(
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let observation = driver.trusted_personal_observation(
+        let observation = driver
+            .trusted_personal_observation(
                 person_id,
                 device_id,
                 dependency.observation_id(),
@@ -725,8 +714,7 @@ pub async fn authorize_personal_dependency(
             .map_err(|_| AgentFailure::PolicyDenied)?;
         let reviewed_subject = records.reviewed_subject(grant.id()).await?;
         if observation.native_subject_fingerprint != reviewed_subject
-            || dependency.observed_at().timestamp_millis()
-                != observation.observed_at_unix_ms
+            || dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
             || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
             || dependency.query_fingerprint() != observation.query_fingerprint
         {
@@ -741,8 +729,7 @@ pub async fn authorize_personal_dependency(
     if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
         if placements != [ModelPlacement::DeviceLocal]
             || dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
-            || dependency.source().execution_owner().as_str()
-                != apple_execution_owner(device_id)
+            || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
             || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
@@ -756,24 +743,24 @@ pub async fn authorize_personal_dependency(
             return Err(AgentFailure::PolicyDenied);
         }
         let grants = records.grants().await?;
-        let grant =
-            active_read_grant(
-                &grants,
-                &PersonalReadRequirement {
-                    source: dependency.source(),
-                    resource: FEASIBILITY_RESOURCE,
-                    consumer: dependency.consumer(),
-                    same_authority: false,
-                    reject_ambiguous: true,
-                },
-            )?;
+        let grant = active_read_grant(
+            &grants,
+            &PersonalReadRequirement {
+                source: dependency.source(),
+                resource: FEASIBILITY_RESOURCE,
+                consumer: dependency.consumer(),
+                same_authority: false,
+                reject_ambiguous: true,
+            },
+        )?;
         if dependency.grant_id() != grant.id()
             || dependency.grant_authority() != grant.authority()
             || dependency.source() != grant.source()
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let observation = driver.trusted_personal_observation(
+        let observation = driver
+            .trusted_personal_observation(
                 person_id,
                 device_id,
                 dependency.observation_id(),
@@ -788,9 +775,7 @@ pub async fn authorize_personal_dependency(
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        if dependency.consumer_policy()
-            != records.consumer_policy(grant.id()).await?
-        {
+        if dependency.consumer_policy() != records.consumer_policy(grant.id()).await? {
             return Err(AgentFailure::PolicyDenied);
         }
         return Ok(());
@@ -798,8 +783,7 @@ pub async fn authorize_personal_dependency(
     if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
         if placements != [ModelPlacement::DeviceLocal]
             || dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
-            || dependency.source().execution_owner().as_str()
-                != apple_execution_owner(device_id)
+            || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
             || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
@@ -829,7 +813,8 @@ pub async fn authorize_personal_dependency(
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let observation = driver.trusted_personal_observation(
+        let observation = driver
+            .trusted_personal_observation(
                 person_id,
                 device_id,
                 dependency.observation_id(),
@@ -844,9 +829,7 @@ pub async fn authorize_personal_dependency(
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        if dependency.consumer_policy()
-            != records.consumer_policy(grant.id()).await?
-        {
+        if dependency.consumer_policy() != records.consumer_policy(grant.id()).await? {
             return Err(AgentFailure::PolicyDenied);
         }
         return Ok(());
@@ -897,7 +880,8 @@ pub async fn authorize_personal_dependency(
     {
         return Err(AgentFailure::PolicyDenied);
     }
-    let (current_view, trusted_observation_subject) = driver.trusted_attention_observation(
+    let (current_view, trusted_observation_subject) = driver
+        .trusted_attention_observation(
             person_id,
             device_id,
             dependency.observation_id(),

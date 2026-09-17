@@ -14,9 +14,7 @@ use floe_access::{
     remote_dependency_resource, remote_dependency_source_admits, remote_view_source,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture, ModelPlacement, PersonId};
-use floe_context_contract::{
-    ContextDependency, GrantConsumer, GrantScope, GrantSourceBinding,
-};
+use floe_context_contract::{ContextDependency, GrantConsumer, GrantScope, GrantSourceBinding};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -48,10 +46,7 @@ pub trait RemoteViewTransport: RemoteGrantTransport {
 }
 
 /// The resource handle a grant must name to admit this view from this source.
-pub fn remote_view_grant_resource(
-    view_id: &str,
-    source: &GrantSourceBinding,
-) -> Option<String> {
+pub fn remote_view_grant_resource(view_id: &str, source: &GrantSourceBinding) -> Option<String> {
     (is_remote_view(view_id)
         && remote_view_connector_admissible(view_id, source.connector().as_str()))
     .then(|| remote_view_resource(view_id, source.connection_id().as_str()))
@@ -205,5 +200,9 @@ pub async fn authorize_remote_dependency(
             reference.source_authority,
         )
         .await?;
-    remote_dependency_binding_matches(binding.consumer_policy, binding.grant.authority(), dependency)
+    remote_dependency_binding_matches(
+        binding.consumer_policy,
+        binding.grant.authority(),
+        dependency,
+    )
 }

@@ -1,6 +1,14 @@
-use floe_agent_contract::{DataClass};
-use floe_connections::{CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConnectionState, ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor, ConnectorSnapshot, ExecutionLocation, RetentionClass, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot};
-use floe_context::{ContextRoutingRuntime, ContextTransferClass, DeviceClass, DevicePresence, DeviceScope, LogicalViewRoute, LogicalViewRoutingPolicy, RoutedAvailability, RuntimeDeviceState, RuntimeSourcePolicy, route_logical_views, route_logical_views_with_runtime};
+use floe_agent_contract::DataClass;
+use floe_connections::{
+    CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConnectionState, ConnectorCapabilityDescriptor,
+    ConnectorConnectionSnapshot, ConnectorDescriptor, ConnectorSnapshot, ExecutionLocation,
+    RetentionClass, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot,
+};
+use floe_context::{
+    ContextRoutingRuntime, ContextTransferClass, DeviceClass, DevicePresence, DeviceScope,
+    LogicalViewRoute, LogicalViewRoutingPolicy, RoutedAvailability, RuntimeDeviceState,
+    RuntimeSourcePolicy, route_logical_views, route_logical_views_with_runtime,
+};
 
 const NOW: u64 = 2_000_000;
 

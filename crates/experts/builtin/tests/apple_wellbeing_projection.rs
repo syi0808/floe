@@ -1,4 +1,6 @@
-use floe_context_contract::{CapacityState, RecoveryState, WellbeingView, personal_context_evidence, validate_wellbeing_view};
+use floe_context_contract::{
+    CapacityState, RecoveryState, WellbeingView, personal_context_evidence, validate_wellbeing_view,
+};
 
 #[test]
 fn apple_fixture_crosses_the_derived_wellbeing_boundary() {

@@ -2,7 +2,12 @@ use std::collections::HashSet;
 
 use floe_kernel::{AgentFailure, PersonId};
 
-use crate::{EpistemicStatus, EvidenceProjectionPurpose, EvidenceReader, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceSnapshot, LearningOutcome, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin, MemorySummary, PersonalMemoryKind, StageMemoryCandidate};
+use crate::{
+    EpistemicStatus, EvidenceProjectionPurpose, EvidenceReader, KNOWLEDGE_VERSION, KnowledgeActor,
+    KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceSnapshot,
+    LearningOutcome, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin, MemorySummary, PersonalMemoryKind,
+    StageMemoryCandidate,
+};
 
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_MEMORY_STATEMENT_BYTES: usize = 2 * 1024;
@@ -208,7 +213,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{KnowledgeKind, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceRef, LearningObservationKind, PersonalMemoryValue};
+    use crate::{
+        KnowledgeKind, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
+        LearningEvidenceRef, LearningObservationKind, PersonalMemoryValue,
+    };
 
     fn request() -> StageMemoryCandidate {
         StageMemoryCandidate {
@@ -406,15 +414,11 @@ mod tests {
             requests: Mutex::new(Vec::new()),
         };
 
-        assert!(admit_learning_evidence(
-            &reader,
-            person_id,
-            session_id,
-            4,
-            &request_turns,
-        )
-        .await
-        .is_ok());
+        assert!(
+            admit_learning_evidence(&reader, person_id, session_id, 4, &request_turns,)
+                .await
+                .is_ok()
+        );
         assert_eq!(
             admit_learning_evidence(&reader, person_id, session_id, 4, &request_turns).await,
             Err(AgentFailure::Conflict)
@@ -450,8 +454,7 @@ mod tests {
             (person_id, session_id, 1, vec![turn_id, turn_id]),
         ] {
             assert_eq!(
-                admit_learning_evidence(&reader, person_id, session_id, revision, &turn_ids)
-                    .await,
+                admit_learning_evidence(&reader, person_id, session_id, revision, &turn_ids).await,
                 Err(AgentFailure::InvalidInput)
             );
         }

@@ -3,14 +3,16 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{CommunicationView};
-use floe_agent_contract::{InferencePolicyDecision};
+use floe_agent_contract::AgentFailure;
 use floe_agent_contract::ExpertModel;
+use floe_agent_contract::InferencePolicyDecision;
+use floe_context_contract::CommunicationView;
 
-use crate::prompts::{communication_expert_prompt};
-use crate::shared::{MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary};
+use crate::prompts::communication_expert_prompt;
+use crate::shared::{
+    MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

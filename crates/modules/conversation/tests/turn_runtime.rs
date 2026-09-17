@@ -14,10 +14,10 @@ use floe_context_contract::{
     ContextEvidence, ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass,
     EpistemicStatus, LearningEvidenceRef, ModelPlacement, PersonalMemoryKind, TransferConsent,
 };
-use floe_execution::{CancelReason, Cancellation};
-use floe_kernel::AgentFailure;
 use floe_conversation::{prompts::manager_prompt, *};
+use floe_execution::{CancelReason, Cancellation};
 use floe_inference::ModelAttemptState;
+use floe_kernel::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 

@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::{
     AgentCard, CapabilityDescriptor, ContextEvidence, ContextIssue, ContextMemory, DataClass,
-    LearningEvidenceRef, prompts::{PromptAssembly, PromptComponentKind},
+    LearningEvidenceRef,
+    prompts::{PromptAssembly, PromptComponentKind},
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

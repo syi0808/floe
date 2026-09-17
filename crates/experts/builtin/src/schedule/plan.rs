@@ -8,10 +8,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 
-use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_agent_contract::InferencePolicyDecision;
-use floe_day::CalendarRange;
+use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context_contract::CalendarProvider;
+use floe_day::CalendarRange;
 
 /// The explicit user shortcut that asks for a protected focus window today.
 pub const FOCUS_REQUEST: &str = "/focus";
@@ -167,9 +167,7 @@ pub fn run_policy(
 }
 
 /// The instants one calendar day covers, in the offsets the range declares.
-pub fn day_bounds(
-    range: &CalendarRange,
-) -> Result<(DateTime<Utc>, DateTime<Utc>), AgentFailure> {
+pub fn day_bounds(range: &CalendarRange) -> Result<(DateTime<Utc>, DateTime<Utc>), AgentFailure> {
     if !range.is_valid() {
         return Err(AgentFailure::InvalidInput);
     }
@@ -253,9 +251,16 @@ mod tests {
             Err(AgentFailure::CapabilityUnavailable)
         );
         assert!(
-            !plan_run("what is today like?", CalendarProvider::Fixture, 2, false, local, now)
-                .unwrap()
-                .propose_focus
+            !plan_run(
+                "what is today like?",
+                CalendarProvider::Fixture,
+                2,
+                false,
+                local,
+                now
+            )
+            .unwrap()
+            .propose_focus
         );
     }
 

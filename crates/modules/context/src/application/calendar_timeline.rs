@@ -94,16 +94,14 @@ impl<
     Access: CalendarSource + CalendarReadAdmission + Send,
     Mirror: CalendarMirrorReader + Send,
     Clock: Fn() -> DateTime<Utc> + Sync + Send,
-> floe_access::DependencyResolver
-    for GovernedDependencyResolver<'_, '_, Access, Mirror, Clock>
+> floe_access::DependencyResolver for GovernedDependencyResolver<'_, '_, Access, Mirror, Clock>
 {
     fn authorize<'a>(
         &'a self,
         dependency: &'a ContextDependency,
         request: &'a floe_access::DependencyAuthorization,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
         Box::pin(self.resolve(dependency, request.deadline, request.cancellation.clone()))
     }
 }
@@ -112,7 +110,6 @@ struct AuthorizedRead {
     stamp: CalendarReadAccessStamp,
     admission: Option<CalendarReadAccessAdmission>,
 }
-
 
 impl<
     'host,
@@ -292,7 +289,8 @@ impl<
         self.consumed
             .validate((self.clock)(), Instant::now(), |dependency, scope| {
                 admission.is_some_and(|admission| {
-                    admission.scope() == scope && admission_matches_dependency(admission, dependency)
+                    admission.scope() == scope
+                        && admission_matches_dependency(admission, dependency)
                 })
             })
     }
@@ -373,11 +371,8 @@ impl<
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .insert(key, lease);
-        self.consumed.record(
-            dependency,
-            admission.scope().clone(),
-            expires_at_monotonic,
-        )?;
+        self.consumed
+            .record(dependency, admission.scope().clone(), expires_at_monotonic)?;
         let mut saved = self
             .stamp
             .lock()
@@ -530,9 +525,7 @@ impl<
                 .ok_or(AgentFailure::StaleContext)?;
             if let Some(failure) = status.error {
                 return Err(match failure {
-                    floe_day::CalendarFailure::PermissionDenied => {
-                        AgentFailure::CapabilityDenied
-                    }
+                    floe_day::CalendarFailure::PermissionDenied => AgentFailure::CapabilityDenied,
                     _ => AgentFailure::CapabilityUnavailable,
                 });
             }
@@ -882,9 +875,7 @@ impl<
         for batch in observation.batches {
             if let Some(failure) = batch.failure {
                 return Err(match failure {
-                    floe_day::CalendarFailure::PermissionDenied => {
-                        AgentFailure::CapabilityDenied
-                    }
+                    floe_day::CalendarFailure::PermissionDenied => AgentFailure::CapabilityDenied,
                     _ => AgentFailure::CapabilityUnavailable,
                 });
             }

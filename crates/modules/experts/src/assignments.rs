@@ -58,7 +58,9 @@ impl ExpertAssignments for RegistryAssignments<'_> {
             return Err(AgentFailure::Conflict);
         }
         let (builtin_expert, focus_minimum_minutes) = match &resolved.package.implementation {
-            PackageImplementation::Builtin { expert } => (Some(expert.as_str().to_owned()), focus_minutes),
+            PackageImplementation::Builtin { expert } => {
+                (Some(expert.as_str().to_owned()), focus_minutes)
+            }
             // A declarative package's own rule sets the floor; a request may ask
             // for a longer window but never a shorter one.
             PackageImplementation::Declarative { rules } => match rules.as_slice() {

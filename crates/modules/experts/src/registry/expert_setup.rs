@@ -8,14 +8,13 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, PackageKind};
 use floe_agent_contract::{AGENT_VERSION, PersonId};
+use floe_agent_contract::{AgentFailure, PackageKind};
 
 use super::{
     AgentId, AgentPackage, AgentRegistry, BuiltinExpertAssignmentReceipt,
     BuiltinExpertSetupReceipt, BuiltinSourceBinding, BuiltinSourceState, ExpertPrivateState,
-    PackageAssignment, PackageImplementation, PackageInstallation, RegistryOverview,
-    SourceGrant,
+    PackageAssignment, PackageImplementation, PackageInstallation, RegistryOverview, SourceGrant,
 };
 
 /// One Expert's installation, as its owning crate declares it.
@@ -38,8 +37,6 @@ pub struct BuiltinExpertSetup {
     pub setup_id: Uuid,
     pub sources: Vec<BuiltinSourceBinding>,
 }
-
-
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -253,8 +250,10 @@ impl AgentRegistry {
                 {
                     return None;
                 }
-                if matches!(package.implementation, PackageImplementation::Builtin { .. })
-                    && !self.assignment_has_mandatory_source(assignment.id)
+                if matches!(
+                    package.implementation,
+                    PackageImplementation::Builtin { .. }
+                ) && !self.assignment_has_mandatory_source(assignment.id)
                 {
                     return None;
                 }
@@ -311,11 +310,7 @@ impl AgentRegistry {
 
     /// Whether the Expert behind `expert_assignment_id` was granted `source`
     /// at setup time, and what stands in the way when it was not.
-    pub fn assignment_source_grant(
-        &self,
-        assignment_id: Uuid,
-        source: &AgentId,
-    ) -> SourceGrant {
+    pub fn assignment_source_grant(&self, assignment_id: Uuid, source: &AgentId) -> SourceGrant {
         let Some((setup, receipt)) = self.snapshot.builtin_setups.iter().find_map(|setup| {
             setup
                 .assignments
@@ -363,11 +358,15 @@ impl AgentRegistry {
             if receipt.setup_id.is_nil()
                 || receipt.expected_revision >= self.revision()
                 || receipt.assignments.is_empty()
-                || receipt.assignments.iter().enumerate().any(|(position, entry)| {
-                    receipt.assignments[..position]
-                        .iter()
-                        .any(|other| other.expert == entry.expert)
-                })
+                || receipt
+                    .assignments
+                    .iter()
+                    .enumerate()
+                    .any(|(position, entry)| {
+                        receipt.assignments[..position]
+                            .iter()
+                            .any(|other| other.expert == entry.expert)
+                    })
                 || self.snapshot.builtin_setups[..index].iter().any(|other| {
                     other.setup_id == receipt.setup_id || other.person_id == receipt.person_id
                 })
@@ -397,7 +396,9 @@ impl AgentRegistry {
                 if tool_package.reference.kind != PackageKind::Tool
                     || expert_package.reference.kind != PackageKind::Expert
                     || expert_package.reference.id != expert_receipt.expert.as_str()
-                    || !expert_package.required_tools.contains(&tool_package.reference)
+                    || !expert_package
+                        .required_tools
+                        .contains(&tool_package.reference)
                     || tool_assignment.installation_id != expert_receipt.tool_installation_id
                     || expert_assignment.installation_id != expert_receipt.expert_installation_id
                     || tool_assignment.granted_view_handles != expected_views
@@ -524,7 +525,9 @@ fn validate_specs(specs: &[ExpertSetupSpec]) -> Result<(), AgentFailure> {
                 || !spec.packages[1]
                     .required_tools
                     .contains(&spec.packages[0].reference)
-                || specs[..index].iter().any(|other| other.expert == spec.expert)
+                || specs[..index]
+                    .iter()
+                    .any(|other| other.expert == spec.expert)
         })
     {
         return Err(AgentFailure::InvalidInput);

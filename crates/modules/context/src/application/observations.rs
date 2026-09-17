@@ -14,8 +14,8 @@ use std::{
 
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::CalendarProvider;
-use floe_day::CalendarBatch;
 use floe_context_contract::PersonId;
+use floe_day::CalendarBatch;
 use serde_json::Value;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -166,10 +166,7 @@ impl ObservationRegistry {
         self.entries
             .lock()
             .map_err(|_| AgentFailure::Interrupted)?
-            .insert(
-                (person_id, device_id.to_owned(), view_id.to_owned()),
-                entry,
-            );
+            .insert((person_id, device_id.to_owned(), view_id.to_owned()), entry);
         Ok(true)
     }
 

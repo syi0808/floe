@@ -80,8 +80,7 @@ pub async fn install_calendar_expert(
     let connection_id = match admitted {
         Some(admitted) => {
             request.source_authority = Some(admitted.source_authority);
-            request.reviewed_native_subject_fingerprint =
-                Some(admitted.native_subject_fingerprint);
+            request.reviewed_native_subject_fingerprint = Some(admitted.native_subject_fingerprint);
             admitted.connection_id
         }
         None => request.setup_id.to_string(),
@@ -116,17 +115,16 @@ pub async fn apply_calendar_access(
     }
     // A scope change may be what first binds this setup to a native calendar,
     // in which case the device has to admit it before the registry records it.
-    if matches!(
-        configuration.change,
-        CalendarAccessChange::SetScope { .. }
-    ) && let Some(admitted) = admission
-        .admit(&scope_request(&configuration))
-        .await?
+    if matches!(configuration.change, CalendarAccessChange::SetScope { .. })
+        && let Some(admitted) = admission.admit(&scope_request(&configuration)).await?
     {
         let connection_id = admitted.connection_id.clone();
         record_admission(&mut configuration.change, admitted);
         return store
-            .configure(configuration, CalendarAccessSource::Native { connection_id })
+            .configure(
+                configuration,
+                CalendarAccessSource::Native { connection_id },
+            )
             .await;
     }
     store
@@ -203,9 +201,7 @@ fn setup_request(
             connection_scope: view.connection_scope,
             connection_revision: view.connection_revision,
             source_authority: setup.source_authority.or(view.source_authority),
-            reviewed_native_subject_fingerprint: setup
-                .reviewed_native_subject_fingerprint
-                .clone(),
+            reviewed_native_subject_fingerprint: setup.reviewed_native_subject_fingerprint.clone(),
         },
     }
 }

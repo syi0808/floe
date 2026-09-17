@@ -17,8 +17,6 @@ const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 pub const BEHAVIOR_KERNEL_REVISION: u64 = 3;
 pub const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
 
-
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptRole {
@@ -135,7 +133,6 @@ impl PromptAssembly {
         Ok(())
     }
 }
-
 
 /// Assemble a role prompt from the shared kernel, the role text and the protocol.
 pub fn expert_prompt(

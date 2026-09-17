@@ -2,9 +2,9 @@
 //!
 //! It needs one view — granted communication — and the paired server model.
 
-use floe_context_contract::{AuthorizedRead, HeldGrant};
-use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::AgentFailure;
+use floe_context_contract::{AuthorizedRead, HeldGrant};
 
 use floe_context_contract::CommunicationView;
 

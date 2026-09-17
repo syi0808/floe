@@ -5,7 +5,7 @@ use floe_kernel::PersonId;
 use uuid::Uuid;
 
 use crate::{DataAccessGrant, GrantTransitionError};
-use floe_context_contract::{GrantId};
+use floe_context_contract::GrantId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccessGrantMutation {
@@ -95,7 +95,10 @@ pub fn apply_grant_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
+        GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
 
     fn fixture() -> (PersonId, DataAccessGrant, GrantScope) {
         let person = PersonId::new();

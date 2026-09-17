@@ -8,23 +8,22 @@
 
 use std::{future::Future, pin::Pin};
 
+use floe_agent_contract::PersonId;
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, ExpertModel};
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, NativeContextView, PeopleView,
     WellbeingView, WorkContextView,
 };
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{ContextDependency, MemoryContextSnapshot, SourceGrant};
 use floe_execution::Cancellation;
-use floe_agent_contract::PersonId;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context_contract::{CommunicationView, ConfirmedInteractionView};
 use crate::{
-    BuiltinContextSource, MailExpertInvocation, PersonalExpertInvocation,
-    PortfolioExpertInvocation,
+    BuiltinContextSource, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
 };
+use floe_context_contract::{CommunicationView, ConfirmedInteractionView};
 
 /// Every builtin Expert runs one bounded model call with the same ceiling.
 const MAX_EXPERT_MODEL_TOKENS: u64 = 40_960;
@@ -192,8 +191,10 @@ pub trait BuiltinExpertHost: Sync {
         people: &'a PeopleView,
     ) -> Acquiring<'a, Vec<ConfirmedInteractionView>>;
 
-    fn wellbeing_view<'a>(&'a self, request: &'a BuiltinExpertRequest)
-    -> Acquiring<'a, WellbeingView>;
+    fn wellbeing_view<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> Acquiring<'a, WellbeingView>;
 
     fn attention_view<'a>(
         &'a self,

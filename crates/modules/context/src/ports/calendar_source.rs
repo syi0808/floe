@@ -10,10 +10,10 @@ use std::future::Future;
 
 use chrono::{DateTime, Utc};
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
+use floe_agent_contract::{AgentFailure, PersonId};
 use floe_context_contract::CalendarProvider;
 use floe_day::{CalendarBatch, CalendarMirror};
 use floe_execution::Cancellation;
-use floe_agent_contract::{AgentFailure, PersonId};
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 

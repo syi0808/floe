@@ -9,16 +9,16 @@
 use floe_app::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
-    CalendarObservationPublication, CalendarProvider, CalendarSourceFailure,
-    LocalContextCommand, LocalContextOutcome,
-    MAX_ACQUISITION_DEADLINE_MS, NativeCalendarBatch, NativeCalendarFailure, NativeCalendarRecord,
-    NativeEventSchedule, PersonId, PersonalAcquisitionRequest, PersonalAcquisitionResult,
-    PersonalDomain, attention_failure, personal_failure, valid_native_subject_fingerprint,
+    CalendarObservationPublication, CalendarProvider, CalendarSourceFailure, LocalContextCommand,
+    LocalContextOutcome, MAX_ACQUISITION_DEADLINE_MS, NativeCalendarBatch, NativeCalendarFailure,
+    NativeCalendarRecord, NativeEventSchedule, PersonId, PersonalAcquisitionRequest,
+    PersonalAcquisitionResult, PersonalDomain, attention_failure, personal_failure,
+    valid_native_subject_fingerprint,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::{
-    CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, CalendarRecordDto,
-    EventScheduleDto, LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
+    CalendarBatchDto, CalendarFailureDto, CalendarProviderDto, CalendarRecordDto, EventScheduleDto,
+    LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAcquisitionResultDto, LocalContextAttentionAcquisitionModeDto,
     LocalContextAttentionAcquisitionRequestDto, LocalContextAttentionAcquisitionResultDto,
     LocalContextOperationDto, LocalContextPersonalAcquisitionRequestDto,
@@ -259,9 +259,7 @@ fn personal_domain_dto(value: PersonalDomain) -> LocalContextPersonalDomainDto {
     }
 }
 
-pub fn validate_acquisition_request(
-    request: &LocalContextAcquisitionRequestDto,
-) -> WireResult<()> {
+pub fn validate_acquisition_request(request: &LocalContextAcquisitionRequestDto) -> WireResult<()> {
     validate_host_epoch(&request.host_epoch)?;
     validate_handle(&request.request_id, "operation.request_id")?;
     validate_handle(&request.person_id, "operation.person_id")?;

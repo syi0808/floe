@@ -3,24 +3,24 @@
 //! Day owns the timeline; the wire owns the DTO. Neither of them owns the
 //! translation, so it lives here, at the binding that needs both.
 
-
-use floe_app::{
-    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange,
-    CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture, CaptureProcessing, CaptureSource, Classification, DaySnapshot, DomainError,
-    DomainRef, Event, EventId, EventSchedule, Note, NoteId, Priority, SourceRef, Task,
-    TaskId, TimedSchedule, TimelineItem,
-};
 #[cfg(test)]
 use floe_app::Revision;
+use floe_app::{
+    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange,
+    CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture,
+    CaptureProcessing, CaptureSource, Classification, DaySnapshot, DomainError, DomainRef, Event,
+    EventId, EventSchedule, Note, NoteId, Priority, SourceRef, Task, TaskId, TimedSchedule,
+    TimelineItem,
+};
 use floe_protocol::conversion::{
     ProtocolConversionError, parse_date, parse_timestamp, parse_uuid, timestamp,
 };
 use floe_protocol::{
-    CalendarBatchDto, CalendarConnectionDto, CalendarFailureDto,
-    CalendarRangeDto, CalendarRecordDto, CalendarSelectionDto, CalendarSourceDto,
-    CalendarSyncStatusDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto, ClassificationDto,
-    DaySnapshotDto, DomainRefDto, EventDto, EventScheduleDto, NoteDto, PROTOCOL_VERSION,
-    PriorityDto, SourceRefDto, TaskDto, TimelineItemDto,
+    CalendarBatchDto, CalendarConnectionDto, CalendarFailureDto, CalendarRangeDto,
+    CalendarRecordDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto, CaptureDto,
+    CaptureProcessingDto, CaptureSourceDto, ClassificationDto, DaySnapshotDto, DomainRefDto,
+    EventDto, EventScheduleDto, NoteDto, PROTOCOL_VERSION, PriorityDto, SourceRefDto, TaskDto,
+    TimelineItemDto,
 };
 
 /// The identity and scope codecs stay with the wire; re-exported so a caller
@@ -232,9 +232,7 @@ pub fn source_ref_to_dto(value: SourceRef) -> SourceRefDto {
 }
 
 #[cfg(test)]
-pub fn source_ref_from_dto(
-    value: SourceRefDto,
-) -> Result<SourceRef, ProtocolConversionError> {
+pub fn source_ref_from_dto(value: SourceRefDto) -> Result<SourceRef, ProtocolConversionError> {
     match value {
         SourceRefDto::Manual => Ok(SourceRef::Manual),
         SourceRefDto::Calendar { source } => {
@@ -255,9 +253,7 @@ pub fn domain_ref_to_dto(value: DomainRef) -> DomainRefDto {
     }
 }
 
-pub fn domain_ref_from_dto(
-    value: DomainRefDto,
-) -> Result<DomainRef, ProtocolConversionError> {
+pub fn domain_ref_from_dto(value: DomainRefDto) -> Result<DomainRef, ProtocolConversionError> {
     match value {
         DomainRefDto::Event { id } => Ok(DomainRef::Event(parse_event_id(&id, "id")?)),
         DomainRefDto::Task { id } => Ok(DomainRef::Task(parse_task_id(&id, "id")?)),
@@ -287,20 +283,24 @@ pub fn event_schedule_from_dto(
             starts_at,
             ends_at,
             timezone,
-        } => Ok(EventSchedule::Timed(TimedSchedule::new(
-            parse_timestamp(&starts_at, "starts_at")?,
-            parse_timestamp(&ends_at, "ends_at")?,
-            timezone,
-        )
-        .map_err(domain_error)?)),
+        } => Ok(EventSchedule::Timed(
+            TimedSchedule::new(
+                parse_timestamp(&starts_at, "starts_at")?,
+                parse_timestamp(&ends_at, "ends_at")?,
+                timezone,
+            )
+            .map_err(domain_error)?,
+        )),
         EventScheduleDto::AllDay {
             start_date,
             end_date_exclusive,
-        } => Ok(EventSchedule::AllDay(AllDaySchedule::new(
-            parse_date(&start_date, "start_date")?,
-            parse_date(&end_date_exclusive, "end_date_exclusive")?,
-        )
-        .map_err(domain_error)?)),
+        } => Ok(EventSchedule::AllDay(
+            AllDaySchedule::new(
+                parse_date(&start_date, "start_date")?,
+                parse_date(&end_date_exclusive, "end_date_exclusive")?,
+            )
+            .map_err(domain_error)?,
+        )),
     }
 }
 
@@ -324,7 +324,8 @@ pub fn event_from_dto(value: EventDto) -> Result<Event, ProtocolConversionError>
     let schedule = event_schedule_from_dto(value.schedule)?;
     let source = source_ref_from_dto(value.source)?;
     let created_at = parse_timestamp(&value.created_at, "created_at")?;
-    let mut event = Event::new(person_id, value.title, schedule, source, created_at).map_err(domain_error)?;
+    let mut event =
+        Event::new(person_id, value.title, schedule, source, created_at).map_err(domain_error)?;
     event.id = parse_event_id(&value.id, "id")?;
     event.updated_at = parse_timestamp(&value.updated_at, "updated_at")?;
     event.revision = Revision(value.revision);
@@ -405,8 +406,7 @@ pub fn note_from_dto(value: NoteDto) -> Result<Note, ProtocolConversionError> {
     let person_id = parse_person_id(&value.person_id, "person_id")?;
     let source = source_ref_from_dto(value.source)?;
     let created_at = parse_timestamp(&value.created_at, "created_at")?;
-    let mut note =
-        Note::new(person_id, value.content, source, created_at).map_err(domain_error)?;
+    let mut note = Note::new(person_id, value.content, source, created_at).map_err(domain_error)?;
     note.id = parse_note_id(&value.id, "id")?;
     note.updated_at = parse_timestamp(&value.updated_at, "updated_at")?;
     note.revision = Revision(value.revision);
@@ -579,9 +579,7 @@ pub fn capture_from_dto(value: CaptureDto) -> Result<Capture, ProtocolConversion
     Ok(capture)
 }
 
-pub fn day_snapshot_to_dto(
-    value: DaySnapshot,
-) -> Result<DaySnapshotDto, ProtocolConversionError> {
+pub fn day_snapshot_to_dto(value: DaySnapshot) -> Result<DaySnapshotDto, ProtocolConversionError> {
     Ok(DaySnapshotDto {
         schema_version: PROTOCOL_VERSION,
         person_id: value.person_id.to_string(),

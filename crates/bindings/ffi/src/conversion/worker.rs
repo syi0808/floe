@@ -10,8 +10,8 @@ use floe_app::{
     CalendarProposalInspection, CalendarSubjectPreview, CalendarSubjectRequest,
     ContactsAccessChange, ContactsAccessConfiguration, ConversationSessionOperation,
     ConversationTurnRequest, FeasibilityGrantQuery, FixtureOperation, GrantState,
-    MemoryReviewDecision, MemoryReviewResult, PairingIssuer, PairingStatus,
-    PersonalAccessChange, PersonalAccessConfiguration, PersonId, ProcessingRestriction,
+    MemoryReviewDecision, MemoryReviewResult, PairingIssuer, PairingStatus, PersonId,
+    PersonalAccessChange, PersonalAccessConfiguration, ProcessingRestriction,
     RemoteCalendarGrantPreview, RemoteEnrollmentStatus, RemoteOwnerPublicKey,
     RemotePairingChallenge, RemoteProducerIdentity, RemoteTurnRoute, VaultState, WorkerAction,
     WorkerOperation, WorkerResult,
@@ -524,9 +524,7 @@ fn feasibility_query(query: &FeasibilityGrantQueryDto) -> FeasibilityGrantQuery 
     }
 }
 
-fn personal_access(
-    request: &PersonalAccessConfigurationDto,
-) -> PersonalAccessConfiguration {
+fn personal_access(request: &PersonalAccessConfigurationDto) -> PersonalAccessConfiguration {
     PersonalAccessConfiguration {
         connector: request.connector.clone(),
         device_id: request.device_id.clone(),
@@ -552,9 +550,7 @@ fn personal_access(
     }
 }
 
-fn contacts_access(
-    request: &ContactsAccessConfigurationDto,
-) -> ContactsAccessConfiguration {
+fn contacts_access(request: &ContactsAccessConfigurationDto) -> ContactsAccessConfiguration {
     ContactsAccessConfiguration {
         connector: request.connector.clone(),
         device_id: request.device_id.clone(),
@@ -594,13 +590,14 @@ fn remote_route(route: &AgentRemoteRouteDto) -> RemoteTurnRoute {
             external: route.external,
             allow_external: route.allow_external,
             recipient: route.recipient.clone(),
-            pairing: route.pairing.as_ref().map(|pairing| {
-                floe_app::RoutePairing {
+            pairing: route
+                .pairing
+                .as_ref()
+                .map(|pairing| floe_app::RoutePairing {
                     client_id: pairing.client_id.clone(),
                     person_id: pairing.person_id.clone(),
                     device_id: pairing.device_id.clone(),
-                }
-            }),
+                }),
         },
         // The source catalog is a separate admission that rides the same wire.
         calendar_connections: route
@@ -624,9 +621,7 @@ fn conversation_turn_request(
         text: request.text.clone(),
         device_id: request.device_id.clone(),
         profile: match &request.profile {
-            AppProfileSelectionDto::Auto => {
-                floe_app::ProfileSelection::Auto
-            }
+            AppProfileSelectionDto::Auto => floe_app::ProfileSelection::Auto,
             AppProfileSelectionDto::Explicit { profile_id } => {
                 floe_app::ProfileSelection::Explicit(profile_id.clone())
             }
@@ -699,8 +694,10 @@ fn pairing_status_dto(status: PairingStatus) -> RemotePairingStatusDto {
         status: status.status,
         person_id: status.person_id,
         device_id: status.device_id,
-        producer: status.producer.as_ref().map(|producer| {
-            RemoteProducerIdentityDto {
+        producer: status
+            .producer
+            .as_ref()
+            .map(|producer| RemoteProducerIdentityDto {
                 schema_version: producer.schema_version,
                 instance_id: producer.instance_id.clone(),
                 execution_owner: producer.execution_owner.clone(),
@@ -708,8 +705,7 @@ fn pairing_status_dto(status: PairingStatus) -> RemotePairingStatusDto {
                 key_id: producer.key_id.clone(),
                 public_key: producer.public_key.clone(),
                 fingerprint: producer.fingerprint.clone(),
-            }
-        }),
+            }),
         issuer: status.issuer.as_ref().map(pairing_issuer_dto),
         issuer_fingerprint: status.issuer_fingerprint,
         token: status.token,
@@ -1096,9 +1092,7 @@ pub fn worker_operation(operation: AgentVaultOperationDto) -> WireResult<WorkerO
         AgentVaultOperationDto::Submit { action } => WorkerOperation::Submit {
             action: Box::new(worker_action(action)?),
         },
-        AgentVaultOperationDto::Poll { after_sequence } => {
-            WorkerOperation::Poll { after_sequence }
-        }
+        AgentVaultOperationDto::Poll { after_sequence } => WorkerOperation::Poll { after_sequence },
         AgentVaultOperationDto::Stop {} => WorkerOperation::Stop,
         AgentVaultOperationDto::Release {} => WorkerOperation::Release,
     })
@@ -1460,5 +1454,4 @@ mod tests {
             assert!(!envelope.retryable);
         }
     }
-
 }

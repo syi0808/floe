@@ -3,13 +3,13 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{LogisticsView, logistics_context_evidence, validate_logistics_view};
-use floe_agent_contract::{InferencePolicyDecision};
+use floe_agent_contract::AgentFailure;
 use floe_agent_contract::ExpertModel;
+use floe_agent_contract::InferencePolicyDecision;
+use floe_context_contract::{LogisticsView, logistics_context_evidence, validate_logistics_view};
 
-use crate::prompts::{life_logistics_expert_prompt};
+use crate::prompts::life_logistics_expert_prompt;
 use crate::shared::{PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

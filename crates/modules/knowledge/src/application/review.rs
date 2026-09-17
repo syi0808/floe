@@ -2,7 +2,12 @@ use chrono::{DateTime, Utc};
 use floe_kernel::AgentFailure;
 use uuid::Uuid;
 
-use crate::{EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState};
+use crate::{
+    EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
+    KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult,
+    KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
+    KnowledgeRevisionState,
+};
 
 /// One decision the Person made about a learned memory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -236,7 +241,10 @@ mod tests {
     use floe_kernel::PersonId;
 
     use super::*;
-    use crate::{EpistemicStatus, KnowledgeKind, KnowledgePayload, LearningEvidenceRef, PersonalMemoryKind, PersonalMemoryValue};
+    use crate::{
+        EpistemicStatus, KnowledgeKind, KnowledgePayload, LearningEvidenceRef, PersonalMemoryKind,
+        PersonalMemoryValue,
+    };
 
     fn candidate() -> KnowledgeCandidate {
         KnowledgeCandidate {

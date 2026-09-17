@@ -8,7 +8,10 @@ use floe_agent_runtime::{Engine, EnginePorts};
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, RunId};
 
-use crate::{ConversationPorts, ConversationRepository, FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_PROMPT, RunState, RunTerminal};
+use crate::{
+    ConversationPorts, ConversationRepository, FINALIZATION_OUTPUT_CONTRACT,
+    FINALIZATION_ROLE_PROMPT, RunState, RunTerminal,
+};
 
 use super::recovery::project_active_journal;
 

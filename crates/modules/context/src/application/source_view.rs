@@ -80,10 +80,8 @@ impl<Payload: Serialize> SourceView<Payload> {
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
         }
-        reservation.validate_binding(
-            dependency.person_id(),
-            dependency.process_incarnation_id(),
-        )?;
+        reservation
+            .validate_binding(dependency.person_id(), dependency.process_incarnation_id())?;
         bounded_serialized_size(&payload, reservation.byte_allowance())?;
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
@@ -165,8 +163,8 @@ mod tests {
     };
     use serde::ser::{Error as _, SerializeSeq, Serializer};
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use uuid::Uuid;
 

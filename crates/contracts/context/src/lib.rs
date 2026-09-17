@@ -15,16 +15,16 @@ mod evidence;
 mod memory;
 pub mod views;
 
-pub use floe_kernel::PersonId;
-pub use authorized_read::{AuthorizedRead, HeldGrant};
 pub use assembly::{OptionalSource, acquire_optional_source, record_source_issue};
+pub use authorized_read::{AuthorizedRead, HeldGrant};
 pub use calendar::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};
 pub use evidence::{ContextEvidence, MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_BYTES};
-pub use views::*;
+pub use floe_kernel::PersonId;
 pub use memory::{
     ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
     MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
 };
+pub use views::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

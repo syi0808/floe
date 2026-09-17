@@ -147,10 +147,7 @@ impl ActionRepository for TestActionStore {
         Ok(self.actions()?.authority.clone())
     }
 
-    async fn put_action_authority(
-        &self,
-        authority: &ActionAuthority,
-    ) -> Result<(), ActionError> {
+    async fn put_action_authority(&self, authority: &ActionAuthority) -> Result<(), ActionError> {
         self.actions()?.authority = Some(authority.clone());
         Ok(())
     }

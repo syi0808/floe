@@ -1,5 +1,5 @@
-use floe_context_contract::{FeasibilityView};
-use floe_context_contract::{validate_feasibility_view};
+use floe_context_contract::FeasibilityView;
+use floe_context_contract::validate_feasibility_view;
 
 #[test]
 fn swift_feasibility_fixture_matches_rust_contract() {

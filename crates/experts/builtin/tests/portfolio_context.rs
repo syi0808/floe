@@ -1,7 +1,10 @@
-use floe_agent_contract::{AgentFailure};
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind, logistics_context_evidence, validate_logistics_view, validate_work_context_view, work_context_evidence};
+use floe_agent_contract::AgentFailure;
 use floe_context_contract::{LogisticsItem, LogisticsItemKind};
+use floe_context_contract::{
+    LogisticsView, WorkContextItem, WorkContextView, WorkItemKind, logistics_context_evidence,
+    validate_logistics_view, validate_work_context_view, work_context_evidence,
+};
 
 const NOW: i64 = 1_789_000_000_000;
 

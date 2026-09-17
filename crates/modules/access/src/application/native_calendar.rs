@@ -45,9 +45,7 @@ pub fn native_calendar_source_current(
     connection: NativeCalendarConnection<'_>,
     review: NativeCalendarReview<'_>,
 ) -> Result<SourceAuthority, AgentFailure> {
-    if !binds(connection, review)
-        || review.source_authority != Some(connection.source_authority)
-    {
+    if !binds(connection, review) || review.source_authority != Some(connection.source_authority) {
         return Err(AgentFailure::StaleContext);
     }
     review

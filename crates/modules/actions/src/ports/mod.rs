@@ -1,17 +1,17 @@
 use std::{collections::BTreeMap, future::Future};
 
 use chrono::{DateTime, Utc};
-use floe_kernel::AgentFailure;
+use floe_agent_contract::ExpertResult;
 use floe_context_contract::ContextDependency;
 use floe_day::{CalendarConnection, CalendarMirror, Event, PersonId};
-use floe_agent_contract::ExpertResult;
+use floe_kernel::AgentFailure;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::domain::{
-    ActionAuthority, ActionAuthorityMode, ActionFailure, AgentActionAdmission,
-    AgentActionEnvelope, CalendarAction, CalendarActionState, CalendarCreateReceipt,
-    CalendarPreflight, ExpertProposalReference,
+    ActionAuthority, ActionAuthorityMode, ActionFailure, AgentActionAdmission, AgentActionEnvelope,
+    CalendarAction, CalendarActionState, CalendarCreateReceipt, CalendarPreflight,
+    ExpertProposalReference,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,8 +93,7 @@ pub trait ActionRepository: Send + Sync {
         &self,
         person_id: PersonId,
     ) -> Result<Option<ActionAuthority>, ActionError>;
-    async fn put_action_authority(&self, authority: &ActionAuthority)
-    -> Result<(), ActionError>;
+    async fn put_action_authority(&self, authority: &ActionAuthority) -> Result<(), ActionError>;
     async fn calendar_mirror(
         &self,
         person_id: PersonId,

@@ -82,7 +82,11 @@ pub fn parse_person(value: &str) -> WireResult<PersonId> {
         .map_err(|value| invalid("person_id", value.to_string()))
 }
 
-pub fn parse_id<T>(value: &str, field: &'static str, wrap: impl FnOnce(Uuid) -> T) -> WireResult<T> {
+pub fn parse_id<T>(
+    value: &str,
+    field: &'static str,
+    wrap: impl FnOnce(Uuid) -> T,
+) -> WireResult<T> {
     Uuid::parse_str(value)
         .map(wrap)
         .map_err(|value| invalid(field, value.to_string()))

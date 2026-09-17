@@ -3,14 +3,20 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, DataClass};
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence, validate_confirmed_interaction_view, validate_people_view};
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::ExpertModel;
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{AgentFailure, DataClass};
+use floe_context_contract::{
+    ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence,
+    validate_confirmed_interaction_view, validate_people_view,
+};
 
-use crate::prompts::{relationships_expert_prompt};
-use crate::shared::{validate_summary, PersonalExpertInvocation, ensure_unique_source, run_personal_model, valid_handle};
+use crate::prompts::relationships_expert_prompt;
+use crate::shared::{
+    PersonalExpertInvocation, ensure_unique_source, run_personal_model, valid_handle,
+    validate_summary,
+};
 
 #[derive(Clone, Debug)]
 pub struct RelationshipsContextViews {

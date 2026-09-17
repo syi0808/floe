@@ -12,9 +12,9 @@ use floe_agent_contract::{
     AgentFailure, AllowedCatalog, BoundedContext, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, EndpointInvocation, EngineRequest, ExecutionJournal, ExpertReport,
     JournalAck, JournalEvent, ModelPlacement, ModelPort, ModelRequest, ModelResponse, ModelStep,
-    ModelUsage,
-    RoleSpec, TaskId, TaskSnapshot, TaskState, ToolCall, ToolPort, ToolResult,
+    ModelUsage, RoleSpec, TaskId, TaskSnapshot, TaskState, ToolCall, ToolPort, ToolResult,
 };
+use floe_agent_contract::{RunId, TraceContext};
 use floe_agent_runtime::Engine;
 use floe_execution::{
     Cancellation, ExecutionScope,
@@ -24,7 +24,6 @@ use floe_experts::{
     Directory, DirectoryEntry, DirectoryQuery, TaskActivation, TaskAdmission, TaskCoordinator,
     TaskRecord, TaskRepository,
 };
-use floe_agent_contract::{RunId, TraceContext};
 use tokio::time::Instant;
 use uuid::Uuid;
 

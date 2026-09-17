@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    ModelPlacement,
     AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_AGENT_MESSAGES, MAX_OUTPUT_BYTES,
+    ModelPlacement,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

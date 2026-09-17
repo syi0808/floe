@@ -65,11 +65,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use chrono::{TimeZone, Utc};
+    use floe_context_contract::PersonId;
     use floe_context_contract::{
         ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
-    use floe_context_contract::PersonId;
     use uuid::Uuid;
 
     use super::*;

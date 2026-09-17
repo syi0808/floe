@@ -1,21 +1,26 @@
 use std::{collections::VecDeque, sync::Mutex};
 
-use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
-use floe_context_contract::{NativeContextItem, NativeContextView, TaskContextPriority};
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::PersonId;
+use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
     AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
     InferencePolicyDecision,
 };
-use floe_agent_contract::AGENT_VERSION;
-use floe_execution::{Cancellation};
+use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
+use floe_context_contract::CommunicationItem;
 use floe_context_contract::{CalendarContextItem, CalendarContextView, CommunicationView};
-use floe_experts_builtin::commitments::{CommitmentEvidenceSource, CommitmentsContextViews, FindingEpistemicStatus, run_commitments_expert_with_views};
+use floe_context_contract::{
+    ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind,
+};
+use floe_context_contract::{NativeContextItem, NativeContextView, TaskContextPriority};
+use floe_execution::Cancellation;
+use floe_experts_builtin::MailExpertInvocation;
+use floe_experts_builtin::commitments::{
+    CommitmentEvidenceSource, CommitmentsContextViews, FindingEpistemicStatus,
+    run_commitments_expert_with_views,
+};
 use floe_experts_builtin::communication::{CommunicationResultKind, run_communication_expert};
-use floe_experts_builtin::{MailExpertInvocation};
-use floe_context_contract::{CommunicationItem};
-use floe_agent_contract::prompts::PromptRole;
-use floe_context_contract::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind};
-use floe_agent_contract::PersonId;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::time::{Duration, Instant};

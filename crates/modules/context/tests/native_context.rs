@@ -44,7 +44,10 @@ async fn optional_context_keeps_budget_issues_distinct_from_unreadable_storage()
     .await
     .unwrap();
     assert!(tasks.value.is_none());
-    assert_eq!(tasks.issue.unwrap().reason, ContextIssueReason::BudgetExceeded);
+    assert_eq!(
+        tasks.issue.unwrap().reason,
+        ContextIssueReason::BudgetExceeded
+    );
     let notes = acquire_optional_source(
         ContextSource::Notes,
         note_context_view(
@@ -59,7 +62,10 @@ async fn optional_context_keeps_budget_issues_distinct_from_unreadable_storage()
     .await
     .unwrap();
     assert!(notes.value.is_none());
-    assert_eq!(notes.issue.unwrap().reason, ContextIssueReason::BudgetExceeded);
+    assert_eq!(
+        notes.issue.unwrap().reason,
+        ContextIssueReason::BudgetExceeded
+    );
 
     // A row belonging to someone else is not a budget issue and never degrades
     // into a partial view: the read fails.
@@ -166,9 +172,16 @@ async fn projects_bounded_floe_native_task_and_note_views() {
         .unwrap();
 
     let task_handle = Uuid::new_v4();
-    let task_view = task_context_view(&timeline, person, task_handle, now, 8, MAX_NATIVE_CONTEXT_BYTES)
-        .await
-        .unwrap();
+    let task_view = task_context_view(
+        &timeline,
+        person,
+        task_handle,
+        now,
+        8,
+        MAX_NATIVE_CONTEXT_BYTES,
+    )
+    .await
+    .unwrap();
     assert_eq!(task_view.view_id, FLOE_TASK_VIEW_ID);
     assert_eq!(task_view.items.len(), 1);
     assert_eq!(
@@ -191,9 +204,16 @@ async fn projects_bounded_floe_native_task_and_note_views() {
     .unwrap();
 
     let note_handle = Uuid::new_v4();
-    let note_view = note_context_view(&timeline, person, note_handle, now, 8, MAX_NATIVE_CONTEXT_BYTES)
-        .await
-        .unwrap();
+    let note_view = note_context_view(
+        &timeline,
+        person,
+        note_handle,
+        now,
+        8,
+        MAX_NATIVE_CONTEXT_BYTES,
+    )
+    .await
+    .unwrap();
     assert_eq!(note_view.view_id, FLOE_NOTE_VIEW_ID);
     assert_eq!(
         note_view.items[0],
@@ -233,9 +253,16 @@ async fn enforces_item_and_byte_budgets_before_exposure() {
         .unwrap();
 
     assert!(
-        task_context_view(&timeline, person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES)
-            .await
-            .is_err()
+        task_context_view(
+            &timeline,
+            person,
+            Uuid::new_v4(),
+            now,
+            1,
+            MAX_NATIVE_CONTEXT_BYTES
+        )
+        .await
+        .is_err()
     );
     assert!(
         task_context_view(&timeline, person, Uuid::new_v4(), now, 8, 64)

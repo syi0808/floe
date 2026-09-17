@@ -27,6 +27,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 base64 = "0.22.1"
+floe-kernel = { path = "../../contracts/kernel" }
 # Dev-only: the control client's tests sign with a real vault key holder.
 floe-vault = { path = "../vault" }
 tempfile = "3.23.0"

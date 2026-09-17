@@ -25,11 +25,13 @@ impl CapabilityJournalSender {
             sender: Some(sender),
         }
     }
-
 }
 
 impl CapabilityJournal for CapabilityJournalSender {
-    fn record<'a>(&'a self, record: CapabilityExecution) -> BoxFuture<'a, Result<(), AgentFailure>> {
+    fn record<'a>(
+        &'a self,
+        record: CapabilityExecution,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
             let Some(sender) = &self.sender else {
                 return Ok(());

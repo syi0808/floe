@@ -49,12 +49,12 @@ pub use expert_model::{
 };
 pub use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,
-    ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass, ExpertTimelineView,
-    MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem,
-    DependencyCoverage, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
+    ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass, DependencyCoverage,
+    EpistemicStatus, ExpertTimelineView, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
+    MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,
     MemoryContextSnapshot, ModelPlacement, PersonalMemoryKind, SourceAuthority, SourceGrant,
-    TransferConsent,
+    TimelineViewItem, TransferConsent,
 };
 pub use floe_execution::{CancelReason, Cancellation, ExecutionScope};
 pub use floe_kernel::{

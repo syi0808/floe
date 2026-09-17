@@ -1107,6 +1107,7 @@ dependencies = [
  "floe-day",
  "floe-execution",
  "floe-inference",
+ "floe-kernel",
  "floe-native",
  "floe-vault",
  "reqwest",

@@ -180,7 +180,9 @@ pub fn review_remote_view_grant(
         };
     }
     Ok(RemoteViewGrantReview::Activate {
-        grant_id: existing.map(|grant| grant.id()).unwrap_or_else(GrantId::new),
+        grant_id: existing
+            .map(|grant| grant.id())
+            .unwrap_or_else(GrantId::new),
         expected: existing.map(|grant| grant.authority()),
     })
 }
@@ -281,8 +283,10 @@ pub fn remote_dependency_source_admits(
         return Err(AgentFailure::PolicyDenied);
     }
     match dependency.processing() {
-        ProcessingRestriction::ApprovedRecipient { recipient: approved, .. }
-            if approved == recipient => {}
+        ProcessingRestriction::ApprovedRecipient {
+            recipient: approved,
+            ..
+        } if approved == recipient => {}
         _ => return Err(AgentFailure::PolicyDenied),
     }
     Ok(())
@@ -294,8 +298,7 @@ pub fn remote_dependency_binding_matches(
     authority: GrantAuthority,
     dependency: &ContextDependency,
 ) -> Result<(), AgentFailure> {
-    if consumer_policy != dependency.consumer_policy()
-        || authority != dependency.grant_authority()
+    if consumer_policy != dependency.consumer_policy() || authority != dependency.grant_authority()
     {
         return Err(AgentFailure::PolicyDenied);
     }

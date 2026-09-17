@@ -38,7 +38,9 @@ pub fn narrow_by_source_boundary(
         let crosses = messages
             .iter()
             .filter(|message| message.turn_id() == *turn_id)
-            .any(|message| crate::turn::carries_source_history(std::slice::from_ref(message), boundary));
+            .any(|message| {
+                crate::turn::carries_source_history(std::slice::from_ref(message), boundary)
+            });
         if crosses {
             decision.retain_derived = false;
         }

@@ -4,14 +4,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 use floe_agent_contract::AGENT_VERSION;
-use floe_inference::{
-    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
-};
-use floe_execution::limits::{CallLimiter, CallLimits};
+use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation};
+use floe_execution::limits::{CallLimiter, CallLimits};
 use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute};
+use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
@@ -492,7 +490,10 @@ impl ModelTransport for ServerModelRunner {
         self.placement
     }
 
-    async fn generate(&self, request: ModelTransportRequest) -> Result<ModelTransportResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         request.prompt.validate()?;
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -1225,7 +1226,6 @@ mod tests {
         let mut wrong_purpose = route();
         wrong_purpose.purpose = "other".into();
         assert!(ServerModelRunner::new_model_only(wrong_purpose).is_err());
-
     }
 
     #[test]

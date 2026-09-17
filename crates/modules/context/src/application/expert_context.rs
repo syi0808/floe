@@ -46,8 +46,7 @@ impl ExpertContextRequest<'_> {
             self.placement,
             self.protection,
             context,
-            u64::try_from(self.now.timestamp_millis())
-                .map_err(|_| AgentFailure::StaleContext)?,
+            u64::try_from(self.now.timestamp_millis()).map_err(|_| AgentFailure::StaleContext)?,
         )
     }
 }

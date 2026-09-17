@@ -203,7 +203,10 @@ mod tests {
         grant
     }
 
-    fn requirement<'a>(source: &'a GrantSourceBinding, consumer: &'a GrantConsumer) -> PersonalReadRequirement<'a> {
+    fn requirement<'a>(
+        source: &'a GrantSourceBinding,
+        consumer: &'a GrantConsumer,
+    ) -> PersonalReadRequirement<'a> {
         PersonalReadRequirement {
             source,
             resource: "attention.coarse",
@@ -228,7 +231,10 @@ mod tests {
             active_read_grant(&other_resource, &requirement(&bound, &consumer)),
             Err(AgentFailure::AccessReviewRequired)
         );
-        let other_device = [active(source(person_id, "device:other"), "attention.coarse")];
+        let other_device = [active(
+            source(person_id, "device:other"),
+            "attention.coarse",
+        )];
         assert_eq!(
             active_read_grant(&other_device, &requirement(&bound, &consumer)),
             Err(AgentFailure::AccessReviewRequired)
@@ -273,7 +279,10 @@ mod tests {
             Err(AgentFailure::PolicyDenied)
         );
         assert_eq!(
-            grant_unchanged(&before, &active(source(person_id, "device:this"), "attention.coarse")),
+            grant_unchanged(
+                &before,
+                &active(source(person_id, "device:this"), "attention.coarse")
+            ),
             Err(AgentFailure::PolicyDenied)
         );
     }

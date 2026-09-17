@@ -57,7 +57,7 @@ pub fn bounded_history_start(
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn bounded_history_keeps_complete_latest_turns_and_exact_array_budget() {
         let old = Uuid::new_v4();
         let current = Uuid::new_v4();

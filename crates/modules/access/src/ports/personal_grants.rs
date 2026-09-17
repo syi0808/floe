@@ -50,11 +50,15 @@ pub trait PersonalSubjectInspector: Sync {
 
 /// The grant the Person already left, and where a reviewed one is committed.
 pub trait PersonalGrantStore: Sync {
-    fn grants<'a>(&'a self, limit: usize)
-    -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
+    fn grants<'a>(
+        &'a self,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>>;
 
-    fn reviewed_subject<'a>(&'a self, grant: GrantId)
-    -> BoxFuture<'a, Result<String, AgentFailure>>;
+    fn reviewed_subject<'a>(
+        &'a self,
+        grant: GrantId,
+    ) -> BoxFuture<'a, Result<String, AgentFailure>>;
 
     fn selected_handles<'a>(
         &'a self,

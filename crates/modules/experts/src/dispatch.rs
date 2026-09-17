@@ -4,10 +4,10 @@
 //! composition root from statically registered endpoints, and the request and
 //! report shapes belong to the caller's own boundary.
 
+use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{
     AgentFailure, BoxFuture, DependencyCoverage, EndpointInvocation, ExpertReport,
 };
-use floe_agent_contract::AGENT_VERSION;
 use uuid::Uuid;
 
 use crate::{
@@ -95,7 +95,10 @@ pub fn admit_expert_message(
     {
         return Err(AgentFailure::CapabilityDenied);
     }
-    request.message.task_id.ok_or(AgentFailure::CapabilityDenied)
+    request
+        .message
+        .task_id
+        .ok_or(AgentFailure::CapabilityDenied)
 }
 
 /// Assemble the completed Task that carries one Expert's result.
@@ -184,11 +187,11 @@ pub async fn delegate_expert_task<Repository: crate::TaskRepository>(
     selected_definition_revision: u64,
 ) -> Result<floe_agent_contract::TaskReceipt, AgentFailure> {
     use floe_agent_contract::{DelegationPort, DelegationRequest, InvocationKey, TaskId};
+    use floe_agent_contract::{RunId, TraceContext};
     use floe_execution::{
         ExecutionScope,
         budget::{BudgetConfig, BudgetLedger},
     };
-    use floe_agent_contract::{RunId, TraceContext};
 
     let task_uuid = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
     let task_id = TaskId::from_uuid(task_uuid).ok_or(AgentFailure::InvalidInput)?;

@@ -1,5 +1,5 @@
 use crate::{AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep};
-use floe_agent_contract::{AgentFailure};
+use floe_agent_contract::AgentFailure;
 
 pub async fn generate_with_recovery<Model: ModelRunner>(
     model: &Model,

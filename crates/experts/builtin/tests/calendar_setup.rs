@@ -1,3 +1,4 @@
+use floe_agent_contract::PersonId;
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context_contract::{CalendarProvider, CalendarScope};
 use floe_experts::{
@@ -5,7 +6,6 @@ use floe_experts::{
     ExpertPackaging, ExpertPrivateState, PackageImplementation, PackageKind, PackageRef,
 };
 use floe_experts_builtin::BuiltinExpertKind;
-use floe_agent_contract::PersonId;
 use uuid::Uuid;
 
 /// How the Schedule Expert is packaged when its calendar setup is installed.
@@ -51,7 +51,9 @@ fn native_calendar_grants_without_authority_are_rejected() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
     let request = setup_request(&registry, CalendarProvider::EventKit);
-    registry.install_calendar_expert(person, &request, &packaging()).unwrap();
+    registry
+        .install_calendar_expert(person, &request, &packaging())
+        .unwrap();
     let mut encoded = serde_json::to_value(registry.snapshot()).unwrap();
     encoded["calendar_views"][0]
         .as_object_mut()
@@ -77,7 +79,9 @@ fn setup_is_one_revision_default_off_and_uses_the_builtin_schedule_catalog() {
     ] {
         let mut registry = AgentRegistry::new(Uuid::new_v4());
         let request = setup_request(&registry, provider);
-        let setup = registry.install_calendar_expert(person, &request, &packaging()).unwrap();
+        let setup = registry
+            .install_calendar_expert(person, &request, &packaging())
+            .unwrap();
         assert_eq!(registry.revision(), request.expected_revision + 1);
         let snapshot = registry.snapshot();
         let binding = snapshot.calendar_views.last().unwrap();
@@ -125,7 +129,9 @@ fn setup_is_one_revision_default_off_and_uses_the_builtin_schedule_catalog() {
         );
         assert_eq!(registry.snapshot().packages.len(), 2);
         let next = setup_request(&registry, provider);
-        registry.install_calendar_expert(person, &next, &packaging()).unwrap();
+        registry
+            .install_calendar_expert(person, &next, &packaging())
+            .unwrap();
         assert_eq!(registry.snapshot().packages.len(), 2);
         assert_eq!(registry.snapshot().installations.len(), 4);
     }
@@ -136,7 +142,9 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
     let request = setup_request(&registry, CalendarProvider::EventKit);
-    let setup = registry.install_calendar_expert(person, &request, &packaging()).unwrap();
+    let setup = registry
+        .install_calendar_expert(person, &request, &packaging())
+        .unwrap();
 
     let configure = |registry: &AgentRegistry, setup_id, change| CalendarAccessConfiguration {
         instance_id: registry.instance_id(),
@@ -239,7 +247,9 @@ fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
     let request = setup_request(&registry, CalendarProvider::EventKit);
-    let setup = registry.install_calendar_expert(person, &request, &packaging()).unwrap();
+    let setup = registry
+        .install_calendar_expert(person, &request, &packaging())
+        .unwrap();
     registry
         .set_calendar_view_enabled(registry.revision(), person, setup.view_handle, true)
         .unwrap();
@@ -277,9 +287,11 @@ fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
             7 => changed.connection_revision += 1,
             _ => changed.setup_id = Uuid::new_v4(),
         }
-        assert!(registry
-            .install_calendar_expert(owner, &changed, &packaging())
-            .is_err());
+        assert!(
+            registry
+                .install_calendar_expert(owner, &changed, &packaging())
+                .is_err()
+        );
         assert_eq!(registry.snapshot(), recorded);
     }
 }
@@ -315,7 +327,9 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
         assert_eq!(registry.snapshot(), before);
     }
     let first = setup_request(&registry, CalendarProvider::Fixture);
-    registry.install_calendar_expert(person, &first, &packaging()).unwrap();
+    registry
+        .install_calendar_expert(person, &first, &packaging())
+        .unwrap();
     let mut full = registry.snapshot();
     while full.installations.len() < 128 {
         let mut installation = full.installations[0].clone();
@@ -348,7 +362,9 @@ fn corrupt_setup_receipts_fail_restore() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
     let request = setup_request(&registry, CalendarProvider::Fixture);
-    registry.install_calendar_expert(person, &request, &packaging()).unwrap();
+    registry
+        .install_calendar_expert(person, &request, &packaging())
+        .unwrap();
     let before = registry.snapshot();
     for mode in 0..11 {
         let mut invalid = before.clone();
@@ -364,7 +380,10 @@ fn corrupt_setup_receipts_fail_restore() {
             6 => invalid.calendar_views[0].device_id.clear(),
             7 => invalid.calendar_setups[0].connection_revision = 0,
             8 => invalid.calendar_views[0].connection_revision += 1,
-            9 => invalid.calendar_views[0].connection_scope = floe_context_contract::CalendarScope::All,
+            9 => {
+                invalid.calendar_views[0].connection_scope =
+                    floe_context_contract::CalendarScope::All
+            }
             _ => invalid.calendar_setups[0].expert_assignment_id = Uuid::new_v4(),
         }
         assert!(AgentRegistry::restore(invalid, registry.instance_id()).is_err());

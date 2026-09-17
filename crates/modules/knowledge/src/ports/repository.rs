@@ -3,7 +3,10 @@ use std::future::Future;
 use chrono::{DateTime, Utc};
 use floe_kernel::AgentFailure;
 
-use crate::{ContextMemory, KnowledgeActor, KnowledgeDecisionKind, KnowledgeDecisionResult, MemoryReviewSnapshot};
+use crate::{
+    ContextMemory, KnowledgeActor, KnowledgeDecisionKind, KnowledgeDecisionResult,
+    MemoryReviewSnapshot,
+};
 
 pub trait LearnerJobRepository: Send + Sync {
     fn discover_reviews(

@@ -96,7 +96,11 @@ impl ByteCall {
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    pub fn call(&self, _request: &[u8], _max_response_bytes: usize) -> Result<Vec<u8>, NativeCallError> {
+    pub fn call(
+        &self,
+        _request: &[u8],
+        _max_response_bytes: usize,
+    ) -> Result<Vec<u8>, NativeCallError> {
         Err(NativeCallError::Unavailable)
     }
 
@@ -109,7 +113,8 @@ impl ByteCall {
         let (invoke, release) = *self
             .functions
             .get_or_init(|| {
-                resolve(&self.library).map(|(_, invoke, release)| (invoke as usize, release as usize))
+                resolve(&self.library)
+                    .map(|(_, invoke, release)| (invoke as usize, release as usize))
             })
             .as_ref()
             .map_err(|failure| *failure)?;
@@ -169,7 +174,8 @@ impl GatedStringCall {
         let (invoke, release) = *self
             .functions
             .get_or_init(|| {
-                resolve(&self.library).map(|(_, invoke, release)| (invoke as usize, release as usize))
+                resolve(&self.library)
+                    .map(|(_, invoke, release)| (invoke as usize, release as usize))
             })
             .as_ref()
             .map_err(|failure| *failure)?;

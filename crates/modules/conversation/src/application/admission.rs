@@ -167,9 +167,7 @@ where
     {
         return Err(AgentFailure::InvalidInput);
     }
-    let session = sessions
-        .load(request.person_id, request.session_id)
-        .await?;
+    let session = sessions.load(request.person_id, request.session_id).await?;
     let existing = if request.continuation {
         super::query::get_command(
             repository,

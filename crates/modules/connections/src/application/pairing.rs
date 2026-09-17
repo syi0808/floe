@@ -2,7 +2,10 @@ use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
 use tokio::time::Instant;
 
-use crate::{PairingConfirmation, PairingConfirmationRequest, PairingStatus, PairingStatusRequest, RemoteControl};
+use crate::{
+    PairingConfirmation, PairingConfirmationRequest, PairingStatus, PairingStatusRequest,
+    RemoteControl,
+};
 
 #[derive(Clone)]
 pub struct PairingService<Remote> {

@@ -14,9 +14,7 @@ use std::{
 };
 
 use chrono::{DateTime, Duration as TimeDelta, TimeZone, Utc};
-use floe_access::{
-    CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission,
-};
+use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission};
 use floe_agent_contract::{
     AgentFailure, DataClass, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
     MAX_TIMELINE_VIEW_ITEMS, TimelineViewRead,
@@ -367,7 +365,8 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let projected = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(projected.items.len(), 1);
     assert_eq!(projected.items[0].untrusted_title, "Home appointment");
@@ -402,7 +401,8 @@ async fn read_range_is_request_scoped_within_the_authorized_source() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let range_start = now() + TimeDelta::minutes(75);
     let range_end = now() + TimeDelta::minutes(105);
     let projected = views
@@ -429,17 +429,18 @@ async fn read_range_is_request_scoped_within_the_authorized_source() {
         milliseconds(range_start).unwrap()
     );
 
-    let expanded = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now)
-        .unwrap()
-        .timeline(TimelineViewRead {
-            range_start_unix_ms: Some(
-                milliseconds(grant.starts_at - TimeDelta::minutes(1)).unwrap(),
-            ),
-            range_end_unix_ms: Some(milliseconds(grant.ends_at).unwrap()),
-            ..request(&grant)
-        })
-        .await
-        .unwrap();
+    let expanded =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now)
+            .unwrap()
+            .timeline(TimelineViewRead {
+                range_start_unix_ms: Some(
+                    milliseconds(grant.starts_at - TimeDelta::minutes(1)).unwrap(),
+                ),
+                range_end_unix_ms: Some(milliseconds(grant.ends_at).unwrap()),
+                ..request(&grant)
+            })
+            .await
+            .unwrap();
     assert_eq!(
         expanded.range_start_unix_ms,
         milliseconds(grant.starts_at - TimeDelta::minutes(1)).unwrap()
@@ -497,7 +498,8 @@ async fn native_subject_change_during_read_denies_projection() {
         ),
         subject_change_during_read: true,
     };
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::StaleContext)
@@ -588,7 +590,8 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
         expires_at: now() + TimeDelta::minutes(2),
     };
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let projected = views
         .timeline(TimelineViewRead {
             max_items: MAX_TIMELINE_VIEW_ITEMS,
@@ -636,7 +639,9 @@ async fn unknown_scope_identity_budgets_and_permission_are_denied_before_project
         if mode == 2 {
             grant.calendar_ids = vec!["unselected".into()];
         }
-        let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+        let views =
+            CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now)
+                .unwrap();
         let mut read = request(&grant);
         match mode {
             0 => read.person_id = PersonId::new(),
@@ -687,7 +692,8 @@ async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
     let access = Access::default();
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert!(
         views
             .timeline(request(&grant))
@@ -697,7 +703,8 @@ async fn failed_other_calendar_does_not_poison_a_healthy_explicit_subset() {
             .is_empty()
     );
     grant.calendar_ids.push("work-secret-id".into());
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityDenied)
@@ -737,7 +744,8 @@ async fn stale_cache_uncovered_ranges_revisions_and_revocation_never_return_empt
                 .unwrap();
         }
         let views =
-            CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), clock).unwrap();
+            CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), clock)
+                .unwrap();
         assert_eq!(
             views.timeline(request(&grant)).await,
             Err(AgentFailure::StaleContext)
@@ -753,13 +761,15 @@ async fn access_generation_change_and_later_calendar_change_invalidate_a_read_le
         change_on_second: true,
         ..Access::default()
     };
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &changed, grant.clone(), now).unwrap();
+    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &changed, grant.clone(), now)
+        .unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::StaleContext)
     );
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     views.timeline(request(&grant)).await.unwrap();
     views
         .revalidate(
@@ -792,7 +802,8 @@ async fn native_subject_change_invalidates_cached_read_before_egress() {
         subject_change_on_call: Some(2),
         ..Access::default()
     };
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     views.timeline(request(&grant)).await.unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
@@ -808,7 +819,8 @@ async fn missing_native_subject_fingerprint_denies_calendar_read() {
         invalid_subject: true,
         ..Access::default()
     };
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityDenied)
@@ -836,7 +848,8 @@ async fn all_day_and_long_events_block_the_entire_requested_window_without_false
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let view = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(view.items.len(), 2);
     assert!(
@@ -870,7 +883,8 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let view = views.timeline(request(&grant)).await.unwrap();
     assert!(view.items[0].untrusted_title.len() <= 256);
     assert!(view.items[0].untrusted_title.ends_with('…'));
@@ -883,7 +897,8 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
         .await
         .unwrap();
     grant.connection_revision = 4;
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::BudgetExceeded)
@@ -932,7 +947,8 @@ async fn cancelled_and_expired_reads_do_not_start_authority_work() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let read = request(&grant);
     read.cancellation.cancel();
     assert_eq!(views.timeline(read).await, Err(AgentFailure::Cancelled));
@@ -954,7 +970,9 @@ async fn pending_access_is_cancelled_on_stop_deadline_and_dropped_view_future() 
             pending: true,
             ..Access::default()
         };
-        let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+        let views =
+            CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now)
+                .unwrap();
         let mut read = request(&grant);
         if mode == 1 {
             read.deadline = Instant::now() + Duration::from_millis(50);
@@ -1020,7 +1038,8 @@ async fn mirror_size_and_invalid_grant_limits_fail_without_partial_projection() 
     let mut grant = fixture.grant();
     grant.connection_revision = 3;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::BudgetExceeded)
@@ -1061,10 +1080,10 @@ async fn native_eventkit_without_observation_does_not_use_mirror_payload() {
     grant.provider = CalendarProvider::EventKit;
     grant.connection_revision = 4;
     let access = Access::default();
-    let views = CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityUnavailable)
     );
 }
-

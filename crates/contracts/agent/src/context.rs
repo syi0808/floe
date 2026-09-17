@@ -8,9 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 use floe_context_contract::{
-    ContextEvidence, ContextIssue, ContextMemory, ContextSource, DataClass,
-    MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, ModelPlacement, TransferConsent,
+    ContextEvidence, ContextIssue, ContextMemory, ContextSource, DataClass, MAX_CONTEXT_EVIDENCE,
+    MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES, ModelPlacement,
+    TransferConsent,
 };
 use floe_kernel::AgentFailure;
 

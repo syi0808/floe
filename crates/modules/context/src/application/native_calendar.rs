@@ -9,9 +9,9 @@
 use std::future::Future;
 
 use floe_access::{
-    NativeCalendarConnection, NativeCalendarReview, RemoteCallWindow,
-    admit_native_calendar_setup, admit_native_calendar_subject, is_native_calendar,
-    native_calendar_connection_unchanged, reviewed_native_subject,
+    NativeCalendarConnection, NativeCalendarReview, RemoteCallWindow, admit_native_calendar_setup,
+    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
+    reviewed_native_subject,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};

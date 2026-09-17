@@ -5,13 +5,13 @@ use uuid::Uuid;
 
 use crate::*;
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
+use floe_agent_contract::{CapabilityExecutionState, ModelPlacement, ModelReplay};
 use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_execution::tasks::run_bounded as bounded;
-use floe_agent_contract::{CapabilityExecutionState, ModelPlacement, ModelReplay};
 use floe_experts::{
-    A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
-    A2ATaskState, NoA2AHost,
+    A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
+    NoA2AHost,
 };
 use floe_inference::ModelAttemptRecord;
 
@@ -98,7 +98,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             &mut emit,
         );
         let mut usage = AgentUsage::default();
-        let ledger = crate::turn::turn_ledger(self.budget.max_tokens, self.budget.max_cost_micros, usage);
+        let ledger =
+            crate::turn::turn_ledger(self.budget.max_tokens, self.budget.max_cost_micros, usage);
         let (outcome, resumable) = match self
             .drive(
                 &mut session,
@@ -418,7 +419,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         usage: &mut AgentUsage,
         ledger: &UsageLedger,
         attempts: &mut tokio::sync::mpsc::UnboundedReceiver<floe_inference::AttemptUpdate>,
-        capabilities: &mut tokio::sync::mpsc::UnboundedReceiver<crate::turn::journal::CapabilityUpdate>,
+        capabilities: &mut tokio::sync::mpsc::UnboundedReceiver<
+            crate::turn::journal::CapabilityUpdate,
+        >,
         turn_id: Uuid,
         emit: &mut impl FnMut(AgentEvent),
         deadline: Instant,
@@ -844,7 +847,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                 usage,
                                 &ledger,
                                 &mut attempts,
-                    &mut capabilities,
+                                &mut capabilities,
                                 turn_id,
                                 emit,
                                 deadline,
@@ -932,7 +935,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                 usage,
                                 &ledger,
                                 &mut attempts,
-                    &mut capabilities,
+                                &mut capabilities,
                                 turn_id,
                                 emit,
                                 deadline,

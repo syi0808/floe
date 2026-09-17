@@ -7,9 +7,9 @@
 
 use floe_agent_contract::{
     AGENT_VERSION, AgentCard, AgentContext, AgentFailure, ContextEnvelope, ContextManifest,
-    ContextualData, ConversationContext, DataClass, EvidenceManifestEntry,
-    InferencePolicyDecision, MemoryManifestEntry, ModelPlacement, PromptManifestEntry,
-    RuntimeContext, ScopedInstructions, TransferConsent,
+    ContextualData, ConversationContext, DataClass, EvidenceManifestEntry, InferencePolicyDecision,
+    MemoryManifestEntry, ModelPlacement, PromptManifestEntry, RuntimeContext, ScopedInstructions,
+    TransferConsent,
 };
 use floe_inference::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,

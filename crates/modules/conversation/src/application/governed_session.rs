@@ -8,11 +8,11 @@
 use std::collections::{BTreeMap, HashMap};
 
 use floe_agent_contract::{AgentFailure, BoxFuture, SessionProtection};
+use floe_agent_contract::{ContextDependency, DependencyCoverage};
 use floe_context::{
     CoverageMessageFact, CoverageRegistry, DependencyAuthorization, DependencyLiveness,
     DependencyResolver, EvidenceReader,
 };
-use floe_agent_contract::{ContextDependency, DependencyCoverage};
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
@@ -77,7 +77,9 @@ impl<Repository: GovernedSessionRepository> EvidenceReader for SessionEvidence<'
         if session_id != self.session_id {
             return Err(AgentFailure::Conflict);
         }
-        self.repository.read_turn_coverage(session_id, turn_id).await
+        self.repository
+            .read_turn_coverage(session_id, turn_id)
+            .await
     }
 }
 
@@ -253,9 +255,7 @@ fn authorization(request: &ModelRequest) -> DependencyAuthorization {
     }
 }
 
-impl<Repository: GovernedSessionRepository> SessionStore
-    for GovernedSessionStore<'_, Repository>
-{
+impl<Repository: GovernedSessionRepository> SessionStore for GovernedSessionStore<'_, Repository> {
     fn protection(&self) -> SessionProtection {
         self.repository.protection()
     }

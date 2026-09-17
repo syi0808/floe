@@ -7,13 +7,13 @@
 
 use std::future::Future;
 
-use floe_kernel::AgentFailure;
 use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, ConsumerPolicyAuthority, ContextDependency,
     GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose, GrantScope,
     GrantSourceBinding, ProcessingRestriction,
 };
 use floe_execution::Cancellation;
+use floe_kernel::AgentFailure;
 use floe_kernel::PersonId;
 use tokio::time::Instant;
 

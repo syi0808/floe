@@ -2,11 +2,11 @@
 
 pub mod adapters;
 mod api;
-pub mod prompts;
-pub mod turn;
 mod application;
 mod domain;
 mod ports;
+pub mod prompts;
+pub mod turn;
 
 pub use adapters::model_transport::{TransportModelRunner, transport_request};
 pub use api::{
@@ -14,12 +14,13 @@ pub use api::{
     TurnRequest,
 };
 pub use application::{
-    CancelCommandRequest, CancelRunAdmission, admit_unscoped_session, admitted_session, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
+    CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationService, GovernedSessionRepository, GovernedSessionStore,
-    HistoryProjection, PreparedTurn, RunCancellationRegistry, TurnPrecheck,
-    TurnPrecheckRequest, TurnPreparationRequest, cancel_run_command, prepare_turn, compact_session, continuation, get_command, get_run,
-    get_session, narrow_by_source_boundary, precheck_turn, project_continuation, recovered_session,
-    project_history_into, read_archive, recover_session, resume_session, start_session,
+    HistoryProjection, PreparedTurn, RunCancellationRegistry, TurnPrecheck, TurnPrecheckRequest,
+    TurnPreparationRequest, admit_unscoped_session, admitted_session, cancel_run_command,
+    compact_session, continuation, get_command, get_run, get_session, narrow_by_source_boundary,
+    precheck_turn, prepare_turn, project_continuation, project_history_into, read_archive,
+    recover_session, recovered_session, resume_session, start_session,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest,

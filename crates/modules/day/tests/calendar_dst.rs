@@ -1,8 +1,6 @@
 use chrono::{Duration, TimeZone, Utc};
 use floe_context_contract::CalendarProvider;
-use floe_day::{
-    CalendarRange, CalendarRecord, DayService, EventSchedule, PersonId, TimedSchedule,
-};
+use floe_day::{CalendarRange, CalendarRecord, DayService, EventSchedule, PersonId, TimedSchedule};
 
 mod support;
 use support::TestTimelineRepository;

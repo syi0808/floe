@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use floe_agent_contract::{DataClass, ModelPlacement, TransferConsent};
 use floe_context::{AgentContext, InferencePolicyDecision};
-use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, manager_prompt};
-use floe_execution::{Cancellation};
+use floe_conversation::{AgentMessage, ModelRequest, ModelRunner, prompts::manager_prompt};
+use floe_execution::Cancellation;
 use floe_kernel::PersonId;
-use floe_ffi::local_model::{FoundationModelRunner, LocalModelAvailability};
+use floe_provider_adapters::models::{FoundationModelRunner, LocalModelAvailability};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -24,11 +24,15 @@ async fn main() -> std::process::ExitCode {
         && !learner
         && !learner_expiry
     {
-        eprintln!("Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, or --exercise-learner-expiry (synthetic only)");
+        eprintln!(
+            "Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, or --exercise-learner-expiry (synthetic only)"
+        );
         return std::process::ExitCode::FAILURE;
     }
-    let model = FoundationModelRunner::synthetic();
-    let availability = match model.availability() {
+    let transport = FoundationModelRunner::synthetic();
+    let availability_of = transport.availability();
+    let model = floe_conversation::TransportModelRunner::new(transport);
+    let availability = match availability_of {
         Ok(availability) => availability,
         Err(failure) => {
             println!(

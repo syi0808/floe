@@ -1,20 +1,33 @@
 use std::{collections::VecDeque, sync::Mutex};
 
-use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::PersonId;
+use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
     AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
     InferencePolicyDecision,
 };
-use floe_agent_contract::AGENT_VERSION;
-use floe_execution::{Cancellation};
-use floe_context_contract::{AttentionState, AttentionView, CalendarContextItem, CalendarContextView, CapacityState, ConfirmedInteraction, ConfirmedInteractionView, PeopleIdentity, PeopleView, RecoveryState, WellbeingView, WorkContextItem, WorkContextView, WorkItemKind, validate_calendar_context_view, validate_work_context_view};
-use floe_experts_builtin::focus_attention::{FocusContextViews, FocusRecommendation, run_focus_expert_with_views};
-use floe_experts_builtin::relationships::{RelationshipsContextViews, run_relationships_expert_with_views};
-use floe_experts_builtin::wellbeing::{ScheduleImpact, WellbeingContextViews, run_wellbeing_expert_with_views};
-use floe_experts_builtin::{PersonalExpertInvocation};
-use floe_agent_contract::prompts::PromptRole;
-use floe_context_contract::{ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind};
-use floe_agent_contract::PersonId;
+use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
+use floe_context_contract::{
+    AttentionState, AttentionView, CalendarContextItem, CalendarContextView, CapacityState,
+    ConfirmedInteraction, ConfirmedInteractionView, PeopleIdentity, PeopleView, RecoveryState,
+    WellbeingView, WorkContextItem, WorkContextView, WorkItemKind, validate_calendar_context_view,
+    validate_work_context_view,
+};
+use floe_context_contract::{
+    ContextMemory, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind,
+};
+use floe_execution::Cancellation;
+use floe_experts_builtin::PersonalExpertInvocation;
+use floe_experts_builtin::focus_attention::{
+    FocusContextViews, FocusRecommendation, run_focus_expert_with_views,
+};
+use floe_experts_builtin::relationships::{
+    RelationshipsContextViews, run_relationships_expert_with_views,
+};
+use floe_experts_builtin::wellbeing::{
+    ScheduleImpact, WellbeingContextViews, run_wellbeing_expert_with_views,
+};
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 

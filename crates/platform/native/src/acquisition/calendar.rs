@@ -25,8 +25,9 @@ pub enum CalendarSourceFailure {
 pub fn calendar_failure(failure: CalendarSourceFailure) -> AgentFailure {
     match failure {
         CalendarSourceFailure::PermissionDenied => AgentFailure::CapabilityDenied,
-        CalendarSourceFailure::CalendarUnavailable
-        | CalendarSourceFailure::ProviderUnavailable => AgentFailure::CapabilityUnavailable,
+        CalendarSourceFailure::CalendarUnavailable | CalendarSourceFailure::ProviderUnavailable => {
+            AgentFailure::CapabilityUnavailable
+        }
     }
 }
 

@@ -1,5 +1,11 @@
+use floe_connections::{
+    CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConformanceCode, ConnectionState,
+    ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor,
+    ConnectorSnapshot, DeviceBinding, ExecutionLocation, RetentionClass, SituationDescriptor,
+    SituationTrigger, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot,
+    evaluate_situation, validate_connector_snapshot,
+};
 use floe_context_contract::DataClass;
-use floe_connections::{CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConformanceCode, ConnectionState, ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor, ConnectorSnapshot, DeviceBinding, ExecutionLocation, RetentionClass, SituationDescriptor, SituationTrigger, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot, evaluate_situation, validate_connector_snapshot};
 
 const NOW: u64 = 2_000_000;
 

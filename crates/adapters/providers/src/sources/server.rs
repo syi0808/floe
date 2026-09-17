@@ -6,11 +6,18 @@ use std::{
 use crate::control::authorization::{
     RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
 };
-use floe_agent_contract::{AgentFailure};
-use floe_agent_contract::AGENT_VERSION;
-use floe_context::{AttentionView, CalendarContextView, CommunicationView, ConfirmedInteractionView, LogisticsView, MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PERSONAL_CONTEXT_BYTES, MAX_PORTFOLIO_VIEW_BYTES, PeopleView, WellbeingView, WorkContextView, validate_attention_view, validate_calendar_context_view, validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view, validate_people_view, validate_wellbeing_view, validate_work_context_view};
 use floe_access::{RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation};
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::AgentFailure;
 use floe_connections::CalendarConnectionRef;
+use floe_context::{
+    AttentionView, CalendarContextView, CommunicationView, ConfirmedInteractionView, LogisticsView,
+    MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
+    MAX_PERSONAL_CONTEXT_BYTES, MAX_PORTFOLIO_VIEW_BYTES, PeopleView, WellbeingView,
+    WorkContextView, validate_attention_view, validate_calendar_context_view,
+    validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view,
+    validate_people_view, validate_wellbeing_view, validate_work_context_view,
+};
 use floe_execution::limits::{CallLimiter, CallLimits};
 use floe_inference::RemoteRoute;
 use reqwest::{Client, StatusCode, Url};
@@ -158,7 +165,6 @@ impl ServerSourceClient {
     pub(crate) fn call_limiter(&self) -> &CallLimiter {
         &self.source_calls
     }
-
 
     /// Read one view the Person's grant admits, through their paired server.
     pub async fn read_admitted_view<Keys: RemoteAuthorizationKeys>(
@@ -898,10 +904,8 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
     fn producer_identity<'a>(
         &'a self,
         window: &'a floe_access::RemoteCallWindow,
-    ) -> floe_agent_contract::BoxFuture<
-        'a,
-        Result<floe_access::RemoteProducerIdentity, AgentFailure>,
-    > {
+    ) -> floe_agent_contract::BoxFuture<'a, Result<floe_access::RemoteProducerIdentity, AgentFailure>>
+    {
         Box::pin(async move {
             let producer = self
                 .client

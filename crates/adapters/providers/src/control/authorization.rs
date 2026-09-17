@@ -1,14 +1,14 @@
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use floe_access::{
+    RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
+    RemoteOwnerPublicKey, RemoteProducerIdentity,
+};
 use floe_agent_contract::AgentFailure;
 use floe_connections::{
     PairingConfirmation, PairingConfirmationRequest, PairingIssuer, PairingStatus,
     PairingStatusRequest, ProducerIdentity, RemoteControl,
-};
-use floe_access::{
-    RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
-    RemoteOwnerPublicKey, RemoteProducerIdentity,
 };
 use floe_inference::RemoteRoute;
 use reqwest::{Client, StatusCode, Url};
@@ -559,8 +559,7 @@ impl RemoteAuthorizationClient {
             public_key: producer.public_key,
             fingerprint: producer.fingerprint,
         };
-        if &observed != pinned_producer || keys.pinned_producer().await? != *pinned_producer
-        {
+        if &observed != pinned_producer || keys.pinned_producer().await? != *pinned_producer {
             return Err(AgentFailure::PolicyDenied);
         }
         let owner_key = keys.owner_public_key().await?;
@@ -1125,8 +1124,8 @@ mod tests {
     };
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
     use floe_agent_contract::PersonId;
+    use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
     use tokio::io::AsyncWriteExt;
     use uuid::Uuid;
 
@@ -1620,9 +1619,7 @@ pub fn access_producer_identity(identity: &ProducerIdentityResponse) -> RemotePr
 }
 
 /// The enrollment state as Access states it.
-pub fn enrollment_status(
-    status: EnrollmentStatusResponse,
-) -> floe_access::RemoteEnrollmentStatus {
+pub fn enrollment_status(status: EnrollmentStatusResponse) -> floe_access::RemoteEnrollmentStatus {
     floe_access::RemoteEnrollmentStatus {
         enrollment_id: status.enrollment_id,
         key_id: status.key_id,
@@ -1678,13 +1675,8 @@ impl<'a, Keys: RemoteAuthorizationKeys> RemoteAuthorityEndpoint<'a, Keys> {
     }
 }
 
-fn bounded(
-    window: &floe_access::RemoteCallWindow,
-    budget: Duration,
-) -> tokio::time::Instant {
-    window
-        .deadline
-        .min(tokio::time::Instant::now() + budget)
+fn bounded(window: &floe_access::RemoteCallWindow, budget: Duration) -> tokio::time::Instant {
+    window.deadline.min(tokio::time::Instant::now() + budget)
 }
 
 impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteAuthorityTransport

@@ -113,8 +113,12 @@ impl ModelRouteConfig {
         let consumer =
             ModelConsumer::new(LEGACY_INFERENCE_CONSUMER).ok_or(AgentFailure::InvalidInput)?;
         let data_recipient = if self.external {
-            DataRecipient::external(self.recipient.as_deref().ok_or(AgentFailure::InvalidInput)?)
-                .ok_or(AgentFailure::InvalidInput)?
+            DataRecipient::external(
+                self.recipient
+                    .as_deref()
+                    .ok_or(AgentFailure::InvalidInput)?,
+            )
+            .ok_or(AgentFailure::InvalidInput)?
         } else {
             DataRecipient::Device
         };

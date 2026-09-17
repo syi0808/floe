@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use floe_kernel::AgentFailure;
 
-use crate::DataClass;
 use crate::ContextEvidence;
+use crate::DataClass;
 use floe_kernel::AGENT_VERSION;
 
 pub const COMMUNICATION_VIEW_ID: &str = "mail.communication";

@@ -1,19 +1,19 @@
 use std::{collections::VecDeque, sync::Mutex};
 
-use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
+use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::PersonId;
+use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
     AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
     InferencePolicyDecision,
 };
-use floe_agent_contract::AGENT_VERSION;
-use floe_execution::{Cancellation};
-use floe_context_contract::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind};
-use floe_experts_builtin::life_logistics::{LogisticsUrgency, run_life_logistics_expert};
-use floe_experts_builtin::work_context::{run_work_context_expert};
-use floe_experts_builtin::{PortfolioExpertInvocation};
+use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
 use floe_context_contract::{LogisticsItem, LogisticsItemKind};
-use floe_agent_contract::prompts::PromptRole;
-use floe_agent_contract::PersonId;
+use floe_context_contract::{LogisticsView, WorkContextItem, WorkContextView, WorkItemKind};
+use floe_execution::Cancellation;
+use floe_experts_builtin::PortfolioExpertInvocation;
+use floe_experts_builtin::life_logistics::{LogisticsUrgency, run_life_logistics_expert};
+use floe_experts_builtin::work_context::run_work_context_expert;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 

@@ -265,11 +265,11 @@ impl Default for CoverageRegistry {
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
+    use floe_context_contract::PersonId;
     use floe_context_contract::{
         ConsumerPolicyAuthority, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
         GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
-    use floe_context_contract::PersonId;
 
     use super::*;
 
@@ -367,7 +367,10 @@ mod tests {
             registry.result_coverage(turn_id, result_id).unwrap(),
             Some(DependencyCoverage::Dependent { .. })
         ));
-        assert_eq!(registry.result_coverage(turn_id, result_id).unwrap(), before);
+        assert_eq!(
+            registry.result_coverage(turn_id, result_id).unwrap(),
+            before
+        );
     }
 
     #[test]

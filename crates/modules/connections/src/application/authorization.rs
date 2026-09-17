@@ -53,9 +53,13 @@ pub struct AuthorizationOperation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthorizationState {
     /// Waiting for the person to finish authorization at `authorization_url`.
-    Pending { authorization_url: String },
+    Pending {
+        authorization_url: String,
+    },
     Connected,
-    Failed { code: String },
+    Failed {
+        code: String,
+    },
     Cancelled,
     TimedOut,
 }
@@ -259,9 +263,15 @@ mod tests {
 
     #[test]
     fn an_authorization_page_must_be_https_without_embedded_credentials() {
-        assert!(valid_authorization_url("https://provider.example/authorize"));
-        assert!(!valid_authorization_url("http://provider.example/authorize"));
-        assert!(!valid_authorization_url("https://user:pass@provider.example/a"));
+        assert!(valid_authorization_url(
+            "https://provider.example/authorize"
+        ));
+        assert!(!valid_authorization_url(
+            "http://provider.example/authorize"
+        ));
+        assert!(!valid_authorization_url(
+            "https://user:pass@provider.example/a"
+        ));
         assert!(!valid_authorization_url("https:///authorize"));
     }
 

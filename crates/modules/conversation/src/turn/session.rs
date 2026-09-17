@@ -182,9 +182,7 @@ impl AgentMessage {
     pub fn may_derive_from_source(&self) -> bool {
         match self {
             Self::Assistant { .. } | Self::Capability { result: Ok(_), .. } => true,
-            Self::Delegation { task, .. } => {
-                task.state == floe_experts::A2ATaskState::Completed
-            }
+            Self::Delegation { task, .. } => task.state == floe_experts::A2ATaskState::Completed,
             Self::Compaction { .. }
             | Self::Preamble { .. }
             | Self::User { .. }

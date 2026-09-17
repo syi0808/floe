@@ -9,8 +9,8 @@ use floe_agent_contract::{CalendarProvider, CalendarScope};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, DataClass};
 use floe_agent_contract::{AGENT_VERSION, PersonId};
+use floe_agent_contract::{AgentFailure, DataClass};
 
 use super::{
     AgentPackage, AgentRegistry, CalendarExpertSetupReceipt, CalendarViewBinding, ExpertMetadata,
@@ -83,7 +83,6 @@ pub struct CalendarExpertSetup {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_native_subject_fingerprint: Option<String>,
 }
-
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

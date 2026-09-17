@@ -3,7 +3,11 @@ use std::sync::Arc;
 use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, RunId};
 
-use crate::{AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, CompactionReceipt, CompactionRequest, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, TurnAdmission, TurnAdmissionRequest};
+use crate::{
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, CompactionReceipt,
+    CompactionRequest, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal,
+    SessionReadRequest, SessionReceipt, SessionRequest, TurnAdmission, TurnAdmissionRequest,
+};
 
 pub trait ConversationRepository: Send + Sync {
     fn find_command<'a>(

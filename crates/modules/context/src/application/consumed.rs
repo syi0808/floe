@@ -99,12 +99,12 @@ impl ConsumedLineage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_context_contract::PersonId;
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
-    use floe_context_contract::PersonId;
     use uuid::Uuid;
 
     fn fixture() -> (ContextDependency, GrantScope) {

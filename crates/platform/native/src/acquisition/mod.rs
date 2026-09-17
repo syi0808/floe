@@ -15,8 +15,8 @@ pub use attention::{
     AttentionBroker, attention_failure,
 };
 pub use calendar::{
-    CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
-    CalendarBroker, CalendarSourceFailure, calendar_failure,
+    CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult, CalendarBroker,
+    CalendarSourceFailure, calendar_failure,
 };
 pub use personal::{
     PersonalAcquisitionRequest, PersonalAcquisitionResult, PersonalBroker, PersonalDomain,
@@ -175,11 +175,7 @@ impl<Exchange: AcquisitionExchange> AcquisitionBroker<Exchange> {
         Ok(HostRegistration::Replaced)
     }
 
-    pub fn dispose_host(
-        &self,
-        person_id: PersonId,
-        host_epoch: &str,
-    ) -> Result<(), AgentFailure> {
+    pub fn dispose_host(&self, person_id: PersonId, host_epoch: &str) -> Result<(), AgentFailure> {
         let mut state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
         if state.host_epoch.as_deref() != Some(host_epoch) || state.host_person != Some(person_id) {
             return Err(AgentFailure::StaleContext);

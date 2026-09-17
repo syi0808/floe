@@ -140,8 +140,8 @@ pub fn remote_calendar_source(
 
 /// The scope one reviewed remote calendar grant carries.
 pub fn remote_calendar_scope(resource: &str) -> Result<GrantScope, AgentFailure> {
-    let consumer = GrantConsumer::builtin(REMOTE_CALENDAR_CONSUMER)
-        .map_err(|_| AgentFailure::InvalidInput)?;
+    let consumer =
+        GrantConsumer::builtin(REMOTE_CALENDAR_CONSUMER).map_err(|_| AgentFailure::InvalidInput)?;
     GrantScope::try_new(
         vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
         vec![GrantDataCategory::Content],

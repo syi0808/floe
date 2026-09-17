@@ -5,16 +5,15 @@
 //! mirror it reads.
 
 use chrono::{DateTime, Utc};
+use floe_context_contract::CalendarProvider;
 use floe_context_contract::DataClass;
 use floe_day::{CalendarFailure, CalendarMirror, CalendarSyncStatus, SourceRef};
-use floe_context_contract::CalendarProvider;
 use sha2::{Digest, Sha256};
 
 use floe_connections::{
-    CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConnectionState,
-    ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor,
-    ConnectorSnapshot, ExecutionLocation, RetentionClass, SourceFailure, SourceFailureKind,
-    ViewDescriptor, ViewSnapshot,
+    CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConnectionState, ConnectorCapabilityDescriptor,
+    ConnectorConnectionSnapshot, ConnectorDescriptor, ConnectorSnapshot, ExecutionLocation,
+    RetentionClass, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot,
 };
 
 /// Rejected when the caller's device identity is not usable.
@@ -163,9 +162,7 @@ pub fn project_calendar_connector(
                 expires_at_unix_ms: milliseconds(
                     success
                         .checked_add_signed(chrono::Duration::minutes(5))
-                        .ok_or_else(|| {
-                            ConnectorProjectionError::InvalidObservation
-                        })?,
+                        .ok_or_else(|| ConnectorProjectionError::InvalidObservation)?,
                 )?,
                 item_count: source_events.len(),
                 byte_count,
@@ -271,6 +268,5 @@ fn source_handle(provider: CalendarProvider, calendar_id: &str) -> String {
 }
 
 fn milliseconds(time: DateTime<Utc>) -> Result<u64, ConnectorProjectionError> {
-    u64::try_from(time.timestamp_millis())
-        .map_err(|_| ConnectorProjectionError::InvalidObservation)
+    u64::try_from(time.timestamp_millis()).map_err(|_| ConnectorProjectionError::InvalidObservation)
 }

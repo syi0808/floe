@@ -216,18 +216,20 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         title: proposal.title.clone(),
         schedule: EventSchedule::Timed(proposal.schedule.clone()),
     }];
-    store.day()
-.import_calendar(
-        proposal.person_id,
-        proposal.connection_revision,
-        range.clone(),
-        records.clone(),
-        now(),
-    )
-    .await
-    .unwrap();
-    let snapshot = store.day()
-.day_snapshot(proposal.person_id, now().date_naive(), 0, now())
+    store
+        .day()
+        .import_calendar(
+            proposal.person_id,
+            proposal.connection_revision,
+            range.clone(),
+            records.clone(),
+            now(),
+        )
+        .await
+        .unwrap();
+    let snapshot = store
+        .day()
+        .day_snapshot(proposal.person_id, now().date_naive(), 0, now())
         .await
         .unwrap();
     let event = snapshot
@@ -283,16 +285,17 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         .unwrap();
     let mut read_only = records;
     read_only[0].can_modify = false;
-    store.day()
-.import_calendar(
-        proposal.person_id,
-        connection.revision,
-        range,
-        read_only,
-        now(),
-    )
-    .await
-    .unwrap();
+    store
+        .day()
+        .import_calendar(
+            proposal.person_id,
+            connection.revision,
+            range,
+            read_only,
+            now(),
+        )
+        .await
+        .unwrap();
     let blocked = core
         .execute_calendar_action(deletion.person_id, deletion.id, &policy, &provider, now)
         .await
@@ -403,26 +406,28 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         title: receipt.title,
         schedule: EventSchedule::Timed(receipt.schedule),
     }];
-    store.day()
-.import_calendar(
-        action.person_id,
-        action.connection_revision,
-        range.clone(),
-        records.clone(),
-        now(),
-    )
-    .await
-    .unwrap();
-    store.day()
-.import_calendar(
-        action.person_id,
-        action.connection_revision + 1,
-        range,
-        records,
-        now(),
-    )
-    .await
-    .unwrap();
+    store
+        .day()
+        .import_calendar(
+            action.person_id,
+            action.connection_revision,
+            range.clone(),
+            records.clone(),
+            now(),
+        )
+        .await
+        .unwrap();
+    store
+        .day()
+        .import_calendar(
+            action.person_id,
+            action.connection_revision + 1,
+            range,
+            records,
+            now(),
+        )
+        .await
+        .unwrap();
     drop(core);
     let reopened = ActionService::new(&store);
     assert_eq!(
@@ -468,21 +473,22 @@ async fn policy_and_connection_changes_block_execution() {
         ActionBlockReason::CalendarChanged,
     ] {
         let store = TestActionStore::new();
-    let (core, action, mut policy) = fixture(&store).await;
+        let (core, action, mut policy) = fixture(&store).await;
         let provider = Provider::default();
         approve(&core, &action).await;
         if reason == ActionBlockReason::PolicyDenied {
             policy.allow_create = false;
         } else {
-            store.day()
-.select_calendar(
-                action.person_id,
-                CalendarProvider::Fixture,
-                "other".into(),
-                "Other".into(),
-            )
-            .await
-            .unwrap();
+            store
+                .day()
+                .select_calendar(
+                    action.person_id,
+                    CalendarProvider::Fixture,
+                    "other".into(),
+                    "Other".into(),
+                )
+                .await
+                .unwrap();
         }
         let result = core
             .execute_calendar_action(action.person_id, action.id, &policy, &provider, now)
@@ -503,7 +509,7 @@ async fn preflight_failures_require_new_proposal_and_approval() {
         ActionBlockReason::ProviderUnavailable,
     ] {
         let store = TestActionStore::new();
-    let (core, action, policy) = fixture(&store).await;
+        let (core, action, policy) = fixture(&store).await;
         let provider = Provider {
             block: Some(reason),
             ..Default::default()
@@ -580,7 +586,7 @@ async fn ambiguous_create_recovers_after_restart_without_retry() {
         ActionFailure::ProviderUnavailable,
     ] {
         let store = TestActionStore::new();
-    let (core, action, policy) = fixture(&store).await;
+        let (core, action, policy) = fixture(&store).await;
         let provider = Provider {
             failure: Some(failure),
             ..Default::default()
@@ -619,7 +625,7 @@ async fn ambiguous_create_recovers_after_restart_without_retry() {
 async fn absent_duplicate_or_mismatched_receipts_never_retry_create() {
     for case in 0..3 {
         let store = TestActionStore::new();
-    let (core, action, policy) = fixture(&store).await;
+        let (core, action, policy) = fixture(&store).await;
         let provider = Provider {
             failure: Some(ActionFailure::Timeout),
             mismatch: case == 1,
@@ -751,15 +757,16 @@ async fn preflight_includes_current_local_events() {
     let (core, action, policy) = fixture(&store).await;
     let provider = Provider::default();
     approve(&core, &action).await;
-    store.day()
-.create_event(
-        action.person_id,
-        "New local event",
-        EventSchedule::Timed(action.schedule.clone()),
-        now(),
-    )
-    .await
-    .unwrap();
+    store
+        .day()
+        .create_event(
+            action.person_id,
+            "New local event",
+            EventSchedule::Timed(action.schedule.clone()),
+            now(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         core.execute_calendar_action(action.person_id, action.id, &policy, &provider, now)
             .await

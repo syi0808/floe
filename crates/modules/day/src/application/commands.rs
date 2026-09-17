@@ -1,6 +1,10 @@
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::{Capture, CaptureProcessing, CaptureSource, DayError, DaySnapshot, DomainError, DomainRef, Event, EventSchedule, Note, Priority, SourceRef, Task, TimelineItem, TimelineRepository, project_day_with_end_offset};
+use crate::{
+    Capture, CaptureProcessing, CaptureSource, DayError, DaySnapshot, DomainError, DomainRef,
+    Event, EventSchedule, Note, Priority, SourceRef, Task, TimelineItem, TimelineRepository,
+    project_day_with_end_offset,
+};
 use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 
 #[derive(Clone, Debug)]

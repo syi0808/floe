@@ -8,13 +8,16 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_agent_contract::{
-    AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    SessionProtection,
-};
-use floe_context_contract::{CalendarContextView, CommunicationView, ContextEvidence, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, calendar_context_evidence, communication_context_evidence, validate_calendar_context_view, validate_communication_view};
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::prompts::PromptAssembly;
+use floe_agent_contract::{
+    AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall, SessionProtection,
+};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_context_contract::{
+    CalendarContextView, CommunicationView, ContextEvidence, MAX_COMMUNICATION_BYTES,
+    MAX_COMMUNICATION_ITEMS, calendar_context_evidence, communication_context_evidence,
+    validate_calendar_context_view, validate_communication_view,
+};
 
 /// How many findings one communication-backed Expert may report.
 pub(crate) const MAX_MAIL_EXPERT_FINDINGS: usize = 16;

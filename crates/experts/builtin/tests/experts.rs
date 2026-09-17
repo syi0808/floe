@@ -9,27 +9,27 @@ use std::{
 use chrono::{TimeZone, Utc};
 use tokio::{sync::Notify, time::Instant};
 
+use floe_agent_contract::prompts::{PromptComponentKind, PromptRole};
+use floe_agent_contract::{AGENT_VERSION, PersonId};
+use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::{
     AgentFailure, BoxFuture, CapabilityExecution, CapabilityJournal, DataClass, ExpertModel,
     ExpertModelAnswer, ExpertModelCall, ExpertReasoner, ExpertReasoningStep, ExpertStep,
     ExpertStepOutcome, ExpertTranscriptEntry, ModelPlacement, TransferConsent,
 };
 use floe_context_contract::ContextEvidence;
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_experts::{
-    AgentId, AgentPackage, AgentRegistry, ExpertBudget, ExpertFocusProposal, ExpertInput,
-    ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertPrivateState, ExpertResult, ExpertRule,
-    PackageAssignment, PackageImplementation, PackageInstallation, PackageKind, PackageRef,
-    CalendarViewBinding, RegistrySnapshot,
+    AgentId, AgentPackage, AgentRegistry, CalendarViewBinding, ExpertBudget, ExpertFocusProposal,
+    ExpertInput, ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertPrivateState, ExpertResult,
+    ExpertRule, PackageAssignment, PackageImplementation, PackageInstallation, PackageKind,
+    PackageRef, RegistrySnapshot,
 };
 use floe_experts_builtin::BuiltinExpertKind;
 use floe_experts_builtin::schedule::{
     ExpertHost, ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
     MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
 };
-use floe_agent_contract::prompts::{PromptComponentKind, PromptRole};
-use floe_agent_contract::{AGENT_VERSION, PersonId};
 use uuid::Uuid;
 
 struct Fixture {
@@ -1366,8 +1366,7 @@ async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_wi
     );
     let steps = model.steps.lock().unwrap();
     assert!(steps.iter().all(|step| {
-        step
-            .capabilities
+        step.capabilities
             .iter()
             .map(|capability| capability.id.as_str())
             .eq([

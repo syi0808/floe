@@ -13,8 +13,7 @@ const RELATIONSHIPS_EXPERT_ROLE: &str = include_str!("../prompts/relationships_e
 const FOCUS_EXPERT_ROLE: &str = include_str!("../prompts/focus_expert_role.txt");
 const WELLBEING_EXPERT_ROLE: &str = include_str!("../prompts/wellbeing_expert_role.txt");
 const WORK_CONTEXT_EXPERT_ROLE: &str = include_str!("../prompts/work_context_expert_role.txt");
-const LIFE_LOGISTICS_EXPERT_ROLE: &str =
-    include_str!("../prompts/life_logistics_expert_role.txt");
+const LIFE_LOGISTICS_EXPERT_ROLE: &str = include_str!("../prompts/life_logistics_expert_role.txt");
 const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 4;
 const COMMITMENTS_EXPERT_ROLE_REVISION: u64 = 1;
 const COMMUNICATION_EXPERT_ROLE_REVISION: u64 = 1;

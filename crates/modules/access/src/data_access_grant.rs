@@ -223,8 +223,12 @@ pub enum GrantTransitionError {
 mod tests {
     use std::num::NonZeroU64;
 
-    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
-use floe_kernel::{PersonId};
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantId,
+        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
+        ResourceHandle, SourceAuthority,
+    };
+    use floe_kernel::PersonId;
 
     use super::*;
 

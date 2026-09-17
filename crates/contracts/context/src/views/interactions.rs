@@ -6,8 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use floe_kernel::AgentFailure;
 use floe_kernel::AGENT_VERSION;
+use floe_kernel::AgentFailure;
 
 use super::personal::PeopleView;
 use crate::MAX_PERSONAL_CONTEXT_BYTES;
@@ -71,7 +71,6 @@ pub fn validate_confirmed_interaction_view(
     }
     Ok(())
 }
-
 
 fn valid_view_handle(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128

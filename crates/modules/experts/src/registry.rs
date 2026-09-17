@@ -2,9 +2,9 @@ use floe_agent_contract::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
-use floe_agent_contract::CalendarScope;
 use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::CalendarScope;
+use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
 
 mod calendar_setup;
 mod expert_setup;
@@ -312,7 +312,8 @@ impl CalendarViewBinding {
             || self.connection_revision == 0
             || (matches!(
                 self.provider,
-                floe_agent_contract::CalendarProvider::EventKit | floe_agent_contract::CalendarProvider::Android
+                floe_agent_contract::CalendarProvider::EventKit
+                    | floe_agent_contract::CalendarProvider::Android
             ) && self.source_authority.is_none())
             || self
                 .source_authority
@@ -1021,7 +1022,10 @@ impl AgentRegistry {
         Ok(revision)
     }
 
-    pub(crate) fn validate_grants(&self, assignment: &PackageAssignment) -> Result<(), AgentFailure> {
+    pub(crate) fn validate_grants(
+        &self,
+        assignment: &PackageAssignment,
+    ) -> Result<(), AgentFailure> {
         let installation = self.installation(assignment.installation_id)?;
         let package = self.package(&installation.package)?;
         for handle in &assignment.granted_view_handles {

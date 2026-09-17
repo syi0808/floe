@@ -1,10 +1,10 @@
 use floe_agent_contract::AgentFailure;
+use floe_agent_contract::PersonId;
 use floe_experts::{
     AgentId, AgentRegistry, BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState,
     ExpertPackaging, ExpertSetupSpec,
 };
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
-use floe_agent_contract::PersonId;
 use uuid::Uuid;
 
 /// The builtin Experts, in the shape the registry installs them.
@@ -73,7 +73,9 @@ fn builtins_only_grant_available_person_scoped_sources_and_publish_enabled_cards
             source(BuiltinContextSource::Tasks, BuiltinSourceState::Unavailable),
         ],
     };
-    let receipt = registry.install_builtin_experts(person, &request, &specs()).unwrap();
+    let receipt = registry
+        .install_builtin_experts(person, &request, &specs())
+        .unwrap();
     assert_eq!(registry.revision(), 1);
     assert_eq!(registry.enabled_expert_cards(person), []);
     assert_eq!(registry.enabled_expert_cards(other), []);
@@ -135,10 +137,14 @@ fn builtin_setup_is_idempotent_for_the_same_request() {
         setup_id: Uuid::new_v4(),
         sources: vec![],
     };
-    let first = registry.install_builtin_experts(person, &request, &specs()).unwrap();
+    let first = registry
+        .install_builtin_experts(person, &request, &specs())
+        .unwrap();
     let revision = registry.revision();
     assert_eq!(
-        registry.install_builtin_experts(person, &request, &specs()).unwrap(),
+        registry
+            .install_builtin_experts(person, &request, &specs())
+            .unwrap(),
         first
     );
     assert_eq!(registry.revision(), revision);
@@ -156,7 +162,9 @@ fn source_refresh_updates_grants_without_changing_enablement() {
         setup_id: Uuid::new_v4(),
         sources: vec![mail.clone()],
     };
-    let receipt = registry.install_builtin_experts(person, &request, &specs()).unwrap();
+    let receipt = registry
+        .install_builtin_experts(person, &request, &specs())
+        .unwrap();
     let communication = receipt
         .assignments
         .iter()

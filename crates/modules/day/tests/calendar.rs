@@ -2,9 +2,8 @@ use chrono::{Duration, TimeZone, Utc};
 use floe_context_contract::{CalendarProvider, CalendarScope};
 use floe_day::{
     AllDaySchedule, CalendarConnection, CalendarFailure, CalendarRange, CalendarRecord,
-    CalendarSelection, DaySnapshot, SourceAuthority,
-    DayErrorCode as ErrorCode, DayService, EventSchedule, PersonId, SourceRef, TimedSchedule,
-    TimelineItem, TimelineRepository,
+    CalendarSelection, DayErrorCode as ErrorCode, DayService, DaySnapshot, EventSchedule, PersonId,
+    SourceAuthority, SourceRef, TimedSchedule, TimelineItem, TimelineRepository,
 };
 
 mod support;

@@ -1,41 +1,51 @@
 use std::{collections::HashMap, os::unix::fs::PermissionsExt, sync::Mutex};
 
 use chrono::Utc;
-use floe_agent_contract::{AgentFailure};
+use floe_agent_contract::AgentFailure;
 use floe_conversation::{AgentMessage, AgentOutcome, SessionStore};
-use floe_execution::{Cancellation};
-use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
+use floe_execution::Cancellation;
 use floe_kernel::PersonId;
-use floe_inference::{ModelProfile, PlannedRoute};
-use floe_provider_adapters::models::learner::FoundationLearnerTransport;
 use floe_knowledge::{
-    InferenceLearnerModel, LearnerInferenceResponse, LearnerInferenceTransport, LearnerJobState,
-    LearnerModelRequest, LearnerService,
+    InferenceLearnerModel, LearnerJobState, LearnerModelAvailability, LearnerService,
+    TransportLearnerModel,
 };
+use floe_provider_adapters::models::learner::FoundationLearnerTransport;
+use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 #[derive(Default)]
 struct SmokeKeys(Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>);
 
-struct SmokeTransport;
+/// The bundled on-device model bound to the Learner role, as the host binds it.
+struct SmokeTransport(FoundationLearnerTransport);
 
-impl LearnerInferenceTransport for SmokeTransport {
-    fn profile(&self) -> Result<ModelProfile, AgentFailure> {
-        FoundationLearnerTransport.profile()
+impl Default for SmokeTransport {
+    fn default() -> Self {
+        Self(FoundationLearnerTransport::new("floe.learner.synthetic"))
+    }
+}
+
+impl floe_inference::ModelTransport for SmokeTransport {
+    fn placement(&self) -> floe_agent_contract::ModelPlacement {
+        self.0.placement()
     }
 
     async fn generate(
         &self,
-        route: PlannedRoute,
-        request: LearnerModelRequest,
-    ) -> Result<LearnerInferenceResponse, AgentFailure> {
-        let response = FoundationLearnerTransport.generate(route, request).await?;
-        println!(
-            "{}",
-            json!({"personal_data":false,"synthetic_learner_answer":response.text})
-        );
-        Ok(response)
+        request: floe_inference::ModelTransportRequest,
+    ) -> Result<floe_inference::ModelTransportResponse, AgentFailure> {
+        self.0.generate(request).await
+    }
+}
+
+impl LearnerModelAvailability for SmokeTransport {
+    fn profile_id(&self) -> &str {
+        self.0.profile_id()
+    }
+
+    fn is_available(&self) -> Result<bool, AgentFailure> {
+        Ok(true)
     }
 }
 
@@ -93,9 +103,9 @@ pub(super) async fn run(with_expiry: bool) -> Result<Value, AgentFailure> {
     if queued.len() != 1 {
         return Err(AgentFailure::Conflict);
     }
-    let transport = SmokeTransport;
-    let profile_id = transport.profile()?.id;
-    let model = InferenceLearnerModel::new(transport);
+    let transport = SmokeTransport::default();
+    let profile_id = LearnerModelAvailability::profile_id(&transport).to_owned();
+    let model = InferenceLearnerModel::new(TransportLearnerModel::new(transport));
     let processed = LearnerService {
         model: &model,
         repository: &vault,

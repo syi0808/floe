@@ -21,7 +21,7 @@ mod tests {
 
     use uuid::Uuid;
 
-        use crate::turn::journal::{CapabilityJournalSender, CapabilityUpdate};
+    use crate::turn::journal::{CapabilityJournalSender, CapabilityUpdate};
 
     fn record() -> CapabilityExecution {
         CapabilityExecution {

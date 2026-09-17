@@ -273,10 +273,9 @@ impl BuiltinContextSource {
         match self {
             Self::Calendar => BuiltinSourceRequirement::DeviceConnection,
             Self::Tasks | Self::ConfirmedMemory => BuiltinSourceRequirement::Device,
-            Self::Mail
-            | Self::ConfirmedInteractions
-            | Self::WorkContext
-            | Self::Logistics => BuiltinSourceRequirement::PairedServer,
+            Self::Mail | Self::ConfirmedInteractions | Self::WorkContext | Self::Logistics => {
+                BuiltinSourceRequirement::PairedServer
+            }
             Self::Contacts | Self::Attention | Self::Wellbeing => {
                 BuiltinSourceRequirement::Unserved
             }

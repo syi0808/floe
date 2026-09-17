@@ -1,10 +1,8 @@
 use std::time::{Duration, SystemTime};
 
-use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 use floe_agent_contract::AGENT_VERSION;
-use floe_inference::{
-    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
-};
+use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
+use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
@@ -56,7 +54,10 @@ impl ModelTransport for FoundationModelRunner {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelTransportRequest) -> Result<ModelTransportResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         generate(&NativeTransport, request, self.protection)
             .await
             .map_err(|failure| match failure {
@@ -120,7 +121,10 @@ fn check_deadline(request: &ModelTransportRequest) -> Result<(), AgentFailure> {
     }
 }
 
-fn prepare(request: &ModelTransportRequest, protection: SessionProtection) -> Result<Value, AgentFailure> {
+fn prepare(
+    request: &ModelTransportRequest,
+    protection: SessionProtection,
+) -> Result<Value, AgentFailure> {
     if request.schema_version != AGENT_VERSION {
         return Err(AgentFailure::UnsupportedVersion);
     }
@@ -296,15 +300,16 @@ impl Transport for NativeTransport {
     }
 }
 
-static LOCAL_MODEL: floe_native::ByteCall = floe_native::ByteCall::new(floe_native::NativeLibrary {
-    relative_path: "Frameworks/libfloe_local_model.dylib",
-    invoke_symbol: c"floe_local_model",
-    release_symbol: c"floe_local_model_free",
-    #[cfg(target_os = "macos")]
-    bundle_parents: floe_native::MACOS_BUNDLE_ROOT,
-    #[cfg(not(target_os = "macos"))]
-    bundle_parents: floe_native::BUNDLE_SIBLING,
-});
+static LOCAL_MODEL: floe_native::ByteCall =
+    floe_native::ByteCall::new(floe_native::NativeLibrary {
+        relative_path: "Frameworks/libfloe_local_model.dylib",
+        invoke_symbol: c"floe_local_model",
+        release_symbol: c"floe_local_model_free",
+        #[cfg(target_os = "macos")]
+        bundle_parents: floe_native::MACOS_BUNDLE_ROOT,
+        #[cfg(not(target_os = "macos"))]
+        bundle_parents: floe_native::BUNDLE_SIBLING,
+    });
 
 const MAX_LOCAL_MODEL_BYTES: usize = 32_768;
 
@@ -331,18 +336,19 @@ fn local_model_failure(error: floe_native::NativeCallError) -> AgentFailure {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use floe_agent_contract::{DataClass, TransferConsent};
-use floe_agent_contract::prompts::{
-    BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL, CAPABILITY_PROTOCOL_REVISION,
-    PromptAssembly, PromptComponentKind, PromptRole, product_component,
-};
-use floe_agent_contract::{
-    AgentContext, CapabilityDescriptor, ContextEnvelope, ContextEvidence, ContextManifest,
-    ContextualData, ConversationContext, InferencePolicyDecision, PromptManifestEntry,
-    RuntimeContext, ScopedInstructions,
-};
-use floe_execution::Cancellation;
     use floe_agent_contract::PersonId;
+    use floe_agent_contract::prompts::{
+        BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL,
+        CAPABILITY_PROTOCOL_REVISION, PromptAssembly, PromptComponentKind, PromptRole,
+        product_component,
+    };
+    use floe_agent_contract::{
+        AgentContext, CapabilityDescriptor, ContextEnvelope, ContextEvidence, ContextManifest,
+        ContextualData, ConversationContext, InferencePolicyDecision, PromptManifestEntry,
+        RuntimeContext, ScopedInstructions,
+    };
+    use floe_agent_contract::{DataClass, TransferConsent};
+    use floe_execution::Cancellation;
 
     use super::*;
 
@@ -418,13 +424,13 @@ use floe_execution::Cancellation;
     fn request() -> ModelTransportRequest {
         let prompt = prompt();
         let policy = InferencePolicyDecision {
-                purpose: "synthetic-test".into(),
-                data_classes: vec![DataClass::Synthetic],
-                allowed_placements: vec![ModelPlacement::DeviceLocal],
-                performance_class: "fast".into(),
-                projection_version: 1,
-                external_transfer_consent: TransferConsent::NotGranted,
-                bounded_sensitive_projection: false,
+            purpose: "synthetic-test".into(),
+            data_classes: vec![DataClass::Synthetic],
+            allowed_placements: vec![ModelPlacement::DeviceLocal],
+            performance_class: "fast".into(),
+            projection_version: 1,
+            external_transfer_consent: TransferConsent::NotGranted,
+            bounded_sensitive_projection: false,
         };
         let context = AgentContext {
             projection_version: 1,

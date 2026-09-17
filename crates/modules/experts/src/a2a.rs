@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure};
-use floe_execution::{Cancellation};
+use floe_agent_contract::AgentFailure;
+use floe_execution::Cancellation;
 use floe_inference::UsageLedger;
 
 #[cfg(test)]

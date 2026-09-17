@@ -1,15 +1,20 @@
 use chrono::{DateTime, Utc};
-use floe_context_contract::DataClass;
-use floe_kernel::AgentFailure;
-use floe_context_contract::ContextDependency;
-use floe_day::{PersonId, TimedSchedule};
-use floe_context_contract::CalendarProvider;
-use floe_execution::Cancellation;
 use floe_agent_contract::ExpertResult;
+use floe_context_contract::CalendarProvider;
+use floe_context_contract::ContextDependency;
+use floe_context_contract::DataClass;
+use floe_day::{PersonId, TimedSchedule};
+use floe_execution::Cancellation;
+use floe_kernel::AgentFailure;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{ActionAuthorityMode, ActionBlockReason, ActionError, ActionErrorCode, ActionFailure, ActionRepository, ActionService, AgentActionEnvelope, AgentActionOrigin, CalendarAction, CalendarActionPolicy, CalendarActionProvider, CalendarActionState, ExpertActionStore, ExpertProposalReference};
+use crate::{
+    ActionAuthorityMode, ActionBlockReason, ActionError, ActionErrorCode, ActionFailure,
+    ActionRepository, ActionService, AgentActionEnvelope, AgentActionOrigin, CalendarAction,
+    CalendarActionPolicy, CalendarActionProvider, CalendarActionState, ExpertActionStore,
+    ExpertProposalReference,
+};
 
 pub struct ExpertCalendarDestination {
     pub provider: CalendarProvider,

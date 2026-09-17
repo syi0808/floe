@@ -13,10 +13,6 @@ pub use api::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
     PlannedRoute, RecipientConstraint, RouteRequest,
 };
-pub use ports::model_transport::{
-    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
-};
-pub use transfer::{RouteRecipient, external_transfer_consent};
 pub use application::{
     AttemptJournal, AttemptLifecycle, AttemptUpdate, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter,
     LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY, ModelAttemptRecord, ModelAttemptState,
@@ -25,3 +21,7 @@ pub use application::{
     admit_saved_connection, candidate_route, plan_remote_route, select_remote_route,
     valid_external_recipient,
 };
+pub use ports::model_transport::{
+    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
+};
+pub use transfer::{RouteRecipient, external_transfer_consent};

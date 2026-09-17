@@ -4,9 +4,9 @@
 //! confirmed memory, tasks and calendars — and how it composes them. Acquiring
 //! each view stays behind the host port.
 
-use floe_context_contract::{AuthorizedRead, HeldGrant};
-use floe_agent_contract::{AgentFailure, ContextSource};
 use floe_agent_contract::AGENT_VERSION;
+use floe_agent_contract::{AgentFailure, ContextSource};
+use floe_context_contract::{AuthorizedRead, HeldGrant};
 
 use floe_context_contract::CommunicationView;
 
@@ -27,10 +27,10 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     crate::require_mandatory_source(host, request)?;
     let readable = host.conversation_context_available();
-    let memory_granted = readable
-        && host.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory);
-    let tasks_granted = readable
-        && host.source_granted(&request.agent_id, BuiltinContextSource::Tasks);
+    let memory_granted =
+        readable && host.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory);
+    let tasks_granted =
+        readable && host.source_granted(&request.agent_id, BuiltinContextSource::Tasks);
     let mut context = granted_context(host, request);
     if memory_granted {
         let snapshot = host.memory_context().await?;
@@ -44,7 +44,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     let mut task_views = host.staged_task_views().to_vec();
     if tasks_granted {
         let acquired =
-            floe_context_contract::acquire_optional_source(ContextSource::Tasks, host.task_view()).await?;
+            floe_context_contract::acquire_optional_source(ContextSource::Tasks, host.task_view())
+                .await?;
         floe_context_contract::record_source_issue(
             &mut context.optional_context_issues,
             ContextSource::Tasks,

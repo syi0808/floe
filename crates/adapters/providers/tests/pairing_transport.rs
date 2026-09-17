@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use floe_agent_contract::{AgentFailure};
-use floe_execution::{Cancellation};
+use floe_agent_contract::AgentFailure;
 use floe_connections::{PairingService, PairingStatusRequest};
+use floe_execution::Cancellation;
 use floe_provider_adapters::control::HttpRemoteControl;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
