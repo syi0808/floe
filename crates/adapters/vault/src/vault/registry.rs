@@ -1434,5 +1434,3 @@ fn integer(value: u64) -> Result<i64, AgentFailure> {
     i64::try_from(value).map_err(|_| AgentFailure::BudgetExceeded)
 }
 
-#[cfg(test)]
-mod tests;

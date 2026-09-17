@@ -2368,6 +2368,7 @@ mod tests {
     mod learner_worker;
     mod memory_review;
     mod proposals;
+    mod vault_registry;
 
     impl Worker {
         fn new(root: PathBuf, keys: Keys) -> Result<Self, AgentFailure> {

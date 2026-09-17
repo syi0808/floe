@@ -402,7 +402,7 @@ use floe_kernel::{PersonId};
     use uuid::Uuid;
 
     use super::*;
-    use crate::agent_vault::VaultKey;
+    use crate::VaultKey;
 
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);

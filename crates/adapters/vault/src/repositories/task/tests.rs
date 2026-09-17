@@ -6,13 +6,11 @@ use std::{
 };
 
 use floe_agent_contract::{DependencyCoverage, InvocationKey, TaskSnapshot, TaskState};
-use floe_app::{FloeCore};
-use floe_vault::{VaultKey};
+use crate::{VaultKey};
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
 use super::*;
-use crate::vault_host::OpenVault;
 
 #[derive(Clone, Default)]
 struct Keys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -111,21 +109,24 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
     let reopened = EncryptedAgentVault::open(root.path(), person_id, keys)
         .await
         .unwrap();
-    let opened = OpenVault::activate(
-        reopened,
-        Arc::new(FloeCore::open(":memory:").await.unwrap()),
-        Arc::new(crate::local_context::LocalContextStore::default()),
+    let reopened = Arc::new(reopened);
+    let repository = Arc::new(crate::VaultTaskRepository::new(
+        Arc::clone(&reopened),
+        "floe.builtin.schedule/v1",
+    ));
+    let (_coordinator, recovered) = floe_experts::TaskCoordinator::activate(
+        floe_experts::Directory::default(),
+        repository,
+        "everyday-assistance",
+        floe_agent_contract::MAX_OUTPUT_BYTES,
     )
     .await
     .unwrap();
-    assert_eq!(opened._recovered_tasks.len(), 1);
-    assert_eq!(opened._recovered_tasks[0].snapshot.task_id, task_id);
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].snapshot.task_id, task_id);
+    assert_eq!(recovered[0].snapshot.state, TaskState::Interrupted);
     assert_eq!(
-        opened._recovered_tasks[0].snapshot.state,
-        TaskState::Interrupted
-    );
-    assert_eq!(
-        opened.task(task_id).await.unwrap().unwrap().snapshot,
-        opened._recovered_tasks[0].snapshot
+        reopened.task(task_id).await.unwrap().unwrap().snapshot,
+        recovered[0].snapshot
     );
 }

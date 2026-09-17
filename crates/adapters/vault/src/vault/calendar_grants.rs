@@ -1056,6 +1056,29 @@ fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
 
 #[cfg(test)]
 mod tests {
+    /// How an Expert is packaged when its calendar setup is installed.
+    ///
+    /// The builtin catalogue is the App's; what the registry takes is this.
+    fn test_packaging() -> floe_experts::ExpertPackaging {
+        floe_experts::ExpertPackaging {
+            expert: floe_experts::AgentId::try_new("floe.builtin.schedule").unwrap(),
+            tool_id: "floe.builtin.schedule.timeline".into(),
+            version: "1.0.0".into(),
+            publisher: "floe".into(),
+            metadata: floe_experts::ExpertMetadata {
+                name: "Schedule Expert".into(),
+                description: "Reads a bounded calendar timeline.".into(),
+                domain_tags: vec!["schedule".into()],
+                skills: vec!["propose a focus window".into()],
+                supported_placements: vec![
+                    floe_agent_contract::ModelPlacement::DeviceLocal,
+                    floe_agent_contract::ModelPlacement::Remote,
+                ],
+            },
+            state_schema_version: 1,
+        }
+    }
+
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, sync::Mutex};
 
     use floe_access::ConnectionId;
@@ -1122,6 +1145,7 @@ mod tests {
         let installed = vault
             .install_calendar_expert_with_connection(
                 request.clone(),
+                &test_packaging(),
                 "opaque-eventkit-connection".into(),
                 floe_execution::Cancellation::default(),
             )
@@ -1382,6 +1406,7 @@ mod tests {
         let installed = vault
             .install_calendar_expert_with_connection(
                 request.clone(),
+                &test_packaging(),
                 "opaque-eventkit-connection".into(),
                 floe_execution::Cancellation::default(),
             )
@@ -1490,6 +1515,7 @@ mod tests {
         let installed = vault
             .install_calendar_expert_with_connection(
                 request.clone(),
+                &test_packaging(),
                 "opaque-eventkit-connection".into(),
                 floe_execution::Cancellation::default(),
             )
@@ -1626,6 +1652,7 @@ mod tests {
         let installed = vault
             .install_calendar_expert_with_connection(
                 request,
+                &test_packaging(),
                 "opaque-eventkit-connection".into(),
                 floe_execution::Cancellation::default(),
             )

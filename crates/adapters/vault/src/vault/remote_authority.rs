@@ -1601,6 +1601,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::vault::PersonId;
+    use floe_access::ConnectionId;
+    use floe_access::ConnectorId;
+    use floe_access::ExecutionOwnerId;
+    use floe_access::GrantConsumer;
+    use floe_access::GrantDataCategory;
+    use floe_access::GrantId;
+    use floe_access::GrantScope;
+    use floe_access::GrantSourceBinding;
+    use floe_access::ResourceHandle;
 
     #[derive(Clone, Default)]
     struct TestKeys(Arc<TestKeyState>);

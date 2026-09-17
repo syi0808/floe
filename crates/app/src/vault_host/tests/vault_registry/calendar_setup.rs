@@ -1,4 +1,12 @@
 use super::*;
+use floe_execution::Cancellation;
+use floe_experts::CalendarAccessChange;
+use floe_experts::CalendarAccessConfiguration;
+use floe_experts::CalendarExpertOverview;
+use floe_experts::CalendarExpertSetup;
+use floe_experts::CalendarExpertSetupResult;
+use floe_experts::RegistryConfiguration;
+use floe_experts::RegistryConfigurationTarget;
 
 fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
     CalendarExpertSetup {
@@ -316,8 +324,7 @@ async fn setup_and_sample_coexist_in_both_orders_without_regranting_disabled_sam
         assert_eq!(replay.setup, installed.setup);
         let session = fixture.vault.create_sample_session().await.unwrap();
         let attempted = fixture
-            .vault
-            .run_persisted_agent_sample(
+            .crate::run_persisted_agent_sample(&vault, 
                 AgentFixtureTurn {
                     person_id: fixture.person,
                     session_id: session.id,

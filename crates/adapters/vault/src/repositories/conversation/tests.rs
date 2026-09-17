@@ -15,12 +15,10 @@ use floe_conversation::{
     ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnMode,
     TurnRequest,
 };
-use floe_app::{FloeCore};
-use floe_vault::{VaultConversationAdmissionRequest, VaultKey};
+use crate::{VaultConversationAdmissionRequest, VaultKey};
 use floe_kernel::PersonId;
 
 use super::*;
-use crate::vault_host::OpenVault;
 
 #[derive(Clone, Default)]
 struct Keys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -885,8 +883,8 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         .finish_conversation_run(
             run_id,
             1,
-            floe_vault::VaultConversationTerminal {
-                state: floe_vault::VaultConversationRunState::TimedOut,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::TimedOut,
                 output: None,
                 coverage: DependencyCoverage::Unknown,
                 issue: Some(AgentFailure::DeadlineExceeded),
@@ -916,7 +914,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             expected_session_revision: continuation.session_revision,
             request_digest: [8; 32],
             text: "continue safely".into(),
-            continuation: Some(floe_vault::VaultConversationContinuationRef {
+            continuation: Some(crate::VaultConversationContinuationRef {
                 run_id: continuation.reference.run_id,
                 executor_generation: continuation.reference.executor_generation,
                 level: continuation.reference.level,
@@ -985,8 +983,8 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         .finish_conversation_run(
             second_run_id,
             1,
-            floe_vault::VaultConversationTerminal {
-                state: floe_vault::VaultConversationRunState::TimedOut,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::TimedOut,
                 output: None,
                 coverage: DependencyCoverage::Unknown,
                 issue: Some(AgentFailure::DeadlineExceeded),
@@ -1075,17 +1073,12 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
         .unwrap();
     drop(vault);
 
-    let opened = OpenVault::activate(
-        EncryptedAgentVault::open(root.path(), person_id, keys)
-            .await
-            .unwrap(),
-        Arc::new(FloeCore::open(":memory:").await.unwrap()),
-        Arc::new(crate::local_context::LocalContextStore::default()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(opened._recovered_conversation_runs.len(), 1);
-    let recovered = &opened._recovered_conversation_runs[0];
+    let opened = EncryptedAgentVault::open(root.path(), person_id, keys)
+        .await
+        .unwrap();
+    let activation = opened.activate_conversation_executor().await.unwrap();
+    assert_eq!(activation.interrupted.len(), 1);
+    let recovered = &activation.interrupted[0];
     assert_eq!(recovered.run_id, run_id);
     assert_eq!(recovered.command_id, command_id);
     assert_eq!(recovered.state, VaultConversationRunState::Interrupted);

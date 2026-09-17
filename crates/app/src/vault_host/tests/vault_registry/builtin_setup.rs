@@ -1,4 +1,10 @@
 use super::*;
+use floe_execution::Cancellation;
+use floe_experts::BuiltinExpertSetup;
+use floe_experts::BuiltinSourceBinding;
+use floe_experts::BuiltinSourceState;
+use floe_experts::RegistryConfiguration;
+use floe_experts::RegistryConfigurationTarget;
 
 #[tokio::test]
 async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_entry_point() {

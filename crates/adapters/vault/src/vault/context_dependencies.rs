@@ -320,11 +320,12 @@ mod tests {
     };
 
     use super::*;
+    use crate::ContextEvidenceReader;
     use chrono::{Duration, Utc};
     use floe_agent_contract::{DataClass, ModelPlacement, TransferConsent};
 use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentBudget, AgentMessage, ModelReplay, ModelRequest, ProviderReplay, SessionStore, manager_prompt};
+use floe_conversation::{AgentBudget, AgentMessage, ModelReplay, ModelRequest, ProviderReplay, SessionStore, prompts::manager_prompt};
 use floe_execution::{Cancellation};
     use floe_access::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES, ProcessingRestriction, ResourceHandle, SourceAuthority};
 
@@ -364,11 +365,11 @@ use floe_execution::{Cancellation};
 
     struct AllowDependency;
 
-    impl super::super::GovernedDependencyResolver for AllowDependency {
+    impl floe_access::DependencyResolver for AllowDependency {
         fn authorize<'a>(
             &'a self,
             _: &'a ContextDependency,
-            _: &'a ModelRequest,
+            _: &'a floe_access::DependencyAuthorization,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
         > {
@@ -1139,7 +1140,7 @@ use floe_execution::{Cancellation};
     async fn dependent_release_rechecks_live_evidence_inside_final_transaction() {
         struct Liveness(std::sync::atomic::AtomicBool);
 
-        impl super::super::GovernedDependencyLiveness for Liveness {
+        impl floe_access::DependencyLiveness for Liveness {
             fn validate(&self, _: &ContextDependency) -> Result<(), AgentFailure> {
                 if self.0.load(std::sync::atomic::Ordering::Acquire) {
                     Ok(())
@@ -1200,7 +1201,7 @@ use floe_execution::{Cancellation};
             .await
             .unwrap();
         let session = vault.create_session().await.unwrap();
-        let reader = crate::context_evidence::ContextEvidenceReader::new(&vault, session.id);
+        let reader = crate::ContextEvidenceReader::new(&vault, session.id);
         let turn_id = Uuid::new_v4();
         assert_eq!(
             reader.read_turn_coverage(session.id, turn_id).await,

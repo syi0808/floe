@@ -6,12 +6,23 @@ use std::{
     time::Duration,
 };
 
-// FIXME(stage-2): glob import of the retired floe-agent crate
 use tokio::{sync::Notify, time::Instant};
 
 use super::*;
-use crate::{agent_fixture::FixtureCapabilities};
-use floe_conversation::{AgentFixturePrompt, AgentFixtureTurn, recover_agent_sample};
+use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
+use floe_conversation::AgentEventKind;
+use floe_conversation::AgentOutcome;
+use floe_conversation::AgentSessionScope;
+use floe_execution::Cancellation;
+use floe_experts::A2AMessage;
+use floe_experts::A2AMessageRole;
+use floe_experts::A2APart;
+use floe_experts::A2ASendMessageRequest;
+use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
+use floe_experts::RegistryConfiguration;
+use floe_experts::RegistryConfigurationTarget;
+use crate::agent_fixture::FixtureCapabilities;
+use crate::{AgentFixturePrompt, AgentFixtureTurn, recover_agent_sample};
 
 mod builtin_setup;
 mod calendar_setup;
@@ -446,8 +457,7 @@ impl Fixture {
 
     async fn sample(&self) -> AgentSession {
         let session = self.vault.create_sample_session().await.unwrap();
-        self.vault
-            .run_persisted_agent_sample(
+        crate::run_persisted_agent_sample(&self.vault, 
                 AgentFixtureTurn {
                     person_id: self.person,
                     session_id: session.id,
@@ -671,7 +681,7 @@ async fn persisted_authority_change_during_model_work_never_publishes_expert_suc
     let baseline = fixture.prepare().await;
     let session = fixture.vault.create_sample_session().await.unwrap();
     let started = Notify::new();
-    let run = fixture.vault.run_persisted_agent_sample(
+    let run = crate::run_persisted_agent_sample(&fixture.vault, 
         AgentFixtureTurn {
             person_id: fixture.person,
             session_id: session.id,
