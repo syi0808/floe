@@ -492,7 +492,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
-    let action = WorkerAction::ConversationTurn {
+    let action = || WorkerAction::ConversationTurn {
         request: Box::new(ConversationTurnRequest {
             session_id: session.id,
             expected_revision: session.revision,
@@ -501,7 +501,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             profile: ProfileSelection::Auto,
             continuation: false,
             retry_of: None,
-            remote_route: Some(route),
+            remote_route: Some(route.clone()),
         }),
     };
     let request_id = Uuid::new_v4();
@@ -1197,7 +1197,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
-    let action = WorkerAction::ConversationTurn {
+    let action = || WorkerAction::ConversationTurn {
         request: Box::new(ConversationTurnRequest {
             session_id: session.id,
             expected_revision: session.revision + 2,
@@ -1693,20 +1693,27 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         )
         .unwrap();
     let completed = wait(&worker, person, id);
+    let replayed = worker
+        .request(
+            person,
+            id,
+            WorkerOperation::Submit {
+                action: Box::new(action()),
+            },
+        )
+        .unwrap();
     assert_eq!(
-        worker
-            .request(person, id, WorkerOperation::Submit { action: action() })
-            .unwrap(),
-        completed
+        (replayed.request_id, replayed.stage.clone(), replayed.done),
+        (completed.request_id, completed.stage.clone(), completed.done)
     );
-    assert_eq!(
+    assert!(matches!(
         worker.request(
             PersonId::new(),
             id,
             WorkerOperation::Poll { after_sequence: 0 }
         ),
         Err(AgentFailure::NotFound)
-    );
+    ));
     assert!(
         completed.events.is_empty() && completed.session.is_none() && completed.registry.is_none()
     );
@@ -1834,11 +1841,11 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             .unwrap()
             .done
     );
-    assert_eq!(
+    assert!(matches!(
         worker.request(person, id, WorkerOperation::Release),
         Err(AgentFailure::Conflict)
-    );
-    assert_eq!(
+    ));
+    assert!(matches!(
         worker.request(
             person,
             Uuid::new_v4(),
@@ -1847,7 +1854,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             }
         ),
         Err(AgentFailure::Conflict)
-    );
+    ));
     *keys.0.paused.lock().unwrap() = false;
     keys.0.wake.notify_all();
     let cancelled = wait(&worker, person, id);

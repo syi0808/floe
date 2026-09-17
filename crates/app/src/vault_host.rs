@@ -3044,26 +3044,27 @@ mod tests {
             )
             .unwrap();
         let done = wait(&worker, person, id);
+        let replayed = worker
+            .request(
+                person,
+                id,
+                WorkerOperation::Submit {
+                    action: Box::new(action()),
+                },
+            )
+            .unwrap();
         assert_eq!(
-            worker
-                .request(
-                    person,
-                    id,
-                    WorkerOperation::Submit {
-                        action: action.clone()
-                    }
-                )
-                .unwrap(),
-            done
+            (replayed.request_id, replayed.stage, replayed.done),
+            (done.request_id, done.stage.clone(), done.done)
         );
-        assert_eq!(
+        assert!(matches!(
             worker.request(
                 PersonId::new(),
                 id,
                 WorkerOperation::Poll { after_sequence: 0 }
             ),
             Err(AgentFailure::NotFound)
-        );
+        ));
         assert!(done.session.is_none() && done.events.is_empty());
         let after = done.registry.as_ref().unwrap();
         assert_eq!(after.revision, before.revision + 1);
@@ -3371,7 +3372,7 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert_eq!(
+        assert!(matches!(
             worker.request(
                 person,
                 Uuid::new_v4(),
@@ -3385,11 +3386,11 @@ mod tests {
                 }
             ),
             Err(AgentFailure::Conflict)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             worker.request(PersonId::new(), id, WorkerOperation::Stop),
             Err(AgentFailure::NotFound)
-        );
+        ));
         worker.request(person, id, WorkerOperation::Stop).unwrap();
         let result = wait(&worker, person, id);
         assert_eq!(
@@ -3398,8 +3399,12 @@ mod tests {
                 reason: AgentFailure::Cancelled
             })
         );
-        assert_eq!(wait(&worker, person, id), result);
+        let awaited = wait(&worker, person, id);
         assert_eq!(
+            (awaited.request_id, awaited.next_sequence, awaited.done),
+            (result.request_id, result.next_sequence, result.done)
+        );
+        assert!(matches!(
             worker.request(
                 person,
                 id,
@@ -3408,7 +3413,7 @@ mod tests {
                 }
             ),
             Err(AgentFailure::InvalidInput)
-        );
+        ));
         worker
             .request(person, id, WorkerOperation::Release)
             .unwrap();

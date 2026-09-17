@@ -6,8 +6,9 @@ use floe_agent_contract::{
 };
 use floe_context::CalendarSource;
 use floe_context_contract::{CalendarProvider, ModelPlacement, TransferConsent};
-use floe_conversation::{
-    AgentBudget, AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+use floe_conversation::{AgentBudget, AgentMessage};
+use floe_inference::{
+    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
 };
 use floe_day::{CalendarRange, CalendarTimelineGrant};
 use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
@@ -45,44 +46,54 @@ fn fixture_now() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc.with_ymd_and_hms(2050, 1, 15, 9, 0, 0).unwrap()
 }
 
-impl ModelRunner for Model {
+/// The conversation the envelope carries, history then current turn.
+fn envelope_messages(request: &ModelTransportRequest) -> Vec<&serde_json::Value> {
+    request
+        .envelope
+        .conversation
+        .history
+        .iter()
+        .chain(request.envelope.conversation.current_turn.iter())
+        .collect()
+}
+
+impl ModelTransport for Model {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: ModelTransportRequest,
+    ) -> Result<ModelTransportResponse, AgentFailure> {
         let schedule_expert = request.prompt.role == PromptRole::ScheduleExpert;
+        let messages = envelope_messages(&request);
         let step = if schedule_expert {
-            let coverage = request.messages.iter().find_map(|message| match message {
-                AgentMessage::User { text, .. } => serde_json::from_str::<serde_json::Value>(text)
-                    .ok()
+            let coverage = messages.iter().find_map(|message| {
+                (message["role"] == "user")
+                    .then(|| message["content"].as_str())
+                    .flatten()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
                     .map(|task| {
                         (
                             task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
                             task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
                         )
-                    }),
-                _ => None,
+                    })
             });
             let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
                 coverage.ok_or(AgentFailure::InvalidModelOutput)?
             else {
                 return Err(AgentFailure::InvalidModelOutput);
             };
-            let latest = request
-                .messages
-                .iter()
-                .rev()
-                .find_map(|message| match message {
-                    AgentMessage::Capability {
-                        capability_id,
-                        result: Ok(output),
-                        ..
-                    } => Some((capability_id.as_str(), output.as_str())),
-                    _ => None,
-                });
+            // A capability result reaches a transport as a tool message.
+            let latest = messages.iter().rev().find_map(|message| {
+                (message["role"] == "tool" && message["status"] == "success")
+                    .then(|| message["capability_id"].as_str())
+                    .flatten()
+            });
             match latest {
-                Some(("schedule.find_free_windows", _)) => ModelStep::Answer {
+                Some("schedule.find_free_windows") => ModelStep::Answer {
                     text: "Synthetic proposal recorded.".into(),
                 },
                 _ => ModelStep::Call {
@@ -95,10 +106,9 @@ impl ModelRunner for Model {
                     .to_string(),
                 },
             }
-        } else if request
-            .messages
+        } else if messages
             .iter()
-            .any(|message| matches!(message, AgentMessage::Delegation { .. }))
+            .any(|message| message["capability_id"] == "floe.a2a.delegate")
         {
             ModelStep::Answer {
                 text: "Synthetic proposal recorded.".into(),
@@ -109,7 +119,7 @@ impl ModelRunner for Model {
                 message: "Find a suitable time for this calendar request.".into(),
             }
         };
-        Ok(ModelResponse {
+        Ok(ModelTransportResponse {
             replay: None,
             schema_version: 1,
             output: vec![step],
@@ -379,7 +389,11 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     };
     worker.request(person, id, submit.clone()).unwrap();
     let result = wait(&worker, person, id);
-    assert_eq!(worker.request(person, id, submit).unwrap(), result);
+    let replayed = worker.request(person, id, submit).unwrap();
+    assert_eq!(
+        (replayed.request_id, replayed.stage.clone(), replayed.done),
+        (result.request_id, result.stage.clone(), result.done)
+    );
     assert!(result.failure.is_none() && result.events.is_empty() && result.session.is_none());
     let projection = result.proposal.unwrap();
     assert_eq!(projection.session_id, session.id.to_string());
