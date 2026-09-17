@@ -9,38 +9,38 @@ use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_experts_builtin::BuiltinExpertKind;
 use floe_experts_builtin::schedule::{self, SCHEDULE_DEFINITION_REVISION};
 
-pub(in crate::vault_host) use floe_experts_builtin::schedule::schedule_definition;
-use floe_agent_contract::{
-    AgentEndpoint, BoxFuture, DependencyCoverage, EndpointInvocation, ExpertReport,
-};
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
     CalendarReadAdmission,
+};
+use floe_agent_contract::{
+    AgentEndpoint, BoxFuture, DependencyCoverage, EndpointInvocation, ExpertReport,
 };
 use floe_context::{
     CalendarObservation, CalendarObserveRequest, CalendarSource, ProjectedCalendarItem,
     ProjectedCalendarObservation,
 };
+pub(in crate::vault_host) use floe_experts_builtin::schedule::schedule_definition;
 
 use crate::FloeCore;
-use floe_day::CalendarTimelineGrant;
 use agent::CalendarExpertEndpointRequest;
-use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
-use floe_day::{CalendarBatch, CalendarConnection, CalendarRecord};
 use floe_context_contract::CalendarProvider;
-use floe_kernel::PersonId;
+use floe_day::CalendarTimelineGrant;
+use floe_day::{CalendarBatch, CalendarConnection, CalendarRecord};
 use floe_execution::ExecutionScope;
 use floe_experts::TaskCoordinator;
+use floe_kernel::PersonId;
+use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
 // BOUNDARY(stage-3): the Schedule Expert still reaches the provider adapter directly.
 // The acquisition must arrive through an owner-defined source port.
 use floe_provider_adapters::control::{
     RemoteAuthorizationClient, calendar_query_sha256, parse_calendar_challenge,
 };
-use floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess;
 use floe_provider_adapters::sources::native_acquisition::{
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
     NativeCalendarBatch, NativeCalendarFailure, NativeEventSchedule,
 };
+use floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess;
 use uuid::Uuid;
 
 use crate::local_context::LocalContextHost;
@@ -349,9 +349,7 @@ async fn select_active_setup<Keys: VaultKeyProvider>(
     })
 }
 
-pub(crate) async fn run_registered<
-    Keys: VaultKeyProvider + 'static,
->(
+pub(crate) async fn run_registered<Keys: VaultKeyProvider + 'static>(
     endpoint: &ScheduleEndpoint<Keys>,
     coordinator: &TaskCoordinator<VaultTaskRepository<Keys>>,
     request: floe_experts::A2ASendMessageRequest,
@@ -543,7 +541,6 @@ fn validate_active_connection(
     }
     Ok(())
 }
-
 
 enum Access<'model> {
     Fixture(FixtureAccess),
@@ -1465,9 +1462,7 @@ enum Model {
 }
 
 impl Model {
-    fn conversation(
-        remote_route: Option<crate::RemoteTurnRoute>,
-    ) -> Result<Self, AgentFailure> {
+    fn conversation(remote_route: Option<crate::RemoteTurnRoute>) -> Result<Self, AgentFailure> {
         match remote_route {
             Some(route) => ServerModelRunner::new_model_only(route.route).map(Self::Server),
             None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
@@ -1497,16 +1492,18 @@ impl floe_inference::ModelTransport for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FloeCore;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use floe_agent_contract::TransferConsent;
-    use crate::FloeCore;
-use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
-    use floe_context_contract::{ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle};
-use floe_day::{CalendarSelection, CalendarSyncStatus};
-use floe_context_contract::CalendarScope;
-    use floe_protocol::{
-        CalendarBatchDto, LocalContextAcquisitionResultDto, LocalContextOperationDto,
+    use floe_context_contract::CalendarScope;
+    use floe_context_contract::{
+        ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation,
+        GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
+    use floe_day::{CalendarSelection, CalendarSyncStatus};
+    use crate::local_context::{CalendarObservationPublication, LocalContextCommand};
+    use floe_provider_adapters::sources::native_acquisition::CalendarAcquisitionResult;
+    use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use sha2::{Digest, Sha256};
     use std::{
@@ -1936,10 +1933,7 @@ use floe_context_contract::CalendarScope;
         (setup, binding, connection)
     }
 
-    fn remote_route(
-        connector_id: &str,
-        connection: &CalendarConnection,
-    ) -> crate::RemoteTurnRoute {
+    fn remote_route(connector_id: &str, connection: &CalendarConnection) -> crate::RemoteTurnRoute {
         crate::RemoteTurnRoute {
             route: floe_inference::RemoteRoute {
                 base_url: "http://127.0.0.1:8080/".into(),
@@ -2088,21 +2082,21 @@ use floe_context_contract::CalendarScope;
                 )
             });
             let route = crate::RemoteTurnRoute {
-                            route: floe_inference::RemoteRoute {
-                                base_url: format!("http://127.0.0.1:{}/", address.port()),
-                                bearer_token: "fixture-token-that-is-long-enough".into(),
-                                purpose: "everyday_assistance".into(),
-                                external: false,
-                                allow_external: false,
-                                recipient: None,
-                                pairing: Some(floe_inference::RoutePairing {
-                    client_id: "fixture-client".into(),
-                    person_id: person_id.to_string(),
-                    device_id: "device-a".into(),
-                }),
-                            },
-                            calendar_connections: vec![],
-                        };
+                route: floe_inference::RemoteRoute {
+                    base_url: format!("http://127.0.0.1:{}/", address.port()),
+                    bearer_token: "fixture-token-that-is-long-enough".into(),
+                    purpose: "everyday_assistance".into(),
+                    external: false,
+                    allow_external: false,
+                    recipient: None,
+                    pairing: Some(floe_inference::RoutePairing {
+                        client_id: "fixture-client".into(),
+                        person_id: person_id.to_string(),
+                        device_id: "device-a".into(),
+                    }),
+                },
+                calendar_connections: vec![],
+            };
             let backend = VaultRemoteCalendarBackend::new(
                 &vault,
                 &core,
@@ -2327,23 +2321,25 @@ use floe_context_contract::CalendarScope;
             let store = LocalContextHost::default();
             let now = chrono::Utc::now().timestamp_millis();
             store
-                .request_bound(
+                .execute(
                     setup.person_id,
-                    LocalContextOperationDto::PublishCalendarObservation {
+                    LocalContextCommand::PublishCalendarObservation {
                         device_id: "device-a".into(),
-                        connection_id: connection.connection_id.clone(),
-                        connection_revision: connection.revision,
-                        provider: floe_protocol::conversion::calendar_provider_to_dto(provider),
-                        calendar_ids: vec!["primary".into()],
-                        observed_at_unix_ms: now,
-                        expires_at_unix_ms: now + 240_000,
-                        range_start_unix_ms: now - 60_000,
-                        range_end_unix_ms: now + 60_000,
-                        batches: vec![CalendarBatchDto {
-                            calendar_id: "primary".into(),
-                            records: vec![],
-                            failure: None,
-                        }],
+                        observation: Box::new(CalendarObservationPublication {
+                            connection_id: connection.connection_id.clone(),
+                            connection_revision: connection.revision,
+                            provider,
+                            calendar_ids: vec!["primary".into()],
+                            observed_at_unix_ms: now,
+                            expires_at_unix_ms: now + 240_000,
+                            range_start_unix_ms: now - 60_000,
+                            range_end_unix_ms: now + 60_000,
+                            batches: vec![floe_day::CalendarBatch {
+                                calendar_id: "primary".into(),
+                                records: vec![],
+                                failure: None,
+                            }],
+                        }),
                     },
                     Some(&connection),
                 )
@@ -2476,25 +2472,27 @@ use floe_context_contract::CalendarScope;
         observed_at_unix_ms: i64,
     ) {
         store
-            .request_bound(
+            .execute(
                 person_id,
-                LocalContextOperationDto::PublishCalendarObservation {
+                LocalContextCommand::PublishCalendarObservation {
                     device_id: connection.device_id.clone(),
-                    connection_id: connection.connection_id.clone(),
-                    connection_revision: connection.revision,
-                    provider: floe_protocol::conversion::calendar_provider_to_dto(
-                        CalendarProvider::EventKit,
-                    ),
-                    calendar_ids: vec!["primary".into()],
-                    observed_at_unix_ms,
-                    expires_at_unix_ms: observed_at_unix_ms + 240_000,
-                    range_start_unix_ms: observed_at_unix_ms - 60_000,
-                    range_end_unix_ms: observed_at_unix_ms + 60_000,
-                    batches: vec![CalendarBatchDto {
-                        calendar_id: "primary".into(),
-                        records: vec![],
-                        failure: None,
-                    }],
+                    observation: Box::new(CalendarObservationPublication {
+                        connection_id: connection.connection_id.clone(),
+                        connection_revision: connection.revision,
+                        provider: floe_protocol::conversion::calendar_provider_to_dto(
+                            CalendarProvider::EventKit,
+                        ),
+                        calendar_ids: vec!["primary".into()],
+                        observed_at_unix_ms,
+                        expires_at_unix_ms: observed_at_unix_ms + 240_000,
+                        range_start_unix_ms: observed_at_unix_ms - 60_000,
+                        range_end_unix_ms: observed_at_unix_ms + 60_000,
+                        batches: vec![floe_day::CalendarBatch {
+                            calendar_id: "primary".into(),
+                            records: vec![],
+                            failure: None,
+                        }],
+                    }),
                 },
                 Some(connection),
             )
@@ -2633,9 +2631,9 @@ use floe_context_contract::CalendarScope;
         .unwrap();
         let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
         store
-            .request_bound(
+            .execute(
                 person_id,
-                LocalContextOperationDto::RegisterAcquisitionHost {
+                LocalContextCommand::RegisterAcquisitionHost {
                     host_epoch: "host-a".into(),
                 },
                 None,
@@ -2666,9 +2664,9 @@ use floe_context_contract::CalendarScope;
                 result = &mut check => break result,
                 _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {
                     let polled = store
-                        .request_bound(
+                        .execute(
                             person_id,
-                            LocalContextOperationDto::PollAcquisitions {
+                            LocalContextCommand::PollAcquisitions {
                                 host_epoch: "host-a".into(),
                             },
                             None,
@@ -2676,11 +2674,11 @@ use floe_context_contract::CalendarScope;
                         .unwrap();
                     if let Some(acquisition) = polled.acquisitions.into_iter().next() {
                         store
-                            .request_bound(
+                            .execute(
                                 person_id,
-                                LocalContextOperationDto::CompleteAcquisition {
+                                LocalContextCommand::CompleteAcquisition {
                                     host_epoch: "host-a".into(),
-                                    result: LocalContextAcquisitionResultDto {
+                                    result: Box::new(CalendarAcquisitionResult {
                                         request_id: acquisition.request_id,
                                         host_epoch: acquisition.host_epoch,
                                         person_id: acquisition.person_id,
@@ -2697,7 +2695,7 @@ use floe_context_contract::CalendarScope;
                                         available_calendar_ids: vec!["primary".into()],
                                         permission_class: "full".into(),
                                         batches: vec![],
-                                    },
+                                    }),
                                 },
                                 None,
                             )

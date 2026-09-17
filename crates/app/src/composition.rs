@@ -6,8 +6,8 @@ use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 
 use crate::{
-    AppHost, FloeCore, HostError, HostServices, agent_run,
-    inference_routes, local_context, vault_host,
+    AppHost, FloeCore, HostError, HostServices, agent_run, inference_routes, local_context,
+    vault_host,
 };
 
 pub struct AppComposition {
@@ -168,12 +168,11 @@ fn service_failure(failure: floe_kernel::AgentFailure) -> crate::ServiceError {
     }
 }
 
-
 /// Create the host: one current-thread runtime, the local store, the Vault
 /// worker and the route selector, bound to the verified local identity.
 pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
-    let identity =
-        crate::local_identity_for_database(std::path::Path::new(path)).map_err(AppOpenError::Host)?;
+    let identity = crate::local_identity_for_database(std::path::Path::new(path))
+        .map_err(AppOpenError::Host)?;
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()

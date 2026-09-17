@@ -1,7 +1,10 @@
 use chrono::{DateTime, Utc};
 
-use floe_day::{CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange, CalendarRecord, CalendarSelection};
 use floe_context_contract::{CalendarProvider, CalendarScope};
+use floe_day::{
+    CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange, CalendarRecord,
+    CalendarSelection,
+};
 use floe_kernel::PersonId;
 
 use crate::{CoreError, FloeCore};

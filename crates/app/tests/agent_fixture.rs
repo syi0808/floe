@@ -1,8 +1,8 @@
-use floe_agent_contract::{AgentFailure};
+use floe_agent_contract::AgentFailure;
+use floe_app::FloeCore;
+use floe_conversation::AgentFixturePrompt;
 use floe_conversation::{AgentMessage, AgentOutcome};
 use floe_experts::{EXPERT_RESULT_MEDIA_TYPE, ExpertResult, PackageKind};
-use floe_app::{FloeCore};
-use floe_conversation::{AgentFixturePrompt};
 use floe_kernel::PersonId;
 
 #[tokio::test]

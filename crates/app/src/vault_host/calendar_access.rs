@@ -102,9 +102,14 @@ impl NativeCalendarSubjectSource for DeviceCalendarSubject<'_> {
         &self,
         request: NativeSubjectRequest,
     ) -> Result<NativeSubjectObservation, AgentFailure> {
-        use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
+        use floe_provider_adapters::sources::{
+            CalendarAcquisitionMode, CalendarAcquisitionRequest,
+        };
 
-        let host_epoch = self.local_context.calendar().host_epoch(request.person_id)?;
+        let host_epoch = self
+            .local_context
+            .calendar()
+            .host_epoch(request.person_id)?;
         let start = chrono::Utc::now().timestamp_millis();
         let result = self
             .local_context

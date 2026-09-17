@@ -2,19 +2,30 @@ use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
-use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentBudget, AgentEvent, CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse, ModelRunner, SessionStore};
-use floe_experts::{A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent};
 use floe_context::{
     AttentionView, CalendarContextView, FeasibilityView, PeopleView, WellbeingView,
 };
-use floe_experts_builtin::BuiltinContextSource;
+use floe_conversation::{
+    AgentBudget, AgentEvent, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
+    ModelRequest, ModelResponse, ModelRunner, SessionStore,
+};
 #[cfg(test)]
 use floe_conversation::{AgentCommand, AgentRuntime};
+use floe_experts::{
+    A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
+};
+use floe_experts_builtin::BuiltinContextSource;
+use floe_kernel::AGENT_VERSION;
 // What the regressions below stand a turn up against: the expert results and
 // task states they assert on, and the wire a fixture route is stated in.
+use crate::{ConversationTurnRequest, RemoteTurnRoute};
 #[cfg(test)]
-use floe_experts::{A2AArtifact, A2ATaskState, BuiltinExpertSetupReceipt, EXPERT_RESULT_MEDIA_TYPE};
+use floe_connections::CalendarConnectionRef;
+use floe_conversation::GovernedSessionStore;
+#[cfg(test)]
+use floe_experts::{
+    A2AArtifact, A2ATaskState, BuiltinExpertSetupReceipt, EXPERT_RESULT_MEDIA_TYPE,
+};
 #[cfg(test)]
 use floe_experts_builtin::commitments::{
     CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
@@ -41,12 +52,8 @@ use floe_experts_builtin::work_context::{WorkContextExpertResult, run_work_conte
 use floe_experts_builtin::{
     BuiltinExpertKind, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
 };
-#[cfg(test)]
-use floe_connections::CalendarConnectionRef;
-use floe_conversation::GovernedSessionStore;
-use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use floe_kernel::PersonId;
-use crate::{ConversationTurnRequest, RemoteTurnRoute};
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 
 use crate::FloeCore;
@@ -73,12 +80,9 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     person_id: PersonId,
     request: &'a ConversationTurnRequest,
     command_id: floe_agent_contract::CommandId,
-    conversation_repository:
-        &'a std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
+    conversation_repository: &'a std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     run_cancellations: &'a std::sync::Arc<floe_conversation::RunCancellationRegistry>,
-    task_coordinator: &'a floe_experts::TaskCoordinator<
-        floe_vault::VaultTaskRepository<Keys>,
-    >,
+    task_coordinator: &'a floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
     schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     builtin_expert_endpoint: &'a expert_dispatch::BuiltinExpertEndpoint<Keys>,
     /// The Run this turn continues, as Conversation admitted it.
@@ -89,14 +93,10 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
     local_context: &LocalContextHost,
-    task_coordinator: &floe_experts::TaskCoordinator<
-        floe_vault::VaultTaskRepository<Keys>,
-    >,
+    task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
     schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     builtin_expert_endpoint: &expert_dispatch::BuiltinExpertEndpoint<Keys>,
-    conversation_repository: &std::sync::Arc<
-        floe_vault::VaultConversationRepository<Keys>,
-    >,
+    conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     person_id: PersonId,
     command_id: floe_agent_contract::CommandId,
@@ -349,7 +349,8 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             floe_conversation::ManagerConfig {
                 role_spec: floe_agent_contract::RoleSpec {
                     role_id: "manager".into(),
-                    prompt: floe_conversation::prompts::manager_prompt(context.persona.as_ref())?.render(),
+                    prompt: floe_conversation::prompts::manager_prompt(context.persona.as_ref())?
+                        .render(),
                     output_contract: "Return one user-facing answer or one registered delegation."
                         .into(),
                 },
@@ -473,9 +474,7 @@ struct ConversationContextReader<'a, Keys: VaultKeyProvider> {
     person_id: PersonId,
 }
 
-impl<Keys: VaultKeyProvider> ConversationContextReaderApi
-    for ConversationContextReader<'_, Keys>
-{
+impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContextReader<'_, Keys> {
     fn memory<'a>(
         &'a self,
     ) -> Pin<
@@ -495,14 +494,16 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>> {
         let handle = uuid::Uuid::new_v5(&self.person_id.0, b"floe.tasks");
-        Box::pin(floe_context::application::day_context_views::task_context_view(
-            &self.core.store,
-            self.person_id,
-            handle,
-            chrono::Utc::now(),
-            16,
-            8 * 1024,
-        ))
+        Box::pin(
+            floe_context::application::day_context_views::task_context_view(
+                &self.core.store,
+                self.person_id,
+                handle,
+                chrono::Utc::now(),
+                16,
+                8 * 1024,
+            ),
+        )
     }
 }
 
@@ -516,8 +517,15 @@ async fn optional_task_views(
     let acquired = floe_context::acquire_optional_source(
         floe_agent_contract::ContextSource::Tasks,
         floe_context::application::day_context_views::task_context_view(
-            &core.store,person_id, handle, chrono::Utc::now(), 16, 8 * 1024),
-    ).await?;
+            &core.store,
+            person_id,
+            handle,
+            chrono::Utc::now(),
+            16,
+            8 * 1024,
+        ),
+    )
+    .await?;
     floe_context::record_source_issue(
         &mut context.optional_context_issues,
         floe_agent_contract::ContextSource::Tasks,
@@ -528,9 +536,7 @@ async fn optional_task_views(
 
 pub(super) async fn recover<Keys: VaultKeyProvider + 'static>(
     vault: &EncryptedAgentVault<Keys>,
-    conversation_repository: &std::sync::Arc<
-        floe_vault::VaultConversationRepository<Keys>,
-    >,
+    conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     person_id: PersonId,
     session_id: Uuid,
     expected_revision: u64,
@@ -555,7 +561,10 @@ fn policy(model: &Model, route: Option<&RemoteTurnRoute>) -> InferencePolicyDeci
         allowed_placements: vec![floe_inference::ModelTransport::placement(model)],
         performance_class: "interactive".into(),
         projection_version: 1,
-        external_transfer_consent: external_transfer_consent(floe_inference::ModelTransport::placement(model), route),
+        external_transfer_consent: external_transfer_consent(
+            floe_inference::ModelTransport::placement(model),
+            route,
+        ),
         bounded_sensitive_projection: false,
     }
 }
@@ -566,10 +575,7 @@ fn external_transfer_consent(
     placement: ModelPlacement,
     route: Option<&RemoteTurnRoute>,
 ) -> TransferConsent {
-    floe_inference::external_transfer_consent(
-        placement,
-        route.map(RemoteTurnRoute::recipient),
-    )
+    floe_inference::external_transfer_consent(placement, route.map(RemoteTurnRoute::recipient))
 }
 
 pub(crate) enum Model {
@@ -665,8 +671,10 @@ impl<Transport: floe_inference::ModelTransport + Sync> floe_agent_contract::Expe
     fn answer<'a>(
         &'a self,
         call: floe_agent_contract::ExpertModelCall,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<floe_agent_contract::ExpertModelAnswer, AgentFailure>>
-    {
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_agent_contract::ExpertModelAnswer, AgentFailure>,
+    > {
         Box::pin(async move {
             let turn_id = Uuid::new_v4();
             let runner = floe_conversation::TransportModelRunner::new(self.model);
@@ -852,7 +860,10 @@ struct CompositeDependencyLiveness<'a> {
 }
 
 impl floe_access::DependencyLiveness for CompositeDependencyLiveness<'_> {
-    fn validate(&self, dependency: &floe_context_contract::ContextDependency) -> Result<(), AgentFailure> {
+    fn validate(
+        &self,
+        dependency: &floe_context_contract::ContextDependency,
+    ) -> Result<(), AgentFailure> {
         if floe_access::is_device_local_source(dependency.source().connector().as_str()) {
             self.personal.validate(dependency)
         } else {
@@ -1109,7 +1120,8 @@ impl PersonalViewSource<'_> {
 
     fn server_fallback_allowed(&self) -> bool {
         matches!(self.model, Model::Server(_))
-            && (floe_inference::ModelTransport::placement(self.model) == ModelPlacement::DeviceLocal
+            && (floe_inference::ModelTransport::placement(self.model)
+                == ModelPlacement::DeviceLocal
                 || self.policy.external_transfer_consent == TransferConsent::Granted)
     }
 }
@@ -1152,7 +1164,8 @@ async fn read_context_source(
     let prepared = floe_context::ContextService::new(Some(reader)).prepare(person_id)?;
     let source_request = prepared.source_request(
         source_id,
-        floe_context_contract::GrantConsumer::builtin(consumer).map_err(|_| AgentFailure::InvalidInput)?,
+        floe_context_contract::GrantConsumer::builtin(consumer)
+            .map_err(|_| AgentFailure::InvalidInput)?,
         floe_context_contract::GrantPurpose::Assistant,
         query,
         deadline,
@@ -1220,7 +1233,10 @@ trait PersonalAttentionReaderApi: Send + Sync {
     ) -> Pin<
         Box<
             dyn Future<
-                    Output = Result<(AttentionView, floe_context_contract::ContextDependency), AgentFailure>,
+                    Output = Result<
+                        (AttentionView, floe_context_contract::ContextDependency),
+                        AgentFailure,
+                    >,
                 > + Send
                 + 'a,
         >,
@@ -1236,8 +1252,12 @@ trait PersonalPeopleReaderApi: Send + Sync {
         cancellation: &'a floe_execution::Cancellation,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<(PeopleView, floe_context_contract::ContextDependency), AgentFailure>>
-                + Send
+            dyn Future<
+                    Output = Result<
+                        (PeopleView, floe_context_contract::ContextDependency),
+                        AgentFailure,
+                    >,
+                > + Send
                 + 'a,
         >,
     >;
@@ -1275,7 +1295,10 @@ trait PersonalWellbeingReaderApi: Send + Sync {
     ) -> Pin<
         Box<
             dyn Future<
-                    Output = Result<(WellbeingView, floe_context_contract::ContextDependency), AgentFailure>,
+                    Output = Result<
+                        (WellbeingView, floe_context_contract::ContextDependency),
+                        AgentFailure,
+                    >,
                 > + Send
                 + 'a,
         >,
@@ -1300,7 +1323,10 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
     ) -> Pin<
         Box<
             dyn Future<
-                    Output = Result<(AttentionView, floe_context_contract::ContextDependency), AgentFailure>,
+                    Output = Result<
+                        (AttentionView, floe_context_contract::ContextDependency),
+                        AgentFailure,
+                    >,
                 > + Send
                 + 'a,
         >,
@@ -1394,7 +1420,10 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
     ) -> Pin<
         Box<
             dyn Future<
-                    Output = Result<(WellbeingView, floe_context_contract::ContextDependency), AgentFailure>,
+                    Output = Result<
+                        (WellbeingView, floe_context_contract::ContextDependency),
+                        AgentFailure,
+                    >,
                 > + Send
                 + 'a,
         >,
@@ -1424,8 +1453,12 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         cancellation: &'a floe_execution::Cancellation,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<(PeopleView, floe_context_contract::ContextDependency), AgentFailure>>
-                + Send
+            dyn Future<
+                    Output = Result<
+                        (PeopleView, floe_context_contract::ContextDependency),
+                        AgentFailure,
+                    >,
+                > + Send
                 + 'a,
         >,
     > {
@@ -1698,16 +1731,16 @@ mod tests {
 
     use crate::LocalContextCommand;
     use floe_conversation::{AgentMessage, ModelStep};
-    use floe_provider_adapters::sources::native_acquisition::{
-        AttentionAcquisitionMode, AttentionAcquisitionResult,
-    };
+    use floe_execution::Cancellation;
     use floe_experts_builtin::prompts::focus_expert_prompt;
-use floe_execution::{Cancellation};
-    use floe_vault::{VaultKey, VaultKeyProvider};
     use floe_protocol::{
         LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionResultDto,
         LocalContextOperationDto, PersonalAccessChangeDto, PersonalAccessConfigurationDto,
     };
+    use floe_provider_adapters::sources::native_acquisition::{
+        AttentionAcquisitionMode, AttentionAcquisitionResult,
+    };
+    use floe_vault::{VaultKey, VaultKeyProvider};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use uuid::Uuid;
 
@@ -1722,14 +1755,8 @@ use floe_execution::{Cancellation};
         fn read<'a>(
             &'a self,
             request: &'a floe_context::SourceReadRequest,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<floe_context::SourceRead, AgentFailure>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
+        ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
+        {
             Box::pin(async move {
                 let view_id = request.source().as_str();
                 let consumer = request.consumer().identifier();
@@ -1798,8 +1825,10 @@ use floe_execution::{Cancellation};
                         .map_err(|_| AgentFailure::InvalidInput)?,
                     floe_context_contract::ConnectorId::try_new(connector)
                         .map_err(|_| AgentFailure::InvalidInput)?,
-                    floe_context_contract::ExecutionOwnerId::try_new("00000000-0000-4000-8000-000000000098")
-                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    floe_context_contract::ExecutionOwnerId::try_new(
+                        "00000000-0000-4000-8000-000000000098",
+                    )
+                    .map_err(|_| AgentFailure::InvalidInput)?,
                     floe_context_contract::SourceAuthority::new(),
                 )
                 .map_err(|_| AgentFailure::InvalidInput)?;
@@ -1807,8 +1836,10 @@ use floe_execution::{Cancellation};
                     .map_err(|_| AgentFailure::InvalidInput)?;
                 let scope = floe_context_contract::GrantScope::try_new(
                     vec![
-                        floe_context_contract::ResourceHandle::try_new(format!("{view_id}:{connection_id}"))
-                            .map_err(|_| AgentFailure::InvalidInput)?,
+                        floe_context_contract::ResourceHandle::try_new(format!(
+                            "{view_id}:{connection_id}"
+                        ))
+                        .map_err(|_| AgentFailure::InvalidInput)?,
                     ],
                     vec![category],
                     vec![floe_context_contract::GrantOperation::Read],
@@ -1995,9 +2026,10 @@ use floe_execution::{Cancellation};
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
-        let vault = EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-            .await
-            .unwrap();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
         let mut session = vault.create_session().await.unwrap();
         let store = vault.governed_general_store(session.id);
         let old_turns = [Uuid::new_v4(), Uuid::new_v4()];
@@ -2076,7 +2108,9 @@ use floe_execution::{Cancellation};
                 .iter()
                 .all(|message| !old_turns.contains(&message.turn_id()))
         );
-        assert!(serde_json::to_vec(&requests[0].messages).unwrap().len() <= budget.max_context_bytes);
+        assert!(
+            serde_json::to_vec(&requests[0].messages).unwrap().len() <= budget.max_context_bytes
+        );
     }
 
     struct UnavailableMemoryReader(AgentFailure);
@@ -2136,9 +2170,10 @@ use floe_execution::{Cancellation};
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
-        let vault = EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-            .await
-            .unwrap();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
         let local_context = LocalContextHost::default();
         let liveness = personal_grants::PersonalDependencyLiveness {
             local_context: &local_context,
@@ -2217,33 +2252,67 @@ use floe_execution::{Cancellation};
         let person_id = PersonId::new();
         let core = FloeCore::open(root.path().join("day.db")).await.unwrap();
         for index in 0..17 {
-            core.create_task(person_id, format!("Task {index}"), None, floe_day::Priority::Normal, chrono::Utc::now())
-                .await.unwrap();
+            core.create_task(
+                person_id,
+                format!("Task {index}"),
+                None,
+                floe_day::Priority::Normal,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
         }
         let vault_root = root.path().join("vault");
         fs::create_dir(&vault_root).unwrap();
         fs::set_permissions(&vault_root, fs::Permissions::from_mode(0o700)).unwrap();
-        let vault = EncryptedAgentVault::create(&vault_root, person_id, AttentionTestKeys::default())
-            .await.unwrap();
+        let vault =
+            EncryptedAgentVault::create(&vault_root, person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
         let session = vault.create_session().await.unwrap();
         let mut context = conversation_context(&vault).await.unwrap();
-        let views = optional_task_views(&core, person_id, &mut context).await.unwrap();
+        let views = optional_task_views(&core, person_id, &mut context)
+            .await
+            .unwrap();
         assert!(views.is_empty());
-        assert_eq!(context.optional_context_issues, vec![floe_agent_contract::ContextIssue {
+        assert_eq!(
+            context.optional_context_issues,
+            vec![floe_agent_contract::ContextIssue {
+                source: floe_agent_contract::ContextSource::Tasks,
+                reason: floe_agent_contract::ContextIssueReason::BudgetExceeded,
+            }]
+        );
+        let model = OptionalSourceModel {
+            requests: Mutex::new(vec![]),
             source: floe_agent_contract::ContextSource::Tasks,
-            reason: floe_agent_contract::ContextIssueReason::BudgetExceeded,
-        }]);
-        let model = OptionalSourceModel { requests: Mutex::new(vec![]), source: floe_agent_contract::ContextSource::Tasks };
+        };
         let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()), None);
         let store = vault.governed_general_store(session.id);
         let completed = AgentRuntime {
-            store: &store, model: &model, capabilities: &NoCapabilities,
-            policy: &policy, budget: AgentBudget::default(),
-        }.run_turn(AgentCommand {
-            schema_version: AGENT_VERSION, person_id, session_id: session.id,
-            expected_revision: 0, text: "Hello".into(),
-        }, context, Cancellation::default(), |_| {}).await.unwrap();
-        assert_eq!(completed.last_outcome, Some(floe_conversation::AgentOutcome::Completed));
+            store: &store,
+            model: &model,
+            capabilities: &NoCapabilities,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        }
+        .run_turn(
+            AgentCommand {
+                schema_version: AGENT_VERSION,
+                person_id,
+                session_id: session.id,
+                expected_revision: 0,
+                text: "Hello".into(),
+            },
+            context,
+            Cancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            completed.last_outcome,
+            Some(floe_conversation::AgentOutcome::Completed)
+        );
         assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
         assert_eq!(model.requests.lock().unwrap().len(), 1);
     }
@@ -2495,17 +2564,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn schedule_delegation_uses_registered_task_runner() {
         let model = Model::new(Some(RemoteTurnRoute {
-                                        route: floe_inference::RemoteRoute {
-                                            base_url: "http://127.0.0.1:1".into(),
-                                            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
-                                            purpose: "everyday_assistance".into(),
-                                            external: false,
-                                            allow_external: false,
-                                            recipient: None,
-                                            pairing: None,
-                                        },
-                                        calendar_connections: vec![],
-                                    }))
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:1".into(),
+                bearer_token: "test_token_that_is_long_enough_to_validate".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        }))
         .unwrap();
         let policy = policy(&model, None);
         let context = AgentContext {
@@ -2680,17 +2749,17 @@ use floe_execution::{Cancellation};
     #[test]
     fn configured_daily_route_takes_priority_over_the_device_model() {
         let model = Model::new(Some(RemoteTurnRoute {
-                                        route: floe_inference::RemoteRoute {
-                                            base_url: "http://127.0.0.1:8431".into(),
-                                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                                            purpose: "everyday_assistance".into(),
-                                            external: false,
-                                            allow_external: false,
-                                            recipient: None,
-                                            pairing: None,
-                                        },
-                                        calendar_connections: vec![],
-                                    }))
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:8431".into(),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        }))
         .unwrap();
         assert!(matches!(model, Model::Server(_)));
     }
@@ -2932,10 +3001,12 @@ use floe_execution::{Cancellation};
             .unwrap();
         let mut rejected = completed.clone();
         rejected.revision = 3;
-        rejected.messages.push(floe_conversation::AgentMessage::Assistant {
-            turn_id,
-            text: "Late attention response".into(),
-        });
+        rejected
+            .messages
+            .push(floe_conversation::AgentMessage::Assistant {
+                turn_id,
+                text: "Late attention response".into(),
+            });
         assert_eq!(
             store.compare_and_swap(&rejected, 2).await,
             Err(AgentFailure::PolicyDenied)
@@ -2979,17 +3050,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn remote_expert_requires_an_admitted_reader() {
         let model = Model::new(Some(RemoteTurnRoute {
-                                        route: floe_inference::RemoteRoute {
-                                            base_url: "http://127.0.0.1:1".into(),
-                                            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
-                                            purpose: "everyday_assistance".into(),
-                                            external: false,
-                                            allow_external: false,
-                                            recipient: None,
-                                            pairing: None,
-                                        },
-                                        calendar_connections: vec![],
-                                    }))
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:1".into(),
+                bearer_token: "test_token_that_is_long_enough_to_validate".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        }))
         .unwrap();
         let policy = policy(&model, None);
         let context = AgentContext {
@@ -3020,7 +3091,7 @@ use floe_execution::{Cancellation};
                 person_id,
                 BuiltinContextSource::Mail,
             ))),
-                task_runners: &[],
+            task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -3108,17 +3179,17 @@ use floe_execution::{Cancellation};
     #[test]
     fn server_route_exposes_only_bounded_context_observe_capabilities() {
         let model = Model::new(Some(RemoteTurnRoute {
-                                        route: floe_inference::RemoteRoute {
-                                            base_url: "http://127.0.0.1:8431".into(),
-                                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                                            purpose: "everyday_assistance".into(),
-                                            external: false,
-                                            allow_external: false,
-                                            recipient: None,
-                                            pairing: None,
-                                        },
-                                        calendar_connections: vec![],
-                                    }))
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:8431".into(),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        }))
         .unwrap();
         let policy = policy(&model, None);
         let local_context = LocalContextHost::default();
@@ -3180,7 +3251,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -3222,7 +3293,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: vec![],
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -3252,17 +3323,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn mail_capability_rejects_authority_escalation_before_io() {
         let model = Model::new(Some(RemoteTurnRoute {
-                                        route: floe_inference::RemoteRoute {
-                                            base_url: "http://127.0.0.1:1".into(),
-                                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                                            purpose: "everyday_assistance".into(),
-                                            external: false,
-                                            allow_external: false,
-                                            recipient: None,
-                                            pairing: None,
-                                        },
-                                        calendar_connections: vec![],
-                                    }))
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:1".into(),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        }))
         .unwrap();
         let policy = policy(&model, None);
         let local_context = LocalContextHost::default();
@@ -3379,17 +3450,17 @@ use floe_execution::{Cancellation};
             .await;
         });
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: format!("http://{address}"),
-                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: None,
-                        },
-                        calendar_connections: test_calendar_connections(),
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: test_calendar_connections(),
+        };
         let model = Model::new(Some(route.clone())).unwrap();
         let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let person_id = PersonId::new();
@@ -3426,7 +3497,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -3571,17 +3642,17 @@ use floe_execution::{Cancellation};
             .await;
         });
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: format!("http://{address}"),
-                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: None,
-                        },
-                        calendar_connections: test_calendar_connections(),
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: test_calendar_connections(),
+        };
         let model = Model::new(Some(route.clone())).unwrap();
         let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let policy = policy(&model, Some(&route));
@@ -3650,7 +3721,7 @@ use floe_execution::{Cancellation};
             task_views: &tasks,
             cards: test_expert_cards(),
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -3802,17 +3873,17 @@ use floe_execution::{Cancellation};
             }
         });
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: format!("http://{address}"),
-                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: None,
-                        },
-                        calendar_connections: vec![],
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        };
         let model = Model::new(Some(route.clone())).unwrap();
         let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let person_id = PersonId::new();
@@ -3849,7 +3920,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -4083,17 +4154,17 @@ use floe_execution::{Cancellation};
             }
         });
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: format!("http://{address}"),
-                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: None,
-                        },
-                        calendar_connections: test_calendar_connections(),
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: test_calendar_connections(),
+        };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
         let context = AgentContext {
@@ -4120,7 +4191,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -4155,17 +4226,17 @@ use floe_execution::{Cancellation};
     #[tokio::test]
     async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: "http://127.0.0.1:1".into(),
-                            bearer_token: "daily_route_token_that_is_long_enough".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: None,
-                        },
-                        calendar_connections: test_calendar_connections(),
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: "http://127.0.0.1:1".into(),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: test_calendar_connections(),
+        };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
         let context = AgentContext {
@@ -4192,7 +4263,7 @@ use floe_execution::{Cancellation};
             task_views: &[],
             cards: test_expert_cards(),
             grants: Default::default(),
-                task_runners: &[],
+            task_runners: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

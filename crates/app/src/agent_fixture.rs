@@ -22,10 +22,11 @@ use floe_conversation::{
 };
 use floe_execution::Cancellation;
 use floe_experts::{
-    A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
-    AgentId, AgentPackage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertBudget, ExpertInput,
-    ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertResult, InProcessA2ATransport,
-    InProcessAgent, PackageImplementation, PackageKind, PackageRef, RegistrySnapshot,
+    A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATask, A2ATaskState,
+    AgentCard, AgentId, AgentPackage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertBudget,
+    ExpertInput, ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertResult,
+    InProcessA2ATransport, InProcessAgent, PackageImplementation, PackageKind, PackageRef,
+    RegistrySnapshot,
 };
 use floe_experts_builtin::schedule::{
     ExpertHost, ExpertTimelineView, ExpertViews, TimelineViewItem, TimelineViewRead,
@@ -263,7 +264,8 @@ pub async fn run_persisted_agent_sample<Keys: floe_vault::VaultKeyProvider>(
             let revision = previous.revision;
             let snapshot = FixtureCapabilities::ensure_snapshot(turn.person_id, previous)?;
             if snapshot.revision != revision {
-                vault.save_expert_registry_checked(revision, &snapshot, &check)
+                vault
+                    .save_expert_registry_checked(revision, &snapshot, &check)
                     .await?;
             }
             snapshot
@@ -274,7 +276,8 @@ pub async fn run_persisted_agent_sample<Keys: floe_vault::VaultKeyProvider>(
                 vault.registry_instance_id(),
             )?;
             let snapshot = capabilities.snapshot()?;
-            vault.initialize_expert_registry_checked(&snapshot, &check)
+            vault
+                .initialize_expert_registry_checked(&snapshot, &check)
                 .await?;
             snapshot
         }

@@ -1,11 +1,11 @@
-use floe_agent_contract::{AgentFailure};
-use floe_execution::{Cancellation};
-use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
-use floe_provider_adapters::models::learner::FoundationLearnerTransport;
+use floe_agent_contract::AgentFailure;
+use floe_execution::Cancellation;
 use floe_knowledge::{
     FOUNDATION_LEARNER_PROFILE, InferenceLearnerModel, LearnerModelAvailability, LearnerService,
     TransportLearnerModel,
 };
+use floe_provider_adapters::models::learner::FoundationLearnerTransport;
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 pub(super) async fn run<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,

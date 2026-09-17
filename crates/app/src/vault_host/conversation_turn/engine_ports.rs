@@ -1,14 +1,18 @@
-use floe_conversation::{AgentMessage as LegacyMessage, CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest as LegacyModelRequest, ModelResponse as LegacyModelResponse, ModelRunner as LegacyModelRunner, ModelStep as LegacyModelStep};
-use floe_conversation::turn::UsageLedger;
 use floe_agent_contract::{
     AgentDefinition, AllowedCatalog, Artifact, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, MessageRole, ModelPort, ModelRequest, ModelResponse, ModelStep,
     TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
 use floe_conversation::GovernedSessionStore;
-use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
-use floe_kernel::PersonId;
+use floe_conversation::turn::UsageLedger;
+use floe_conversation::{
+    AgentMessage as LegacyMessage, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
+    ModelRequest as LegacyModelRequest, ModelResponse as LegacyModelResponse,
+    ModelRunner as LegacyModelRunner, ModelStep as LegacyModelStep,
+};
 use floe_execution::ExecutionScope;
+use floe_kernel::PersonId;
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 
 use floe_agent_contract::AgentFailure;
@@ -61,12 +65,15 @@ where
                 .min(MAX_ATTEMPT_COST_MICROS);
             let usage =
                 UsageLedger::new(remaining_tokens, remaining_cost_micros, Default::default());
-            let mut prompt = floe_conversation::prompts::manager_prompt(self.context.persona.as_ref())?;
+            let mut prompt =
+                floe_conversation::prompts::manager_prompt(self.context.persona.as_ref())?;
             if finalization {
                 let role = prompt
                     .components
                     .iter_mut()
-                    .find(|component| component.kind == floe_knowledge::prompts::PromptComponentKind::Role)
+                    .find(|component| {
+                        component.kind == floe_knowledge::prompts::PromptComponentKind::Role
+                    })
                     .ok_or(AgentFailure::InvalidInput)?;
                 role.content = format!("{}\n{}", request.role.prompt, request.role.output_contract);
             }
@@ -133,7 +140,8 @@ where
                 store: self.store,
                 resolver: self.resolver,
             };
-            let response = floe_conversation::turn::generate_with_recovery(&governed, legacy_request).await?;
+            let response =
+                floe_conversation::turn::generate_with_recovery(&governed, legacy_request).await?;
             contract_response(request.attempt_id, response, &request.catalog)
         })
     }
@@ -204,9 +212,7 @@ where
 }
 
 pub(super) struct LegacyDelegationPort<'a, Keys: VaultKeyProvider> {
-    pub task_coordinator: &'a floe_experts::TaskCoordinator<
-        floe_vault::VaultTaskRepository<Keys>,
-    >,
+    pub task_coordinator: &'a floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
     pub schedule_endpoint: &'a super::expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     pub builtin_expert_endpoint: &'a super::expert_dispatch::BuiltinExpertEndpoint<Keys>,
     pub turn_request: &'a crate::ConversationTurnRequest,
@@ -382,7 +388,9 @@ fn contract_response(
         .output
         .into_iter()
         .map(|step| match step {
-            LegacyModelStep::Preamble { text } => Ok::<_, AgentFailure>(ModelStep::Preamble { text }),
+            LegacyModelStep::Preamble { text } => {
+                Ok::<_, AgentFailure>(ModelStep::Preamble { text })
+            }
             LegacyModelStep::Answer { text } => Ok(ModelStep::Answer {
                 text,
                 artifacts: vec![],

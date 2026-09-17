@@ -1,8 +1,8 @@
 use super::*;
-use floe_knowledge::KnowledgeActor;
 use crate::MemoryReviewDecision;
 use chrono::Utc;
 use floe_conversation::{AgentMessage, AgentOutcome};
+use floe_knowledge::KnowledgeActor;
 use floe_knowledge::{
     EpistemicStatus, LearningObservationKind, PersonalMemoryKind, PersonalMemoryValue,
     StageMemoryCandidate,
@@ -132,17 +132,18 @@ fn memory_snapshots_follow_review_decisions_and_survive_unlock() {
         candidates
     });
     let worker = Worker::new(root, keys).unwrap();
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Unlock).failure,
-        None
-    );
+    assert_eq!(perform(&worker, person, WorkerAction::Unlock).failure, None);
     let initial = perform(&worker, person, WorkerAction::Memory)
         .memory
         .unwrap();
     assert_eq!((initial.saved_count, initial.pending_count), (0, 2));
-    let pending = perform(&worker, person, WorkerAction::MemoryReview { decision: None })
-        .memory_review
-        .unwrap();
+    let pending = perform(
+        &worker,
+        person,
+        WorkerAction::MemoryReview { decision: None },
+    )
+    .memory_review
+    .unwrap();
     assert_eq!(pending.snapshot.candidates.len(), 2);
     for (candidate, kind) in candidates.iter().zip([
         floe_knowledge::KnowledgeDecisionKind::Approve,
@@ -183,14 +184,8 @@ fn memory_snapshots_follow_review_decisions_and_survive_unlock() {
     assert_eq!(summary.confidence_millis, 1000);
     assert_eq!(summary.memory_kind, PersonalMemoryKind::Preference);
     assert_eq!(summary.epistemic_status, EpistemicStatus::Fact);
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Lock).failure,
-        None
-    );
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Unlock).failure,
-        None
-    );
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+    assert_eq!(perform(&worker, person, WorkerAction::Unlock).failure, None);
     assert_eq!(
         perform(&worker, person, WorkerAction::Memory)
             .memory

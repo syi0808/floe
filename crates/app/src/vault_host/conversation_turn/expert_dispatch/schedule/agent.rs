@@ -12,26 +12,22 @@ use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
     CalendarReadAdmission,
 };
-use floe_context::{
-    CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
-    CalendarTimelineViews, GovernedDependencyResolver, ProjectedCalendarObservation,
-};
 use floe_actions::{
     CalendarAction, ExpertCalendarDestination, ExpertCalendarRequest, ExpertProposalReference,
 };
 use floe_agent_contract::{AgentFailure, CancelReason, ModelPlacement, SessionProtection};
+use floe_context::{
+    CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
+    CalendarTimelineViews, GovernedDependencyResolver, ProjectedCalendarObservation,
+};
 // What the regressions below stand a task and a registry up with.
 #[cfg(test)]
 use floe_agent_contract::{ContextEvidence, DataClass, TaskId, TaskSnapshot};
+use floe_context::{AgentContext, FeasibilityView, InferencePolicyDecision, WellbeingView};
 #[cfg(test)]
 use floe_context_contract::views::personal::{
     FEASIBILITY_VIEW_ID, WELLBEING_VIEW_ID, personal_context_evidence, validate_feasibility_view,
     validate_wellbeing_view,
-};
-#[cfg(test)]
-use floe_experts::RegistrySnapshot;
-use floe_context::{
-    AgentContext, FeasibilityView, InferencePolicyDecision, WellbeingView,
 };
 use floe_conversation::{
     AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentOutcome, AgentRuntime, AgentSession,
@@ -40,9 +36,11 @@ use floe_conversation::{
 };
 use floe_day::CalendarTimelineGrant;
 use floe_execution::Cancellation;
+#[cfg(test)]
+use floe_experts::RegistrySnapshot;
 use floe_experts::{
-    A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATaskState,
-    EXPERT_RESULT_MEDIA_TYPE, A2ATask, AgentCard, AgentRegistry, ExpertBudget, ExpertInput,
+    A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATask, A2ATaskState,
+    AgentCard, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertBudget, ExpertInput,
     ExpertInvocation, ExpertResult, InProcessA2ATransport, InProcessAgent,
 };
 use floe_experts_builtin::BuiltinExpertKind;
@@ -53,12 +51,14 @@ use floe_vault::{
 };
 
 use crate::FloeCore;
-use floe_context_contract::{ContextDependency, DependencyCoverage, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction};
 use floe_context_contract::CalendarProvider;
+use floe_context_contract::{
+    ContextDependency, DependencyCoverage, GrantConsumer, GrantOperation, GrantPurpose,
+    ProcessingRestriction,
+};
 use floe_kernel::PersonId;
 use tokio::time::Instant;
 use uuid::Uuid;
-
 
 pub struct CalendarAgentTurnRequest {
     pub command: AgentCommand,
@@ -110,7 +110,6 @@ pub const CALENDAR_EXPERT_SETTLEMENT_OWNER: &str = "floe.builtin.schedule/v1";
 
 /// The Schedule Expert settles through the common Task settlement.
 pub type CalendarExpertSettlement = floe_experts::ExpertSettlement;
-
 
 impl FloeCore {
     pub async fn run_calendar_expert_endpoint<
@@ -299,7 +298,12 @@ impl FloeCore {
             let saved = vault
                 .load(request.command.person_id, request.command.session_id)
                 .await?;
-            if request.continuation && floe_conversation::carries_source_history(&saved.messages, &CalendarHistoryBoundary) {
+            if request.continuation
+                && floe_conversation::carries_source_history(
+                    &saved.messages,
+                    &CalendarHistoryBoundary,
+                )
+            {
                 return Err(AgentFailure::StaleContext);
             }
             let effective_budget = if request.continuation {
@@ -328,12 +332,12 @@ impl FloeCore {
                 remote_processing: model.placement() == ModelPlacement::Remote,
             };
             let views = CalendarTimelineViews::new(
-            &self.lease_registry,
-            &self.store,
-            &guarded_access,
-            request.grant,
-            clock,
-        )?;
+                &self.lease_registry,
+                &self.store,
+                &guarded_access,
+                request.grant,
+                clock,
+            )?;
             vault.check_access()?;
             let snapshot = tokio::select! {
                 biased;

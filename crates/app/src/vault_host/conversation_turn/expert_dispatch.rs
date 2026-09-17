@@ -13,7 +13,7 @@ use std::{
 
 use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
 use floe_experts_builtin::{
-    BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, BuiltinExpertKind,
+    BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest,
 };
 
 pub(in crate::vault_host) mod schedule;
@@ -46,13 +46,17 @@ pub(super) fn registered_experts<'turn, 'host>() -> floe_experts::ExpertDispatch
             Box::pin(floe_experts_builtin::work_context::dispatch(host, request))
         }),
         (BuiltinExpertKind::LifeLogistics, |host, request| {
-            Box::pin(floe_experts_builtin::life_logistics::dispatch(host, request))
+            Box::pin(floe_experts_builtin::life_logistics::dispatch(
+                host, request,
+            ))
         }),
         (BuiltinExpertKind::Relationships, |host, request| {
             Box::pin(floe_experts_builtin::relationships::dispatch(host, request))
         }),
         (BuiltinExpertKind::FocusAttention, |host, request| {
-            Box::pin(floe_experts_builtin::focus_attention::dispatch(host, request))
+            Box::pin(floe_experts_builtin::focus_attention::dispatch(
+                host, request,
+            ))
         }),
         (BuiltinExpertKind::Wellbeing, |host, request| {
             Box::pin(floe_experts_builtin::wellbeing::dispatch(host, request))
@@ -153,10 +157,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 .remote_route
                 .as_ref()
                 .map(|route| {
-                    ServerSourceClient::new(
-                        route.route.clone(),
-                        route.calendar_connections.clone(),
-                    )
+                    ServerSourceClient::new(route.route.clone(), route.calendar_connections.clone())
                 })
                 .transpose()?;
             let model = Model::new(staged.request.remote_route.clone())?;
@@ -280,18 +281,14 @@ pub(super) trait ExpertTaskRunner: Send + Sync {
 }
 
 pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
-    pub coordinator: &'a floe_experts::TaskCoordinator<
-        floe_vault::VaultTaskRepository<Keys>,
-    >,
+    pub coordinator: &'a floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
     pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
     pub turn_request: &'a crate::ConversationTurnRequest,
     pub context: &'a AgentContext,
     pub recorder: Option<&'a dyn floe_experts::TaskCoverageRecorder>,
 }
 
-impl<Keys: VaultKeyProvider + 'static> ExpertTaskRunner
-    for RegisteredScheduleTaskRunner<'_, Keys>
-{
+impl<Keys: VaultKeyProvider + 'static> ExpertTaskRunner for RegisteredScheduleTaskRunner<'_, Keys> {
     fn run<'a>(
         &'a self,
         request: A2ASendMessageRequest,
@@ -422,7 +419,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::SourceView<serde_json::Value>> {
         Box::pin(async move {
             super::read_context_source(
-                self.experts.remote_reader
+                self.experts
+                    .remote_reader
                     .ok_or(AgentFailure::CapabilityUnavailable)?,
                 request.person_id,
                 view_id,
@@ -441,7 +439,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         result_id: Uuid,
         dependency: floe_context_contract::ContextDependency,
     ) -> Result<(), AgentFailure> {
-        self.experts.recorder
+        self.experts
+            .recorder
             .ok_or(AgentFailure::CapabilityUnavailable)?
             .record(turn_id, result_id, dependency)
     }
@@ -451,7 +450,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::CalendarContextView>> {
         Box::pin(async move {
-            self.experts.personal_views(request, ASSISTANT_CONSUMER)
+            self.experts
+                .personal_views(request, ASSISTANT_CONSUMER)
                 .calendar_views(request.deadline, &request.cancellation)
                 .await
         })
@@ -462,7 +462,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::WorkContextView>> {
         Box::pin(async move {
-            self.experts.personal_views(request, ASSISTANT_CONSUMER)
+            self.experts
+                .personal_views(request, ASSISTANT_CONSUMER)
                 .work_context_views(request.deadline, &request.cancellation)
                 .await
         })
@@ -473,9 +474,10 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::PeopleView> {
         Box::pin(async move {
-            self.experts.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
-            .people_view(request.deadline, &request.cancellation)
-            .await
+            self.experts
+                .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+                .people_view(request.deadline, &request.cancellation)
+                .await
         })
     }
 
@@ -483,12 +485,12 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         &'a self,
         request: &'a BuiltinExpertRequest,
         people: &'a floe_context::PeopleView,
-    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::ConfirmedInteractionView>>
-    {
+    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::ConfirmedInteractionView>> {
         Box::pin(async move {
-            self.experts.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
-            .confirmed_interaction_views(people, request.deadline, &request.cancellation)
-            .await
+            self.experts
+                .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+                .confirmed_interaction_views(people, request.deadline, &request.cancellation)
+                .await
         })
     }
 
@@ -497,7 +499,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::WellbeingView> {
         Box::pin(async move {
-            self.experts.personal_views(request, ASSISTANT_CONSUMER)
+            self.experts
+                .personal_views(request, ASSISTANT_CONSUMER)
                 .wellbeing_view(request.deadline, &request.cancellation)
                 .await
         })
@@ -514,7 +517,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         ),
     > {
         Box::pin(async move {
-            self.experts.attention
+            self.experts
+                .attention
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .read(
                     request.person_id,
@@ -536,7 +540,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         &'a self,
     ) -> floe_experts_builtin::Acquiring<'a, floe_knowledge::MemoryContextSnapshot> {
         Box::pin(async move {
-            self.experts.context_reader
+            self.experts
+                .context_reader
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .memory()
                 .await
@@ -545,7 +550,8 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
 
     fn task_view<'a>(&'a self) -> floe_experts_builtin::Acquiring<'a, NativeContextView> {
         Box::pin(async move {
-            self.experts.context_reader
+            self.experts
+                .context_reader
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .tasks()
                 .await

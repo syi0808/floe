@@ -1,8 +1,11 @@
 use super::*;
 use chrono::Utc;
-use floe_agent_contract::{ModelPlacement};
+use floe_agent_contract::ModelPlacement;
 use floe_conversation::{AgentMessage, AgentOutcome, SessionStore};
-use floe_knowledge::{KNOWLEDGE_VERSION, LearnerJobState, LearnerModel, LearnerModelRequest, LearnerReviewInput, LearnerReviewOutput};
+use floe_knowledge::{
+    KNOWLEDGE_VERSION, LearnerJobState, LearnerModel, LearnerModelRequest, LearnerReviewInput,
+    LearnerReviewOutput,
+};
 use std::os::unix::fs::PermissionsExt;
 
 struct FailingModel(AgentFailure);

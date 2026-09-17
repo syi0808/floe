@@ -28,7 +28,9 @@ use floe_experts::{
     ExpertMetadata, ExpertTaskCompletion as CalendarExpertTaskCompletion, PackageImplementation,
     RegistryConfiguration, RegistryConfigurationTarget,
 };
-use floe_inference::{ModelAttemptState, ModelTransport, ModelTransportRequest, ModelTransportResponse};
+use floe_inference::{
+    ModelAttemptState, ModelTransport, ModelTransportRequest, ModelTransportResponse,
+};
 use floe_vault::{VaultKey, VaultTaskRecord};
 
 use crate::recover_agent_sample;
@@ -590,7 +592,10 @@ impl Fixture {
             (
                 expert,
                 PackageImplementation::Builtin {
-                    expert: AgentId::try_new(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()).unwrap(),
+                    expert: floe_experts::AgentId::try_new(
+                        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+                    )
+                    .unwrap(),
                 },
                 vec![tool],
             ),
@@ -609,7 +614,10 @@ impl Fixture {
                                 description: "Reviews schedules".into(),
                                 domain_tags: vec!["schedule".into(), "calendar".into()],
                                 skills: vec!["Provide independent scheduling judgment".into()],
-                                supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
+                                supported_placements: vec![
+                                    ModelPlacement::DeviceLocal,
+                                    ModelPlacement::Remote,
+                                ],
                             }
                         }),
                         required_tools,
@@ -669,6 +677,7 @@ impl Fixture {
             let installed = vault
                 .install_calendar_expert_with_connection(
                     request.clone(),
+                    &crate::vault_host::schedule_packaging(),
                     connection.connection_id.clone(),
                     Cancellation::default(),
                 )
@@ -1228,6 +1237,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
                 .vault
                 .install_calendar_expert_with_connection(
                     request.clone(),
+                    &crate::vault_host::schedule_packaging(),
                     connection_id.clone(),
                     Cancellation::default(),
                 )
@@ -1375,6 +1385,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
                 .vault
                 .install_calendar_expert_with_connection(
                     request,
+                    &crate::vault_host::schedule_packaging(),
                     fixture
                         .core
                         .calendar_connection(fixture.session.person_id)
@@ -1433,9 +1444,9 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert_eq!(result.session.delegation_executions.len(), 1);
     assert_eq!(result.session.delegation_executions[0].agent_id, "schedule");
     assert!(
-        executions
-            .iter()
-            .all(|execution| execution.state == floe_conversation::CapabilityExecutionState::Settled)
+        executions.iter().all(
+            |execution| execution.state == floe_conversation::CapabilityExecutionState::Settled
+        )
     );
     assert!(
         executions
@@ -2026,9 +2037,15 @@ async fn new_turn_without_calendar_reads_does_not_reuse_previous_calendar_eviden
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(access.calls.load(Ordering::Acquire), 0);
     let requests = model.requests.lock().unwrap();
-    assert!(!floe_conversation::carries_source_history(&requests[0].messages, &CalendarHistoryBoundary));
+    assert!(!floe_conversation::carries_source_history(
+        &requests[0].messages,
+        &CalendarHistoryBoundary
+    ));
     assert!(requests[0].replay.is_empty());
-    assert!(floe_conversation::carries_source_history(&result.session.messages, &CalendarHistoryBoundary));
+    assert!(floe_conversation::carries_source_history(
+        &result.session.messages,
+        &CalendarHistoryBoundary
+    ));
 }
 
 #[tokio::test]
@@ -2049,7 +2066,10 @@ async fn calendar_history_cannot_resume_without_a_new_lease() {
         .await
         .unwrap();
     assert!(first.session.continuation.is_some());
-    assert!(floe_conversation::carries_source_history(&first.session.messages, &CalendarHistoryBoundary));
+    assert!(floe_conversation::carries_source_history(
+        &first.session.messages,
+        &CalendarHistoryBoundary
+    ));
     fixture.session = first.session;
     let mut request = fixture.request();
     request.continuation = true;
@@ -2507,15 +2527,14 @@ async fn native_lease_reuses_exact_query_payload_after_observation_generation_ch
         grant_pin: Mutex::new(None),
         remote_processing: false,
     };
-    let views =
-        CalendarTimelineViews::new(
-            &fixture.core.lease_registry,
-            &fixture.core.store,
-            &guarded_access,
-            fixture.grant.clone(),
-            now,
-        )
-        .unwrap();
+    let views = CalendarTimelineViews::new(
+        &fixture.core.lease_registry,
+        &fixture.core.store,
+        &guarded_access,
+        fixture.grant.clone(),
+        now,
+    )
+    .unwrap();
     let request = || TimelineViewRead {
         person_id: fixture.grant.person_id,
         handle: fixture.grant.handle,
@@ -2551,7 +2570,6 @@ async fn cached_native_view_expiring_during_authorization_is_not_returned() {
         advance_to: AtomicI64,
     }
     impl CalendarReadAdmission for AdvancingAccess {}
-
 
     impl CalendarSource for AdvancingAccess {
         async fn check(

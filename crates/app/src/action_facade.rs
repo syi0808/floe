@@ -12,9 +12,9 @@ use floe_actions::{
     ExpertCalendarInspection, ExpertCalendarRequest, ObservationFence,
 };
 use floe_agent_contract::AgentFailure;
+use floe_context_contract::CalendarProvider;
 use floe_context_contract::ContextDependency;
 use floe_day::TimedSchedule;
-use floe_context_contract::CalendarProvider;
 use floe_kernel::{EventId, PersonId, Revision};
 use floe_provider_adapters::sources::native_calendar::{LOCAL_PERSON, NativeCalendar};
 use floe_vault::TursoStore;

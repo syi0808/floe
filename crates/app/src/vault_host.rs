@@ -19,28 +19,27 @@ use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use floe_agent_contract::AgentFailure;
 use floe_conversation::{AgentEvent, AgentSession, SessionStore};
 // What the regressions below read off a finished turn.
+use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
+use crate::{
+    CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
+    ConversationSessionOperation, ConversationTurnRequest, FixtureOperation, RemoteGrantOverview,
+    RemoteTurnRoute, VaultState, WorkerAction, WorkerOperation, WorkerResult,
+};
+use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
+use floe_context_contract::CalendarProvider;
 #[cfg(test)]
 use floe_conversation::AgentOutcome;
 use floe_execution::Cancellation;
 use floe_experts::{BuiltinSourceBinding, BuiltinSourceEvidence};
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement};
-#[cfg(not(target_os = "android"))]
-use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
-use crate::{
-    CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
-    ConversationSessionOperation, ConversationTurnRequest,
-    FixtureOperation, RemoteGrantOverview, RemoteTurnRoute, VaultState,
-    WorkerAction, WorkerOperation, WorkerResult,
-};
-use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
-use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
-use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
-use floe_context_contract::CalendarProvider;
-use floe_kernel::PersonId;
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
+use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement};
+use floe_kernel::PersonId;
 use floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint;
 #[cfg(not(target_os = "macos"))]
 use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
+#[cfg(not(target_os = "android"))]
+use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 
 use crate::local_context::LocalContextHost;
@@ -568,9 +567,8 @@ impl Worker {
                                             let execution_job = Arc::clone(&task_job);
                                             let execution = tokio::spawn(diagnostics::instrument(
                                                 async move {
-                                                    let WorkerAction::ConversationTurn {
-                                                        request,
-                                                    } = &*execution_job.action
+                                                    let WorkerAction::ConversationTurn { request } =
+                                                        &*execution_job.action
                                                     else {
                                                         return Err(AgentFailure::InvalidInput);
                                                     };
@@ -599,10 +597,8 @@ impl Worker {
                                             };
                                             if matches!(
                                                 &result,
-                                                Err(
-                                                    AgentFailure::VaultUnavailable
-                                                        | AgentFailure::Interrupted
-                                                )
+                                                Err(AgentFailure::VaultUnavailable
+                                                    | AgentFailure::Interrupted)
                                             ) {
                                                 health_vault.mark_unavailable();
                                             }
@@ -622,9 +618,7 @@ impl Worker {
                                         continue;
                                     }
                                     (Ok(_), Some(_)) => AgentFailure::NotFound,
-                                    (Ok(_), None) | (Err(_), _) => {
-                                        AgentFailure::VaultUnavailable
-                                    }
+                                    (Ok(_), None) | (Err(_), _) => AgentFailure::VaultUnavailable,
                                 };
                                 let result = Err(failure);
                                 trace_job_result(&request_id, operation, started, &result);
@@ -638,14 +632,7 @@ impl Worker {
                             }
                             let result = match catch_unwind(AssertUnwindSafe(|| match &runtime {
                                 Ok(runtime) => runtime.block_on(diagnostics::instrument(
-                                    execute(
-                                        &root,
-                                        &keys,
-                                        &core,
-                                        &local_context,
-                                        &mut vault,
-                                        &job,
-                                    ),
+                                    execute(&root, &keys, &core, &local_context, &mut vault, &job),
                                     trace_context,
                                     "agent_job",
                                 )),
@@ -667,12 +654,7 @@ impl Worker {
                             let vault_available = vault
                                 .as_ref()
                                 .is_some_and(|(person, _)| *person == job.person);
-                            finish_job(
-                                &job,
-                                result,
-                                vault_available,
-                                &worker_learner_scheduling,
-                            );
+                            finish_job(&job, result, vault_available, &worker_learner_scheduling);
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             if worker_closing.load(Ordering::Acquire) {
@@ -943,7 +925,11 @@ impl Worker {
             app_events: Arc::clone(&self.app_events),
         });
         self.learner_scheduling.foreground_submitted()?;
-        if self.sender.try_send(WorkerMessage::Job(job.clone())).is_err() {
+        if self
+            .sender
+            .try_send(WorkerMessage::Job(job.clone()))
+            .is_err()
+        {
             let _ = self.learner_scheduling.foreground_finished();
             return Err(AgentFailure::VaultUnavailable);
         }
@@ -984,11 +970,13 @@ impl Worker {
         self.learner_scheduling.foreground_submitted()?;
         if self
             .sender
-            .try_send(WorkerMessage::ConversationPrecheck(ConversationPrecheckJob {
-                person,
-                request,
-                reply,
-            }))
+            .try_send(WorkerMessage::ConversationPrecheck(
+                ConversationPrecheckJob {
+                    person,
+                    request,
+                    reply,
+                },
+            ))
             .is_err()
         {
             let _ = self.learner_scheduling.foreground_finished();
@@ -1060,15 +1048,6 @@ struct VaultExecutionResult {
     personal_access: Option<floe_access::PersonalAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
 }
-
-
-
-
-
-
-
-
-
 
 impl VaultExecutionResult {
     fn new(state: VaultState) -> Self {
@@ -1218,8 +1197,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         &vault.conversation_repository,
         &job.run_cancellations,
         job.person,
-        floe_agent_contract::CommandId::from_uuid(job.id)
-            .ok_or(AgentFailure::InvalidInput)?,
+        floe_agent_contract::CommandId::from_uuid(job.id).ok_or(AgentFailure::InvalidInput)?,
         request,
         job.cancellation.clone(),
         |receipt| job.publish_admission(Ok(receipt.clone())),
@@ -1338,13 +1316,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     expected_revision,
                 } => {
                     sample_session(&***vault, job.person, *session_id).await?;
-                    recover_agent_sample(
-                        &***vault,
-                        job.person,
-                        *session_id,
-                        *expected_revision,
-                    )
-                    .await?
+                    recover_agent_sample(&***vault, job.person, *session_id, *expected_revision)
+                        .await?
                 }
                 FixtureOperation::Turn {
                     session_id,
@@ -1352,28 +1325,28 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     prompt,
                 } => {
                     run_persisted_agent_sample(
-                            vault,
-                            AgentFixtureTurn {
-                                person_id: job.person,
-                                session_id: *session_id,
-                                expected_revision: *expected_revision,
-                                prompt: *prompt,
-                            },
-                            job.cancellation.clone(),
-                            Duration::from_millis(500),
-                            |event| {
-                                if let Ok(mut progress) = job.progress.lock() {
-                                    if progress.events.len() < 64 {
-                                        progress.events.push(event);
-                                    } else {
-                                        job.cancellation.cancel();
-                                    }
+                        vault,
+                        AgentFixtureTurn {
+                            person_id: job.person,
+                            session_id: *session_id,
+                            expected_revision: *expected_revision,
+                            prompt: *prompt,
+                        },
+                        job.cancellation.clone(),
+                        Duration::from_millis(500),
+                        |event| {
+                            if let Ok(mut progress) = job.progress.lock() {
+                                if progress.events.len() < 64 {
+                                    progress.events.push(event);
                                 } else {
                                     job.cancellation.cancel();
                                 }
-                            },
-                        )
-                        .await?
+                            } else {
+                                job.cancellation.cancel();
+                            }
+                        },
+                    )
+                    .await?
                 }
             };
             Ok(VaultExecutionResult {
@@ -1643,12 +1616,9 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let review = floe_knowledge::review_memory(
-                vault.vault.as_ref(),
-                *decision,
-                chrono::Utc::now(),
-            )
-            .await?;
+            let review =
+                floe_knowledge::review_memory(vault.vault.as_ref(), *decision, chrono::Utc::now())
+                    .await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
@@ -1925,8 +1895,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         WorkerAction::RemoteCalendarGrantStatus { grant_id } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant =
-                floe_access::remote_calendar_grant(vault.vault.as_ref(), *grant_id).await?;
+            let grant = floe_access::remote_calendar_grant(vault.vault.as_ref(), *grant_id).await?;
             Ok(VaultExecutionResult {
                 remote_calendar_grant: Some(RemoteGrantOverview {
                     grant,
@@ -2152,13 +2121,16 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
             .await?
         }
         CalendarActionOperation::Execute { .. } | CalendarActionOperation::Recover { .. } => {
-            if person_id.to_string() != floe_provider_adapters::sources::native_calendar::LOCAL_PERSON
+            if person_id.to_string()
+                != floe_provider_adapters::sources::native_calendar::LOCAL_PERSON
                 || stored.provider != CalendarProvider::EventKit
             {
                 return Err(AgentFailure::CapabilityUnavailable);
             }
             let provider =
-                floe_provider_adapters::sources::native_calendar::NativeCalendar::new(vec![stored.calendar_id.clone()]);
+                floe_provider_adapters::sources::native_calendar::NativeCalendar::new(vec![
+                    stored.calendar_id.clone(),
+                ]);
             if matches!(operation, CalendarActionOperation::Recover { .. }) {
                 core.recover_expert_calendar_action(vault, person_id, action_id, &provider)
                     .await?
@@ -2220,13 +2192,12 @@ async fn builtin_source_bindings(
     person_id: PersonId,
     remote_route: Option<&RemoteTurnRoute>,
 ) -> Vec<BuiltinSourceBinding> {
-    let paired_server = if remote_route
-        .is_some_and(|route| !route.route.external || route.route.allow_external)
-    {
-        BuiltinSourceEvidence::Serving
-    } else {
-        BuiltinSourceEvidence::Absent
-    };
+    let paired_server =
+        if remote_route.is_some_and(|route| !route.route.external || route.route.allow_external) {
+            BuiltinSourceEvidence::Serving
+        } else {
+            BuiltinSourceEvidence::Absent
+        };
     let calendar = core
         .calendar_connector_snapshot(
             person_id,
@@ -2351,19 +2322,11 @@ fn builtin_source_handle(person_id: PersonId, source: BuiltinContextSource) -> U
     )
 }
 
-
-
-
-
-
-
-
 /// Whether the client must reload the session before continuing.
 ///
 /// Recoveries that keep the current session usable do not force a reload.
 
 /// Whether the client must stop applying results for the current session.
-
 
 async fn sample_session(
     store: &impl SessionStore,
@@ -2371,7 +2334,9 @@ async fn sample_session(
     id: Uuid,
 ) -> Result<AgentSession, AgentFailure> {
     let session = store.load(person, id).await?;
-    if session.scope.is_some() || session.data_classes != [floe_agent_contract::DataClass::Synthetic] {
+    if session.scope.is_some()
+        || session.data_classes != [floe_agent_contract::DataClass::Synthetic]
+    {
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(session)
@@ -2384,12 +2349,12 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     // These regressions drive the worker the way the binding does, so the
     // fixtures they stand up are stated on the binding's wire.
+    use crate::AgentFixturePrompt;
     use floe_protocol::*;
     use floe_vault::VaultKey;
-    use crate::AgentFixturePrompt;
-    use sha2::{Digest, Sha256};
     use ring::signature::{self, Ed25519KeyPair, KeyPair};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::{
         collections::HashMap,
         io::{Read, Write},
@@ -2509,17 +2474,17 @@ mod tests {
             created.failure
         );
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: "http://not-loopback.invalid".into(),
-                            bearer_token: "not-a-real-token".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: None,
-                        },
-                        calendar_connections: vec![],
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: "http://not-loopback.invalid".into(),
+                bearer_token: "not-a-real-token".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        };
         let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
@@ -2552,21 +2517,21 @@ mod tests {
             created.failure
         );
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: "http://not-loopback.invalid".into(),
-                            bearer_token: "not-a-real-token".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: Some(AgentRemotePairingDto {
-                client_id: "saved-client".into(),
-                person_id: PersonId::new().to_string(),
-                device_id: "saved-device".into(),
-            }),
-                        },
-                        calendar_connections: vec![],
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: "http://not-loopback.invalid".into(),
+                bearer_token: "not-a-real-token".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: Some(AgentRemotePairingDto {
+                    client_id: "saved-client".into(),
+                    person_id: PersonId::new().to_string(),
+                    device_id: "saved-device".into(),
+                }),
+            },
+            calendar_connections: vec![],
+        };
         let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
@@ -2626,21 +2591,21 @@ mod tests {
             serve_signed_enrollment(listener, producer_key, server_producer, person)
         });
         let route = RemoteTurnRoute {
-                        route: floe_inference::RemoteRoute {
-                            base_url: format!("http://127.0.0.1:{}", address.port()),
-                            bearer_token: "secret_token_value_that_is_long_enough".into(),
-                            purpose: "everyday_assistance".into(),
-                            external: false,
-                            allow_external: false,
-                            recipient: None,
-                            pairing: Some(AgentRemotePairingDto {
-                client_id: "client-1".into(),
-                person_id: person.to_string(),
-                device_id: "device-1".into(),
-            }),
-                        },
-                        calendar_connections: vec![],
-                    };
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://127.0.0.1:{}", address.port()),
+                bearer_token: "secret_token_value_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: Some(AgentRemotePairingDto {
+                    client_id: "client-1".into(),
+                    person_id: person.to_string(),
+                    device_id: "device-1".into(),
+                }),
+            },
+            calendar_connections: vec![],
+        };
         let result = perform(
             &worker,
             person,
@@ -2945,7 +2910,10 @@ mod tests {
         .session
         .unwrap();
         assert!(created.scope.is_none());
-        assert_eq!(created.data_classes, [floe_agent_contract::DataClass::Personal]);
+        assert_eq!(
+            created.data_classes,
+            [floe_agent_contract::DataClass::Personal]
+        );
         assert_eq!(
             perform(
                 &worker,
@@ -2974,14 +2942,10 @@ mod tests {
             .session,
             Some(created.clone())
         );
-        let installed_revision = perform(
-            &worker,
-            person,
-            WorkerAction::Registry { change: None },
-        )
-        .registry
-        .unwrap()
-        .revision;
+        let installed_revision = perform(&worker, person, WorkerAction::Registry { change: None })
+            .registry
+            .unwrap()
+            .revision;
         let resumed = perform(
             &worker,
             person,
@@ -2993,14 +2957,10 @@ mod tests {
         .unwrap();
         assert_eq!(resumed.id, created.id);
         assert_eq!(
-            perform(
-                &worker,
-                person,
-                WorkerAction::Registry { change: None },
-            )
-            .registry
-            .unwrap()
-            .revision,
+            perform(&worker, person, WorkerAction::Registry { change: None },)
+                .registry
+                .unwrap()
+                .revision,
             installed_revision,
         );
         let sample = perform(
@@ -3013,7 +2973,10 @@ mod tests {
         .session
         .unwrap();
         assert_ne!(sample.id, created.id);
-        assert_eq!(sample.data_classes, [floe_agent_contract::DataClass::Synthetic]);
+        assert_eq!(
+            sample.data_classes,
+            [floe_agent_contract::DataClass::Synthetic]
+        );
     }
 
     #[test]
@@ -3024,21 +2987,12 @@ mod tests {
         let person = PersonId::new();
         let worker = Worker::new(root.clone(), Keys::default()).unwrap();
         assert_eq!(
-            perform(
-                &worker,
-                person,
-                WorkerAction::Registry { change: None }
-            )
-            .failure,
+            perform(&worker, person, WorkerAction::Registry { change: None }).failure,
             Some(AgentFailure::VaultUnavailable)
         );
         assert!(!root.exists());
         perform(&worker, person, WorkerAction::Create {});
-        let empty = perform(
-            &worker,
-            person,
-            WorkerAction::Registry { change: None },
-        );
+        let empty = perform(&worker, person, WorkerAction::Registry { change: None });
         assert_eq!(empty.state, Some(VaultState::Ready));
         assert!(empty.registry.is_none());
         let session = perform(
@@ -3061,13 +3015,9 @@ mod tests {
                 },
             },
         );
-        let before = perform(
-            &worker,
-            person,
-            WorkerAction::Registry { change: None },
-        )
-        .registry
-        .unwrap();
+        let before = perform(&worker, person, WorkerAction::Registry { change: None })
+            .registry
+            .unwrap();
         let assignment = before
             .assignments
             .iter()
@@ -3088,7 +3038,9 @@ mod tests {
             .request(
                 person,
                 id,
-                WorkerOperation::Submit { action: Box::new(action()) },
+                WorkerOperation::Submit {
+                    action: Box::new(action()),
+                },
             )
             .unwrap();
         let done = wait(&worker, person, id);
@@ -3133,13 +3085,9 @@ mod tests {
         perform(&worker, person, WorkerAction::Lock {});
         perform(&worker, person, WorkerAction::Unlock {});
         assert_eq!(
-            perform(
-                &worker,
-                person,
-                WorkerAction::Registry { change: None }
-            )
-            .registry
-            .as_ref(),
+            perform(&worker, person, WorkerAction::Registry { change: None })
+                .registry
+                .as_ref(),
             Some(after)
         );
         let session = perform(
@@ -3171,13 +3119,9 @@ mod tests {
                 reason: AgentFailure::InvalidModelOutput,
             })
         );
-        let current = perform(
-            &worker,
-            person,
-            WorkerAction::Registry { change: None },
-        )
-        .registry
-        .unwrap();
+        let current = perform(&worker, person, WorkerAction::Registry { change: None })
+            .registry
+            .unwrap();
         assert_eq!(current, *after);
         perform(&worker, person, WorkerAction::Lock {});
     }
@@ -3233,7 +3177,10 @@ mod tests {
         .session
         .unwrap();
         assert_ne!(sample.id, session.id);
-        assert_eq!(sample.data_classes, [floe_agent_contract::DataClass::Synthetic]);
+        assert_eq!(
+            sample.data_classes,
+            [floe_agent_contract::DataClass::Synthetic]
+        );
     }
 
     #[test]
@@ -3274,7 +3221,8 @@ mod tests {
                 completed.last_outcome,
                 Some(floe_conversation::AgentOutcome::Completed)
             );
-            let floe_conversation::AgentMessage::Delegation { task, .. } = &completed.messages[1] else {
+            let floe_conversation::AgentMessage::Delegation { task, .. } = &completed.messages[1]
+            else {
                 panic!("expected Expert result");
             };
             serde_json::from_str(
@@ -3331,7 +3279,10 @@ mod tests {
         )
         .session
         .unwrap();
-        assert_eq!(session.data_classes, [floe_agent_contract::DataClass::Synthetic]);
+        assert_eq!(
+            session.data_classes,
+            [floe_agent_contract::DataClass::Synthetic]
+        );
         assert_eq!(
             perform(&worker, PersonId::new(), WorkerAction::Lock {}).failure,
             Some(AgentFailure::NotFound)
@@ -3409,11 +3360,12 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let result = worker.request(person, id, operation.clone()).unwrap();
-            if result
-                .events
-                .iter()
-                .any(|event| matches!(event.event, floe_conversation::AgentEventKind::ModelStarted { .. }))
-            {
+            if result.events.iter().any(|event| {
+                matches!(
+                    event.event,
+                    floe_conversation::AgentEventKind::ModelStarted { .. }
+                )
+            }) {
                 break;
             }
             assert!(Instant::now() < deadline);
@@ -3438,9 +3390,7 @@ mod tests {
             worker.request(PersonId::new(), id, WorkerOperation::Stop),
             Err(AgentFailure::NotFound)
         );
-        worker
-            .request(person, id, WorkerOperation::Stop)
-            .unwrap();
+        worker.request(person, id, WorkerOperation::Stop).unwrap();
         let result = wait(&worker, person, id);
         assert_eq!(
             result.session.as_ref().unwrap().last_outcome,
@@ -3500,11 +3450,7 @@ mod tests {
         let start = Instant::now();
         assert!(
             !worker
-                .request(
-                    person,
-                    id,
-                    WorkerOperation::Poll { after_sequence: 0 }
-                )
+                .request(person, id, WorkerOperation::Poll { after_sequence: 0 })
                 .unwrap()
                 .done
         );
@@ -3541,7 +3487,9 @@ mod tests {
 
 /// The Person's vault, as this device's own storage shows it.
 /// The pairing a route names, as Connections states one.
-fn pairing_identity(pairing: &floe_inference::RoutePairing) -> floe_connections::PairingIdentity<'_> {
+fn pairing_identity(
+    pairing: &floe_inference::RoutePairing,
+) -> floe_connections::PairingIdentity<'_> {
     floe_connections::PairingIdentity {
         person_id: &pairing.person_id,
         client_id: &pairing.client_id,

@@ -73,9 +73,7 @@ pub(super) struct VaultRemoteAuthority<'a, Keys> {
     pub vault: &'a EncryptedAgentVault<Keys>,
 }
 
-impl<Keys: VaultKeyProvider> floe_access::RemoteAuthorityStore
-    for VaultRemoteAuthority<'_, Keys>
-{
+impl<Keys: VaultKeyProvider> floe_access::RemoteAuthorityStore for VaultRemoteAuthority<'_, Keys> {
     fn owner_public_key<'a>(
         &'a self,
     ) -> floe_access::BoxFuture<'a, Result<RemoteOwnerPublicKey, AgentFailure>> {

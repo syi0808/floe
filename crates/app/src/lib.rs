@@ -21,17 +21,17 @@ pub mod local_context;
 mod prompts;
 mod services;
 pub mod turn_request;
-pub mod worker;
 #[cfg(unix)]
 mod vault_host;
+pub mod worker;
 
+pub use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
 /// The values this host's own API names at its boundary.
 ///
 /// A binding reads a receipt and reports a failure; it does not reach past the
 /// app into the modules behind it, so only the values these signatures carry
 /// are named here — never a module, and never a concrete adapter.
 pub use floe_conversation::{RunReceipt, RunState};
-pub use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
 pub use floe_day::{
     AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRange,
     CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture, CaptureId,
@@ -55,49 +55,46 @@ pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState}
 pub use floe_connections::{CalendarConnectionRef, PairingIssuer, PairingStatus};
 pub use floe_conversation::AgentOutcome;
 pub use floe_inference::{RemoteRoute, RoutePairing};
-pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
+pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
 pub use action_facade::CalendarActionCommand;
-pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
-pub use bootstrap::local_identity_for_database;
-#[cfg(unix)]
-pub use composition::{AppComposition, AppOpenError, open};
-pub use agent_run::{
-    AgentFixtureRunCommand, AgentFixtureRunRequest, AgentFixtureRunSnapshot,
-};
 pub use agent_fixture::{
     AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,
     run_persisted_agent_sample,
 };
+pub use agent_run::{AgentFixtureRunCommand, AgentFixtureRunRequest, AgentFixtureRunSnapshot};
+pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
+pub use bootstrap::local_identity_for_database;
+#[cfg(unix)]
+pub use composition::{AppComposition, AppOpenError, open};
 pub use core::{Classification, FloeCore};
-pub use services::CalendarActionsResult;
-pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute};
-pub use worker::{
-    CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
-    CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation,
-    FixtureOperation, MemoryReviewDecision, MemoryReviewResult, RemoteCalendarGrantPreview,
-    RemoteGrantOverview, RemotePairingChallenge, VaultState, WorkerAction, WorkerOperation,
-    WorkerResult,
-};
 pub use error::{CoreError, ErrorCode};
-pub use host::{AppHost, HostRequest};
-pub use inference_routes::HostInferenceRoutes;
-pub use local_context::{
-    CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
-};
 /// The acquisition values one local-context command carries.
 pub use floe_context::{PublishedCalendarObservation, valid_native_subject_fingerprint};
 pub use floe_provider_adapters::sources::native_acquisition::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
-    CalendarSourceFailure, MAX_ACQUISITION_DEADLINE_MS, NativeCalendarBatch,
-    NativeCalendarFailure, NativeCalendarRecord, NativeEventSchedule, PersonalAcquisitionRequest,
+    CalendarSourceFailure, MAX_ACQUISITION_DEADLINE_MS, NativeCalendarBatch, NativeCalendarFailure,
+    NativeCalendarRecord, NativeEventSchedule, PersonalAcquisitionRequest,
     PersonalAcquisitionResult, PersonalDomain, attention_failure, personal_failure,
 };
+pub use host::{AppHost, HostRequest};
+pub use inference_routes::HostInferenceRoutes;
+pub use local_context::{
+    CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
+};
+pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
     ConversationCommands, ProfileSelection, ServiceError, StartTurn, TurnMode,
 };
+pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute};
 #[cfg(unix)]
 pub use vault_host::{ConversationQuery, VaultBridge, VaultRequestFailure};
+pub use worker::{
+    CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
+    CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation, FixtureOperation,
+    MemoryReviewDecision, MemoryReviewResult, RemoteCalendarGrantPreview, RemoteGrantOverview,
+    RemotePairingChallenge, VaultState, WorkerAction, WorkerOperation, WorkerResult,
+};

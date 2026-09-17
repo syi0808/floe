@@ -1,16 +1,16 @@
 use chrono::TimeZone;
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission};
+use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
 use floe_agent_contract::{
     AgentContext, DataClass, ExpertResult, InferencePolicyDecision, prompts::PromptRole,
 };
-use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
-use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
 use floe_context::CalendarSource;
 use floe_context_contract::{CalendarProvider, ModelPlacement, TransferConsent};
 use floe_conversation::{
     AgentBudget, AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep,
 };
 use floe_day::{CalendarRange, CalendarTimelineGrant};
+use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
 use floe_experts::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget};
 
 use crate::vault_host::conversation_turn::expert_dispatch::schedule::agent::CalendarAgentTurnRequest;
@@ -356,27 +356,21 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     });
     assert_eq!(publication, Err(AgentFailure::PolicyDenied));
     perform(&worker, person, WorkerAction::Unlock);
-    let overview = perform(
-        &worker,
-        person,
-        WorkerAction::Registry { change: None },
-    )
-    .registry
-    .unwrap();
+    let overview = perform(&worker, person, WorkerAction::Registry { change: None })
+        .registry
+        .unwrap();
     perform(
         &worker,
         person,
         WorkerAction::Registry {
-            change: Some(
-                RegistryConfiguration {
-                    instance_id: overview.instance_id,
-                    expected_revision: overview.revision,
-                    target: RegistryConfigurationTarget::Assignment {
-                        id: evidence.assignment_id,
-                        enabled: false,
-                    },
+            change: Some(RegistryConfiguration {
+                instance_id: overview.instance_id,
+                expected_revision: overview.revision,
+                target: RegistryConfigurationTarget::Assignment {
+                    id: evidence.assignment_id,
+                    enabled: false,
                 },
-            ),
+            }),
         },
     );
     let id = Uuid::new_v4();
@@ -447,7 +441,9 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
         .request(
             person,
             id,
-            WorkerOperation::Submit { action: Box::new(inspect()) },
+            WorkerOperation::Submit {
+                action: Box::new(inspect()),
+            },
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);

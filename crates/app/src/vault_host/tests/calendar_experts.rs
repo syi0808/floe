@@ -22,9 +22,9 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     if !fixture_library.is_some_and(|path| path.exists()) {
         return;
     }
-    use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration};
+    use floe_context_contract::{CalendarProvider, CalendarScope};
     use floe_day::{CalendarFailure, CalendarSelection};
-use floe_context_contract::{CalendarProvider, CalendarScope};
+    use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration};
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId(
         Uuid::parse_str(floe_provider_adapters::sources::native_calendar::LOCAL_PERSON)
@@ -215,7 +215,9 @@ use floe_context_contract::{CalendarProvider, CalendarScope};
             text: "Hello!".into(),
         },
         floe_conversation::ModelStep::Delegate {
-            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule.package_id().into(),
+            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
+                .package_id()
+                .into(),
             message: "Read my calendar".into(),
         },
         floe_conversation::ModelStep::Call {
@@ -339,10 +341,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         Arc::new(crate::events::AppEventBuffer::default()),
     )
     .unwrap();
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Create).failure,
-        None
-    );
+    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
     let empty = perform(
         &worker,
         person,
@@ -354,20 +353,18 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         &worker,
         person,
         WorkerAction::CalendarExperts {
-            setup: Some(
-                Box::new(CalendarExpertSetup {
-                    instance_id: empty.registry.instance_id,
-                    expected_revision: empty.registry.revision,
-                    setup_id,
-                    provider: floe_context_contract::CalendarProvider::Fixture,
-                    device_id: "mac-local".into(),
-                    calendar_ids: vec!["fixture-calendar".into()],
-                    connection_scope: floe_context_contract::CalendarScope::Selected,
-                    connection_revision: 2,
-                    source_authority: None,
-                    reviewed_native_subject_fingerprint: None,
-                }),
-            ),
+            setup: Some(Box::new(CalendarExpertSetup {
+                instance_id: empty.registry.instance_id,
+                expected_revision: empty.registry.revision,
+                setup_id,
+                provider: floe_context_contract::CalendarProvider::Fixture,
+                device_id: "mac-local".into(),
+                calendar_ids: vec!["fixture-calendar".into()],
+                connection_scope: floe_context_contract::CalendarScope::Selected,
+                connection_revision: 2,
+                source_authority: None,
+                reviewed_native_subject_fingerprint: None,
+            })),
         },
     )
     .calendar_experts
@@ -397,7 +394,9 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     let now = chrono::Utc::now().timestamp_millis();
     let (mut route, server) = answer_server(vec![
         floe_conversation::ModelStep::Delegate {
-            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule.package_id().into(),
+            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
+                .package_id()
+                .into(),
             message: "Find an open hour".into(),
         },
         floe_conversation::ModelStep::Call {
@@ -457,10 +456,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         })
         .expect("completed Schedule delegation");
     assert_eq!(server.join().unwrap().len(), 4);
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Lock).failure,
-        None
-    );
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
     let reopened = runtime
         .block_on(EncryptedAgentVault::open(&root, person, keys))
         .unwrap();
@@ -564,7 +560,9 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         .request(
             person,
             request_id,
-            WorkerOperation::Submit { action: Box::new(changed) },
+            WorkerOperation::Submit {
+                action: Box::new(changed),
+            },
         )
         .unwrap();
     let conflict = wait(&worker, person, request_id);
@@ -688,20 +686,18 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         &worker,
         person,
         WorkerAction::CalendarExperts {
-            setup: Some(
-                Box::new(CalendarExpertSetup {
-                    instance_id: empty.registry.instance_id,
-                    expected_revision: empty.registry.revision,
-                    setup_id,
-                    provider: floe_context_contract::CalendarProvider::Fixture,
-                    device_id: "mac-local".into(),
-                    calendar_ids: vec!["fixture-calendar".into()],
-                    connection_scope: floe_context_contract::CalendarScope::Selected,
-                    connection_revision: 1,
-                    source_authority: None,
-                    reviewed_native_subject_fingerprint: None,
-                }),
-            ),
+            setup: Some(Box::new(CalendarExpertSetup {
+                instance_id: empty.registry.instance_id,
+                expected_revision: empty.registry.revision,
+                setup_id,
+                provider: floe_context_contract::CalendarProvider::Fixture,
+                device_id: "mac-local".into(),
+                calendar_ids: vec!["fixture-calendar".into()],
+                connection_scope: floe_context_contract::CalendarScope::Selected,
+                connection_revision: 1,
+                source_authority: None,
+                reviewed_native_subject_fingerprint: None,
+            })),
         },
     )
     .calendar_experts
@@ -872,11 +868,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     assert_eq!(conversation.failure, None, "conversation: {conversation:?}");
     assert!(!root_cancellation.is_cancelled());
     worker
-        .request(
-            person,
-            competing_id,
-            WorkerOperation::Release,
-        )
+        .request(person, competing_id, WorkerOperation::Release)
         .unwrap();
     worker
         .request(person, preview_id, WorkerOperation::Release)
@@ -888,11 +880,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .request(person, query_id, WorkerOperation::Release)
         .unwrap();
     worker
-        .request(
-            person,
-            conversation_id,
-            WorkerOperation::Release,
-        )
+        .request(person, conversation_id, WorkerOperation::Release)
         .unwrap();
     server.join().unwrap();
 }
@@ -1065,10 +1053,12 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         .block_on(EncryptedAgentVault::create(&root, person, keys.clone()))
         .unwrap();
     let session = runtime.block_on(vault.create_session()).unwrap();
-    assert!(runtime
-        .block_on(vault.builtin_expert_overview())
-        .unwrap()
-        .is_none());
+    assert!(
+        runtime
+            .block_on(vault.builtin_expert_overview())
+            .unwrap()
+            .is_none()
+    );
     drop(vault);
 
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
@@ -1129,10 +1119,12 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let vault = runtime
         .block_on(EncryptedAgentVault::open(&root, person, keys))
         .unwrap();
-    assert!(runtime
-        .block_on(vault.builtin_expert_overview())
-        .unwrap()
-        .is_none());
+    assert!(
+        runtime
+            .block_on(vault.builtin_expert_overview())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -1167,8 +1159,8 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         .unwrap();
     let run_id = floe_agent_contract::RunId::new();
     runtime
-        .block_on(vault.admit_conversation_turn(
-            floe_vault::VaultConversationAdmissionRequest {
+        .block_on(
+            vault.admit_conversation_turn(floe_vault::VaultConversationAdmissionRequest {
                 run_id,
                 command_id: floe_agent_contract::CommandId::new(),
                 session_id: session.id,
@@ -1179,8 +1171,8 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
                 continuation: None,
                 retry_of: None,
                 model_placement: floe_agent_contract::ModelPlacement::DeviceLocal,
-            },
-        ))
+            }),
+        )
         .unwrap();
     runtime
         .block_on(vault.finish_conversation_run(
@@ -1253,7 +1245,9 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         .request(
             person,
             request_id,
-            WorkerOperation::Submit { action: Box::new(action) },
+            WorkerOperation::Submit {
+                action: Box::new(action),
+            },
         )
         .unwrap();
     let replay = wait(&worker, person, request_id);
@@ -1272,10 +1266,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     let keys = Keys::default();
     let person = PersonId::new();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Create).failure,
-        None
-    );
+    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
     let session = perform(
         &worker,
         person,
@@ -1314,7 +1305,8 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         .iter()
         .find_map(|message| match message {
             AgentMessage::Delegation { task, .. }
-                if task.agent_id == floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()
+                if task.agent_id
+                    == floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()
                     && task.state == floe_experts::A2ATaskState::Failed
                     && task.failure == Some(AgentFailure::AccessReviewRequired) =>
             {
@@ -1324,10 +1316,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         })
         .unwrap_or_else(|| panic!("durable Commitments denial: {session:?}"));
     assert_eq!(server.join().unwrap().len(), 2);
-    assert_eq!(
-        perform(&worker, person, WorkerAction::Lock).failure,
-        None
-    );
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1346,10 +1335,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     );
 }
 
-fn commitments_denial_server() -> (
-    crate::RemoteTurnRoute,
-    std::thread::JoinHandle<Vec<String>>,
-) {
+fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1476,10 +1462,7 @@ fn commitments_denial_server() -> (
 
 fn answer_server(
     steps: Vec<floe_conversation::ModelStep>,
-) -> (
-    crate::RemoteTurnRoute,
-    std::thread::JoinHandle<Vec<String>>,
-) {
+) -> (crate::RemoteTurnRoute, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1682,13 +1665,9 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
     assert_eq!(empty.registry.revision, 0);
     assert!(empty.views.is_empty() && empty.setups.is_empty());
     assert!(
-        perform(
-            &worker,
-            person,
-            WorkerAction::Registry { change: None }
-        )
-        .registry
-        .is_none()
+        perform(&worker, person, WorkerAction::Registry { change: None })
+            .registry
+            .is_none()
     );
     let setup = CalendarExpertSetup {
         instance_id: empty.registry.instance_id,
@@ -1779,16 +1758,14 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             &worker,
             person,
             WorkerAction::Registry {
-                change: Some(
-                    RegistryConfiguration {
-                        instance_id: current.registry.instance_id,
-                        expected_revision: current.registry.revision,
-                        target: RegistryConfigurationTarget::CalendarView {
-                            id: installed.views[0].handle,
-                            enabled,
-                        },
+                change: Some(RegistryConfiguration {
+                    instance_id: current.registry.instance_id,
+                    expected_revision: current.registry.revision,
+                    target: RegistryConfigurationTarget::CalendarView {
+                        id: installed.views[0].handle,
+                        enabled,
                     },
-                ),
+                }),
             },
         );
         assert!(result.failure.is_none());
@@ -1890,7 +1867,9 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         .request(person, id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(
-        perform(&worker, person, inspect()).calendar_experts.as_ref(),
+        perform(&worker, person, inspect())
+            .calendar_experts
+            .as_ref(),
         Some(&empty)
     );
     let retry = perform(

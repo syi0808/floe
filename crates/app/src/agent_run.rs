@@ -4,11 +4,11 @@ use std::{
     time::Duration,
 };
 
-use floe_agent_contract::{AgentFailure};
-use floe_conversation::{AgentEvent, AgentSession};
-use floe_execution::{Cancellation};
 use crate::{AgentFixturePrompt, AgentFixtureTurn};
+use floe_agent_contract::AgentFailure;
+use floe_conversation::{AgentEvent, AgentSession};
 use floe_diagnostics::{TraceContext, current_context};
+use floe_execution::Cancellation;
 use floe_kernel::PersonId;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -188,7 +188,10 @@ pub fn run(
     Ok(result)
 }
 
-fn snapshot(run: &AgentRun, after_sequence: usize) -> Result<AgentFixtureRunSnapshot, AgentFailure> {
+fn snapshot(
+    run: &AgentRun,
+    after_sequence: usize,
+) -> Result<AgentFixtureRunSnapshot, AgentFailure> {
     let events = run.events.lock().map_err(|_| AgentFailure::Interrupted)?;
     if after_sequence > events.len() {
         return Err(AgentFailure::InvalidInput);
