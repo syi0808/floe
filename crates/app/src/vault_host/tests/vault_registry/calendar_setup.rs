@@ -1,5 +1,6 @@
 use super::*;
 use floe_execution::Cancellation;
+use floe_experts::AgentRegistry;
 use floe_experts::CalendarAccessChange;
 use floe_experts::CalendarAccessConfiguration;
 use floe_experts::CalendarExpertOverview;
@@ -31,7 +32,12 @@ async fn install_calendar(
     let connection_id = request.setup_id.to_string();
     fixture
         .vault
-        .install_calendar_expert_with_connection(request, connection_id, cancellation)
+        .install_calendar_expert_with_connection(
+            request,
+            &crate::vault_host::schedule_packaging(),
+            connection_id,
+            cancellation,
+        )
         .await
 }
 
@@ -213,24 +219,7 @@ async fn setup_bootstraps_without_a_sample_and_replays_after_reopen_without_resu
     let before = fixture.vault.expert_registry().await.unwrap().unwrap();
     assert!(!before.calendar_views[0].enabled);
     assert_eq!(fixture.receipts().await, 0);
-    let mut sessions = fixture
-        .vault
-        .connection()
-        .unwrap()
-        .query("SELECT count(*) FROM agent_sessions", ())
-        .await
-        .unwrap();
-    assert_eq!(
-        sessions
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .get::<i64>(0)
-            .unwrap(),
-        0
-    );
-    drop(sessions);
+    assert_eq!(fixture.rows("agent_sessions").await, 0);
     let mut registry = AgentRegistry::restore(before, request.instance_id).unwrap();
     for enabled in [true, false] {
         let revision = registry.revision();
@@ -323,20 +312,20 @@ async fn setup_and_sample_coexist_in_both_orders_without_regranting_disabled_sam
             .unwrap();
         assert_eq!(replay.setup, installed.setup);
         let session = fixture.vault.create_sample_session().await.unwrap();
-        let attempted = fixture
-            .crate::run_persisted_agent_sample(&vault, 
-                AgentFixtureTurn {
-                    person_id: fixture.person,
-                    session_id: session.id,
-                    expected_revision: session.revision,
-                    prompt: AgentFixturePrompt::Today,
-                },
-                Cancellation::default(),
-                Duration::ZERO,
-                |_| {},
-            )
-            .await
-            .unwrap();
+        let attempted = crate::run_persisted_agent_sample(
+            &fixture.vault,
+            AgentFixtureTurn {
+                person_id: fixture.person,
+                session_id: session.id,
+                expected_revision: session.revision,
+                prompt: AgentFixturePrompt::Today,
+            },
+            Cancellation::default(),
+            Duration::ZERO,
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(
             !attempted
                 .messages
@@ -481,7 +470,11 @@ async fn staged_setup_cancellation_rolls_back_initial_tables_and_existing_regist
         };
         let revision = registry.revision();
         registry
-            .install_calendar_expert(fixture.person, &setup_request(&fixture, revision))
+            .install_calendar_expert(
+                fixture.person,
+                &setup_request(&fixture, revision),
+                &crate::vault_host::schedule_packaging(),
+            )
             .unwrap();
         let checks = std::sync::atomic::AtomicUsize::new(0);
         let check = || {
@@ -531,7 +524,10 @@ async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_an
             1 => changed.calendar_setups[0].setup_id = Uuid::new_v4(),
             2 => changed.calendar_setups[0].expected_revision = before.revision,
             3 => changed.calendar_setups[0].connection_revision += 1,
-            4 => changed.calendar_setups[0].connection_scope = floe_agent_contract::CalendarScope::All,
+            4 => {
+                changed.calendar_setups[0].connection_scope =
+                    floe_agent_contract::CalendarScope::All
+            }
             _ => {
                 let mut registry =
                     AgentRegistry::restore(before.clone(), request.instance_id).unwrap();
@@ -539,6 +535,7 @@ async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_an
                     .install_calendar_expert(
                         fixture.person,
                         &setup_request(&fixture, before.revision),
+                        &crate::vault_host::schedule_packaging(),
                     )
                     .unwrap();
                 changed = registry.snapshot();

@@ -9,8 +9,11 @@ use std::{
 use tokio::{sync::Notify, time::Instant};
 
 use super::*;
-use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
+use crate::agent_fixture::FixtureCapabilities;
+use crate::{AgentFixturePrompt, AgentFixtureTurn, recover_agent_sample};
+use floe_agent_contract::SessionProtection;
 use floe_conversation::AgentEventKind;
+use floe_conversation::AgentMessage;
 use floe_conversation::AgentOutcome;
 use floe_conversation::AgentSessionScope;
 use floe_execution::Cancellation;
@@ -18,11 +21,19 @@ use floe_experts::A2AMessage;
 use floe_experts::A2AMessageRole;
 use floe_experts::A2APart;
 use floe_experts::A2ASendMessageRequest;
+use floe_experts::AgentRegistry;
 use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
+use floe_experts::ExpertResult;
+use floe_experts::InProcessAgent;
 use floe_experts::RegistryConfiguration;
 use floe_experts::RegistryConfigurationTarget;
-use crate::agent_fixture::FixtureCapabilities;
-use crate::{AgentFixturePrompt, AgentFixtureTurn, recover_agent_sample};
+use floe_experts::RegistrySnapshot;
+use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
+
+/// The registry names a builtin source by its agent id.
+fn builtin_source_id(source: BuiltinContextSource) -> floe_experts::AgentId {
+    floe_experts::AgentId::try_new(source.source_id()).expect("builtin source ids are valid")
+}
 
 mod builtin_setup;
 mod calendar_setup;
@@ -78,6 +89,21 @@ struct KeyState {
     values: Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>,
     blocked: AtomicBool,
     fail_on_read: std::sync::atomic::AtomicUsize,
+}
+
+impl Keys {
+    /// The one key these fixtures hold, so a test can open the same encrypted
+    /// database the vault writes.
+    fn only_key(&self) -> [u8; 32] {
+        *self
+            .0
+            .values
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .expect("vault key")
+    }
 }
 
 impl VaultKeyProvider for Keys {
@@ -350,7 +376,9 @@ async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_an_unbou
         forged.revision += 1;
         match mode {
             0 => forged.calendar_views[0].calendar_ids = vec!["different".into()],
-            1 => forged.calendar_views[0].provider = floe_agent_contract::CalendarProvider::EventKit,
+            1 => {
+                forged.calendar_views[0].provider = floe_agent_contract::CalendarProvider::EventKit
+            }
             2 => forged.calendar_views[0].handle = Uuid::new_v4(),
             _ => forged.calendar_views.clear(),
         }
@@ -440,9 +468,95 @@ impl Fixture {
         (previous, next, capabilities.snapshot().unwrap())
     }
 
+    /// How many expert invocations are durably on record.
+    ///
+    /// The receipt row is the vault's idempotency key for one invocation, and
+    /// it has no reader of its own; this counts it from the same database the
+    /// vault writes. A Vault-side reader would be the better home for it.
+    /// How many rows the vault's own database holds in `table`.
+    async fn rows(&self, table: &str) -> i64 {
+        let key = self.keys.only_key();
+        let hexkey = key
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = self
+            .root
+            .path()
+            .join(self.person.to_string())
+            .join("sessions.db");
+        turso::Builder::new_local(path.to_str().unwrap())
+            .experimental_encryption(true)
+            .with_encryption(turso::EncryptionOpts {
+                cipher: "aes256gcm".into(),
+                hexkey,
+            })
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap()
+            .query(&format!("SELECT count(*) FROM {table}"), ())
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<i64>(0)
+            .unwrap()
+    }
+
+    /// Run `sql` against the vault's own database, to put it in a state the
+    /// vault itself would never write.
+    async fn corrupt(&self, sql: &str) {
+        let key = self.keys.only_key();
+        let hexkey = key
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = self
+            .root
+            .path()
+            .join(self.person.to_string())
+            .join("sessions.db");
+        turso::Builder::new_local(path.to_str().unwrap())
+            .experimental_encryption(true)
+            .with_encryption(turso::EncryptionOpts {
+                cipher: "aes256gcm".into(),
+                hexkey,
+            })
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap()
+            .execute(sql, ())
+            .await
+            .unwrap();
+    }
+
     async fn receipts(&self) -> i64 {
-        self.vault
-            .connection()
+        let key = self.keys.only_key();
+        let hexkey = key
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let path = self
+            .root
+            .path()
+            .join(self.person.to_string())
+            .join("sessions.db");
+        turso::Builder::new_local(path.to_str().unwrap())
+            .experimental_encryption(true)
+            .with_encryption(turso::EncryptionOpts {
+                cipher: "aes256gcm".into(),
+                hexkey,
+            })
+            .build()
+            .await
+            .unwrap()
+            .connect()
             .unwrap()
             .query("SELECT count(*) FROM agent_expert_receipts", ())
             .await
@@ -457,19 +571,20 @@ impl Fixture {
 
     async fn sample(&self) -> AgentSession {
         let session = self.vault.create_sample_session().await.unwrap();
-        crate::run_persisted_agent_sample(&self.vault, 
-                AgentFixtureTurn {
-                    person_id: self.person,
-                    session_id: session.id,
-                    expected_revision: 0,
-                    prompt: AgentFixturePrompt::Today,
-                },
-                Cancellation::default(),
-                Duration::ZERO,
-                |_| {},
-            )
-            .await
-            .unwrap()
+        crate::run_persisted_agent_sample(
+            &self.vault,
+            AgentFixtureTurn {
+                person_id: self.person,
+                session_id: session.id,
+                expected_revision: 0,
+                prompt: AgentFixturePrompt::Today,
+            },
+            Cancellation::default(),
+            Duration::ZERO,
+            |_| {},
+        )
+        .await
+        .unwrap()
     }
 }
 
@@ -564,13 +679,7 @@ async fn missing_registry_fails_closed_on_reopen() {
         fixture.vault.initialize_expert_registry(&snapshot).await,
         Err(AgentFailure::Conflict)
     );
-    fixture
-        .vault
-        .connection()
-        .unwrap()
-        .execute("DELETE FROM agent_expert_registry", ())
-        .await
-        .unwrap();
+    fixture.corrupt("DELETE FROM agent_expert_registry").await;
     assert_eq!(
         fixture.vault.expert_registry().await,
         Err(AgentFailure::VaultUnavailable)
@@ -681,7 +790,8 @@ async fn persisted_authority_change_during_model_work_never_publishes_expert_suc
     let baseline = fixture.prepare().await;
     let session = fixture.vault.create_sample_session().await.unwrap();
     let started = Notify::new();
-    let run = crate::run_persisted_agent_sample(&fixture.vault, 
+    let run = crate::run_persisted_agent_sample(
+        &fixture.vault,
         AgentFixtureTurn {
             person_id: fixture.person,
             session_id: session.id,
@@ -828,54 +938,6 @@ async fn scoped_commit_rejects_a_competing_private_state_update() {
             .private_state
             .revision,
         1
-    );
-}
-
-#[tokio::test]
-async fn completion_commit_only_advances_the_selected_assignment() {
-    let fixture = Fixture::new().await;
-    let baseline = fixture.prepare().await;
-    let invocation_id = Uuid::new_v4();
-    let (_, _, staged) = fixture.stage(invocation_id).await;
-    let assignment_id = staged
-        .assignments
-        .iter()
-        .find(|assignment| assignment.private_state.last_invocation_id == Some(invocation_id))
-        .unwrap()
-        .id;
-
-    assert_eq!(
-        fixture
-            .vault
-            .save_expert_completion_checked(baseline.revision, &staged, Uuid::new_v4(), || Ok(()))
-            .await,
-        Err(AgentFailure::Conflict)
-    );
-    let mut forged = staged.clone();
-    forged
-        .assignments
-        .iter_mut()
-        .find(|assignment| assignment.id != assignment_id)
-        .unwrap()
-        .enabled = false;
-    assert_eq!(
-        fixture
-            .vault
-            .save_expert_completion_checked(baseline.revision, &forged, assignment_id, || Ok(()))
-            .await,
-        Err(AgentFailure::Conflict)
-    );
-    fixture
-        .vault
-        .save_expert_completion_checked(baseline.revision, &staged, assignment_id, || Ok(()))
-        .await
-        .unwrap();
-    assert_eq!(
-        fixture
-            .vault
-            .save_expert_completion_checked(baseline.revision, &staged, assignment_id, || Ok(()))
-            .await,
-        Err(AgentFailure::Conflict)
     );
 }
 

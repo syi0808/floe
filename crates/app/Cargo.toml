@@ -39,3 +39,6 @@ uuid.workspace = true
 floe-protocol = { path = "../bindings/protocol" }
 ring = "0.17.14"
 tempfile = "3.23.0"
+# The registry regressions count the vault's durable expert receipts, which
+# have no reader of their own.
+turso.workspace = true

@@ -853,6 +853,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "turso",
  "uuid",
 ]
 

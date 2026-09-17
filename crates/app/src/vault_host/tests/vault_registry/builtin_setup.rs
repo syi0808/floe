@@ -1,5 +1,6 @@
 use super::*;
 use floe_execution::Cancellation;
+use floe_experts::AgentRegistry;
 use floe_experts::BuiltinExpertSetup;
 use floe_experts::BuiltinSourceBinding;
 use floe_experts::BuiltinSourceState;
@@ -20,7 +21,11 @@ async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_ent
     let mut staged =
         AgentRegistry::restore(before.clone(), fixture.vault.registry_instance_id()).unwrap();
     staged
-        .install_builtin_experts_enabled(fixture.person, &request)
+        .install_builtin_experts_enabled(
+            fixture.person,
+            &request,
+            &crate::vault_host::builtin_setup_specs(),
+        )
         .unwrap();
     assert_eq!(
         fixture
@@ -35,7 +40,11 @@ async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_ent
     );
     let installed = fixture
         .vault
-        .install_builtin_experts_enabled(request.clone(), Cancellation::default())
+        .install_builtin_experts_enabled(
+            request.clone(),
+            &crate::vault_host::builtin_setup_specs(),
+            Cancellation::default(),
+        )
         .await
         .unwrap();
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
@@ -45,7 +54,11 @@ async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_ent
     assert_eq!(
         fixture
             .vault
-            .install_builtin_experts_enabled(request, Cancellation::default())
+            .install_builtin_experts_enabled(
+                request,
+                &crate::vault_host::builtin_setup_specs(),
+                Cancellation::default()
+            )
             .await
             .unwrap(),
         installed
@@ -60,21 +73,25 @@ async fn builtin_assignments_and_card_visibility_survive_vault_reopen() {
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
         sources: vec![BuiltinSourceBinding {
-            source: BuiltinContextSource::Mail,
+            source: builtin_source_id(BuiltinContextSource::Mail),
             view_handle: Uuid::new_v4(),
             state: BuiltinSourceState::Available,
         }],
     };
     let result = fixture
         .vault
-        .install_builtin_experts(request.clone(), Cancellation::default())
+        .install_builtin_experts(
+            request.clone(),
+            &crate::vault_host::builtin_setup_specs(),
+            Cancellation::default(),
+        )
         .await
         .unwrap();
     let communication = result
         .setup
         .assignments
         .iter()
-        .find(|entry| entry.expert == BuiltinExpertKind::Communication)
+        .find(|entry| entry.expert.as_str() == BuiltinExpertKind::Communication.package_id())
         .unwrap();
     let mut revision = result.registry.revision;
     for (id, installation) in [
@@ -177,21 +194,25 @@ async fn builtin_source_refresh_persists_updated_grants() {
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
         sources: vec![BuiltinSourceBinding {
-            source: BuiltinContextSource::Mail,
+            source: builtin_source_id(BuiltinContextSource::Mail),
             view_handle: mail_handle,
             state: BuiltinSourceState::Unavailable,
         }],
     };
     let installed = fixture
         .vault
-        .install_builtin_experts_enabled(request, Cancellation::default())
+        .install_builtin_experts_enabled(
+            request,
+            &crate::vault_host::builtin_setup_specs(),
+            Cancellation::default(),
+        )
         .await
         .unwrap();
     let communication = installed
         .setup
         .assignments
         .iter()
-        .find(|entry| entry.expert == BuiltinExpertKind::Communication)
+        .find(|entry| entry.expert.as_str() == BuiltinExpertKind::Communication.package_id())
         .unwrap();
 
     let refreshed = fixture
@@ -199,7 +220,7 @@ async fn builtin_source_refresh_persists_updated_grants() {
         .refresh_builtin_expert_sources(
             installed.registry.revision,
             vec![BuiltinSourceBinding {
-                source: BuiltinContextSource::Mail,
+                source: builtin_source_id(BuiltinContextSource::Mail),
                 view_handle: mail_handle,
                 state: BuiltinSourceState::Available,
             }],
@@ -213,7 +234,7 @@ async fn builtin_source_refresh_persists_updated_grants() {
             .setup
             .assignments
             .iter()
-            .find(|entry| entry.expert == BuiltinExpertKind::Communication)
+            .find(|entry| entry.expert.as_str() == BuiltinExpertKind::Communication.package_id())
             .unwrap()
             .granted_view_handles,
         [mail_handle]
