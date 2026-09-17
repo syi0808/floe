@@ -530,23 +530,17 @@ pub(super) async fn recover<Keys: VaultKeyProvider + 'static>(
     session_id: Uuid,
     expected_revision: u64,
 ) -> Result<floe_conversation::AgentSession, AgentFailure> {
-    let receipt = floe_conversation::recover_session(
+    floe_conversation::recovered_session(
         conversation_repository.as_ref(),
+        vault,
+        person_id,
         floe_conversation::RecoveryRequest {
             session_id,
             expected_session_revision: expected_revision,
             principal: person_id.to_string(),
         },
     )
-    .await?;
-    let session = vault.load(person_id, session_id).await?;
-    if session.revision != receipt.session_revision
-        || session.scope.is_some()
-        || session.data_classes != [DataClass::Personal]
-    {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    Ok(session)
+    .await
 }
 
 fn policy(model: &Model, route: Option<&RemoteTurnRoute>) -> InferencePolicyDecision {

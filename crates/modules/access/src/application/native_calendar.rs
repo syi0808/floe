@@ -33,6 +33,28 @@ pub struct NativeCalendarReview<'a> {
     pub connection_id: Option<&'a str>,
 }
 
+/// Who reads a calendar on this device on the Person's behalf.
+pub const CALENDAR_EXPERT_CONSUMER: &str = "calendar.expert";
+
+/// That the connection this device records still serves the native calendar a
+/// reviewed read is bound to.
+///
+/// A connection that moved out from under the binding leaves the read standing
+/// on something the Person never reviewed, which is stale rather than denied.
+pub fn native_calendar_source_current(
+    connection: NativeCalendarConnection<'_>,
+    review: NativeCalendarReview<'_>,
+) -> Result<SourceAuthority, AgentFailure> {
+    if !binds(connection, review)
+        || review.source_authority != Some(connection.source_authority)
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    review
+        .source_authority
+        .ok_or(AgentFailure::AccessReviewRequired)
+}
+
 /// Whether this provider is one whose subject the device answers for itself.
 ///
 /// A native provider has no producer to sign for it, so the Person's own review

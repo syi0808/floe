@@ -14,6 +14,7 @@ use floe_context_contract::{
 };
 use floe_kernel::{AgentFailure, PersonId};
 
+use crate::application::native_calendar::CALENDAR_EXPERT_CONSUMER as REMOTE_CALENDAR_CONSUMER;
 use crate::application::remote_authority::admit_enrollment_pairing;
 use crate::application::remote_view::{RemoteProducerIdentity, producer_is_pinned};
 use crate::data_access_grant::DataAccessGrant;
@@ -21,9 +22,6 @@ use crate::ports::remote_grants::{
     RemoteCalendarQuery, RemoteCallWindow, RemoteGrantStore, RemoteGrantTransport,
     RemotePairingIdentity,
 };
-
-/// Who reads a remote calendar on this device.
-pub const REMOTE_CALENDAR_CONSUMER: &str = "calendar.expert";
 
 /// Where a remote calendar's contents may be processed.
 ///

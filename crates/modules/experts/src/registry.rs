@@ -1248,3 +1248,50 @@ impl AgentRegistry {
         )
     }
 }
+
+/// The installed calendar setup one bound view belongs to.
+///
+/// A calendar-scoped read names a view handle; what the Person's registry
+/// records under it — which setup, at which scope and under which authority —
+/// is the registry's own answer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CalendarSourceBinding {
+    pub setup_id: Uuid,
+    pub view_handle: Uuid,
+    pub provider: floe_agent_contract::CalendarProvider,
+    pub device_id: String,
+    pub calendar_ids: Vec<String>,
+    pub connection_scope: floe_agent_contract::CalendarScope,
+    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
+}
+
+impl AgentRegistry {
+    /// The installed setup that binds one calendar view for this Person.
+    ///
+    /// A view with no setup behind it is not one this Person reviewed, whatever
+    /// a grant says about it.
+    pub fn calendar_source_binding(
+        &self,
+        person_id: PersonId,
+        view_handle: Uuid,
+    ) -> Result<CalendarSourceBinding, AgentFailure> {
+        let setup = self
+            .snapshot
+            .calendar_setups
+            .iter()
+            .find(|setup| setup.person_id == person_id && setup.view_handle == view_handle)
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let binding = self
+            .calendar_view(person_id, view_handle)
+            .map_err(|_| AgentFailure::AccessReviewRequired)?;
+        Ok(CalendarSourceBinding {
+            setup_id: setup.setup_id,
+            view_handle,
+            provider: binding.provider,
+            device_id: binding.device_id.clone(),
+            calendar_ids: binding.calendar_ids.clone(),
+            connection_scope: binding.connection_scope,
+            source_authority: binding.source_authority,
+        })
+    }
+}

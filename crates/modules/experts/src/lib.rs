@@ -42,7 +42,7 @@ pub use floe_agent_contract::{
 pub use assignments::RegistryAssignments;
 pub use registry::{
     AdmittedExpertInvocation, AgentId, AgentPackage, AgentRegistry, AssignmentOverview,
-    CalendarViewClaim, RegisteredExpertInvocation, BuiltinExpertAssignmentReceipt,
+    CalendarSourceBinding, CalendarViewClaim, RegisteredExpertInvocation, BuiltinExpertAssignmentReceipt,
     BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, BuiltinSourceBinding,
     BuiltinSourceState, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview,
     CalendarExpertSetup, CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarViewBinding,

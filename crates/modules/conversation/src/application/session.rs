@@ -74,3 +74,30 @@ pub async fn admitted_session(
     }
     Ok(session)
 }
+
+/// Recover a Session whose client lost track of it, and read it back.
+///
+/// The recovery decides what the Session now is; reading it back checks that
+/// what the store holds is that same Session, and is still a root conversation
+/// holding nothing but the Person's own data.
+pub async fn recovered_session<Repository, Store>(
+    repository: &Repository,
+    sessions: &Store,
+    person_id: PersonId,
+    request: crate::RecoveryRequest,
+) -> Result<AgentSession, AgentFailure>
+where
+    Repository: crate::ConversationRepository,
+    Store: SessionStore,
+{
+    let session_id = request.session_id;
+    let receipt = super::coordinator::recover_session(repository, request).await?;
+    let session = sessions.load(person_id, session_id).await?;
+    if session.revision != receipt.session_revision
+        || session.scope.is_some()
+        || session.data_classes != [floe_agent_contract::DataClass::Personal]
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(session)
+}

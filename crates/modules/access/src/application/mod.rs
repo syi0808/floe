@@ -23,9 +23,9 @@ pub use grants::{
     AccessGrantMutation, GrantPolicyError, apply_grant_mutation, authorize_grant, create_grant,
 };
 pub use native_calendar::{
-    NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
+    CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
     admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
-    reviewed_native_subject,
+    native_calendar_source_current, reviewed_native_subject,
 };
 pub use personal_grants::{
     ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
@@ -49,7 +49,7 @@ pub use remote_authority::{
     inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
 };
 pub use remote_calendar::{
-    REMOTE_CALENDAR_CONSUMER, REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection,
+    REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection,
     RemoteCalendarGrantPreview, RemoteCalendarGrantRequest, RemoteCalendarSourceReference,
     admits_remote_calendar_connection, hosted_calendar_connector, pause_remote_calendar_grant,
     preview_remote_calendar_grant, remote_calendar_grant, remote_calendar_scope,

@@ -20,8 +20,9 @@ pub use application::{
     feasibility_source, source_binding, wellbeing_source,
 };
 pub use application::{
-    NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
-    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
+    CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview,
+    admit_native_calendar_setup, admit_native_calendar_subject, is_native_calendar,
+    native_calendar_connection_unchanged, native_calendar_source_current,
     reviewed_native_subject,
 };
 pub use application::{
@@ -29,7 +30,7 @@ pub use application::{
     inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
 };
 pub use application::{
-    REMOTE_CALENDAR_CONSUMER, REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection,
+    REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection,
     RemoteCalendarGrantPreview, RemoteCalendarGrantRequest, RemoteCalendarSourceReference,
     admits_remote_calendar_connection, hosted_calendar_connector, pause_remote_calendar_grant,
     preview_remote_calendar_grant, remote_calendar_grant, remote_calendar_scope,

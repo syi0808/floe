@@ -626,11 +626,8 @@ impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission>
             .admission_after_check(request, stamp)
             .await?
             .ok_or(AgentFailure::AccessReviewRequired)?;
-        let expected_connector = match self.grant.provider {
-            CalendarProvider::Google => "calendar.google",
-            CalendarProvider::Microsoft => "calendar.microsoft",
-            _ => return Err(AgentFailure::CapabilityDenied),
-        };
+        let expected_connector = floe_access::hosted_calendar_connector(self.grant.provider)
+            .ok_or(AgentFailure::CapabilityDenied)?;
         if admission.person_id() != self.grant.person_id
             || admission.source().connector().as_str() != expected_connector
             || admission.scope().resources().iter().any(|resource| {
@@ -684,46 +681,44 @@ impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission>
             .expert_registry()
             .await?
             .ok_or(AgentFailure::CapabilityDenied)?;
-        let registry = AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
-        let registry_snapshot = registry.snapshot();
-        let setup = registry_snapshot
-            .calendar_setups
-            .iter()
-            .find(|setup| {
-                setup.person_id == self.grant.person_id && setup.view_handle == self.grant.handle
-            })
-            .ok_or(AgentFailure::AccessReviewRequired)?;
-        let binding = registry
-            .calendar_view(self.grant.person_id, self.grant.handle)
-            .map_err(|_| AgentFailure::AccessReviewRequired)?;
+        let binding = AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?
+            .calendar_source_binding(self.grant.person_id, self.grant.handle)?;
         let connection = self
             .core
             .calendar_connection(self.grant.person_id)
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        if connection.disconnected
-            || connection.provider != self.grant.provider
-            || connection.device_id != self.grant.device_id
-            || connection.scope != binding.connection_scope
-            || binding.source_authority != Some(connection.source_authority)
-            || !self.grant.calendar_ids.iter().all(|calendar_id| {
-                connection
-                    .calendars
-                    .iter()
-                    .any(|calendar| calendar.calendar_id == *calendar_id)
-            })
-        {
-            return Err(AgentFailure::StaleContext);
-        }
-        let source_authority = binding
-            .source_authority
-            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let calendar_ids: Vec<_> = connection
+            .calendars
+            .iter()
+            .map(|calendar| calendar.calendar_id.clone())
+            .collect();
+        let source_authority = floe_access::native_calendar_source_current(
+            floe_access::NativeCalendarConnection {
+                connection_id: &connection.connection_id,
+                device_id: &connection.device_id,
+                disconnected: connection.disconnected,
+                provider: connection.provider,
+                scope: connection.scope,
+                source_authority: connection.source_authority,
+                calendar_ids: &calendar_ids,
+            },
+            floe_access::NativeCalendarReview {
+                device_id: &self.grant.device_id,
+                provider: self.grant.provider,
+                scope: binding.connection_scope,
+                calendar_ids: &self.grant.calendar_ids,
+                source_authority: binding.source_authority,
+                native_subject_fingerprint: None,
+                connection_id: None,
+            },
+        )?;
         let admission = self
             .vault
             .authorize_calendar_grant(
-                setup.setup_id,
-                binding.handle,
+                binding.setup_id,
+                binding.view_handle,
                 &connection.connection_id,
                 self.grant.provider,
                 &self.grant.device_id,
@@ -731,7 +726,7 @@ impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission>
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert")
+                GrantConsumer::builtin(floe_access::CALENDAR_EXPERT_CONSUMER)
                     .map_err(|_| AgentFailure::CapabilityDenied)?,
                 ProcessingRestriction::LocalOnly,
                 native_subject_fingerprint,
