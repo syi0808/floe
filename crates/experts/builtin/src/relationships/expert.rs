@@ -5,12 +5,12 @@ use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{AttentionView, CONFIRMED_INTERACTION_VIEW_ID, CalendarContextView, ConfirmedInteraction, ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence, validate_confirmed_interaction_view, validate_people_view};
+use floe_context_contract::{ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence, validate_confirmed_interaction_view, validate_people_view};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::ExpertModel;
 
 use crate::prompts::{relationships_expert_prompt};
-use crate::shared::{validate_summary, PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, valid_handle, validate_judgment};
+use crate::shared::{validate_summary, PersonalExpertInvocation, ensure_unique_source, run_personal_model, valid_handle};
 
 #[derive(Clone, Debug)]
 pub struct RelationshipsContextViews {

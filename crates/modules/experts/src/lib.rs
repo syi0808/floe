@@ -5,9 +5,9 @@
 //! agent identity and a role-neutral invocation.
 
 mod a2a;
+mod assignments;
 mod directory;
 mod dispatch;
-mod invocation;
 mod registry;
 mod settlement;
 mod task;
@@ -23,18 +23,21 @@ pub use dispatch::{
     completed_expert_task, delegate_expert_task, expert_report, record_task_coverage,
     task_receipt_to_a2a,
 };
-pub use invocation::{
+/// What one Expert is asked to do and what it answers are contract values; what
+/// this module adds is the registry that admits an invocation and records it.
+pub use floe_agent_contract::{
     ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
-    ViewCancellation, check_running,
+    MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef, ViewCancellation, check_running,
 };
+pub use assignments::RegistryAssignments;
 pub use registry::{
     AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
     BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, BuiltinSourceBinding,
     BuiltinSourceState, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview,
     CalendarExpertSetup, CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarViewBinding,
     ExpertMetadata, ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec,
-    NoSetupValidator, PackageAssignment, PackageImplementation, PackageInstallation, PackageKind,
-    PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
+    NoSetupValidator, PackageAssignment, PackageImplementation, PackageInstallation,
+    RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
     RegistrySnapshot, ResolvedExpert, SetupValidator, SourceGrant, SourceGrants, eligible_cards,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};

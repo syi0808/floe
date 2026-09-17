@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{CalendarContextView, ContextEvidence, WellbeingView, personal_context_evidence, validate_wellbeing_view};
+use floe_context_contract::{CalendarContextView, WellbeingView, personal_context_evidence, validate_wellbeing_view};
 use floe_agent_contract::{InferencePolicyDecision};
 use floe_agent_contract::ExpertModel;
 

@@ -1,21 +1,37 @@
-//! Role-neutral Expert invocation and result values.
+//! What one Expert is asked to do, and what it answers.
 //!
-//! These are the values the common delegation path carries. A specific
-//! Expert's judgment, prompts and views live in its own crate.
+//! These are the values the common delegation path carries: an assignment, the
+//! context and budget it runs under, and the insights it reports. No Expert's
+//! own judgment, prompt or view is named here, and neither is the registry that
+//! admitted it.
+
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, DataClass};
-use floe_context::AgentContext;
+use floe_context_contract::DataClass;
 use floe_execution::Cancellation;
-use std::sync::Arc;
+use floe_kernel::{AgentFailure, PersonId};
 
-use floe_agent_contract::CapabilityJournal;
-use floe_kernel::PersonId;
+use crate::{AgentContext, CapabilityJournal};
 
-use crate::PackageRef;
+/// What a package is, and which one an assignment runs.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageKind {
+    Tool,
+    Expert,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageRef {
+    pub kind: PackageKind,
+    pub id: String,
+    pub version: String,
+}
 
 /// The default byte bound a view read may return to an Expert.
 pub const MAX_EXPERT_VIEW_BYTES: usize = 65_536;
@@ -64,7 +80,6 @@ impl Default for ExpertBudget {
 }
 
 pub struct ExpertInvocation {
-    pub usage: floe_inference::UsageLedger,
     /// Where this Expert's own capability calls are recorded before they are
     /// dispatched. An Expert never writes its caller's Session state directly.
     pub capabilities: Arc<dyn CapabilityJournal>,
@@ -150,4 +165,46 @@ impl Drop for ViewCancellation {
     fn drop(&mut self) {
         self.0.cancel();
     }
+}
+
+/// What the Person's registry admitted this invocation to do.
+///
+/// An Expert reads its own package identity and the class of data it may
+/// handle; which installation, assignment and revision that came from is the
+/// registry's own business.
+pub struct AdmittedExpert {
+    pub package: PackageRef,
+    pub data_class: DataClass,
+    /// The builtin Expert this assignment runs, when it runs one.
+    pub builtin_expert: Option<String>,
+    /// The shortest focus window this assignment's own rules ask for, already
+    /// reconciled with whatever the request asked for.
+    pub focus_minimum_minutes: Option<u16>,
+    /// The registry revision the admission was decided against.
+    pub registry_revision: u64,
+}
+
+/// The assignments an Expert runs under.
+///
+/// Admitting an invocation and recording that it ran belong to whoever owns the
+/// Person's registry. An Expert asks, decides what it was admitted to do, and
+/// reports back; it never resolves an assignment itself.
+pub trait ExpertAssignments: Sync {
+    /// Admit this invocation, reconciling any focus window it asked for with
+    /// what the assignment's own rules allow.
+    fn admit(
+        &self,
+        invocation: &ExpertInvocation,
+        focus_minutes: Option<u16>,
+    ) -> Result<AdmittedExpert, AgentFailure>;
+
+    /// Record that the invocation ran and return the assignment's new state
+    /// revision. A result that is already stale, or too large for the budget it
+    /// ran under, is refused here rather than stored.
+    fn settle(
+        &self,
+        invocation: &ExpertInvocation,
+        admitted: &AdmittedExpert,
+        result: &ExpertResult,
+    ) -> Result<u64, AgentFailure>;
 }

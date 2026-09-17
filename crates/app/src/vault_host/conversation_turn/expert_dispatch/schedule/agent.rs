@@ -36,7 +36,7 @@ use floe_experts::{
     ExpertInvocation, ExpertResult, InProcessA2ATransport, InProcessAgent, RegistrySnapshot,
 };
 use floe_experts_builtin::BuiltinExpertKind;
-use floe_experts_builtin::schedule::{ExpertHost, has_calendar_history};
+use floe_experts_builtin::schedule::{CalendarHistoryBoundary, ExpertHost};
 use floe_kernel::AGENT_VERSION;
 use floe_vault::{
     CalendarGrantAdmission, ContextEvidenceReader, EncryptedAgentVault, VaultKeyProvider,
@@ -256,7 +256,6 @@ impl FloeCore {
         let registry = Mutex::new(registry);
         let invocation = ExpertInvocation {
             capabilities: std::sync::Arc::new(NoCapabilityJournal),
-            usage: request.usage,
             context: expert_context,
             schema_version: AGENT_VERSION,
             invocation_id: request.invocation_id,
@@ -292,11 +291,17 @@ impl FloeCore {
             deadline: request.deadline,
             cancellation: request.cancellation.clone(),
         };
+        let assignments = floe_experts::RegistryAssignments::new(&registry);
+        // This run's model attempts are charged to the ledger it carries.
+        let reasoner = crate::vault_host::conversation_turn::ExpertModelHost {
+            model,
+            usage: request.usage,
+        };
         let report = ExpertHost {
-            registry: &registry,
+            assignments: &assignments,
             views: &views,
         }
-        .invoke_with_model(invocation, model, &request.policy)
+        .invoke_with_model(invocation, &reasoner, &request.policy)
         .await?;
         check_running(request.deadline, &request.cancellation)?;
         views
@@ -356,7 +361,7 @@ impl FloeCore {
             let saved = vault
                 .load(request.command.person_id, request.command.session_id)
                 .await?;
-            if request.continuation && has_calendar_history(&saved.messages) {
+            if request.continuation && floe_conversation::carries_source_history(&saved.messages, &CalendarHistoryBoundary) {
                 return Err(AgentFailure::StaleContext);
             }
             let effective_budget = if request.continuation {
@@ -1338,14 +1343,19 @@ impl<
         let task_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
         let assignment = request.message.text()?.to_owned();
         self.validate().await?;
+        let assignments = floe_experts::RegistryAssignments::new(&self.registry);
+        // This message's model attempts are charged to the ledger it carries.
+        let model = super::super::super::ExpertModelHost {
+            model: self.model,
+            usage: request.usage.clone(),
+        };
         let result = ExpertHost {
-            registry: &self.registry,
+            assignments: &assignments,
             views: &self.views,
         }
         .invoke_with_model(
             ExpertInvocation {
                 capabilities: std::sync::Arc::new(NoCapabilityJournal),
-                usage: request.usage.clone(),
                 context: self.expert_context.clone(),
                 schema_version: request.schema_version,
                 invocation_id: task_id,
@@ -1381,7 +1391,7 @@ impl<
                 deadline: request.deadline.min(self.deadline),
                 cancellation: request.cancellation,
             },
-            self.model,
+            &model,
             &self.policy,
         )
         .await?;
@@ -1430,7 +1440,12 @@ impl<
         current_turn: Uuid,
         max_bytes: usize,
     ) -> Result<usize, AgentFailure> {
-        floe_experts_builtin::schedule::bounded_model_history_start(messages, current_turn, max_bytes)
+        floe_conversation::bounded_source_history_start(
+            messages,
+            current_turn,
+            max_bytes,
+            &CalendarHistoryBoundary,
+        )
     }
 
     fn placement(&self) -> ModelPlacement {

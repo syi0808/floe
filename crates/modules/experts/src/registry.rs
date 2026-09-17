@@ -2,7 +2,7 @@ use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, DataClass};
+use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
 use floe_day::CalendarScope;
 use floe_kernel::AGENT_VERSION;
 
@@ -103,21 +103,6 @@ pub struct CalendarExpertSetupReceipt {
     pub expert_installation_id: Uuid,
     pub tool_assignment_id: Uuid,
     pub expert_assignment_id: Uuid,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageKind {
-    Tool,
-    Expert,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageRef {
-    pub kind: PackageKind,
-    pub id: String,
-    pub version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

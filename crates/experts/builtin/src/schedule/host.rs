@@ -1,6 +1,6 @@
 //! Schedule Expert host: timeline views, reasoning and focus analysis.
 
-use std::{future::Future, sync::Mutex, time::SystemTime};
+use std::{future::Future, time::SystemTime};
 
 use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
 use floe_agent_contract::PersonId;
@@ -11,19 +11,14 @@ use uuid::Uuid;
 use crate::BuiltinExpertKind;
 use crate::prompts::schedule_expert_prompt;
 use floe_agent_contract::{
-    AgentFailure, CapabilityExecution, CapabilityExecutionState, DataClass,
+    AgentFailure, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState, DataClass,
+    ExpertAssignments, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation,
+    ExpertReasoner, ExpertReasoningStep, ExpertResult, ExpertStep, ExpertStepOutcome,
+    ExpertTranscriptEntry, ModelPlacement, ModelReplay, ViewCancellation, check_running,
 };
 use floe_agent_runtime::execute_recorded;
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
-use floe_conversation::{
-    AgentMessage, CapabilityDescriptor, ModelRequest, ModelRunner, ModelStep,
-    generate_with_recovery,
-};
+use floe_agent_contract::InferencePolicyDecision;
 use floe_execution::Cancellation;
-use floe_experts::{
-    AgentRegistry, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
-    ExpertRule, PackageImplementation, PackageRef, ViewCancellation, check_running,
-};
 use floe_agent_contract::AGENT_VERSION;
 
 pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
@@ -75,18 +70,19 @@ pub trait ExpertViews: Sync {
     ) -> impl Future<Output = Result<ExpertTimelineView, AgentFailure>> + Send;
 }
 
-pub struct ExpertHost<'host, Views> {
-    pub registry: &'host Mutex<AgentRegistry>,
+pub struct ExpertHost<'host, Assignments, Views> {
+    /// The registry this invocation is admitted against and settled with.
+    pub assignments: &'host Assignments,
     pub views: &'host Views,
 }
 
-impl<Views: ExpertViews> ExpertHost<'_, Views> {
+impl<Assignments: ExpertAssignments, Views: ExpertViews> ExpertHost<'_, Assignments, Views> {
     pub async fn invoke(&self, invocation: ExpertInvocation) -> Result<ExpertResult, AgentFailure> {
         self.invoke_inner::<NoExpertModel>(invocation, ExpertReasoning::Deterministic)
             .await
     }
 
-    pub async fn invoke_with_model<Model: ModelRunner + Sync>(
+    pub async fn invoke_with_model<Model: ExpertReasoner>(
         &self,
         invocation: ExpertInvocation,
         model: &Model,
@@ -96,7 +92,7 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             .await
     }
 
-    async fn invoke_inner<Model: ModelRunner + Sync>(
+    async fn invoke_inner<Model: ExpertReasoner>(
         &self,
         mut invocation: ExpertInvocation,
         reasoning: ExpertReasoning<'_, Model>,
@@ -134,58 +130,19 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         if focus_minutes.is_some_and(|minutes| !(1..=240).contains(&minutes)) {
             return Err(AgentFailure::InvalidInput);
         }
-        let resolved = self
-            .registry
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .resolve(
-                invocation.instance_id,
-                invocation.person_id,
-                invocation.assignment_id,
-                invocation.expected_registry_revision,
-                &invocation.granted_view_handles,
-            )?;
-        if !invocation
-            .allowed_data_classes
-            .contains(&resolved.data_class)
-            || invocation
-                .allowed_data_classes
-                .iter()
-                .any(|class| matches!(class, DataClass::Credential | DataClass::DeviceOnlyRaw))
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        if resolved.assignment.private_state.last_invocation_id == Some(invocation.invocation_id) {
-            return Err(AgentFailure::Conflict);
-        }
-        let minimum = match &resolved.package.implementation {
-            PackageImplementation::Builtin { expert }
-                if expert.as_str() == BuiltinExpertKind::Schedule.package_id() =>
-            {
-                focus_minutes
-            }
-            PackageImplementation::Declarative { rules } => match rules.as_slice() {
-                [ExpertRule::FindFocusWindow { minimum_minutes }] => Some(
-                    focus_minutes
-                        .unwrap_or(*minimum_minutes)
-                        .max(*minimum_minutes),
-                ),
-                _ => return Err(AgentFailure::CapabilityDenied),
-            },
-            _ => return Err(AgentFailure::CapabilityDenied),
-        };
+        let admitted = self.assignments.admit(&invocation, focus_minutes)?;
+        let minimum = admitted.focus_minimum_minutes;
         let (view, summary, model_calls, view_calls, action_proposals) =
-            match (&resolved.package.implementation, reasoning) {
-                (
-                    PackageImplementation::Builtin { expert },
-                    ExpertReasoning::Lightweight { model, policy },
-                ) if expert.as_str() == BuiltinExpertKind::Schedule.package_id() => {
+            match (admitted.builtin_expert.as_deref(), reasoning) {
+                (Some(expert), ExpertReasoning::Lightweight { model, policy })
+                    if expert == BuiltinExpertKind::Schedule.package_id() =>
+                {
                     let (summary, model_calls, view, view_calls) = run_schedule_reasoning(
                         model,
                         policy,
                         &invocation,
                         self.views,
-                        resolved.data_class,
+                        admitted.data_class,
                     )
                     .await?;
                     let proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. })
@@ -211,7 +168,7 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
                 }
                 _ => {
                     let view = self
-                        .read_timeline(&invocation, resolved.data_class, None, None, None)
+                        .read_timeline(&invocation, admitted.data_class, None, None, None)
                         .await?;
                     let proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. })
                     {
@@ -257,7 +214,7 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             instance_id: invocation.instance_id,
             person_id: invocation.person_id,
             assignment_id: invocation.assignment_id,
-            package: resolved.package.reference.clone(),
+            package: admitted.package.clone(),
             view_handle: view.handle,
             source_handle: view.source_handle,
             data_class: view.data_class,
@@ -266,37 +223,10 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             action_proposals,
             summary,
             model_calls,
-            state_revision: resolved
-                .assignment
-                .private_state
-                .revision
-                .checked_add(1)
-                .ok_or(AgentFailure::BudgetExceeded)?,
+            state_revision: 0,
             view_calls,
         };
-        if serde_json::to_vec(&result)
-            .map_err(|_| AgentFailure::InvalidModelOutput)?
-            .len()
-            > invocation.budget.max_output_bytes.min(16384)
-        {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let mut registry = self
-            .registry
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        check_running(&invocation)?;
-        if result.expires_at_unix_ms <= now_unix_ms()? {
-            return Err(AgentFailure::StaleContext);
-        }
-        registry.resolve(
-            invocation.instance_id,
-            invocation.person_id,
-            invocation.assignment_id,
-            resolved.registry_revision,
-            &invocation.granted_view_handles,
-        )?;
-        result.state_revision = registry.complete(&resolved, invocation.invocation_id)?;
+        result.state_revision = self.assignments.settle(&invocation, &admitted, &result)?;
         Ok(result)
     }
 
@@ -371,19 +301,35 @@ enum ExpertReasoning<'model, Model> {
     },
 }
 
+/// The model a deterministic invocation runs on: there isn't one.
 struct NoExpertModel;
 
-impl ModelRunner for NoExpertModel {
-    fn placement(&self) -> floe_agent_contract::ModelPlacement {
-        floe_agent_contract::ModelPlacement::DeviceLocal
+impl floe_agent_contract::ExpertModel for NoExpertModel {
+    fn placement(&self) -> ModelPlacement {
+        ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, _: ModelRequest) -> Result<floe_conversation::ModelResponse, AgentFailure> {
-        Err(AgentFailure::ModelUnavailable)
+    fn answer<'a>(
+        &'a self,
+        _: floe_agent_contract::ExpertModelCall,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_agent_contract::ExpertModelAnswer, AgentFailure>,
+    > {
+        Box::pin(async { Err(AgentFailure::ModelUnavailable) })
     }
 }
 
-async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
+impl ExpertReasoner for NoExpertModel {
+    fn step<'a>(
+        &'a self,
+        _: ExpertReasoningStep,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepOutcome, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::ModelUnavailable) })
+    }
+}
+
+async fn run_schedule_reasoning<Model: ExpertReasoner, Views: ExpertViews>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &ExpertInvocation,
@@ -416,10 +362,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
         }
     })
     .to_string();
-    let mut messages = vec![AgentMessage::User {
-        turn_id,
-        text: task,
-    }];
+    let mut transcript = vec![ExpertTranscriptEntry::Task { text: task }];
     let mut replay = vec![];
     let mut used_tokens = 0;
     let mut used_cost = 0;
@@ -439,7 +382,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
             model,
             &expert_policy,
             invocation,
-            &messages,
+            &transcript,
             &replay,
             available_capabilities,
             used_tokens,
@@ -458,12 +401,12 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
             return Err(AgentFailure::BudgetExceeded);
         }
         let mut call_index = 0;
-        for step in response.output.clone() {
+        for step in response.steps.clone() {
             match step {
-                ModelStep::Preamble { text } => {
-                    messages.push(AgentMessage::Preamble { turn_id, text });
+                ExpertStep::Preamble { text } => {
+                    transcript.push(ExpertTranscriptEntry::Preamble { text });
                 }
-                ModelStep::Answer { text } => {
+                ExpertStep::Answer { text } => {
                     let summary = text.trim();
                     if summary.is_empty() || summary.len() > 2048 {
                         return Err(AgentFailure::InvalidModelOutput);
@@ -474,7 +417,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
                     }
                     return Ok((summary.into(), model_call, view, view_calls));
                 }
-                ModelStep::Call {
+                ExpertStep::Call {
                     capability_id,
                     input,
                 } => {
@@ -578,21 +521,19 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
                     )
                     .await??;
                     if let Some(provider_replay) = response.replay_for(call_index)? {
-                        replay.push(floe_conversation::ModelReplay {
+                        replay.push(ModelReplay {
                             call_id,
                             replay: provider_replay,
                         });
                     }
                     call_index += 1;
-                    messages.push(AgentMessage::Capability {
-                        turn_id,
+                    transcript.push(ExpertTranscriptEntry::Capability {
                         call_id,
                         capability_id,
                         input,
-                        result: Ok(output),
+                        result: output,
                     });
                 }
-                ModelStep::Delegate { .. } => return Err(AgentFailure::CapabilityDenied),
             }
         }
     }
@@ -915,16 +856,16 @@ fn bounded_calendar_view(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn generate_schedule_step<Model: ModelRunner + Sync>(
+async fn generate_schedule_step<Model: ExpertReasoner>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &ExpertInvocation,
-    messages: &[AgentMessage],
-    replay: &[floe_conversation::ModelReplay],
+    transcript: &[ExpertTranscriptEntry],
+    replay: &[ModelReplay],
     capabilities: Vec<CapabilityDescriptor>,
     used_tokens: u64,
     used_cost: u64,
-) -> Result<floe_conversation::ModelResponse, AgentFailure> {
+) -> Result<ExpertStepOutcome, AgentFailure> {
     check_running(invocation)?;
     let remaining_tokens = invocation
         .budget
@@ -936,29 +877,23 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
         .max_model_cost_micros
         .checked_sub(used_cost)
         .ok_or(AgentFailure::BudgetExceeded)?;
-    let response = generate_with_recovery(
-        model,
-        ModelRequest {
-            usage: invocation.usage.clone(),
-            replay: replay.to_vec(),
-            schema_version: AGENT_VERSION,
-            prompt: schedule_expert_prompt(),
+    let response = model
+        .step(ExpertReasoningStep {
             person_id: invocation.person_id,
-            session_id: invocation.invocation_id,
-            turn_id: messages[0].turn_id(),
+            invocation_id: invocation.invocation_id,
+            prompt: schedule_expert_prompt(),
             policy: policy.clone(),
             context: invocation.context.clone(),
-            messages: messages.to_vec(),
+            transcript: transcript.to_vec(),
             capabilities,
-            active_agents: vec![],
+            replay: replay.to_vec(),
             remaining_tokens,
             remaining_cost_micros,
             max_output_bytes: invocation.budget.max_output_bytes.min(4096),
             deadline: invocation.deadline,
             cancellation: invocation.cancellation.clone(),
-        },
-    )
-    .await?;
+        })
+        .await?;
     if response.schema_version != AGENT_VERSION
         || response.used_tokens > remaining_tokens
         || response.cost_micros > remaining_cost_micros

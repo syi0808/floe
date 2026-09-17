@@ -10,14 +10,12 @@ use chrono::{TimeZone, Utc};
 use tokio::{sync::Notify, time::Instant};
 
 use floe_agent_contract::{
-    AgentFailure, CapabilityExecution, CapabilityJournal, DataClass, ModelPlacement,
-    TransferConsent,
+    AgentFailure, BoxFuture, CapabilityExecution, CapabilityJournal, DataClass, ExpertModel,
+    ExpertModelAnswer, ExpertModelCall, ExpertReasoner, ExpertReasoningStep, ExpertStep,
+    ExpertStepOutcome, ExpertTranscriptEntry, ModelPlacement, TransferConsent,
 };
 use floe_context_contract::{ContextEvidence};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
-use floe_conversation::{
-    AgentMessage, CapabilityDescriptor, ModelRequest, ModelResponse, ModelRunner, ModelStep,
-};
 use floe_execution::Cancellation;
 use floe_experts::{
     AgentId, AgentPackage, AgentRegistry, ExpertBudget, ExpertFocusProposal, ExpertInput,
@@ -46,53 +44,63 @@ struct Fixture {
 }
 
 struct BatchScheduleModel {
-    requests: Mutex<Vec<ModelRequest>>,
+    steps: Mutex<Vec<ExpertReasoningStep>>,
     range_start_unix_ms: u64,
     range_end_unix_ms: u64,
 }
 
-impl ModelRunner for BatchScheduleModel {
+impl ExpertModel for BatchScheduleModel {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        let first = self.requests.lock().unwrap().is_empty();
-        self.requests.lock().unwrap().push(request);
-        Ok(ModelResponse {
-            schema_version: AGENT_VERSION,
-            replay: None,
-            output: if first {
-                vec![
-                    ModelStep::Preamble {
-                        text: "Comparing authorized windows.".into(),
-                    },
-                    ModelStep::Call {
-                        capability_id: "schedule.find_free_windows".into(),
-                        input: serde_json::json!({
-                            "minimum_minutes": 60,
-                            "range_start_unix_ms": self.range_start_unix_ms,
-                            "range_end_unix_ms": self.range_end_unix_ms,
-                        })
-                        .to_string(),
-                    },
-                    ModelStep::Call {
-                        capability_id: "schedule.find_free_windows".into(),
-                        input: serde_json::json!({
-                            "minimum_minutes": 60,
-                            "range_start_unix_ms": self.range_start_unix_ms,
-                            "range_end_unix_ms": self.range_end_unix_ms,
-                        })
-                        .to_string(),
-                    },
-                ]
-            } else {
-                vec![ModelStep::Answer {
-                    text: "The authorized windows are available.".into(),
-                }]
-            },
-            used_tokens: 32,
-            cost_micros: 0,
+    fn answer<'a>(
+        &'a self,
+        _: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::ModelUnavailable) })
+    }
+}
+
+impl ExpertReasoner for BatchScheduleModel {
+    fn step<'a>(
+        &'a self,
+        step: ExpertReasoningStep,
+    ) -> BoxFuture<'a, Result<ExpertStepOutcome, AgentFailure>> {
+        let first = self.steps.lock().unwrap().is_empty();
+        let find_windows = serde_json::json!({
+            "minimum_minutes": 60,
+            "range_start_unix_ms": self.range_start_unix_ms,
+            "range_end_unix_ms": self.range_end_unix_ms,
+        })
+        .to_string();
+        self.steps.lock().unwrap().push(step);
+        Box::pin(async move {
+            Ok(ExpertStepOutcome {
+                schema_version: AGENT_VERSION,
+                replay: None,
+                steps: if first {
+                    vec![
+                        ExpertStep::Preamble {
+                            text: "Comparing authorized windows.".into(),
+                        },
+                        ExpertStep::Call {
+                            capability_id: "schedule.find_free_windows".into(),
+                            input: find_windows.clone(),
+                        },
+                        ExpertStep::Call {
+                            capability_id: "schedule.find_free_windows".into(),
+                            input: find_windows,
+                        },
+                    ]
+                } else {
+                    vec![ExpertStep::Answer {
+                        text: "The authorized windows are available.".into(),
+                    }]
+                },
+                used_tokens: 32,
+                cost_micros: 0,
+            })
         })
     }
 }
@@ -106,7 +114,7 @@ async fn expert_executes_whole_read_batches_with_its_own_budget_and_transcript()
             reads: AtomicUsize::new(0),
         };
         let model = BatchScheduleModel {
-            requests: Mutex::new(vec![]),
+            steps: Mutex::new(vec![]),
             range_start_unix_ms: fixture.view.range_start_unix_ms,
             range_end_unix_ms: fixture.view.range_end_unix_ms,
         };
@@ -115,30 +123,30 @@ async fn expert_executes_whole_read_batches_with_its_own_budget_and_transcript()
             invocation.budget.max_tool_calls = 1;
         }
         let result = ExpertHost {
-            registry: &fixture.registry,
+            assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
             views: &views,
         }
         .invoke_with_model(invocation, &model, &synthetic_policy())
         .await;
-        let requests = model.requests.lock().unwrap();
+        let steps = model.steps.lock().unwrap();
         if exhausted {
             assert_eq!(result, Err(AgentFailure::BudgetExceeded));
-            assert_eq!(requests.len(), 1);
+            assert_eq!(steps.len(), 1);
         } else {
             assert_eq!(result.unwrap().model_calls, 2);
-            assert_eq!(requests.len(), 2);
-            assert_eq!(requests[1].messages.len(), 4);
+            assert_eq!(steps.len(), 2);
+            assert_eq!(steps[1].transcript.len(), 4);
             assert!(matches!(
-                requests[1].messages[1],
-                AgentMessage::Preamble { .. }
+                steps[1].transcript[1],
+                ExpertTranscriptEntry::Preamble { .. }
             ));
             assert!(matches!(
-                requests[1].messages[2],
-                AgentMessage::Capability { .. }
+                steps[1].transcript[2],
+                ExpertTranscriptEntry::Capability { .. }
             ));
             assert!(matches!(
-                requests[1].messages[3],
-                AgentMessage::Capability { .. }
+                steps[1].transcript[3],
+                ExpertTranscriptEntry::Capability { .. }
             ));
         }
     }
@@ -449,7 +457,6 @@ impl Fixture {
     fn invocation(&self, assignment_id: Uuid) -> ExpertInvocation {
         ExpertInvocation {
             capabilities: std::sync::Arc::new(NoJournal),
-            usage: Default::default(),
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
@@ -558,7 +565,7 @@ async fn historical_validation_preserves_provenance_without_restoring_execution_
         reads: AtomicUsize::new(0),
     };
     let result = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
     .invoke(fixture.invocation(fixture.schedule))
@@ -609,7 +616,7 @@ async fn recorded_result_reconstructs_only_the_validated_private_state_transitio
         reads: AtomicUsize::new(0),
     };
     let result = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
     .invoke(fixture.invocation(fixture.schedule))
@@ -661,7 +668,7 @@ async fn native_and_declarative_share_contract_but_not_private_state() {
         reads: AtomicUsize::new(0),
     };
     let host = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     };
     let native = host
@@ -712,7 +719,7 @@ async fn ungranted_cross_person_and_unavailable_assignments_never_read_views() {
         reads: AtomicUsize::new(0),
     };
     let host = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     };
     let mut foreign = fixture.invocation(fixture.schedule);
@@ -785,7 +792,7 @@ async fn stale_wrong_and_oversized_views_never_commit_expert_state() {
             reads: AtomicUsize::new(0),
         };
         let result = ExpertHost {
-            registry: &fixture.registry,
+            assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
             views: &views,
         }
         .invoke(fixture.invocation(fixture.schedule))
@@ -798,7 +805,7 @@ async fn stale_wrong_and_oversized_views_never_commit_expert_state() {
         reads: AtomicUsize::new(0),
     };
     let host = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     };
     let mut small = fixture.invocation(fixture.schedule);
@@ -948,7 +955,7 @@ async fn revoke_and_reenable_during_view_read_invalidates_the_result() {
     let worker_views = views.clone();
     let task = tokio::spawn(async move {
         ExpertHost {
-            registry: &worker_registry,
+            assignments: &floe_experts::RegistryAssignments::new(&worker_registry),
             views: worker_views.as_ref(),
         }
         .invoke(invocation)
@@ -985,7 +992,7 @@ async fn cancellation_deadline_and_dropped_invocation_cancel_the_view_and_preser
         let worker_views = views.clone();
         let task = tokio::spawn(async move {
             ExpertHost {
-                registry: &worker_registry,
+                assignments: &floe_experts::RegistryAssignments::new(&worker_registry),
                 views: worker_views.as_ref(),
             }
             .invoke(invocation)
@@ -1014,7 +1021,7 @@ async fn cancellation_deadline_and_dropped_invocation_cancel_the_view_and_preser
         };
         assert!(
             ExpertHost {
-                registry: &fixture.registry,
+                assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
                 views: &healthy
             }
             .invoke(fixture.invocation(fixture.schedule))
@@ -1040,7 +1047,7 @@ async fn overlapping_unsorted_commitments_are_merged_and_last_invocation_is_not_
         reads: AtomicUsize::new(0),
     };
     let host = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     };
     let invocation = fixture.invocation(fixture.schedule);
@@ -1064,7 +1071,7 @@ async fn overlapping_unsorted_commitments_are_merged_and_last_invocation_is_not_
 }
 
 struct ScheduleModel {
-    requests: Mutex<Vec<ModelRequest>>,
+    steps: Mutex<Vec<ExpertReasoningStep>>,
     skip_tool: bool,
     range_start_unix_ms: u64,
     range_end_unix_ms: u64,
@@ -1073,7 +1080,7 @@ struct ScheduleModel {
 impl ScheduleModel {
     fn for_view(view: &ExpertTimelineView, skip_tool: bool) -> Self {
         Self {
-            requests: Mutex::new(vec![]),
+            steps: Mutex::new(vec![]),
             skip_tool,
             range_start_unix_ms: view.range_start_unix_ms,
             range_end_unix_ms: view.range_end_unix_ms,
@@ -1081,79 +1088,92 @@ impl ScheduleModel {
     }
 }
 
-impl ModelRunner for ScheduleModel {
+impl ExpertModel for ScheduleModel {
     fn placement(&self) -> ModelPlacement {
         ModelPlacement::DeviceLocal
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        let has_capability = !request.capabilities.is_empty();
-        let call = self.requests.lock().unwrap().len() + 1;
-        let (input, general_analysis) = {
-            let AgentMessage::User { text, .. } = &request.messages[0] else {
-                return Err(AgentFailure::InvalidInput);
-            };
-            let task: serde_json::Value =
-                serde_json::from_str(text).map_err(|_| AgentFailure::InvalidInput)?;
-            let start = self.range_start_unix_ms;
-            let end = self.range_end_unix_ms;
-            let range_start = start + u64::try_from(call - 1).unwrap() * 86_400_000;
-            let general_analysis = task["request"]["kind"] == "analyze";
-            let mut input = serde_json::json!({
-                "range_start_unix_ms": range_start,
-                "range_end_unix_ms": (range_start + 86_400_000).min(end)
-            });
-            if !general_analysis {
-                input["minimum_minutes"] = serde_json::json!(60);
-            }
-            (input.to_string(), general_analysis)
-        };
-        let capability_id = if has_capability {
-            request
-                .capabilities
-                .iter()
-                .find(|capability| {
-                    capability.id
-                        == if general_analysis {
-                            "calendar.read"
-                        } else {
-                            "schedule.find_free_windows"
-                        }
-                })
-                .or_else(|| request.capabilities.first())
-                .unwrap()
-                .id
-                .clone()
-        } else {
-            String::new()
-        };
-        let should_call = has_capability
-            && !self.skip_tool
-            && if capability_id == "schedule.find_free_windows" {
-                call <= 3
-            } else {
-                call == 1
-            };
-        self.requests.lock().unwrap().push(request);
-        Ok(ModelResponse {
-            replay: None,
-            schema_version: AGENT_VERSION,
-            output: vec![if should_call {
-                ModelStep::Call {
-                    capability_id,
-                    input,
-                }
-            } else {
-                ModelStep::Answer {
-                    text: "One commitment leaves a bounded focus window.".into(),
-                }
-            }],
-            used_tokens: 32,
-            cost_micros: 0,
-        })
+    fn answer<'a>(
+        &'a self,
+        _: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::ModelUnavailable) })
     }
 }
 
+impl ExpertReasoner for ScheduleModel {
+    fn step<'a>(
+        &'a self,
+        step: ExpertReasoningStep,
+    ) -> BoxFuture<'a, Result<ExpertStepOutcome, AgentFailure>> {
+        let outcome = (|| {
+            let has_capability = !step.capabilities.is_empty();
+            let call = self.steps.lock().unwrap().len() + 1;
+            let (input, general_analysis) = {
+                let ExpertTranscriptEntry::Task { text } = &step.transcript[0] else {
+                    return Err(AgentFailure::InvalidInput);
+                };
+                let task: serde_json::Value =
+                    serde_json::from_str(text).map_err(|_| AgentFailure::InvalidInput)?;
+                let start = self.range_start_unix_ms;
+                let end = self.range_end_unix_ms;
+                let range_start = start + u64::try_from(call - 1).unwrap() * 86_400_000;
+                let general_analysis = task["request"]["kind"] == "analyze";
+                let mut input = serde_json::json!({
+                    "range_start_unix_ms": range_start,
+                    "range_end_unix_ms": (range_start + 86_400_000).min(end)
+                });
+                if !general_analysis {
+                    input["minimum_minutes"] = serde_json::json!(60);
+                }
+                (input.to_string(), general_analysis)
+            };
+            let capability_id = if has_capability {
+                step.capabilities
+                    .iter()
+                    .find(|capability| {
+                        capability.id
+                            == if general_analysis {
+                                "calendar.read"
+                            } else {
+                                "schedule.find_free_windows"
+                            }
+                    })
+                    .or_else(|| step.capabilities.first())
+                    .unwrap()
+                    .id
+                    .clone()
+            } else {
+                String::new()
+            };
+            let should_call = has_capability
+                && !self.skip_tool
+                && if capability_id == "schedule.find_free_windows" {
+                    call <= 3
+                } else {
+                    call == 1
+                };
+            Ok(ExpertStepOutcome {
+                replay: None,
+                schema_version: AGENT_VERSION,
+                steps: vec![if should_call {
+                    ExpertStep::Call {
+                        capability_id,
+                        input,
+                    }
+                } else {
+                    ExpertStep::Answer {
+                        text: "One commitment leaves a bounded focus window.".into(),
+                    }
+                }],
+                used_tokens: 32,
+                cost_micros: 0,
+            })
+        })();
+        self.steps.lock().unwrap().push(step);
+        Box::pin(async move { outcome })
+    }
+}
 fn synthetic_policy() -> InferencePolicyDecision {
     InferencePolicyDecision {
         purpose: "schedule_summary".into(),
@@ -1179,7 +1199,7 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
     };
     let model = ScheduleModel::for_view(&views.view, false);
     let result = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
     .invoke_with_model(
@@ -1199,25 +1219,25 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
         Some(ExpertInsight::NoFocusWindow | ExpertInsight::FocusWindow { .. })
     ));
     {
-        let requests = model.requests.lock().unwrap();
-        assert_eq!(requests.len(), 4);
-        assert_eq!(requests[0].prompt.role, PromptRole::ScheduleExpert);
+        let steps = model.steps.lock().unwrap();
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[0].prompt.role, PromptRole::ScheduleExpert);
         assert!(
-            !requests[0]
+            !steps[0]
                 .prompt
                 .components
                 .iter()
                 .any(|component| component.kind == PromptComponentKind::Persona)
         );
-        assert!(!requests[0].prompt.render().contains("find_free_windows"));
+        assert!(!steps[0].prompt.render().contains("find_free_windows"));
         assert!(
-            requests[0]
+            steps[0]
                 .prompt
                 .render()
                 .contains("Normally format event times as HH:mm")
         );
-        assert_eq!(requests[0].messages.len(), 1);
-        let AgentMessage::User { text, .. } = &requests[0].messages[0] else {
+        assert_eq!(steps[0].transcript.len(), 1);
+        let ExpertTranscriptEntry::Task { text } = &steps[0].transcript[0] else {
             panic!("expected Schedule Expert task");
         };
         let task: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -1227,10 +1247,10 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
             "1970-01-01 00:00"
         );
         assert_eq!(task["runtime_context"]["timezone_offset_seconds"], 0);
-        assert_eq!(requests[0].policy.purpose, "schedule-summary");
-        assert_eq!(requests[0].policy.performance_class, "fast");
+        assert_eq!(steps[0].policy.purpose, "schedule-summary");
+        assert_eq!(steps[0].policy.performance_class, "fast");
         assert_eq!(
-            requests[0]
+            steps[0]
                 .capabilities
                 .iter()
                 .map(|capability| capability.id.as_str())
@@ -1241,21 +1261,14 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
                 "schedule.find_free_windows"
             ]
         );
-        assert_eq!(requests[1].messages.len(), 2);
-        let AgentMessage::Capability {
-            result: Ok(result), ..
-        } = &requests[1].messages[1]
-        else {
+        assert_eq!(steps[1].transcript.len(), 2);
+        let ExpertTranscriptEntry::Capability { result, .. } = &steps[1].transcript[1] else {
             panic!("expected formatted Schedule result");
         };
         assert!(result.contains("starts_at_local"));
-        assert_eq!(requests[2].messages.len(), 3);
-        assert_eq!(requests[3].messages.len(), 4);
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.capabilities.len() == 3)
-        );
+        assert_eq!(steps[2].transcript.len(), 3);
+        assert_eq!(steps[3].transcript.len(), 4);
+        assert!(steps.iter().all(|step| step.capabilities.len() == 3));
     }
     assert_eq!(views.reads.load(Ordering::Acquire), 3);
 
@@ -1266,7 +1279,7 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
     };
     let invalid_model = ScheduleModel::for_view(&invalid_views.view, true);
     let direct = ExpertHost {
-        registry: &invalid.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&invalid.registry),
         views: &invalid_views,
     }
     .invoke_with_model(
@@ -1303,23 +1316,21 @@ async fn schedule_times_include_the_year_only_when_the_range_crosses_years() {
     let mut invocation = fixture.invocation(fixture.schedule);
     invocation.current_time_unix_ms = start;
     ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
     .invoke_with_model(invocation, &model, &synthetic_policy())
     .await
     .unwrap();
 
-    let requests = model.requests.lock().unwrap();
-    let results = requests
+    let steps = model.steps.lock().unwrap();
+    let results = steps
         .last()
         .unwrap()
-        .messages
+        .transcript
         .iter()
-        .filter_map(|message| match message {
-            AgentMessage::Capability {
-                result: Ok(result), ..
-            } => Some(result),
+        .filter_map(|entry| match entry {
+            ExpertTranscriptEntry::Capability { result, .. } => Some(result),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1341,7 +1352,7 @@ async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_wi
         focus_minutes: None,
     };
     let result = ExpertHost {
-        registry: &fixture.registry,
+        assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
     .invoke_with_model(invocation, &model, &synthetic_policy())
@@ -1353,9 +1364,9 @@ async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_wi
             .iter()
             .all(|insight| matches!(insight, ExpertInsight::Commitment { .. }))
     );
-    let requests = model.requests.lock().unwrap();
-    assert!(requests.iter().all(|request| {
-        request
+    let steps = model.steps.lock().unwrap();
+    assert!(steps.iter().all(|step| {
+        step
             .capabilities
             .iter()
             .map(|capability| capability.id.as_str())
@@ -1365,9 +1376,9 @@ async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_wi
                 "schedule.find_free_windows",
             ])
     }));
-    assert!(requests.iter().all(|request| {
-        request.messages.iter().all(|message| {
-            !matches!(message, AgentMessage::Capability { capability_id, .. } if capability_id == "schedule.find_free_windows")
+    assert!(steps.iter().all(|step| {
+        step.transcript.iter().all(|entry| {
+            !matches!(entry, ExpertTranscriptEntry::Capability { capability_id, .. } if capability_id == "schedule.find_free_windows")
         })
     }));
 }

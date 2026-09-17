@@ -1949,9 +1949,9 @@ async fn new_turn_without_calendar_reads_does_not_reuse_previous_calendar_eviden
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(access.calls.load(Ordering::Acquire), 0);
     let requests = model.requests.lock().unwrap();
-    assert!(!has_calendar_history(&requests[0].messages));
+    assert!(!floe_conversation::carries_source_history(&requests[0].messages, &CalendarHistoryBoundary));
     assert!(requests[0].replay.is_empty());
-    assert!(has_calendar_history(&result.session.messages));
+    assert!(floe_conversation::carries_source_history(&result.session.messages, &CalendarHistoryBoundary));
 }
 
 #[tokio::test]
@@ -1972,7 +1972,7 @@ async fn calendar_history_cannot_resume_without_a_new_lease() {
         .await
         .unwrap();
     assert!(first.session.continuation.is_some());
-    assert!(has_calendar_history(&first.session.messages));
+    assert!(floe_conversation::carries_source_history(&first.session.messages, &CalendarHistoryBoundary));
     fixture.session = first.session;
     let mut request = fixture.request();
     request.continuation = true;

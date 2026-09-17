@@ -8,6 +8,7 @@ mod capability;
 mod context;
 mod delegation;
 mod endpoint;
+mod expert;
 mod expert_model;
 mod history;
 mod message;
@@ -29,7 +30,16 @@ pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
     MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
-pub use expert_model::{ExpertModel, ExpertModelAnswer, ExpertModelCall};
+pub use expert::{
+    AdmittedExpert, ExpertAssignments, ExpertBudget, ExpertFocusProposal, ExpertInput,
+    ExpertInsight, ExpertInvocation, ExpertResult, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
+    ViewCancellation, check_running,
+};
+pub use expert_model::{
+    CapabilityDescriptor, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertReasoner,
+    ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry,
+    SourceHistoryBoundary,
+};
 pub use floe_context_contract::{
     ContextEvidence, ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass,
     DependencyCoverage, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,

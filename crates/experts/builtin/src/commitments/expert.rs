@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{CalendarContextView, CommunicationView, FLOE_TASK_VIEW_ID, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, NativeContextItem, NativeContextView, calendar_context_evidence, native_context_evidence, validate_calendar_context_view, validate_communication_view, validate_native_context_view};
+use floe_context_contract::{CalendarContextView, FLOE_TASK_VIEW_ID, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, NativeContextItem, NativeContextView, calendar_context_evidence, native_context_evidence, validate_calendar_context_view, validate_communication_view, validate_native_context_view};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::ExpertModel;
 

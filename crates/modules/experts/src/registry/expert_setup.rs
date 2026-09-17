@@ -8,13 +8,13 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::AgentFailure;
+use floe_agent_contract::{AgentFailure, PackageKind};
 use floe_kernel::{AGENT_VERSION, PersonId};
 
 use super::{
     AgentId, AgentPackage, AgentRegistry, BuiltinExpertAssignmentReceipt,
     BuiltinExpertSetupReceipt, BuiltinSourceBinding, BuiltinSourceState, ExpertPrivateState,
-    PackageAssignment, PackageImplementation, PackageInstallation, PackageKind, RegistryOverview,
+    PackageAssignment, PackageImplementation, PackageInstallation, RegistryOverview,
     SourceGrant,
 };
 

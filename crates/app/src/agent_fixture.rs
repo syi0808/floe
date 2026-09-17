@@ -753,12 +753,12 @@ impl InProcessAgent for FixtureCapabilities {
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .revision();
+        let assignments = floe_experts::RegistryAssignments::new(&self.registry);
         let result = ExpertHost {
-            registry: &self.registry,
+            assignments: &assignments,
             views: self,
         }
         .invoke(ExpertInvocation {
-            usage: request.usage,
             capabilities: std::sync::Arc::new(NoCapabilityJournal),
             context: AgentContext {
                 projection_version: 1,

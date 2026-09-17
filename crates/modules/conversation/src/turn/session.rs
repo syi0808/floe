@@ -7,8 +7,28 @@ use uuid::Uuid;
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 
 pub use floe_agent_contract::{
-    CapabilityExecution, CapabilityExecutionState, ModelReplay, ProviderReplay,
+    CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState, ModelReplay,
+    ProviderReplay,
 };
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModelStep {
+    Preamble {
+        text: String,
+    },
+    Answer {
+        text: String,
+    },
+    Call {
+        capability_id: String,
+        input: String,
+    },
+    Delegate {
+        agent_id: String,
+        message: String,
+    },
+}
 use floe_context::{InferencePolicyDecision};
 
 pub const AGENT_VERSION: u32 = 1;
@@ -292,18 +312,6 @@ impl AgentBudget {
         }
         Some(expanded)
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CapabilityDescriptor {
-    pub schema_version: u32,
-    pub id: String,
-    pub version: String,
-    pub read_only: bool,
-    pub output_data_class: floe_agent_contract::DataClass,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_schema: Option<serde_json::Value>,
 }
 
 pub struct CapabilityInvocation {
@@ -605,25 +613,6 @@ fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde
 
 fn embedded_json(value: &str) -> serde_json::Value {
     serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.into()))
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ModelStep {
-    Preamble {
-        text: String,
-    },
-    Answer {
-        text: String,
-    },
-    Call {
-        capability_id: String,
-        input: String,
-    },
-    Delegate {
-        agent_id: String,
-        message: String,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

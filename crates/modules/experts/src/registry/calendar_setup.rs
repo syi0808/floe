@@ -14,9 +14,10 @@ use floe_kernel::{AGENT_VERSION, PersonId};
 
 use super::{
     AgentPackage, AgentRegistry, CalendarExpertSetupReceipt, CalendarViewBinding, ExpertMetadata,
-    ExpertPrivateState, PackageAssignment, PackageImplementation, PackageInstallation, PackageKind,
-    PackageRef, RegistryOverview, RegistrySnapshot,
+    ExpertPrivateState, PackageAssignment, PackageImplementation, PackageInstallation,
+    RegistryOverview, RegistrySnapshot,
 };
+use floe_agent_contract::{PackageKind, PackageRef};
 
 /// How the crate that owns an Expert wants it packaged in the registry.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -998,6 +998,8 @@ dependencies = [
  "floe-day",
  "floe-execution",
  "floe-experts",
+ "floe-inference",
+ "floe-kernel",
  "serde",
  "serde_json",
  "tempfile",

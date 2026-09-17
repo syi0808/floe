@@ -116,7 +116,10 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     {
         return Err(AgentFailure::Conflict);
     }
-    if request.continuation && floe_experts_builtin::schedule::has_calendar_history(&session.messages) {
+    if request.continuation && floe_conversation::carries_source_history(
+        &session.messages,
+        &floe_experts_builtin::schedule::CalendarHistoryBoundary,
+    ) {
         return Err(AgentFailure::StaleContext);
     }
     let context = AgentContext {
@@ -637,7 +640,10 @@ impl ModelRunner for Model {
     }
 
     async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        floe_experts_builtin::schedule::project_calendar_history(&mut request);
+        floe_conversation::project_source_history(
+            &mut request,
+            &floe_experts_builtin::schedule::CalendarHistoryBoundary,
+        );
         let started = std::time::Instant::now();
         let placement = match self {
             Self::Foundation(_) => "device_local",
@@ -728,6 +734,98 @@ impl<Runner: ModelRunner + Sync> floe_agent_contract::ExpertModel
     }
 }
 
+impl<Runner: ModelRunner + Sync> floe_agent_contract::ExpertReasoner for ExpertModelHost<'_, Runner> {
+    fn step<'a>(
+        &'a self,
+        step: floe_agent_contract::ExpertReasoningStep,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_agent_contract::ExpertStepOutcome, AgentFailure>,
+    > {
+        Box::pin(async move {
+            // The Expert's transcript is its own; it becomes conversation
+            // messages only for as long as the model call lasts.
+            let turn_id = step.invocation_id;
+            let messages = step
+                .transcript
+                .into_iter()
+                .map(|entry| match entry {
+                    floe_agent_contract::ExpertTranscriptEntry::Task { text } => {
+                        floe_conversation::AgentMessage::User { turn_id, text }
+                    }
+                    floe_agent_contract::ExpertTranscriptEntry::Preamble { text } => {
+                        floe_conversation::AgentMessage::Preamble { turn_id, text }
+                    }
+                    floe_agent_contract::ExpertTranscriptEntry::Capability {
+                        call_id,
+                        capability_id,
+                        input,
+                        result,
+                    } => floe_conversation::AgentMessage::Capability {
+                        turn_id,
+                        call_id,
+                        capability_id,
+                        input,
+                        result: Ok(result),
+                    },
+                })
+                .collect();
+            let response = floe_conversation::generate_with_recovery(
+                self.model,
+                ModelRequest {
+                    usage: self.usage.clone(),
+                    replay: step.replay,
+                    schema_version: floe_agent_contract::AGENT_VERSION,
+                    prompt: step.prompt,
+                    person_id: step.person_id,
+                    session_id: step.invocation_id,
+                    turn_id,
+                    policy: step.policy,
+                    context: step.context,
+                    messages,
+                    capabilities: step.capabilities,
+                    active_agents: vec![],
+                    remaining_tokens: step.remaining_tokens,
+                    remaining_cost_micros: step.remaining_cost_micros,
+                    max_output_bytes: step.max_output_bytes,
+                    deadline: step.deadline,
+                    cancellation: step.cancellation,
+                },
+            )
+            .await?;
+            Ok(floe_agent_contract::ExpertStepOutcome {
+                schema_version: response.schema_version,
+                steps: response
+                    .output
+                    .into_iter()
+                    .map(|step| match step {
+                        floe_conversation::ModelStep::Preamble { text } => {
+                            Ok(floe_agent_contract::ExpertStep::Preamble { text })
+                        }
+                        floe_conversation::ModelStep::Answer { text } => {
+                            Ok(floe_agent_contract::ExpertStep::Answer { text })
+                        }
+                        floe_conversation::ModelStep::Call {
+                            capability_id,
+                            input,
+                        } => Ok(floe_agent_contract::ExpertStep::Call {
+                            capability_id,
+                            input,
+                        }),
+                        // An Expert has no one to delegate to.
+                        floe_conversation::ModelStep::Delegate { .. } => {
+                            Err(AgentFailure::CapabilityDenied)
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                replay: response.replay,
+                used_tokens: response.used_tokens,
+                cost_micros: response.cost_micros,
+            })
+        })
+    }
+}
+
 struct GovernedModel<'a, Keys, Runner: ModelRunner + ?Sized = Model> {
     model: &'a Runner,
     store: &'a GovernedAgentSessionStore<'a, Keys>,
@@ -743,7 +841,12 @@ impl<Keys: VaultKeyProvider, Runner: ModelRunner + ?Sized + Sync> ModelRunner
         current_turn: Uuid,
         max_bytes: usize,
     ) -> Result<usize, AgentFailure> {
-        floe_experts_builtin::schedule::bounded_model_history_start(messages, current_turn, max_bytes)
+        floe_conversation::bounded_source_history_start(
+            messages,
+            current_turn,
+            max_bytes,
+            &floe_experts_builtin::schedule::CalendarHistoryBoundary,
+        )
     }
 
     fn placement(&self) -> ModelPlacement {

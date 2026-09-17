@@ -11,14 +11,19 @@ floe-actions = { path = "../../modules/actions" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context-contract = { path = "../../contracts/context" }
-floe-conversation = { path = "../../modules/conversation" }
 floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
-floe-experts = { path = "../../modules/experts" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# The integration tests drive the real registry and the real conversation model
+# to check that this crate's Experts hold up against them. Neither is a
+# dependency of the Experts themselves.
+floe-conversation = { path = "../../modules/conversation" }
+floe-experts = { path = "../../modules/experts" }
+floe-inference = { path = "../../modules/inference" }
+floe-kernel = { path = "../../contracts/kernel" }
 tempfile = "3.23.0"

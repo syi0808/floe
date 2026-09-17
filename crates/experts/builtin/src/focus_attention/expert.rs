@@ -5,12 +5,12 @@ use uuid::Uuid;
 
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::AGENT_VERSION;
-use floe_context_contract::{AttentionView, CalendarContextView, ContextEvidence, WorkContextView, personal_context_evidence, validate_attention_view, validate_work_context_view, work_context_evidence};
+use floe_context_contract::{AttentionView, CalendarContextView, WorkContextView, personal_context_evidence, validate_attention_view, validate_work_context_view, work_context_evidence};
 use floe_agent_contract::{InferencePolicyDecision};
 use floe_agent_contract::ExpertModel;
 
 use crate::prompts::{focus_expert_prompt};
-use crate::shared::{PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, valid_handle, validate_judgment};
+use crate::shared::{PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles, run_personal_model, validate_judgment};
 
 #[derive(Clone, Debug)]
 pub struct FocusContextViews {
