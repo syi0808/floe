@@ -1919,7 +1919,7 @@ mod tests {
             signature_b64url: String,
         }
         let fixture: Fixture = serde_json::from_str(include_str!(
-            "../../../../fixtures/remote-authorization/producer-v1.json"
+            "../../../../../fixtures/remote-authorization/producer-v1.json"
         ))
         .unwrap();
         let challenge = fixture.challenge_bytes.as_bytes();

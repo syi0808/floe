@@ -4,8 +4,12 @@ use std::sync::{
 };
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use floe_core::*;
-// FIXME(stage-2): glob import of the retired floe-domain crate
+use floe_actions::*;
+use floe_context_contract::CalendarProvider;
+use floe_day::*;
+
+mod support;
+use support::TestActionStore;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 5, 0, 0, 0).unwrap()
@@ -88,25 +92,25 @@ impl CalendarActionProvider for Provider {
     }
 }
 
-async fn fixture() -> (
-    tempfile::TempDir,
-    FloeCore,
+async fn fixture(
+    store: &TestActionStore,
+) -> (
+    ActionService<'_, TestActionStore>,
     CalendarAction,
     CalendarActionPolicy,
 ) {
-    let directory = tempfile::tempdir().unwrap();
-    let core = FloeCore::open(directory.path().join("actions.db"))
+    let core = ActionService::new(store);
+    let person = PersonId::new();
+    store
+        .day()
+        .select_calendar(
+            person,
+            CalendarProvider::Fixture,
+            "calendar-1".into(),
+            "Test".into(),
+        )
         .await
         .unwrap();
-    let person = PersonId::new();
-    core.select_calendar(
-        person,
-        CalendarProvider::Fixture,
-        "calendar-1".into(),
-        "Test".into(),
-    )
-    .await
-    .unwrap();
     let action = core
         .propose_calendar_action(
             person,
@@ -128,10 +132,10 @@ async fn fixture() -> (
         allowed_calendar_ids: vec!["calendar-1".into()],
         allow_create: true,
     };
-    (directory, core, action, policy)
+    (core, action, policy)
 }
 
-async fn approve(core: &FloeCore, action: &CalendarAction) {
+async fn approve(core: &ActionService<'_, TestActionStore>, action: &CalendarAction) {
     core.decide_calendar_action(action.person_id, action.id, true, now())
         .await
         .unwrap();
@@ -139,7 +143,8 @@ async fn approve(core: &FloeCore, action: &CalendarAction) {
 
 #[tokio::test]
 async fn direct_create_is_durable_explicit_authority_and_executes_only_once() {
-    let (directory, core, proposal, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, proposal, policy) = fixture(&store).await;
     let schedule = TimedSchedule::new(
         now() - Duration::hours(2),
         now() - Duration::hours(1),
@@ -162,9 +167,7 @@ async fn direct_create_is_durable_explicit_authority_and_executes_only_once() {
     assert_eq!(direct.state, CalendarActionState::Approved);
     assert_eq!(direct.expires_at, now() + Duration::minutes(15));
     drop(core);
-    let core = FloeCore::open(directory.path().join("actions.db"))
-        .await
-        .unwrap();
+    let core = ActionService::new(&store);
     assert_eq!(
         core.calendar_action(direct.person_id, direct.id)
             .await
@@ -197,7 +200,8 @@ async fn direct_create_is_durable_explicit_authority_and_executes_only_once() {
 
 #[tokio::test]
 async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targets() {
-    let (_directory, core, proposal, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, proposal, policy) = fixture(&store).await;
     let range = CalendarRange {
         start_date: now().date_naive(),
         end_date_exclusive: (now() + Duration::days(1)).date_naive(),
@@ -212,7 +216,8 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         title: proposal.title.clone(),
         schedule: EventSchedule::Timed(proposal.schedule.clone()),
     }];
-    core.import_calendar(
+    store.day()
+.import_calendar(
         proposal.person_id,
         proposal.connection_revision,
         range.clone(),
@@ -221,8 +226,8 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     )
     .await
     .unwrap();
-    let snapshot = core
-        .day_snapshot(proposal.person_id, now().date_naive(), 0, now())
+    let snapshot = store.day()
+.day_snapshot(proposal.person_id, now().date_naive(), 0, now())
         .await
         .unwrap();
     let event = snapshot
@@ -270,14 +275,16 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         .await
         .unwrap();
     assert!(deletion.mutation.as_ref().unwrap().delete);
-    let connection = core
+    let connection = store
+        .day()
         .calendar_connection(proposal.person_id)
         .await
         .unwrap()
         .unwrap();
     let mut read_only = records;
     read_only[0].can_modify = false;
-    core.import_calendar(
+    store.day()
+.import_calendar(
         proposal.person_id,
         connection.revision,
         range,
@@ -326,14 +333,15 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
 
 #[tokio::test]
 async fn pending_rejected_and_foreign_person_cannot_execute() {
-    let (_directory, core, action, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
     let provider = Provider::default();
     assert_eq!(
         core.calendar_action(PersonId::new(), action.id)
             .await
             .unwrap_err()
             .code,
-        ErrorCode::NotFound
+        ActionErrorCode::NotFound
     );
     assert!(
         core.decide_calendar_action(PersonId::new(), action.id, true, now())
@@ -364,7 +372,8 @@ async fn pending_rejected_and_foreign_person_cannot_execute() {
 
 #[tokio::test]
 async fn success_is_durable_and_receipt_can_be_reimported() {
-    let (directory, core, action, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
     let provider = Provider::default();
     approve(&core, &action).await;
     let result = core
@@ -394,7 +403,8 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         title: receipt.title,
         schedule: EventSchedule::Timed(receipt.schedule),
     }];
-    core.import_calendar(
+    store.day()
+.import_calendar(
         action.person_id,
         action.connection_revision,
         range.clone(),
@@ -403,7 +413,8 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
     )
     .await
     .unwrap();
-    core.import_calendar(
+    store.day()
+.import_calendar(
         action.person_id,
         action.connection_revision + 1,
         range,
@@ -413,9 +424,7 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
     .await
     .unwrap();
     drop(core);
-    let reopened = FloeCore::open(directory.path().join("actions.db"))
-        .await
-        .unwrap();
+    let reopened = ActionService::new(&store);
     assert_eq!(
         reopened
             .calendar_action(action.person_id, action.id)
@@ -423,7 +432,8 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
             .unwrap(),
         result
     );
-    let snapshot = reopened
+    let snapshot = store
+        .day()
         .day_snapshot(action.person_id, now().date_naive(), 32_400, now())
         .await
         .unwrap();
@@ -439,7 +449,8 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
 
 #[tokio::test]
 async fn concurrent_execution_claims_create_once() {
-    let (_directory, core, action, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
     let provider = Provider::default();
     approve(&core, &action).await;
     let (first, second) = tokio::join!(
@@ -456,13 +467,15 @@ async fn policy_and_connection_changes_block_execution() {
         ActionBlockReason::PolicyDenied,
         ActionBlockReason::CalendarChanged,
     ] {
-        let (_directory, core, action, mut policy) = fixture().await;
+        let store = TestActionStore::new();
+    let (core, action, mut policy) = fixture(&store).await;
         let provider = Provider::default();
         approve(&core, &action).await;
         if reason == ActionBlockReason::PolicyDenied {
             policy.allow_create = false;
         } else {
-            core.select_calendar(
+            store.day()
+.select_calendar(
                 action.person_id,
                 CalendarProvider::Fixture,
                 "other".into(),
@@ -489,7 +502,8 @@ async fn preflight_failures_require_new_proposal_and_approval() {
         ActionBlockReason::ScheduleConflict,
         ActionBlockReason::ProviderUnavailable,
     ] {
-        let (_directory, core, action, policy) = fixture().await;
+        let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
         let provider = Provider {
             block: Some(reason),
             ..Default::default()
@@ -517,7 +531,8 @@ async fn preflight_failures_require_new_proposal_and_approval() {
 
 #[tokio::test]
 async fn expiry_is_checked_at_approval_and_after_preflight() {
-    let (_directory, core, action, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
     let provider = Provider::default();
     let result = core
         .decide_calendar_action(action.person_id, action.id, true, action.expires_at)
@@ -529,7 +544,8 @@ async fn expiry_is_checked_at_approval_and_after_preflight() {
             reason: ActionBlockReason::Expired
         }
     );
-    let (_directory, core, action, _) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, _) = fixture(&store).await;
     let policy = CalendarActionPolicy {
         person_id: action.person_id,
         ..policy
@@ -563,7 +579,8 @@ async fn ambiguous_create_recovers_after_restart_without_retry() {
         ActionFailure::PermissionDenied,
         ActionFailure::ProviderUnavailable,
     ] {
-        let (directory, core, action, policy) = fixture().await;
+        let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
         let provider = Provider {
             failure: Some(failure),
             ..Default::default()
@@ -577,9 +594,7 @@ async fn ambiguous_create_recovers_after_restart_without_retry() {
             CalendarActionState::Unknown { reason: failure }
         );
         drop(core);
-        let reopened = FloeCore::open(directory.path().join("actions.db"))
-            .await
-            .unwrap();
+        let reopened = ActionService::new(&store);
         assert!(
             reopened
                 .execute_calendar_action(action.person_id, action.id, &policy, &provider, now)
@@ -603,7 +618,8 @@ async fn ambiguous_create_recovers_after_restart_without_retry() {
 #[tokio::test]
 async fn absent_duplicate_or_mismatched_receipts_never_retry_create() {
     for case in 0..3 {
-        let (_directory, core, action, policy) = fixture().await;
+        let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
         let provider = Provider {
             failure: Some(ActionFailure::Timeout),
             mismatch: case == 1,
@@ -634,7 +650,8 @@ async fn absent_duplicate_or_mismatched_receipts_never_retry_create() {
 
 #[tokio::test]
 async fn malformed_proposals_are_not_persisted() {
-    let (_directory, core, action, _) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, _) = fixture(&store).await;
     assert!(
         core.propose_calendar_action(
             action.person_id,
@@ -674,7 +691,8 @@ async fn malformed_proposals_are_not_persisted() {
 
 #[tokio::test]
 async fn cancellation_after_external_write_leaves_recoverable_executing_state() {
-    let (directory, core, action, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
     let provider = Provider {
         suspend_after_create: true,
         ..Default::default()
@@ -699,9 +717,7 @@ async fn cancellation_after_external_write_leaves_recoverable_executing_state() 
         .await;
     }
     drop(core);
-    let reopened = FloeCore::open(directory.path().join("actions.db"))
-        .await
-        .unwrap();
+    let reopened = ActionService::new(&store);
     assert_eq!(
         reopened
             .calendar_action(action.person_id, action.id)
@@ -731,10 +747,12 @@ async fn cancellation_after_external_write_leaves_recoverable_executing_state() 
 
 #[tokio::test]
 async fn preflight_includes_current_local_events() {
-    let (_directory, core, action, policy) = fixture().await;
+    let store = TestActionStore::new();
+    let (core, action, policy) = fixture(&store).await;
     let provider = Provider::default();
     approve(&core, &action).await;
-    core.create_event(
+    store.day()
+.create_event(
         action.person_id,
         "New local event",
         EventSchedule::Timed(action.schedule.clone()),
