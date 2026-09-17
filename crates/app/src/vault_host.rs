@@ -42,8 +42,7 @@ use floe_context_contract::CalendarProvider;
 use floe_kernel::PersonId;
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
 use floe_provider_adapters::control::authorization::{
-    RemoteAuthorizationClient, RemotePairingClient, access_producer_identity, enrollment_status,
-    pairing_report,
+    RemoteAuthorityEndpoint, RemoteAuthorizationClient, access_producer_identity,
 };
 #[cfg(not(target_os = "macos"))]
 use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
@@ -55,6 +54,7 @@ use crate::{FloeCore, diagnostics};
 
 mod calendar_access;
 mod conversation_turn;
+mod remote_authority;
 mod learner_worker;
 mod personal_grants;
 mod remote_views;
@@ -1740,55 +1740,24 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            if pairing.person_id != job.person.to_string()
-                || pairing.client_id != challenge.pairing_id
-                || pairing.device_id.is_empty()
-                || challenge.issuer.key_id.is_empty()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let owner_signature = Box::pin(vault.remote_sign_pairing(
+            let service = floe_connections::PairingService::new(
+                floe_provider_adapters::control::authorization::HttpRemoteControl::new(
+                    &route.route.base_url,
+                )?,
+            );
+            let status = Box::pin(floe_connections::confirm_pairing(
+                &service,
+                &remote_authority::VaultPairingKeys {
+                    vault: vault.vault.as_ref(),
+                },
+                &job.person.to_string(),
+                pairing_identity(pairing),
                 challenge,
-                &pairing.person_id,
-                &pairing.client_id,
-                &pairing.device_id,
+                polling_proof,
+                tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
+                &job.cancellation,
             ))
             .await?;
-            let client = RemotePairingClient::new(&route.route.base_url)?;
-            let response = client
-                .confirm(
-                    &challenge.pairing_id,
-                    polling_proof,
-                    &owner_signature,
-                    &challenge.challenge_id,
-                    tokio::time::Instant::now() + Duration::from_secs(10),
-                    &job.cancellation,
-                )
-                .await?;
-            let status = floe_connections::PairingStatus {
-                schema_version: response.schema_version,
-                pairing_id: response.pairing_id,
-                status: response.status,
-                person_id: pairing.person_id.clone(),
-                device_id: pairing.device_id.clone(),
-                producer: Some(floe_connections::ProducerIdentity {
-                    schema_version: challenge.producer.schema_version,
-                    instance_id: challenge.producer.instance_id.clone(),
-                    execution_owner: challenge.producer.execution_owner.clone(),
-                    audience: challenge.producer.audience.clone(),
-                    key_id: challenge.producer.key_id.clone(),
-                    public_key: challenge.producer.public_key.clone(),
-                    fingerprint: challenge.producer.fingerprint.clone(),
-                }),
-                issuer: Some(floe_connections::PairingIssuer {
-                    key_id: challenge.issuer.key_id.clone(),
-                    public_key: challenge.issuer.public_key.clone(),
-                    fingerprint: challenge.issuer.fingerprint(),
-                }),
-                issuer_fingerprint: Some(challenge.issuer.fingerprint()),
-                client_id: None,
-                token: None,
-            };
             Ok(VaultExecutionResult {
                 remote_pairing: Some(status),
                 ..VaultExecutionResult::ready()
@@ -1799,24 +1768,22 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             pairing_id,
             polling_proof,
         } => {
-            let client = RemotePairingClient::new(&route.route.base_url)?;
-            let response = client
-                .status(
-                    pairing_id,
-                    polling_proof,
-                    tokio::time::Instant::now() + Duration::from_secs(10),
-                    &job.cancellation,
-                )
-                .await?;
-            let status = floe_connections::admit_pairing_status(pairing_report(response))?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            if status.person_id != job.person.to_string()
-                || pairing.person_id != status.person_id
-                || pairing.device_id != status.device_id
-                || pairing.client_id != status.pairing_id
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
+            let service = floe_connections::PairingService::new(
+                floe_provider_adapters::control::authorization::HttpRemoteControl::new(
+                    &route.route.base_url,
+                )?,
+            );
+            let status = Box::pin(floe_connections::read_pairing_status(
+                &service,
+                &job.person.to_string(),
+                pairing_identity(pairing),
+                pairing_id,
+                polling_proof,
+                tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
+                &job.cancellation,
+            ))
+            .await?;
             Ok(VaultExecutionResult {
                 remote_pairing: Some(status),
                 ..VaultExecutionResult::ready()
@@ -1829,32 +1796,24 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             challenge,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let client = RemotePairingClient::new(&route.route.base_url)?;
-            let response = client
-                .status(
-                    pairing_id,
-                    polling_proof,
-                    tokio::time::Instant::now() + Duration::from_secs(10),
-                    &job.cancellation,
-                )
-                .await?;
-            let status = floe_connections::admit_pairing_status(pairing_report(response))?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            let owner = Box::pin(vault.remote_owner_public_key()).await?;
-            if status.person_id != job.person.to_string()
-                || status.pairing_id != challenge.pairing_id
-                || challenge.pairing_id != *pairing_id
-                || pairing.person_id != status.person_id
-                || pairing.device_id != status.device_id
-                || pairing.client_id != status.pairing_id
-                || challenge.issuer != owner
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            Box::pin(vault.finalize_remote_pairing(
+            let service = floe_connections::PairingService::new(
+                floe_provider_adapters::control::authorization::HttpRemoteControl::new(
+                    &route.route.base_url,
+                )?,
+            );
+            let status = Box::pin(floe_connections::finalize_pairing(
+                &service,
+                &remote_authority::VaultPairingKeys {
+                    vault: vault.vault.as_ref(),
+                },
+                &job.person.to_string(),
+                pairing_identity(pairing),
                 pairing_id,
+                polling_proof,
                 challenge,
-                status.status == "approved",
+                tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
+                &job.cancellation,
             ))
             .await?;
             Ok(VaultExecutionResult {
@@ -1863,56 +1822,41 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             })
         }
         WorkerAction::RemoteAuthorityInspectProducer { route } => {
-            let client = RemoteAuthorizationClient::new(&route.route)?;
-            let producer = Box::pin(client.producer_identity(
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
+            let vault = current.as_ref().map(|(_, vault)| vault.vault.as_ref());
+            let transport = RemoteAuthorityEndpoint::new(&route.route, vault)?;
+            let store = vault.map(|vault| remote_authority::VaultRemoteAuthority { vault });
+            let inspection = Box::pin(floe_access::inspect_remote_authority(
+                &transport,
+                store
+                    .as_ref()
+                    .map(|store| store as &dyn floe_access::RemoteAuthorityStore),
+                &remote_authority::authority_window(job.cancellation.clone()),
             ))
             .await?;
-            let remote_owner = if let Some((_, vault)) = current.as_ref() {
-                Some(Box::pin(vault.remote_owner_public_key()).await?)
-            } else {
-                None
-            };
             Ok(VaultExecutionResult {
-                remote_producer: Some(access_producer_identity(&producer)),
-                remote_owner,
+                remote_producer: Some(inspection.producer),
+                remote_owner: inspection.owner,
                 ..VaultExecutionResult::ready()
             })
         }
         WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            if pairing.person_id != job.person.to_string()
-                || pairing.client_id.trim().is_empty()
-                || pairing.device_id.trim().is_empty()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let client = RemoteAuthorizationClient::new(&route.route)?;
-            let pinned = (**producer).clone();
-            let observed = Box::pin(client.producer_identity(
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
-            ))
-            .await?;
-            if pinned != access_producer_identity(&observed) {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            Box::pin(vault.remote_pin_producer(pinned.clone())).await?;
-            let status = Box::pin(client.enroll(
-                vault.vault.as_ref(),
-                &pairing.client_id,
-                &pairing.device_id,
-                &pinned,
-                tokio::time::Instant::now() + Duration::from_secs(30),
-                &job.cancellation,
+            let vault = vault.vault.as_ref();
+            let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
+            let enrolled = Box::pin(floe_access::review_and_enroll_remote_authority(
+                &transport,
+                &remote_authority::VaultRemoteAuthority { vault },
+                job.person,
+                access_pairing_identity(pairing),
+                (**producer).clone(),
+                &remote_authority::authority_window(job.cancellation.clone()),
             ))
             .await?;
             Ok(VaultExecutionResult {
-                remote_producer: Some(pinned),
-                remote_enrollment: Some(enrollment_status(status)),
-                remote_owner: Some(Box::pin(vault.remote_owner_public_key()).await?),
+                remote_producer: Some(enrolled.producer),
+                remote_enrollment: Some(enrolled.enrollment),
+                remote_owner: Some(enrolled.owner),
                 ..VaultExecutionResult::ready()
             })
         }
@@ -1920,15 +1864,16 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             route,
             enrollment_id,
         } => {
-            let client = RemoteAuthorizationClient::new(&route.route)?;
-            let status = Box::pin(client.enrollment_status(
+            let vault = current.as_ref().map(|(_, vault)| vault.vault.as_ref());
+            let transport = RemoteAuthorityEndpoint::new(&route.route, vault)?;
+            let status = Box::pin(floe_access::remote_enrollment_status(
+                &transport,
                 enrollment_id,
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
+                &remote_authority::authority_window(job.cancellation.clone()),
             ))
             .await?;
             Ok(VaultExecutionResult {
-                remote_enrollment: Some(enrollment_status(status)),
+                remote_enrollment: Some(status),
                 ..VaultExecutionResult::ready()
             })
         }
@@ -3806,6 +3751,26 @@ mod tests {
 }
 
 /// The Person's vault, as this device's own storage shows it.
+/// The pairing a route names, as Connections states one.
+fn pairing_identity(pairing: &floe_inference::RoutePairing) -> floe_connections::PairingIdentity<'_> {
+    floe_connections::PairingIdentity {
+        person_id: &pairing.person_id,
+        client_id: &pairing.client_id,
+        device_id: &pairing.device_id,
+    }
+}
+
+/// The pairing a route names, as Access states one.
+fn access_pairing_identity(
+    pairing: &floe_inference::RoutePairing,
+) -> floe_access::RemotePairingIdentity<'_> {
+    floe_access::RemotePairingIdentity {
+        person_id: &pairing.person_id,
+        client_id: &pairing.client_id,
+        device_id: &pairing.device_id,
+    }
+}
+
 fn stored_vault_state(root: &std::path::Path, person: PersonId) -> VaultState {
     if root.join(person.to_string()).join("vault.id").exists() {
         VaultState::Locked

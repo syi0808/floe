@@ -12,6 +12,10 @@ pub use application::pairing::{
     PAIRING_POLL_INTERVAL_MS, PairingDirective, PairingOperation, PairingOperationState,
     PairingService, cancel_pairing, observe_pairing,
 };
+pub use application::remote_pairing::{
+    PairingIdentity, PairingOwnerKeys, admit_pairing_report, confirm_pairing, finalize_pairing,
+    read_pairing_status,
+};
 pub use ports::RemoteControl;
 
 pub use application::connected_context::{

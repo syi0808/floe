@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use floe_agent_contract::{AgentFailure};
 use floe_execution::{Cancellation};
-use floe_provider_adapters::control::RemotePairingClient;
+use floe_connections::{PairingService, PairingStatusRequest};
+use floe_provider_adapters::control::HttpRemoteControl;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const PAIRING_ID: &str = "00000000-0000-4000-8000-000000000001";
@@ -10,15 +11,18 @@ const PAIRING_ID: &str = "00000000-0000-4000-8000-000000000001";
 #[tokio::test]
 async fn cancelled_pairing_poll_never_opens_a_connection() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client =
-        RemotePairingClient::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let client = PairingService::new(
+        HttpRemoteControl::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+    );
     let cancellation = Cancellation::default();
     cancellation.cancel();
     assert_eq!(
         client
             .status(
-                PAIRING_ID,
-                "polling-proof",
+                PairingStatusRequest {
+                    pairing_id: PAIRING_ID.into(),
+                    polling_proof: "polling-proof".into(),
+                },
                 tokio::time::Instant::now() + Duration::from_secs(5),
                 &cancellation
             )
@@ -35,8 +39,9 @@ async fn cancelled_pairing_poll_never_opens_a_connection() {
 #[tokio::test]
 async fn pairing_poll_uses_body_proof_and_cancels_a_stalled_response() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client =
-        RemotePairingClient::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let client = PairingService::new(
+        HttpRemoteControl::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+    );
     let (headers_sent, headers_received) = tokio::sync::oneshot::channel();
     let (finish_server, server_finished) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
@@ -88,8 +93,10 @@ async fn pairing_poll_uses_body_proof_and_cancels_a_stalled_response() {
     let request = tokio::spawn(async move {
         client
             .status(
-                PAIRING_ID,
-                "polling-proof",
+                PairingStatusRequest {
+                    pairing_id: PAIRING_ID.into(),
+                    polling_proof: "polling-proof".into(),
+                },
                 tokio::time::Instant::now() + Duration::from_secs(5),
                 &child,
             )

@@ -964,12 +964,33 @@ impl RemoteAuthorizationClient {
     }
 }
 
+/// The pairing endpoints of a paired producer, spoken over HTTP.
+///
+/// This is transport only: it posts, parses, and maps a status code onto a
+/// failure. What a pairing report means is Connections' own judgment.
 #[derive(Clone)]
-struct HttpRemoteControl {
+pub struct HttpRemoteControl {
     base_url: String,
 }
 
 impl HttpRemoteControl {
+    /// The loopback producer this device pairs with.
+    pub fn new(base_url: &str) -> Result<Self, AgentFailure> {
+        let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
+        if address.scheme() != "http"
+            || address.host_str() != Some("127.0.0.1")
+            || address.path() != "/"
+            || address.query().is_some()
+            || address.fragment().is_some()
+            || address.port().is_none()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(Self {
+            base_url: base_url.trim_end_matches('/').to_owned(),
+        })
+    }
+
     async fn request<T: for<'de> Deserialize<'de>>(
         &self,
         path: &str,
@@ -1087,114 +1108,6 @@ fn producer_identity(value: ProducerIdentityResponse) -> ProducerIdentity {
 
 fn pairing_issuer(value: PairingIssuerResponse) -> PairingIssuer {
     PairingIssuer {
-        key_id: value.key_id,
-        public_key: value.public_key,
-        fingerprint: value.fingerprint,
-    }
-}
-
-#[derive(Clone)]
-pub struct RemotePairingClient {
-    service: floe_connections::PairingService<HttpRemoteControl>,
-}
-
-impl RemotePairingClient {
-    pub fn new(base_url: &str) -> Result<Self, AgentFailure> {
-        let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
-        if address.scheme() != "http"
-            || address.host_str() != Some("127.0.0.1")
-            || address.path() != "/"
-            || address.query().is_some()
-            || address.fragment().is_some()
-            || address.port().is_none()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let remote = HttpRemoteControl {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-        };
-        Ok(Self {
-            service: floe_connections::PairingService::new(remote),
-        })
-    }
-
-    pub async fn confirm(
-        &self,
-        pairing_id: &str,
-        polling_proof: &str,
-        signature: &RemoteEnrollmentSignature,
-        challenge_id: &str,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<PairingConfirmationResponse, AgentFailure> {
-        let response = self
-            .service
-            .confirm(
-                PairingConfirmationRequest {
-                    pairing_id: pairing_id.to_owned(),
-                    polling_proof: polling_proof.to_owned(),
-                    challenge_id: challenge_id.to_owned(),
-                    key_id: signature.key_id.clone(),
-                    signature: signature.signature.clone(),
-                },
-                deadline,
-                cancellation,
-            )
-            .await?;
-        Ok(PairingConfirmationResponse {
-            schema_version: response.schema_version,
-            pairing_id: response.pairing_id,
-            status: response.status,
-        })
-    }
-
-    pub async fn status(
-        &self,
-        pairing_id: &str,
-        polling_proof: &str,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<PairingStatusResponse, AgentFailure> {
-        let response = self
-            .service
-            .status(
-                PairingStatusRequest {
-                    pairing_id: pairing_id.to_owned(),
-                    polling_proof: polling_proof.to_owned(),
-                },
-                deadline,
-                cancellation,
-            )
-            .await?;
-        Ok(PairingStatusResponse {
-            schema_version: response.schema_version,
-            pairing_id: response.pairing_id,
-            status: response.status,
-            person_id: response.person_id,
-            device_id: response.device_id,
-            producer: response.producer.map(wire_producer_identity),
-            issuer: response.issuer.map(wire_pairing_issuer),
-            issuer_fingerprint: response.issuer_fingerprint,
-            client_id: response.client_id,
-            token: response.token,
-        })
-    }
-}
-
-fn wire_producer_identity(value: ProducerIdentity) -> ProducerIdentityResponse {
-    ProducerIdentityResponse {
-        schema_version: value.schema_version,
-        instance_id: value.instance_id,
-        execution_owner: value.execution_owner,
-        audience: value.audience,
-        key_id: value.key_id,
-        public_key: value.public_key,
-        fingerprint: value.fingerprint,
-    }
-}
-
-fn wire_pairing_issuer(value: PairingIssuer) -> PairingIssuerResponse {
-    PairingIssuerResponse {
         key_id: value.key_id,
         public_key: value.public_key,
         fingerprint: value.fingerprint,
@@ -1336,29 +1249,32 @@ mod tests {
                     .unwrap();
             }
         });
-        let client =
-            RemotePairingClient::new(&format!("http://127.0.0.1:{}", address.port())).unwrap();
+        let service = floe_connections::PairingService::new(
+            HttpRemoteControl::new(&format!("http://127.0.0.1:{}", address.port())).unwrap(),
+        );
         let pair_id = "00000000-0000-4000-8000-000000000001";
         let cancellation = floe_execution::Cancellation::default();
-        let confirmation = client
+        let confirmation = service
             .confirm(
-                pair_id,
-                "polling-proof",
-                &RemoteEnrollmentSignature {
+                PairingConfirmationRequest {
+                    pairing_id: pair_id.into(),
+                    polling_proof: "polling-proof".into(),
+                    challenge_id: pair_id.into(),
                     key_id: "00000000-0000-4000-8000-000000000006".into(),
                     signature: "owner-signature".into(),
                 },
-                pair_id,
                 tokio::time::Instant::now() + Duration::from_secs(5),
                 &cancellation,
             )
             .await
             .unwrap();
         assert_eq!(confirmation.status, "local_confirmed");
-        let status = client
+        let status = service
             .status(
-                pair_id,
-                "polling-proof",
+                PairingStatusRequest {
+                    pairing_id: pair_id.into(),
+                    polling_proof: "polling-proof".into(),
+                },
                 tokio::time::Instant::now() + Duration::from_secs(5),
                 &cancellation,
             )
@@ -1733,5 +1649,101 @@ pub fn pairing_report(response: PairingStatusResponse) -> PairingStatus {
         issuer_fingerprint: response.issuer_fingerprint,
         client_id: response.client_id,
         token: response.token,
+    }
+}
+
+/// How long each authority call is given, on top of whatever budget the caller
+/// already set. These are transport budgets, not policy.
+const PRODUCER_IDENTITY_BUDGET: Duration = Duration::from_secs(10);
+const ENROLLMENT_BUDGET: Duration = Duration::from_secs(30);
+
+/// The paired producer's authority endpoints, as Access asks for them.
+///
+/// Access decides which producer may be trusted and in what order an enrollment
+/// happens; this only speaks HTTP to the one it is pointed at, under the key
+/// holder it was given.
+pub struct RemoteAuthorityEndpoint<'a, Keys> {
+    client: RemoteAuthorizationClient,
+    /// A locked vault has no key to enroll under; asking who the producer is
+    /// still works without one.
+    keys: Option<&'a Keys>,
+}
+
+impl<'a, Keys: RemoteAuthorizationKeys> RemoteAuthorityEndpoint<'a, Keys> {
+    pub fn new(route: &RemoteRoute, keys: Option<&'a Keys>) -> Result<Self, AgentFailure> {
+        Ok(Self {
+            client: RemoteAuthorizationClient::new(route)?,
+            keys,
+        })
+    }
+}
+
+fn bounded(
+    window: &floe_access::RemoteCallWindow,
+    budget: Duration,
+) -> tokio::time::Instant {
+    window
+        .deadline
+        .min(tokio::time::Instant::now() + budget)
+}
+
+impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteAuthorityTransport
+    for RemoteAuthorityEndpoint<'_, Keys>
+{
+    fn producer_identity<'a>(
+        &'a self,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_access::BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>> {
+        Box::pin(async move {
+            let producer = self
+                .client
+                .producer_identity(
+                    bounded(window, PRODUCER_IDENTITY_BUDGET),
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(access_producer_identity(&producer))
+        })
+    }
+
+    fn enroll<'a>(
+        &'a self,
+        client_id: &'a str,
+        device_id: &'a str,
+        producer: &'a RemoteProducerIdentity,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_access::BoxFuture<'a, Result<floe_access::RemoteEnrollmentStatus, AgentFailure>> {
+        Box::pin(async move {
+            let status = self
+                .client
+                .enroll(
+                    self.keys.ok_or(AgentFailure::VaultUnavailable)?,
+                    client_id,
+                    device_id,
+                    producer,
+                    bounded(window, ENROLLMENT_BUDGET),
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(enrollment_status(status))
+        })
+    }
+
+    fn enrollment_status<'a>(
+        &'a self,
+        enrollment_id: &'a str,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_access::BoxFuture<'a, Result<floe_access::RemoteEnrollmentStatus, AgentFailure>> {
+        Box::pin(async move {
+            let status = self
+                .client
+                .enrollment_status(
+                    enrollment_id,
+                    bounded(window, PRODUCER_IDENTITY_BUDGET),
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(enrollment_status(status))
+        })
     }
 }

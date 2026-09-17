@@ -132,3 +132,41 @@ pub struct RemoteEnrollmentStatus {
     pub admin_approved: bool,
     pub active: bool,
 }
+
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// The paired producer's authority endpoints, reached over the wire.
+///
+/// A transport fetches and parses; which producer may be trusted, and in what
+/// order an enrollment happens, is Access's own judgment.
+pub trait RemoteAuthorityTransport: Sync {
+    fn producer_identity<'a>(
+        &'a self,
+        window: &'a crate::ports::remote_grants::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>>;
+
+    fn enroll<'a>(
+        &'a self,
+        client_id: &'a str,
+        device_id: &'a str,
+        producer: &'a RemoteProducerIdentity,
+        window: &'a crate::ports::remote_grants::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<RemoteEnrollmentStatus, AgentFailure>>;
+
+    fn enrollment_status<'a>(
+        &'a self,
+        enrollment_id: &'a str,
+        window: &'a crate::ports::remote_grants::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<RemoteEnrollmentStatus, AgentFailure>>;
+}
+
+/// The Person's own record of the producer they trust, and the key that speaks
+/// for them to it.
+pub trait RemoteAuthorityStore: Sync {
+    fn owner_public_key<'a>(&'a self) -> BoxFuture<'a, Result<RemoteOwnerPublicKey, AgentFailure>>;
+
+    fn pin_producer<'a>(
+        &'a self,
+        producer: RemoteProducerIdentity,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+}

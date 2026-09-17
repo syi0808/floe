@@ -862,6 +862,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
+ "floe-access",
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",

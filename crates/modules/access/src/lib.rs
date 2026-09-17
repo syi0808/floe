@@ -25,6 +25,10 @@ pub use application::{
     reviewed_native_subject,
 };
 pub use application::{
+    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_enrollment_pairing,
+    inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
+};
+pub use application::{
     AccessGrantMutation, FeasibilityGrantQuery, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
     ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
     RemoteViewApproval, RemoteViewGrantExpectation, RemoteViewGrantPreview,
@@ -57,11 +61,11 @@ pub use ports::personal_grants::{
     PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };
 pub use ports::remote_grants::{
-    RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport,
+    BoxFuture, RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport,
     RemotePairingIdentity, RemoteSourceQuery, SignedSourcePreview,
 };
 pub use ports::remote_authorization::{
-    RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
+    RemoteAuthorityStore, RemoteAuthorityTransport, RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
     RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemotePairingChallenge,
 };
 

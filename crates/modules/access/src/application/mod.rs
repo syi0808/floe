@@ -11,6 +11,7 @@ pub mod personal_sources;
 pub mod remote_grants;
 pub mod remote_view;
 pub mod release;
+pub mod remote_authority;
 
 pub use admission::{ReplayRequest, ReplayTrust, admit_replay};
 pub use authority::{
@@ -41,6 +42,10 @@ pub use personal_sources::{
 pub use personal_read::{
     FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant, grant_unchanged,
     subject_unchanged, valid_subject_fingerprint,
+};
+pub use remote_authority::{
+    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_enrollment_pairing,
+    inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
 };
 pub use remote_grants::{
     RemoteViewGrantExpectation, RemoteViewGrantPreview, RemoteViewGrantRequest,

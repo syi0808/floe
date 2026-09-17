@@ -5,7 +5,7 @@ pub mod server_connection;
 
 pub use authorization::{
     CalendarChallengeParts, PairingConfirmationResponse, PairingIssuerResponse,
-    PairingStartResponse, PairingStatusResponse, RemoteAuthorizationClient, RemotePairingClient,
+    PairingStartResponse, PairingStatusResponse, HttpRemoteControl, RemoteAuthorityEndpoint, RemoteAuthorizationClient,
     RemoteViewAuthorizationRequest, RemoteViewSourcePreviewResponse, calendar_query_sha256,
     parse_calendar_challenge,
 };
