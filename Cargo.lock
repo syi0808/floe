@@ -763,10 +763,10 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 name = "floe-access"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "floe-context",
  "floe-context-contract",
- "floe-day",
  "floe-execution",
  "floe-kernel",
  "serde",
@@ -860,9 +860,9 @@ dependencies = [
 name = "floe-connections"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "floe-context-contract",
- "floe-day",
  "floe-execution",
  "floe-kernel",
  "serde",
@@ -913,7 +913,6 @@ dependencies = [
  "floe-agent-contract",
  "floe-agent-runtime",
  "floe-context",
- "floe-day",
  "floe-execution",
  "floe-experts",
  "floe-inference",
@@ -971,7 +970,6 @@ dependencies = [
  "floe-agent-contract",
  "floe-agent-runtime",
  "floe-context",
- "floe-day",
  "floe-execution",
  "floe-inference",
  "serde",
@@ -1061,10 +1059,16 @@ dependencies = [
 name = "floe-native"
 version = "0.1.0"
 dependencies = [
+ "floe-context-contract",
+ "floe-execution",
+ "floe-kernel",
  "libc",
  "security-framework",
  "security-framework-sys",
+ "serde",
+ "serde_json",
  "tempfile",
+ "tokio",
  "uuid",
 ]
 
@@ -1075,7 +1079,6 @@ dependencies = [
  "chrono",
  "floe-agent-contract",
  "floe-context-contract",
- "floe-day",
  "floe-kernel",
  "serde",
  "serde_json",
@@ -1095,13 +1098,10 @@ dependencies = [
  "floe-connections",
  "floe-context",
  "floe-context-contract",
- "floe-conversation",
  "floe-day",
  "floe-execution",
  "floe-inference",
- "floe-knowledge",
  "floe-native",
- "floe-protocol",
  "floe-vault",
  "reqwest",
  "serde",

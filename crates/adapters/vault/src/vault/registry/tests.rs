@@ -34,7 +34,7 @@ async fn expert_atomic_commit_cannot_rebind_an_existing_conversation() {
         .unwrap();
     session.scope = Some(AgentSessionScope::Calendar {
         setup_id: Uuid::new_v4(),
-        provider: floe_day::CalendarProvider::Fixture,
+        provider: floe_agent_contract::CalendarProvider::Fixture,
     });
     session.revision = 1;
     assert_eq!(
@@ -242,10 +242,10 @@ async fn calendar_bindings_persist_encrypted_without_exposing_sources_in_the_ove
         .register_calendar_view(
             revision,
             fixture.person,
-            floe_day::CalendarProvider::Fixture,
+            floe_agent_contract::CalendarProvider::Fixture,
             "test-device".into(),
             vec!["private-calendar-canary".into()],
-            floe_day::CalendarScope::Selected,
+            floe_agent_contract::CalendarScope::Selected,
             1,
             Some(floe_access::SourceAuthority::new()),
         )
@@ -305,10 +305,10 @@ async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_an_unbou
         .register_calendar_view(
             revision,
             fixture.person,
-            floe_day::CalendarProvider::Fixture,
+            floe_agent_contract::CalendarProvider::Fixture,
             "test-device".into(),
             vec!["home".into()],
-            floe_day::CalendarScope::Selected,
+            floe_agent_contract::CalendarScope::Selected,
             1,
             Some(floe_access::SourceAuthority::new()),
         )
@@ -339,7 +339,7 @@ async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_an_unbou
         forged.revision += 1;
         match mode {
             0 => forged.calendar_views[0].calendar_ids = vec!["different".into()],
-            1 => forged.calendar_views[0].provider = floe_day::CalendarProvider::EventKit,
+            1 => forged.calendar_views[0].provider = floe_agent_contract::CalendarProvider::EventKit,
             2 => forged.calendar_views[0].handle = Uuid::new_v4(),
             _ => forged.calendar_views.clear(),
         }

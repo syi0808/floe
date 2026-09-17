@@ -3,16 +3,14 @@ pub mod application;
 mod ports;
 
 pub use api::{
-    CalendarConnectionRef, ConnectorCatalogObservation, PairingConfirmation,
-    PairingConfirmationRequest, PairingIssuer, PairingStatus, PairingStatusRequest,
-    ProducerIdentity, project_calendar_connections,
+    CalendarConnectionRef, ConnectorCatalogObservation, PAIRING_REPORT_VERSION,
+    PairingConfirmation, PairingConfirmationRequest, PairingIssuer, PairingStatus,
+    PairingStatusRequest, ProducerIdentity, admit_pairing_issuer, admit_pairing_status,
+    project_calendar_connections,
 };
 pub use application::pairing::{
     PAIRING_POLL_INTERVAL_MS, PairingDirective, PairingOperation, PairingOperationState,
     PairingService, cancel_pairing, observe_pairing,
-};
-pub use application::calendar_connector::{
-    ConnectorProjectionError, project_calendar_connector, validate_connector_device,
 };
 pub use ports::RemoteControl;
 

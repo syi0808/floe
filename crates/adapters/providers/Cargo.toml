@@ -17,11 +17,7 @@ floe-context-contract = { path = "../../contracts/context" }
 floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-inference = { path = "../../modules/inference" }
-floe-vault = { path = "../vault" }
-floe-conversation = { path = "../../modules/conversation" }
-floe-knowledge = { path = "../../modules/knowledge" }
 floe-native = { path = "../../platform/native" }
-floe-protocol = { path = "../../bindings/protocol" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -31,4 +27,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 base64 = "0.22.1"
+# Dev-only: the control client's tests sign with a real vault key holder.
+floe-vault = { path = "../vault" }
 tempfile = "3.23.0"

@@ -6,30 +6,16 @@ use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 
+pub use floe_inference::ModelStep;
+
 pub use floe_agent_contract::{
-    CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState, ModelReplay,
-    ProviderReplay,
+    AgentCardManifestEntry, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState,
+    ContextEnvelope, ContextManifest, ContextualData, ConversationContext, EvidenceManifestEntry,
+    MemoryManifestEntry, ModelReplay, PromptManifestEntry, ProviderReplay, RuntimeContext,
+    ScopedInstructions,
 };
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ModelStep {
-    Preamble {
-        text: String,
-    },
-    Answer {
-        text: String,
-    },
-    Call {
-        capability_id: String,
-        input: String,
-    },
-    Delegate {
-        agent_id: String,
-        message: String,
-    },
-}
-use floe_context::{InferencePolicyDecision};
+use floe_context::InferencePolicyDecision;
 
 pub const AGENT_VERSION: u32 = 1;
 
@@ -68,7 +54,7 @@ pub struct AgentSession {
 pub enum AgentSessionScope {
     Calendar {
         setup_id: Uuid,
-        provider: floe_day::CalendarProvider,
+        provider: floe_agent_contract::CalendarProvider,
     },
 }
 
@@ -76,15 +62,15 @@ impl AgentSessionScope {
     pub fn data_class(self) -> floe_agent_contract::DataClass {
         match self {
             Self::Calendar {
-                provider: floe_day::CalendarProvider::Fixture,
+                provider: floe_agent_contract::CalendarProvider::Fixture,
                 ..
             } => floe_agent_contract::DataClass::Synthetic,
             Self::Calendar {
                 provider:
-                    floe_day::CalendarProvider::EventKit
-                    | floe_day::CalendarProvider::Google
-                    | floe_day::CalendarProvider::Microsoft
-                    | floe_day::CalendarProvider::Android,
+                    floe_agent_contract::CalendarProvider::EventKit
+                    | floe_agent_contract::CalendarProvider::Google
+                    | floe_agent_contract::CalendarProvider::Microsoft
+                    | floe_agent_contract::CalendarProvider::Android,
                 ..
             } => floe_agent_contract::DataClass::Personal,
         }
@@ -450,89 +436,6 @@ impl ModelRequest {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextEnvelope {
-    pub schema_version: u32,
-    pub stable_instructions: floe_knowledge::prompts::PromptAssembly,
-    pub scoped_instructions: ScopedInstructions,
-    pub contextual_data: ContextualData,
-    pub conversation: ConversationContext,
-    pub runtime: RuntimeContext,
-    pub manifest: ContextManifest,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextualData {
-    pub projection_version: u32,
-    pub memories: Vec<floe_knowledge::ContextMemory>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub optional_context_issues: Vec<floe_agent_contract::ContextIssue>,
-    pub evidence: Vec<floe_context::ContextEvidence>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScopedInstructions {
-    pub purpose: String,
-    pub available_capabilities: Vec<CapabilityDescriptor>,
-    pub active_experts: Vec<floe_experts::AgentCard>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConversationContext {
-    pub history: Vec<serde_json::Value>,
-    pub current_turn: Vec<serde_json::Value>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeContext {
-    pub max_output_bytes: usize,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextManifest {
-    pub prompt_components: Vec<PromptManifestEntry>,
-    pub evidence: Vec<EvidenceManifestEntry>,
-    pub memories: Vec<MemoryManifestEntry>,
-    pub agent_cards: Vec<AgentCardManifestEntry>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct MemoryManifestEntry {
-    pub target_id: Uuid,
-    pub revision: u64,
-    pub source_refs: Vec<floe_knowledge::LearningEvidenceRef>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentCardManifestEntry {
-    pub id: String,
-    pub version: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PromptManifestEntry {
-    pub kind: floe_knowledge::prompts::PromptComponentKind,
-    pub source: String,
-    pub revision: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvidenceManifestEntry {
-    pub source_handle: String,
-    pub data_class: floe_agent_contract::DataClass,
-    pub expires_at_unix_ms: u64,
-}
-
 fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde_json::Value> {
     match message {
         AgentMessage::Compaction { summary, .. } => vec![serde_json::json!({
@@ -704,5 +607,100 @@ mod tests {
                 "content": "Earlier conversation summary",
             })]
         );
+    }
+
+    #[test]
+    fn a_capability_result_is_structured_current_evidence_not_a_stored_record() {
+        let call_id = Uuid::new_v4();
+        let message = AgentMessage::Capability {
+            turn_id: Uuid::new_v4(),
+            call_id,
+            capability_id: "fixture.read".into(),
+            input: r#"{"day":"today"}"#.into(),
+            result: Ok(r#"{"summary":"One meeting at 10:00"}"#.into()),
+        };
+
+        let projected = model_messages(&message, true);
+
+        let call = &projected[0];
+        let result = &projected[1];
+        assert_eq!(call["role"], "assistant");
+        assert_eq!(call["tool_calls"][0]["id"], result["tool_call_id"]);
+        assert_eq!(call["tool_calls"][0]["function"]["name"], "fixture.read");
+        assert_eq!(
+            call["tool_calls"][0]["function"]["arguments"]["day"],
+            "today"
+        );
+        assert_eq!(result["role"], "tool");
+        assert_eq!(result["status"], "success");
+        assert_eq!(result["content"]["summary"], "One meeting at 10:00");
+        // The storage record's own identifiers never cross into the model input.
+        assert!(result.get("turn_id").is_none());
+        assert!(call.get("turn_id").is_none());
+    }
+
+    #[test]
+    fn an_earlier_turn_becomes_history_and_leaves_its_evidence_behind() {
+        let previous_turn = Uuid::new_v4();
+        let current_turn = Uuid::new_v4();
+        let messages = vec![
+            AgentMessage::User {
+                turn_id: previous_turn,
+                text: "The earlier question".into(),
+            },
+            AgentMessage::Capability {
+                turn_id: previous_turn,
+                call_id: Uuid::new_v4(),
+                capability_id: "fixture.read".into(),
+                input: "old".into(),
+                result: Ok("stale private evidence".into()),
+            },
+            AgentMessage::Assistant {
+                turn_id: previous_turn,
+                text: "The earlier answer".into(),
+            },
+            AgentMessage::User {
+                turn_id: current_turn,
+                text: "Summarize this fixture".into(),
+            },
+        ];
+
+        let (history, current): (Vec<_>, Vec<_>) = messages
+            .iter()
+            .partition(|message| message.turn_id() != current_turn);
+        let history: Vec<_> = history
+            .into_iter()
+            .flat_map(|message| model_messages(message, false))
+            .collect();
+        let current: Vec<_> = current
+            .into_iter()
+            .flat_map(|message| model_messages(message, true))
+            .collect();
+
+        // The earlier turn's question and answer are history; the evidence its
+        // capability call stood on is not carried forward with them.
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["content"], "The earlier question");
+        assert_eq!(history[1]["content"], "The earlier answer");
+        assert!(
+            !serde_json::to_string(&history)
+                .unwrap()
+                .contains("stale private evidence")
+        );
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0]["content"], "Summarize this fixture");
+    }
+
+    #[test]
+    fn a_capability_message_is_withheld_when_the_turn_may_not_carry_one() {
+        let message = AgentMessage::Capability {
+            turn_id: Uuid::new_v4(),
+            call_id: Uuid::new_v4(),
+            capability_id: "fixture.read".into(),
+            input: r#"{"day":"today"}"#.into(),
+            result: Ok(r#"{"summary":"One meeting at 10:00"}"#.into()),
+        };
+
+        assert!(model_messages(&message, false).is_empty());
     }
 }

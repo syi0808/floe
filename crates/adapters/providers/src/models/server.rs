@@ -1,20 +1,20 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     sync::OnceLock,
     time::{Duration, SystemTime},
 };
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 use floe_agent_contract::AGENT_VERSION;
-use floe_conversation::{ModelRequest, ModelResponse, ModelRunner, ModelStep};
+use floe_inference::{
+    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
+};
 use floe_execution::limits::{CallLimiter, CallLimits};
-use floe_connections::ConnectorCatalogObservation;
-use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteModelConnection};
-use floe_protocol::{AgentRemoteCalendarConnectionDto, AgentRemotePairingDto, AgentRemoteRouteDto};
-use reqwest::{Client, StatusCode, Url};
+use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation};
+use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute};
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 
 pub struct ServerModelRunner {
     route: ModelRouteConfig,
@@ -77,20 +77,28 @@ fn provider_call_limit() -> CallLimiter {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RemoteModelRouteResolver;
 
-impl floe_inference::RemoteRouteResolver<AgentRemoteRouteDto> for RemoteModelRouteResolver {
+impl floe_inference::RemoteRouteResolver<ResolvedRemoteConnection> for RemoteModelRouteResolver {
     fn resolve<'a>(
         &'a self,
         connection: &'a RemoteModelConnection,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<AgentRemoteRouteDto, AgentFailure>> {
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ResolvedRemoteConnection, AgentFailure>> {
         Box::pin(resolve_remote_model_route(connection))
     }
+}
+
+/// What one resolution observed: the route Inference decided, and — separately —
+/// the source catalog Connections projected. They travel together only because
+/// one HTTP round trip produced both; nothing merges them.
+pub struct ResolvedRemoteConnection {
+    pub route: RemoteRoute,
+    pub calendar_connections: Vec<CalendarConnectionRef>,
 }
 
 /// Fetch the facts the local server reports, then let Inference decide the route
 /// and Connections project the connector catalog. No policy is decided here.
 pub async fn resolve_remote_model_route(
     connection: &RemoteModelConnection,
-) -> Result<AgentRemoteRouteDto, AgentFailure> {
+) -> Result<ResolvedRemoteConnection, AgentFailure> {
     let candidate = floe_inference::candidate_route(connection)?;
 
     let client = Client::builder()
@@ -139,51 +147,11 @@ pub async fn resolve_remote_model_route(
                 &connection.device_id,
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|value| AgentRemoteCalendarConnectionDto {
-            connector_id: value.connector_id,
-            connection_id: value.connection_id,
-            connection_revision: value.connection_revision,
-        })
-        .collect();
-    Ok(route_dto(planned, calendar_connections))
-}
-
-fn route_dto(
-    route: floe_inference::RemoteRoute,
-    calendar_connections: Vec<AgentRemoteCalendarConnectionDto>,
-) -> AgentRemoteRouteDto {
-    AgentRemoteRouteDto {
-        base_url: route.base_url,
-        bearer_token: route.bearer_token,
-        purpose: route.purpose,
-        external: route.external,
-        allow_external: route.allow_external,
-        recipient: route.recipient,
+        .unwrap_or_default();
+    Ok(ResolvedRemoteConnection {
+        route: planned,
         calendar_connections,
-        pairing: route.pairing.map(|pairing| AgentRemotePairingDto {
-            client_id: pairing.client_id,
-            person_id: pairing.person_id,
-            device_id: pairing.device_id,
-        }),
-    }
-}
-
-pub(crate) fn route_value(route: &AgentRemoteRouteDto) -> floe_inference::RemoteRoute {
-    floe_inference::RemoteRoute {
-        base_url: route.base_url.clone(),
-        bearer_token: route.bearer_token.clone(),
-        purpose: route.purpose.clone(),
-        external: route.external,
-        allow_external: route.allow_external,
-        recipient: route.recipient.clone(),
-        pairing: route.pairing.as_ref().map(|pairing| floe_inference::RoutePairing {
-            client_id: pairing.client_id.clone(),
-            person_id: pairing.person_id.clone(),
-            device_id: pairing.device_id.clone(),
-        }),
-    }
+    })
 }
 
 async fn authenticated_json<Response: for<'de> Deserialize<'de>>(
@@ -221,8 +189,8 @@ async fn authenticated_json<Response: for<'de> Deserialize<'de>>(
 }
 
 impl ServerModelRunner {
-    pub fn new_model_only(route: AgentRemoteRouteDto) -> Result<Self, AgentFailure> {
-        let model_route = ModelRouteConfig::from_route(&route_value(&route))?;
+    pub fn new_model_only(route: RemoteRoute) -> Result<Self, AgentFailure> {
+        let model_route = ModelRouteConfig::from_route(&route)?;
         let placement = if route.external {
             ModelPlacement::Remote
         } else {
@@ -311,7 +279,7 @@ fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailur
     Ok(())
 }
 
-fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
+fn model_input(request: &ModelTransportRequest) -> Result<serde_json::Value, AgentFailure> {
     let mut aliases: std::collections::HashSet<_> = request
         .capabilities
         .iter()
@@ -323,7 +291,7 @@ fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure
     if !request.active_agents.is_empty() && !aliases.insert(tool_name(DELEGATION_CAPABILITY_ID)) {
         return Err(AgentFailure::InvalidInput);
     }
-    let envelope = request.context_envelope()?;
+    let envelope = request.envelope.clone();
     let mut messages = vec![json!({"role": "user", "content": json!({
         "scoped_instructions": envelope.scoped_instructions,
         "contextual_data": envelope.contextual_data,
@@ -401,7 +369,7 @@ impl ReplayRoute for ModelRouteConfig {
     }
 }
 
-impl ReplayRoute for AgentRemoteRouteDto {
+impl ReplayRoute for RemoteRoute {
     fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -416,7 +384,7 @@ impl ReplayRoute for AgentRemoteRouteDto {
 }
 
 fn restore_replay<Route: ReplayRoute>(
-    replay: &[floe_conversation::ModelReplay],
+    replay: &[floe_agent_contract::ModelReplay],
     route: &Route,
     input: &mut serde_json::Value,
 ) -> Result<(), AgentFailure> {
@@ -519,12 +487,12 @@ fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
     Ok(result)
 }
 
-impl ModelRunner for ServerModelRunner {
+impl ModelTransport for ServerModelRunner {
     fn placement(&self) -> ModelPlacement {
         self.placement
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(&self, request: ModelTransportRequest) -> Result<ModelTransportResponse, AgentFailure> {
         request.prompt.validate()?;
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -709,7 +677,7 @@ impl ModelRunner for ServerModelRunner {
             {
                 return Err(AgentFailure::ServerModelInvalidOutput);
             }
-            Some(floe_conversation::ProviderReplay {
+            Some(floe_agent_contract::ProviderReplay {
                 gateway: self.route.base_url.clone(),
                 purpose: self.route.purpose.clone(),
                 external: self.route.external,
@@ -725,7 +693,7 @@ impl ModelRunner for ServerModelRunner {
             }
             None
         };
-        Ok(ModelResponse {
+        Ok(ModelTransportResponse {
             replay,
             schema_version: AGENT_VERSION,
             output: output.output,
@@ -743,7 +711,7 @@ mod tests {
     fn replay_groups_all_calls_and_results_and_rejects_partial_batches() {
         let route = route();
         let local_ids = [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()];
-        let base = floe_conversation::ProviderReplay {
+        let base = floe_agent_contract::ProviderReplay {
             gateway: route.base_url.clone(),
             purpose: route.purpose.clone(),
             external: route.external,
@@ -763,7 +731,7 @@ mod tests {
             .map(|(index, call_id)| {
                 let mut record = base.clone();
                 record.provider_call_id = base.call_ids[index].clone();
-                floe_conversation::ModelReplay {
+                floe_agent_contract::ModelReplay {
                     call_id: *call_id,
                     replay: record,
                 }
@@ -802,15 +770,115 @@ mod tests {
 
     use super::*;
 
-    fn route() -> AgentRemoteRouteDto {
-        AgentRemoteRouteDto {
+    /// One attempt's immutable input, as the Session owner would have shaped it.
+    fn transport_request() -> ModelTransportRequest {
+        use floe_agent_contract::prompts::{
+            BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL,
+            CAPABILITY_PROTOCOL_REVISION, PromptAssembly, PromptComponentKind, PromptRole,
+            product_component,
+        };
+        let prompt = PromptAssembly {
+            schema_version: 1,
+            role: PromptRole::Manager,
+            components: vec![
+                product_component(
+                    PromptComponentKind::BehaviorKernel,
+                    "behavior-kernel",
+                    BEHAVIOR_KERNEL_REVISION,
+                    BEHAVIOR_KERNEL,
+                ),
+                product_component(
+                    PromptComponentKind::Role,
+                    "fixture-role",
+                    1,
+                    "Answer the fixture assignment.",
+                ),
+                product_component(
+                    PromptComponentKind::CapabilityProtocol,
+                    "capability-protocol",
+                    CAPABILITY_PROTOCOL_REVISION,
+                    CAPABILITY_PROTOCOL,
+                ),
+            ],
+        };
+        prompt.validate().unwrap();
+        let policy = floe_agent_contract::InferencePolicyDecision {
+            purpose: "everyday_assistance".into(),
+            data_classes: vec![floe_agent_contract::DataClass::Synthetic],
+            allowed_placements: vec![ModelPlacement::Remote],
+            performance_class: "fast".into(),
+            projection_version: 1,
+            external_transfer_consent: floe_agent_contract::TransferConsent::Granted,
+            bounded_sensitive_projection: false,
+        };
+        let context = floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            optional_context_issues: vec![],
+            memories: vec![],
+            evidence: vec![],
+        };
+        ModelTransportRequest {
+            schema_version: 1,
+            attempt_id: uuid::Uuid::new_v4(),
+            prompt: prompt.clone(),
+            policy: policy.clone(),
+            context: context.clone(),
+            envelope: floe_agent_contract::ContextEnvelope {
+                schema_version: 1,
+                stable_instructions: prompt.clone(),
+                scoped_instructions: floe_agent_contract::ScopedInstructions {
+                    purpose: policy.purpose.clone(),
+                    available_capabilities: vec![],
+                    active_experts: vec![],
+                },
+                contextual_data: floe_agent_contract::ContextualData {
+                    projection_version: 1,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                conversation: floe_agent_contract::ConversationContext {
+                    history: vec![],
+                    current_turn: vec![json!({"role": "user", "content": "Hello"})],
+                },
+                runtime: floe_agent_contract::RuntimeContext {
+                    max_output_bytes: 1024,
+                },
+                manifest: floe_agent_contract::ContextManifest {
+                    prompt_components: prompt
+                        .components
+                        .iter()
+                        .map(|component| floe_agent_contract::PromptManifestEntry {
+                            kind: component.kind,
+                            source: component.source.clone(),
+                            revision: component.revision,
+                        })
+                        .collect(),
+                    evidence: vec![],
+                    memories: vec![],
+                    agent_cards: vec![],
+                },
+            },
+            capabilities: vec![],
+            active_agents: vec![],
+            replay: vec![],
+            remaining_tokens: 512,
+            remaining_cost_micros: 0,
+            max_output_bytes: 1024,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+            cancellation: floe_execution::Cancellation::new(),
+        }
+    }
+
+    fn route() -> RemoteRoute {
+        RemoteRoute {
             base_url: "http://127.0.0.1:8431".into(),
             bearer_token: "secret_token_value_that_is_long_enough".into(),
             purpose: "everyday_assistance".into(),
             external: true,
             allow_external: false,
             recipient: Some("fixture.example".into()),
-            calendar_connections: vec![],
             pairing: None,
         }
     }
@@ -872,7 +940,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_route_snapshot_uses_server_authority_and_scoped_catalog() {
-        let connection_id = Uuid::new_v4();
+        let connection_id = uuid::Uuid::new_v4();
         let (base_url, server) = inventory_server(vec![
             (
                 "/v1/inference-purposes",
@@ -906,9 +974,9 @@ mod tests {
         let route = resolve_remote_model_route(&connection(base_url))
             .await
             .unwrap();
-        assert!(!route.external);
-        assert!(!route.allow_external);
-        assert_eq!(route.recipient, None);
+        assert!(!route.route.external);
+        assert!(!route.route.allow_external);
+        assert_eq!(route.route.recipient, None);
         assert_eq!(route.calendar_connections.len(), 1);
         assert_eq!(
             route.calendar_connections[0].connection_id,
@@ -934,10 +1002,10 @@ mod tests {
             }),
         )])
         .await;
-        assert_eq!(
+        assert!(matches!(
             resolve_remote_model_route(&connection(base_url)).await,
             Err(AgentFailure::ConsentRequired)
-        );
+        ));
         server.await.unwrap();
     }
 
@@ -976,11 +1044,8 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let mut route = route();
         route.base_url = format!("http://{}", listener.local_addr().unwrap());
-        route.calendar_connections = vec![floe_protocol::AgentRemoteCalendarConnectionDto {
-            connector_id: "invalid.connector".into(),
-            connection_id: "invalid-connection".into(),
-            connection_revision: 0,
-        }];
+        // A source catalog is not part of the model route, so a model-only
+        // runner never sees one.
         let runner = ServerModelRunner::new_model_only(route).unwrap();
         assert_eq!(runner.placement(), ModelPlacement::Remote);
         assert!(!runner.route.allow_external);
@@ -995,11 +1060,6 @@ mod tests {
         let mut config = route();
         config.base_url = format!("http://{}", listener.local_addr().unwrap());
         config.allow_external = true;
-        config.calendar_connections = vec![floe_protocol::AgentRemoteCalendarConnectionDto {
-            connector_id: "unavailable.source".into(),
-            connection_id: String::new(),
-            connection_revision: 0,
-        }];
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = Vec::new();
@@ -1048,43 +1108,7 @@ mod tests {
                 response.len(), response
             ).as_bytes()).await.unwrap();
         });
-        let turn_id = uuid::Uuid::new_v4();
-        let request = ModelRequest {
-            usage: Default::default(),
-            replay: vec![],
-            schema_version: 1,
-            prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
-            person_id: floe_agent_contract::PersonId::new(),
-            session_id: uuid::Uuid::new_v4(),
-            turn_id,
-            policy: floe_context::InferencePolicyDecision {
-                purpose: "everyday_assistance".into(),
-                data_classes: vec![floe_agent_contract::DataClass::Synthetic],
-                allowed_placements: vec![ModelPlacement::Remote],
-                performance_class: "fast".into(),
-                projection_version: 1,
-                external_transfer_consent: floe_agent_contract::TransferConsent::Granted,
-                bounded_sensitive_projection: false,
-            },
-            context: floe_context::AgentContext {
-                projection_version: 1,
-                persona: None,
-                optional_context_issues: vec![],
-                memories: vec![],
-                evidence: vec![],
-            },
-            messages: vec![floe_conversation::AgentMessage::User {
-                turn_id,
-                text: "Hello".into(),
-            }],
-            capabilities: vec![],
-            active_agents: vec![],
-            remaining_tokens: 512,
-            remaining_cost_micros: 0,
-            max_output_bytes: 1024,
-            deadline: tokio::time::Instant::now() + Duration::from_secs(5),
-            cancellation: floe_execution::Cancellation::new(),
-        };
+        let request = transport_request();
         let mut denied = config.clone();
         denied.allow_external = false;
         assert!(matches!(
@@ -1122,9 +1146,9 @@ mod tests {
     fn replay_restores_original_ids_without_runner_memory_and_rejects_foreign_routes() {
         let route = route();
         let call_id = uuid::Uuid::new_v4();
-        let replay = floe_conversation::ModelReplay {
+        let replay = floe_agent_contract::ModelReplay {
             call_id,
-            replay: floe_conversation::ProviderReplay {
+            replay: floe_agent_contract::ProviderReplay {
                 gateway: route.base_url.clone(),
                 purpose: route.purpose.clone(),
                 external: route.external,
@@ -1140,7 +1164,7 @@ mod tests {
             {"role":"tool","tool_call_id":call_id.to_string(),"content":"observed"}
         ]});
         let encoded = serde_json::to_string(&replay.replay).unwrap();
-        let reloaded = floe_conversation::ModelReplay {
+        let reloaded = floe_agent_contract::ModelReplay {
             call_id,
             replay: serde_json::from_str(&encoded).unwrap(),
         };
@@ -1202,20 +1226,6 @@ mod tests {
         wrong_purpose.purpose = "other".into();
         assert!(ServerModelRunner::new_model_only(wrong_purpose).is_err());
 
-        for (connection_id, revision) in [
-            ("not-a-uuid", 1),
-            ("00000000-0000-3000-8000-000000000001", 1),
-            ("00000000-0000-4000-8000-000000000001", 0),
-        ] {
-            let mut candidate = route();
-            candidate.calendar_connections =
-                vec![floe_protocol::AgentRemoteCalendarConnectionDto {
-                    connector_id: "calendar.google".into(),
-                    connection_id: connection_id.into(),
-                    connection_revision: revision,
-                }];
-            assert!(ServerModelRunner::new_model_only(candidate).is_ok());
-        }
     }
 
     #[test]

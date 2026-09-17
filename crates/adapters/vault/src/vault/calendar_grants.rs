@@ -5,7 +5,7 @@ use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration, RegistrySn
 use floe_experts::{CalendarExpertSetup, CalendarExpertSetupReceipt};
 use floe_access::{DataAccessGrant, GrantState};
 use floe_access::{ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
-use floe_day::{CalendarProvider};
+use floe_agent_contract::CalendarProvider;
 use serde::{Deserialize, Serialize};
 use turso::{Row, transaction::TransactionBehavior};
 use uuid::Uuid;
@@ -1102,7 +1102,7 @@ mod tests {
             provider: CalendarProvider::EventKit,
             device_id: "test-device".into(),
             calendar_ids: vec!["home".into(), "work".into()],
-            connection_scope: floe_day::CalendarScope::Selected,
+            connection_scope: floe_agent_contract::CalendarScope::Selected,
             connection_revision: 1,
             source_authority: Some(SourceAuthority::new()),
             reviewed_native_subject_fingerprint: Some("a".repeat(64)),
@@ -1427,7 +1427,7 @@ mod tests {
                         provider: CalendarProvider::EventKit,
                         device_id: "test-device".into(),
                         calendar_ids: request.calendar_ids.clone(),
-                        connection_scope: floe_day::CalendarScope::Selected,
+                        connection_scope: floe_agent_contract::CalendarScope::Selected,
                         connection_revision: 1,
                         source_authority: Some(source_authority),
                         reviewed_native_subject_fingerprint: Some("b".repeat(64)),

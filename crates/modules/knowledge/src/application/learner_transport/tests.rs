@@ -1,13 +1,13 @@
-use floe_knowledge::{
+use crate::{
     InferenceLearnerModel, LearnerBudget, LearnerMemoryProposal, LearnerModel, LearnerReviewInput,
     LearnerReviewOutput, LearnerRuntime, MemoryCandidateSink, explicit_learning_signal,
 };
 
 use chrono::{DateTime, Utc};
 use floe_execution::{Cancellation};
-use floe_knowledge::{KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, LearningObservationKind, StageMemoryCandidate};
+use crate::{KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, LearningObservationKind, StageMemoryCandidate};
 use floe_agent_contract::PersonId;
-use floe_knowledge::PersonalMemoryValue;
+use crate::PersonalMemoryValue;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -16,16 +16,21 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use floe_conversation::{ModelResponse};
-use floe_knowledge::{EpistemicStatus, KnowledgeCandidateState, KnowledgeKind, KnowledgeOperation, KnowledgePayload, LearningEvidenceRef, PersonalMemoryKind};
+use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
+use crate::{EpistemicStatus, KnowledgeCandidateState, KnowledgeKind, KnowledgeOperation, KnowledgePayload, LearningEvidenceRef, PersonalMemoryKind};
+
+use floe_agent_contract::{AgentFailure, ModelPlacement};
+use floe_inference::{DataRecipient, ExecutionLocation, ModelProfile, PlannedRoute};
 
 use super::*;
+use crate::application::inference::{LearnerInferenceResponse, LearnerInferenceTransport};
+use crate::application::learner::LearnerModelRequest;
 
 struct FixtureTransport<'runner>(&'runner Runner);
 
 impl LearnerInferenceTransport for FixtureTransport<'_> {
     fn profile(&self) -> Result<ModelProfile, AgentFailure> {
-        let mut profile = foundation_profile(true)?;
+        let mut profile = learner_profile(FOUNDATION_LEARNER_PROFILE, true)?;
         if self.0.placement() != ModelPlacement::DeviceLocal {
             profile.execution_location = ExecutionLocation::Remote;
             profile.data_recipient = DataRecipient::External("fixture".into());
@@ -38,7 +43,7 @@ impl LearnerInferenceTransport for FixtureTransport<'_> {
         route: PlannedRoute,
         request: LearnerModelRequest,
     ) -> Result<LearnerInferenceResponse, AgentFailure> {
-        review_with_model(self.0, route, request).await
+        review_with_model(self.0, FOUNDATION_LEARNER_PROFILE, route, request).await
     }
 }
 
@@ -52,16 +57,16 @@ struct PendingModel;
 
 struct Runner {
     placement: ModelPlacement,
-    response: ModelResponse,
-    requests: Mutex<Vec<ModelRequest>>,
+    response: ModelTransportResponse,
+    requests: Mutex<Vec<ModelTransportRequest>>,
 }
 
-impl ModelRunner for Runner {
+impl ModelTransport for Runner {
     fn placement(&self) -> ModelPlacement {
         self.placement
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(&self, request: ModelTransportRequest) -> Result<ModelTransportResponse, AgentFailure> {
         self.requests.lock().unwrap().push(request);
         Ok(self.response.clone())
     }
@@ -152,7 +157,7 @@ fn input() -> LearnerReviewInput {
         session_id: Uuid::new_v4(),
         session_revision: 1,
         turn_ids: vec![Uuid::new_v4()],
-        outcome: floe_knowledge::LearningOutcome::Completed,
+        outcome: crate::LearningOutcome::Completed,
         digest: "The user explicitly asked Floe to remember a preference.".into(),
         current_memories: vec![],
         observed_at: Utc::now(),
@@ -196,7 +201,7 @@ fn model_request(input: LearnerReviewInput) -> LearnerModelRequest {
 async fn foundation_adapter_rejects_a_different_profile_before_generation() {
     let runner = Runner {
         placement: ModelPlacement::DeviceLocal,
-        response: ModelResponse {
+        response: ModelTransportResponse {
             replay: None,
             schema_version: AGENT_VERSION,
             output: vec![ModelStep::Answer {
@@ -207,7 +212,7 @@ async fn foundation_adapter_rejects_a_different_profile_before_generation() {
         },
         requests: Mutex::new(vec![]),
     };
-    let profile = foundation_profile(true).unwrap();
+    let profile = learner_profile(FOUNDATION_LEARNER_PROFILE, true).unwrap();
     let route = PlannedRoute {
         profile_id: "different-device-model".into(),
         purpose: profile.purpose,
@@ -216,7 +221,7 @@ async fn foundation_adapter_rejects_a_different_profile_before_generation() {
         data_recipient: profile.data_recipient,
     };
     assert_eq!(
-        review_with_model(&runner, route, model_request(input())).await,
+        review_with_model(&runner, FOUNDATION_LEARNER_PROFILE, route, model_request(input())).await,
         Err(AgentFailure::PolicyDenied)
     );
     assert!(runner.requests.lock().unwrap().is_empty());
@@ -233,7 +238,7 @@ async fn structured_learner_uses_a_local_restricted_request() {
     .to_string();
     let runner = Runner {
         placement: ModelPlacement::DeviceLocal,
-        response: ModelResponse {
+        response: ModelTransportResponse {
             replay: None,
             schema_version: AGENT_VERSION,
             output: vec![ModelStep::Answer { text: answer }],
@@ -249,7 +254,7 @@ async fn structured_learner_uses_a_local_restricted_request() {
     assert_eq!(output, expected);
     let requests = runner.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].prompt.role, floe_knowledge::prompts::PromptRole::Learner);
+    assert_eq!(requests[0].prompt.role, crate::prompts::PromptRole::Learner);
     assert!(requests[0].prompt.render().len() <= 4096);
     assert!(
         requests[0]
@@ -257,9 +262,8 @@ async fn structured_learner_uses_a_local_restricted_request() {
             .render()
             .contains("Never use a person's name as target_id")
     );
-    assert_eq!(requests[0].person_id, input.person_id);
-    assert_eq!(requests[0].session_id, input.session_id);
-    assert_eq!(requests[0].turn_id, input.turn_ids[0]);
+    // The Session that produced the digest does not cross the transport; what
+    // crosses is the digest itself, already projected as the turn to review.
     assert_eq!(requests[0].policy.purpose, "governed-memory-review");
     assert_eq!(
         requests[0].policy.allowed_placements,
@@ -274,10 +278,11 @@ async fn structured_learner_uses_a_local_restricted_request() {
     assert!(requests[0].context.persona.is_none());
     assert!(requests[0].capabilities.is_empty());
     assert!(requests[0].active_agents.is_empty());
-    assert!(matches!(
-        requests[0].messages.as_slice(),
-        [AgentMessage::User { text, .. }] if text == &input.digest
-    ));
+    assert!(requests[0].envelope.conversation.history.is_empty());
+    assert_eq!(
+        requests[0].envelope.conversation.current_turn,
+        vec![serde_json::json!({"role": "user", "content": input.digest})]
+    );
 }
 
 #[tokio::test]
@@ -301,7 +306,7 @@ async fn structured_learner_rejects_remote_and_unstructured_output() {
     ] {
         let runner = Runner {
             placement,
-            response: ModelResponse {
+            response: ModelTransportResponse {
                 replay: None,
                 schema_version: AGENT_VERSION,
                 output: vec![ModelStep::Answer {
@@ -432,7 +437,7 @@ async fn learner_cancellation_and_placement_fail_before_model_or_storage() {
 #[tokio::test]
 async fn learner_rejects_over_budget_or_halted_reviews() {
     let mut halted = input();
-    halted.outcome = floe_knowledge::LearningOutcome::Halted {
+    halted.outcome = crate::LearningOutcome::Halted {
         reason: AgentFailure::Stalled,
     };
     let calls = Arc::new(AtomicUsize::new(0));

@@ -1,3 +1,10 @@
+use base64::Engine as _;
+use floe_kernel::AgentFailure;
+use sha2::{Digest, Sha256};
+
+/// The version a producer's pairing report must be stated in.
+pub const PAIRING_REPORT_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProducerIdentity {
     pub schema_version: u32,
@@ -115,4 +122,53 @@ pub fn project_calendar_connections(
         });
     }
     Some(calendar)
+}
+
+/// Whether a producer's pairing report is one this device may act on.
+///
+/// The producer speaks for the pairing, not for the Person: a report that
+/// renames the client, or whose issuer fingerprint disagrees with the issuer
+/// key it carries, is refused rather than reconciled.
+pub fn admit_pairing_status(status: PairingStatus) -> Result<PairingStatus, AgentFailure> {
+    if status.schema_version != PAIRING_REPORT_VERSION
+        || status.pairing_id.is_empty()
+        || status.person_id.is_empty()
+        || status.device_id.is_empty()
+        || status
+            .client_id
+            .as_deref()
+            .is_some_and(|client_id| client_id != status.pairing_id)
+        || status.issuer.as_ref().is_some_and(|issuer| {
+            status
+                .issuer_fingerprint
+                .as_deref()
+                .is_some_and(|fingerprint| fingerprint != issuer.fingerprint)
+        })
+    {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    if let Some(issuer) = status.issuer.as_ref() {
+        admit_pairing_issuer(issuer)?;
+    }
+    Ok(status)
+}
+
+/// Whether an issuer key is the key its own fingerprint names.
+pub fn admit_pairing_issuer(issuer: &PairingIssuer) -> Result<(), AgentFailure> {
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(issuer.public_key.as_bytes())
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    if decoded.len() != 32
+        || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != issuer.public_key
+    {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    let fingerprint = Sha256::digest(&decoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if fingerprint != issuer.fingerprint {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    Ok(())
 }

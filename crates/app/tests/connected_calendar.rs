@@ -1,8 +1,9 @@
 use chrono::{Duration, TimeZone, Utc};
 use floe_connections::{CONNECTED_CONTEXT_VERSION, ConnectionState, SituationDescriptor, SituationTrigger, SourceFailureKind, evaluate_situation, validate_connector_snapshot};
 use floe_app::FloeCore;
-use floe_day::{CalendarBatch, CalendarFailure, CalendarProvider, CalendarRange, CalendarRecord, CalendarSelection, EventSchedule, TimedSchedule};
-use floe_kernel::{PersonId};
+use floe_day::{CalendarBatch, CalendarFailure, CalendarRange, CalendarRecord, CalendarSelection, EventSchedule, TimedSchedule};
+use floe_context_contract::CalendarProvider;
+use floe_kernel::PersonId;
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 10, 10, 0, 0).unwrap()

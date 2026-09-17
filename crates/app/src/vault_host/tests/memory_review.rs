@@ -1,4 +1,5 @@
 use super::*;
+use crate::MemoryReviewDecision;
 use chrono::Utc;
 use floe_conversation::{AgentMessage, AgentOutcome};
 use floe_knowledge::{
@@ -11,18 +12,17 @@ fn memory_review_requires_an_unlocked_vault_and_returns_pending_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    let inspect = AgentVaultActionDto::MemoryReview { decision: None };
+    let inspect = WorkerAction::MemoryReview { decision: None };
 
     assert_eq!(
         perform(&worker, person, inspect.clone()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
 
     let overview = perform(&worker, person, inspect).memory_review.unwrap();
-    assert_eq!(overview.schema_version, PROTOCOL_VERSION);
-    assert_eq!(overview.person_id, person.to_string());
-    assert!(overview.candidates.is_empty());
+    assert_eq!(overview.snapshot.person_id, person);
+    assert!(overview.snapshot.candidates.is_empty());
     assert!(overview.decision.is_none());
 }
 
@@ -31,25 +31,22 @@ fn memory_review_rejects_invalid_or_unknown_candidate_ids() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
 
-    for (candidate_id, failure) in [
-        ("invalid".to_owned(), AgentFailure::InvalidInput),
-        (Uuid::new_v4().to_string(), AgentFailure::NotFound),
-    ] {
-        let result = perform(
-            &worker,
-            person,
-            AgentVaultActionDto::MemoryReview {
-                decision: Some(AgentMemoryReviewDecisionDto {
-                    candidate_id,
-                    decision: AgentMemoryReviewDecisionKindDto::Approve,
-                }),
-            },
-        );
-        assert_eq!(result.failure, Some(failure));
-        assert!(result.memory_review.is_none());
-    }
+    // An unparseable candidate id never reaches the worker: the binding rejects
+    // it on the wire, so only the unknown id is a command the vault runs.
+    let result = perform(
+        &worker,
+        person,
+        WorkerAction::MemoryReview {
+            decision: Some(MemoryReviewDecision {
+                candidate_id: Uuid::new_v4(),
+                kind: floe_knowledge::KnowledgeDecisionKind::Approve,
+            }),
+        },
+    );
+    assert_eq!(result.failure, Some(AgentFailure::NotFound));
+    assert!(result.memory_review.is_none());
 }
 
 #[test]
@@ -57,17 +54,16 @@ fn memory_overview_requires_an_unlocked_vault_and_is_initially_empty() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    let inspect = AgentVaultActionDto::Memory {};
+    let inspect = WorkerAction::Memory;
 
     assert_eq!(
         perform(&worker, person, inspect.clone()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
 
     let overview = perform(&worker, person, inspect).memory.unwrap();
-    assert_eq!(overview.schema_version, PROTOCOL_VERSION);
-    assert_eq!(overview.person_id, person.to_string());
+    assert_eq!(overview.person_id, person);
     assert_eq!(overview.saved_count, 0);
     assert_eq!(overview.pending_count, 0);
     assert!(overview.memories.is_empty());
@@ -136,32 +132,28 @@ fn memory_snapshots_follow_review_decisions_and_survive_unlock() {
     });
     let worker = Worker::new(root, keys).unwrap();
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Unlock {}).failure,
+        perform(&worker, person, WorkerAction::Unlock).failure,
         None
     );
-    let initial = perform(&worker, person, AgentVaultActionDto::Memory {})
+    let initial = perform(&worker, person, WorkerAction::Memory)
         .memory
         .unwrap();
     assert_eq!((initial.saved_count, initial.pending_count), (0, 2));
-    let pending = perform(
-        &worker,
-        person,
-        AgentVaultActionDto::MemoryReview { decision: None },
-    )
-    .memory_review
-    .unwrap();
-    assert_eq!(pending.candidates.len(), 2);
-    for (candidate, decision) in candidates.iter().zip([
-        AgentMemoryReviewDecisionKindDto::Approve,
-        AgentMemoryReviewDecisionKindDto::Reject,
+    let pending = perform(&worker, person, WorkerAction::MemoryReview { decision: None })
+        .memory_review
+        .unwrap();
+    assert_eq!(pending.snapshot.candidates.len(), 2);
+    for (candidate, kind) in candidates.iter().zip([
+        floe_knowledge::KnowledgeDecisionKind::Approve,
+        floe_knowledge::KnowledgeDecisionKind::Reject,
     ]) {
         let reviewed = perform(
             &worker,
             person,
-            AgentVaultActionDto::MemoryReview {
-                decision: Some(AgentMemoryReviewDecisionDto {
-                    candidate_id: candidate.id.to_string(),
-                    decision,
+            WorkerAction::MemoryReview {
+                decision: Some(MemoryReviewDecision {
+                    candidate_id: candidate.id,
+                    kind,
                 }),
             },
         )
@@ -170,35 +162,36 @@ fn memory_snapshots_follow_review_decisions_and_survive_unlock() {
         assert!(reviewed.decision.is_some());
         assert!(
             !reviewed
+                .snapshot
                 .candidates
                 .iter()
-                .any(|pending| pending.0["id"] == candidate.id.to_string())
+                .any(|pending| pending.id == candidate.id)
         );
     }
-    let saved = perform(&worker, person, AgentVaultActionDto::Memory {})
+    let saved = perform(&worker, person, WorkerAction::Memory)
         .memory
         .unwrap();
     assert_eq!((saved.saved_count, saved.pending_count), (1, 0));
-    assert_eq!(saved.person_id, person.to_string());
+    assert_eq!(saved.person_id, person);
     assert_eq!(saved.memories.len(), 1);
     let summary = &saved.memories[0];
     assert_eq!(summary.revision, 1);
     assert_eq!(summary.statement, "Prefers focused mornings");
-    assert_eq!(summary.origin, AgentMemoryOriginDto::UserProvided);
+    assert_eq!(summary.origin, floe_knowledge::MemoryOrigin::UserProvided);
     assert_eq!(summary.source_count, 1);
     assert_eq!(summary.confidence_millis, 1000);
-    assert_eq!(summary.memory_kind.0, json!("preference"));
-    assert_eq!(summary.epistemic_status.0, json!("fact"));
+    assert_eq!(summary.memory_kind, PersonalMemoryKind::Preference);
+    assert_eq!(summary.epistemic_status, EpistemicStatus::Fact);
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Lock {}).failure,
+        perform(&worker, person, WorkerAction::Lock).failure,
         None
     );
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Unlock {}).failure,
+        perform(&worker, person, WorkerAction::Unlock).failure,
         None
     );
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Memory {})
+        perform(&worker, person, WorkerAction::Memory)
             .memory
             .unwrap(),
         saved

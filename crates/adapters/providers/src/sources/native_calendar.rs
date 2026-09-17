@@ -3,17 +3,20 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use floe_agent_contract::{AgentFailure};
-use floe_execution::{Cancellation};
-use floe_access::{
-    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessRequest, CalendarReadAccessStamp,
-};
+use floe_agent_contract::AgentFailure;
+use floe_execution::Cancellation;
+use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
+use floe_context::{CalendarObservation, CalendarObserveRequest, CalendarSource};
 use floe_actions::{ActionFailure, CalendarAction, CalendarActionProvider, CalendarCreateReceipt, CalendarPreflight};
 
-use floe_context_contract::{ContextDependency};
-use floe_day::{AllDaySchedule, CalendarBatch, CalendarFailure, CalendarProvider, CalendarRecord, Event, EventSchedule, TimedSchedule};
+use floe_context_contract::ContextDependency;
+use floe_day::{AllDaySchedule, CalendarBatch, CalendarFailure, CalendarRecord, Event, EventSchedule, TimedSchedule};
+use floe_context_contract::CalendarProvider;
 use floe_agent_contract::PersonId;
-use floe_protocol::{CalendarBatchDto, CalendarFailureDto, EventScheduleDto, PROTOCOL_VERSION};
+use floe_native::{
+    NATIVE_CALENDAR_WIRE_VERSION, NativeCalendarBatch as CalendarBatchDto,
+    NativeCalendarFailure as CalendarFailureDto, NativeEventSchedule as EventScheduleDto,
+};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -160,7 +163,7 @@ impl NativeCalendarReadAccess {
             .ok_or(AgentFailure::InvalidInput)?;
         Ok(json!({
             "operation": operation,
-            "schema_version": PROTOCOL_VERSION,
+            "schema_version": NATIVE_CALENDAR_WIRE_VERSION,
             "person_id": self.person_id,
             "device_id": self.device_id,
             "provider": self.provider,
@@ -218,7 +221,7 @@ struct NativeObservation {
     batches: Vec<CalendarBatchDto>,
 }
 
-impl CalendarReadAccess for NativeCalendarReadAccess {
+impl CalendarSource for NativeCalendarReadAccess {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -232,7 +235,7 @@ impl CalendarReadAccess for NativeCalendarReadAccess {
         let input = self.request_base("view_access", request.deadline)?;
         let stamp: CalendarReadAccessStamp =
             Self::native(input, request.deadline, request.cancellation).await?;
-        if stamp.schema_version != PROTOCOL_VERSION
+        if stamp.schema_version != NATIVE_CALENDAR_WIRE_VERSION
             || stamp.person_id != self.person_id
             || stamp.device_id != self.device_id
             || stamp.provider != CalendarProvider::EventKit

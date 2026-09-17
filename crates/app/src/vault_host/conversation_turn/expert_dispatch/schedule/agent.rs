@@ -10,15 +10,24 @@ use std::{
 use chrono::{DateTime, Utc};
 
 use floe_access::{
-    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessAdmission,
-    CalendarReadAccessRequest, CalendarReadAccessStamp, ProjectedCalendarObservation,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
+    CalendarReadAdmission,
+};
+use floe_context::{
+    CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
+    CalendarTimelineViews, GovernedDependencyResolver, ProjectedCalendarObservation,
 };
 use floe_actions::{
     CalendarAction, ExpertCalendarDestination, ExpertCalendarRequest, ExpertProposalReference,
 };
 use floe_agent_contract::{
-    AgentFailure, CancelReason, DataClass, ModelPlacement, SessionProtection, TaskId, TaskSnapshot,
+    AgentFailure, CancelReason, DataClass, ModelPlacement, SessionProtection,
 };
+// What the regressions below stand a task and a registry up with.
+#[cfg(test)]
+use floe_agent_contract::{TaskId, TaskSnapshot};
+#[cfg(test)]
+use floe_experts::RegistrySnapshot;
 use floe_context::{
     AgentContext, CoverageAccumulator, FeasibilityView, InferencePolicyDecision, WellbeingView,
     native_context_evidence,
@@ -33,7 +42,7 @@ use floe_execution::Cancellation;
 use floe_experts::{
     A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATaskState,
     EXPERT_RESULT_MEDIA_TYPE, A2ATask, AgentCard, AgentRegistry, ExpertBudget, ExpertInput,
-    ExpertInvocation, ExpertResult, InProcessA2ATransport, InProcessAgent, RegistrySnapshot,
+    ExpertInvocation, ExpertResult, InProcessA2ATransport, InProcessAgent,
 };
 use floe_experts_builtin::BuiltinExpertKind;
 use floe_experts_builtin::schedule::{CalendarHistoryBoundary, ExpertHost};
@@ -42,16 +51,13 @@ use floe_vault::{
     CalendarGrantAdmission, ContextEvidenceReader, EncryptedAgentVault, VaultKeyProvider,
 };
 
-use super::timeline_views::CalendarTimelineViews;
 use crate::FloeCore;
 use floe_context_contract::{ContextDependency, DependencyCoverage, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction};
-use floe_day::{CalendarProvider};
-use floe_kernel::{PersonId};
-use serde::{Deserialize, Serialize};
+use floe_context_contract::CalendarProvider;
+use floe_kernel::PersonId;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::timeline_views::GovernedDependencyResolver;
 
 pub struct CalendarAgentTurnRequest {
     pub command: AgentCommand,
@@ -109,8 +115,8 @@ pub type CalendarExpertTaskCompletion = floe_experts::ExpertTaskCompletion;
 impl FloeCore {
     pub async fn run_calendar_expert_endpoint<
         Keys: VaultKeyProvider,
-        Access: CalendarReadAccess,
-        Model: ModelRunner + Sync,
+        Access: CalendarSource + CalendarReadAdmission,
+        Model: floe_inference::ModelTransport + Sync,
         Clock: Fn() -> DateTime<Utc> + Sync + Copy,
     >(
         &self,
@@ -142,7 +148,13 @@ impl FloeCore {
             grant_pin: Mutex::new(None),
             remote_processing: model.placement() == ModelPlacement::Remote,
         };
-        let views = CalendarTimelineViews::new(self, &guarded_access, request.grant, clock)?;
+        let views = CalendarTimelineViews::new(
+            &self.lease_registry,
+            &self.store,
+            &guarded_access,
+            request.grant,
+            clock,
+        )?;
         vault.check_access()?;
         let snapshot = tokio::select! {
             biased;
@@ -299,7 +311,7 @@ impl FloeCore {
         };
         let report = ExpertHost {
             assignments: &assignments,
-            views: &views,
+            views: &ExpertTimelineViews(&views),
         }
         .invoke_with_model(invocation, &reasoner, &request.policy)
         .await?;
@@ -336,8 +348,8 @@ impl FloeCore {
 
     pub async fn run_calendar_agent_turn<
         Keys: VaultKeyProvider,
-        Access: CalendarReadAccess,
-        Model: ModelRunner + Sync,
+        Access: CalendarSource + CalendarReadAdmission,
+        Model: floe_inference::ModelTransport + Sync,
         Clock: Fn() -> DateTime<Utc> + Sync + Copy,
     >(
         &self,
@@ -391,7 +403,13 @@ impl FloeCore {
                 grant_pin: Mutex::new(None),
                 remote_processing: model.placement() == ModelPlacement::Remote,
             };
-            let views = CalendarTimelineViews::new(self, &guarded_access, request.grant, clock)?;
+            let views = CalendarTimelineViews::new(
+            &self.lease_registry,
+            &self.store,
+            &guarded_access,
+            request.grant,
+            clock,
+        )?;
             vault.check_access()?;
             let snapshot = tokio::select! {
                 biased;
@@ -701,7 +719,7 @@ struct GrantBoundCalendarAccess<'host, Keys, Access> {
     remote_processing: bool,
 }
 
-impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
+impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission>
     GrantBoundCalendarAccess<'_, Keys, Access>
 {
     async fn authorize_remote(
@@ -864,7 +882,7 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
     }
 }
 
-impl<Keys: VaultKeyProvider, Access: CalendarReadAccess> CalendarReadAccess
+impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission> CalendarSource
     for GrantBoundCalendarAccess<'_, Keys, Access>
 {
     async fn check(
@@ -882,44 +900,6 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess> CalendarReadAccess
             self.authorize_remote(&request, &stamp).await?;
         }
         Ok(stamp)
-    }
-
-    async fn admission(
-        &self,
-        request: &CalendarReadAccessRequest,
-    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
-        let stamp = self.access.check(request.clone()).await?;
-        self.admission_after_check(request, &stamp).await
-    }
-
-    async fn admission_after_check(
-        &self,
-        request: &CalendarReadAccessRequest,
-        stamp: &CalendarReadAccessStamp,
-    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
-        if matches!(
-            self.grant.provider,
-            CalendarProvider::EventKit | CalendarProvider::Android
-        ) {
-            let consumer = GrantConsumer::builtin("calendar.expert")
-                .map_err(|_| AgentFailure::CapabilityDenied)?;
-            return Ok(self
-                .authorize_native(request, Some(&stamp.native_subject_fingerprint))
-                .await?
-                .map(|admission| {
-                    CalendarReadAccessAdmission::device_local(
-                        admission.source.person_id(),
-                        admission.grant_id,
-                        admission.authority,
-                        admission.source,
-                        admission.scope,
-                        admission.consumer_policy,
-                        consumer,
-                    )
-                }));
-        } else {
-            return self.authorize_remote(request, stamp).await;
-        }
     }
 
     async fn observe(
@@ -975,9 +955,51 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess> CalendarReadAccess
     }
 }
 
+impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission> CalendarReadAdmission
+    for GrantBoundCalendarAccess<'_, Keys, Access>
+{
+    async fn admission(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        let stamp = self.access.check(request.clone()).await?;
+        self.admission_after_check(request, &stamp).await
+    }
+
+    async fn admission_after_check(
+        &self,
+        request: &CalendarReadAccessRequest,
+        stamp: &CalendarReadAccessStamp,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        if matches!(
+            self.grant.provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            let consumer = GrantConsumer::builtin("calendar.expert")
+                .map_err(|_| AgentFailure::CapabilityDenied)?;
+            return Ok(self
+                .authorize_native(request, Some(&stamp.native_subject_fingerprint))
+                .await?
+                .map(|admission| {
+                    CalendarReadAccessAdmission::device_local(
+                        admission.source.person_id(),
+                        admission.grant_id,
+                        admission.authority,
+                        admission.source,
+                        admission.scope,
+                        admission.consumer_policy,
+                        consumer,
+                    )
+                }));
+        } else {
+            return self.authorize_remote(request, stamp).await;
+        }
+    }
+}
+
 struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     vault: &'host EncryptedAgentVault<Keys>,
-    views: CalendarTimelineViews<'host, Access, Clock>,
+    views: CalendarTimelineViews<'host, Access, floe_vault::TursoStore, Clock>,
     model: &'host Model,
     policy: InferencePolicyDecision,
     registry: Mutex<AgentRegistry>,
@@ -993,7 +1015,7 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarReadAccess,
+    Access: CalendarSource + CalendarReadAdmission,
     Clock: Fn() -> DateTime<Utc> + Sync,
     Model: Sync,
 > CalendarTurn<'_, Keys, Access, Clock, Model>
@@ -1180,7 +1202,7 @@ impl<
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarReadAccess,
+    Access: CalendarSource + CalendarReadAdmission,
     Clock: Fn() -> DateTime<Utc> + Sync,
     Model: Sync,
 > SessionStore for CalendarTurn<'_, Keys, Access, Clock, Model>
@@ -1299,9 +1321,9 @@ impl<
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarReadAccess,
+    Access: CalendarSource + CalendarReadAdmission,
     Clock: Fn() -> DateTime<Utc> + Sync,
-    Model: ModelRunner + Sync,
+    Model: floe_inference::ModelTransport + Sync,
 > CapabilityHost for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
     fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
@@ -1315,9 +1337,9 @@ impl<
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarReadAccess,
+    Access: CalendarSource + CalendarReadAdmission,
     Clock: Fn() -> DateTime<Utc> + Sync,
-    Model: ModelRunner + Sync,
+    Model: floe_inference::ModelTransport + Sync,
 > InProcessAgent for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
     fn agent_cards(&self, person_id: PersonId) -> Vec<AgentCard> {
@@ -1351,7 +1373,7 @@ impl<
         };
         let result = ExpertHost {
             assignments: &assignments,
-            views: &self.views,
+            views: &ExpertTimelineViews(&self.views),
         }
         .invoke_with_model(
             ExpertInvocation {
@@ -1429,9 +1451,9 @@ struct CalendarModel<'model, 'host, Keys, Access, Clock, Model> {
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarReadAccess,
+    Access: CalendarSource + CalendarReadAdmission,
     Clock: Fn() -> DateTime<Utc> + Sync,
-    Model: ModelRunner + Sync,
+    Model: floe_inference::ModelTransport + Sync,
 > ModelRunner for CalendarModel<'_, '_, Keys, Access, Clock, Model>
 {
     fn history_start(
@@ -1466,11 +1488,12 @@ impl<
             }
         }
         request.deadline = request.deadline.min(self.turn.deadline);
+        let runner = floe_conversation::TransportModelRunner::new(self.model);
         let response = tokio::select! {
             biased;
             _ = self.turn.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
             _ = tokio::time::sleep_until(self.turn.deadline) => return Err(AgentFailure::DeadlineExceeded),
-            result = self.model.generate(request) => result?,
+            result = runner.generate(request) => result?,
         };
         if self.turn.views.source_denial_requires_halt() {
             return Err(AgentFailure::CapabilityDenied);
@@ -1567,5 +1590,27 @@ impl floe_agent_contract::CapabilityJournal for NoCapabilityJournal {
         _record: floe_agent_contract::CapabilityExecution,
     ) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+/// The Expert's view port, satisfied by the acquisition Context performs.
+///
+/// The Expert asks for a bounded timeline; Context decides what it is entitled
+/// to and returns it. This only names the boundary between the two.
+pub(crate) struct ExpertTimelineViews<'a, Access, Mirror, Clock>(
+    pub(crate) &'a CalendarTimelineViews<'a, Access, Mirror, Clock>,
+);
+
+impl<
+    Access: CalendarSource + CalendarReadAdmission,
+    Mirror: CalendarMirrorReader,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+> floe_experts_builtin::schedule::ExpertViews for ExpertTimelineViews<'_, Access, Mirror, Clock>
+{
+    async fn timeline(
+        &self,
+        request: floe_agent_contract::TimelineViewRead,
+    ) -> Result<floe_agent_contract::ExpertTimelineView, AgentFailure> {
+        self.0.timeline(request).await
     }
 }

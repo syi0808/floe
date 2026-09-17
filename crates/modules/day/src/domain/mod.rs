@@ -4,9 +4,8 @@ mod entity;
 mod projection;
 
 pub use calendar::{
-    CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror, CalendarProvider,
-    CalendarRange, CalendarRecord, CalendarScope, CalendarSelection, CalendarSource,
-    CalendarSyncStatus,
+    CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror, CalendarRange,
+    CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus,
 };
 pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
 pub use entity::{

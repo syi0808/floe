@@ -1,12 +1,12 @@
 //! The bounded timeline view the Schedule Expert reads under one grant.
 //!
 //! The grant, the observation it is satisfied from and the lease that keeps it
-//! alive are all acquisition, so they are composed here and handed to the
-//! Expert as a view it may read once.
+//! alive are all acquisition, so Context composes them here and hands the Expert
+//! a view it may read once. Access judges the grant, the source adapter performs
+//! the read, and this owns the order and the re-check between them.
 
 use std::{
     collections::{HashMap, HashSet},
-    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -15,31 +15,34 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use floe_agent_contract::{AgentFailure, DataClass};
-use floe_execution::{Cancellation};
-use floe_experts_builtin::schedule::{
-    ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
+use floe_agent_contract::{
+    AgentFailure, ExpertTimelineView, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
     MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
 };
-use floe_context_contract::{ConsumerPolicyAuthority, ContextDependency, GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction};
-use floe_day::{CalendarMirror, CalendarProvider, CalendarRange, EventSchedule, SourceRef};
-use floe_kernel::{PersonId};
-use serde::{Deserialize, Serialize};
+use floe_context_contract::CalendarProvider;
+use floe_context_contract::ContextDependency;
+use floe_day::{CalendarMirror, CalendarRange, CalendarTimelineGrant, EventSchedule, SourceRef};
+use floe_execution::Cancellation;
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use floe_access::{
-    CalendarLeaseKey, CalendarObservation, CalendarObserveRequest, CalendarReadAccess,
-    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
-    ProjectedCalendarObservation, admission_matches, admission_matches_dependency,
-    calendar_lease_dependency,
+    CalendarLeaseKey, CalendarReadAccessAdmission, CalendarReadAccessRequest,
+    CalendarReadAccessStamp, CalendarReadAdmission, admission_matches,
+    admission_matches_dependency, calendar_lease_dependency,
 };
-use floe_day::CalendarTimelineGrant;
 
-use crate::FloeCore;
+use crate::application::consumed::ConsumedLineage;
+use crate::application::leases::{SourceLeaseRegistry, SourceLeaseReservation};
+use crate::application::source_view::SourceView;
+use crate::ports::calendar_source::{
+    CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
+    ProjectedCalendarObservation,
+};
 
-pub struct CalendarTimelineViews<'host, Access, Clock> {
-    core: &'host FloeCore,
+pub struct CalendarTimelineViews<'host, Access, Mirror, Clock> {
+    leases_registry: &'host Arc<SourceLeaseRegistry>,
+    mirror: &'host Mirror,
     access: &'host Access,
     clock: Clock,
     grant: CalendarTimelineGrant,
@@ -47,28 +50,35 @@ pub struct CalendarTimelineViews<'host, Access, Clock> {
     live_observation_expires_at: Mutex<Option<DateTime<Utc>>>,
     invocation_id: Uuid,
     process_incarnation: Uuid,
-    leases: Mutex<HashMap<CalendarLeaseKey, Arc<floe_context::SourceView<ExpertTimelineView>>>>,
-    consumed: floe_context::ConsumedLineage,
+    leases: Mutex<HashMap<CalendarLeaseKey, Arc<SourceView<ExpertTimelineView>>>>,
+    consumed: ConsumedLineage,
     acquisition: tokio::sync::Mutex<()>,
     source_observed: AtomicBool,
     authorized_once: AtomicBool,
     fatal_source_denial: AtomicBool,
 }
 
-pub(super) struct GovernedDependencyResolver<'views, 'host, Access, Clock> {
-    views: &'views CalendarTimelineViews<'host, Access, Clock>,
+pub struct GovernedDependencyResolver<'views, 'host, Access, Mirror, Clock> {
+    views: &'views CalendarTimelineViews<'host, Access, Mirror, Clock>,
 }
 
-impl<'views, 'host, Access, Clock> GovernedDependencyResolver<'views, 'host, Access, Clock> {
-    pub(crate) fn new(views: &'views CalendarTimelineViews<'host, Access, Clock>) -> Self {
+impl<'views, 'host, Access, Mirror, Clock>
+    GovernedDependencyResolver<'views, 'host, Access, Mirror, Clock>
+{
+    pub fn new(views: &'views CalendarTimelineViews<'host, Access, Mirror, Clock>) -> Self {
         Self { views }
     }
 }
 
-impl<'views, 'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
-    GovernedDependencyResolver<'views, 'host, Access, Clock>
+impl<
+    'views,
+    'host,
+    Access: CalendarSource + CalendarReadAdmission,
+    Mirror: CalendarMirrorReader,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+> GovernedDependencyResolver<'views, 'host, Access, Mirror, Clock>
 {
-    pub(crate) async fn resolve(
+    pub async fn resolve(
         &self,
         dependency: &ContextDependency,
         deadline: Instant,
@@ -86,27 +96,33 @@ struct AuthorizedRead {
 }
 
 
-impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
-    CalendarTimelineViews<'host, Access, Clock>
+impl<
+    'host,
+    Access: CalendarSource + CalendarReadAdmission,
+    Mirror: CalendarMirrorReader,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+> CalendarTimelineViews<'host, Access, Mirror, Clock>
 {
     pub fn new(
-        core: &'host FloeCore,
+        leases_registry: &'host Arc<SourceLeaseRegistry>,
+        mirror: &'host Mirror,
         access: &'host Access,
         grant: CalendarTimelineGrant,
         clock: Clock,
     ) -> Result<Self, AgentFailure> {
         grant.validate(clock())?;
         Ok(Self {
-            core,
+            leases_registry,
+            mirror,
             access,
             clock,
             grant,
             stamp: Mutex::new(None),
             live_observation_expires_at: Mutex::new(None),
             invocation_id: Uuid::new_v4(),
-            process_incarnation: core.lease_registry.process_incarnation(),
+            process_incarnation: leases_registry.process_incarnation(),
             leases: Mutex::new(HashMap::new()),
-            consumed: floe_context::ConsumedLineage::default(),
+            consumed: ConsumedLineage::default(),
             acquisition: tokio::sync::Mutex::new(()),
             source_observed: AtomicBool::new(false),
             authorized_once: AtomicBool::new(false),
@@ -130,7 +146,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         self.source_observed.load(Ordering::Acquire)
     }
 
-    pub(crate) fn validate_dependency_liveness(
+    pub fn validate_dependency_liveness(
         &self,
         dependency: &ContextDependency,
     ) -> Result<(), AgentFailure> {
@@ -140,7 +156,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         {
             return Err(AgentFailure::StaleContext);
         }
-        let (evidence, _) = self.core.lease_registry.observation(dependency)?;
+        let (evidence, _) = self.leases_registry.observation(dependency)?;
         if evidence != *dependency {
             return Err(AgentFailure::StaleContext);
         }
@@ -151,7 +167,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         self.fatal_source_denial.load(Ordering::Acquire)
     }
 
-    pub(crate) async fn resolve_dependency(
+    pub async fn resolve_dependency(
         &self,
         dependency: &ContextDependency,
         deadline: Instant,
@@ -163,7 +179,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         {
             return Err(AgentFailure::StaleContext);
         }
-        let (evidence, subject) = self.core.lease_registry.observation(dependency)?;
+        let (evidence, subject) = self.leases_registry.observation(dependency)?;
         if evidence != *dependency {
             return Err(AgentFailure::StaleContext);
         }
@@ -224,7 +240,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
     fn cached_lease(
         &self,
         key: &CalendarLeaseKey,
-    ) -> Result<Option<Arc<floe_context::SourceView<ExpertTimelineView>>>, AgentFailure> {
+    ) -> Result<Option<Arc<SourceView<ExpertTimelineView>>>, AgentFailure> {
         let mut leases = self
             .leases
             .lock()
@@ -269,7 +285,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         before: AuthorizedRead,
         after: AuthorizedRead,
         mut view: ExpertTimelineView,
-        reservation: Option<floe_context::SourceLeaseReservation>,
+        reservation: Option<SourceLeaseReservation>,
         observed_at: DateTime<Utc>,
         acquisition_wall: DateTime<Utc>,
         acquisition_mono: Instant,
@@ -323,14 +339,14 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             expires_at,
         )?;
         let reservation = reservation.ok_or(AgentFailure::CapabilityUnavailable)?;
-        let lease = Arc::new(floe_context::SourceView::try_new(
+        let lease = Arc::new(SourceView::try_new(
             dependency.clone(),
             admission.scope().clone(),
             view.clone(),
             expires_at_monotonic,
             reservation,
         )?);
-        self.core.lease_registry.retain_observation(
+        self.leases_registry.retain_observation(
             dependency.clone(),
             before.stamp.native_subject_fingerprint.clone(),
             expires_at_monotonic,
@@ -458,7 +474,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                     self.authorized(deadline, child.clone(), true).await?;
                     return Ok(());
                 }
-                let mirror = self.core.store.bounded_calendar_mirror(self.grant.person_id).await?;
+                let mirror = self.mirror.bounded_calendar_mirror(self.grant.person_id).await?;
                 self.validate_mirror(&mirror, (self.clock)())?;
                 self.authorized(deadline, child.clone(), true).await?;
                 Ok(())
@@ -586,7 +602,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .admission
             .as_ref()
             .map(|_| {
-                self.core.lease_registry.reserve(
+                self.leases_registry.reserve(
                     self.grant.person_id,
                     request.max_bytes.min(MAX_TIMELINE_VIEW_BYTES),
                 )
@@ -682,8 +698,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::CapabilityUnavailable);
         }
         let mirror = self
-            .core
-            .store
+            .mirror
             .bounded_calendar_mirror(self.grant.person_id)
             .await?;
         let expires = self.validate_mirror(&mirror, (self.clock)())?;
@@ -792,8 +807,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::StaleContext);
         }
         let latest = self
-            .core
-            .store
+            .mirror
             .bounded_calendar_mirror(self.grant.person_id)
             .await?;
         self.validate_mirror(&latest, (self.clock)())?;
@@ -822,7 +836,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         range_end: DateTime<Utc>,
         before: AuthorizedRead,
         key: CalendarLeaseKey,
-        reservation: Option<floe_context::SourceLeaseReservation>,
+        reservation: Option<SourceLeaseReservation>,
         mut observation: CalendarObservation,
         acquisition_wall: DateTime<Utc>,
         acquisition_mono: Instant,
@@ -957,7 +971,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         range_end: DateTime<Utc>,
         before: AuthorizedRead,
         key: CalendarLeaseKey,
-        reservation: Option<floe_context::SourceLeaseReservation>,
+        reservation: Option<SourceLeaseReservation>,
         mut observation: ProjectedCalendarObservation,
         acquisition_wall: DateTime<Utc>,
         acquisition_mono: Instant,
@@ -1090,10 +1104,14 @@ fn observation_schedule_bounds(
     Ok((start.max(range_start), end.min(range_end)))
 }
 
-impl<Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync> ExpertViews
-    for CalendarTimelineViews<'_, Access, Clock>
+impl<
+    Access: CalendarSource + CalendarReadAdmission,
+    Mirror: CalendarMirrorReader,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+> CalendarTimelineViews<'_, Access, Mirror, Clock>
 {
-    async fn timeline(
+    /// Acquire the bounded timeline this read is entitled to.
+    pub async fn timeline(
         &self,
         request: TimelineViewRead,
     ) -> Result<ExpertTimelineView, AgentFailure> {
@@ -1222,6 +1240,3 @@ fn bounded_title(title: &str) -> String {
         .unwrap_or(0);
     format!("{}…", &title[..boundary])
 }
-
-#[cfg(test)]
-mod tests;

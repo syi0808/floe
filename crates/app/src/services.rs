@@ -33,7 +33,9 @@ impl StartTurn {
         {
             return Err(ServiceError::InvalidInput);
         }
-        self.profile.validate()?;
+        self.profile
+            .validate()
+            .map_err(|_| ServiceError::InvalidInput)?;
         match &self.mode {
             TurnMode::New => Ok(()),
             TurnMode::Continue(reference) => reference.validate(),
@@ -54,25 +56,8 @@ pub enum TurnMode {
     Continue(ContinuationRef),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ProfileSelection {
-    Auto,
-    Explicit(String),
-}
-
-impl ProfileSelection {
-    fn validate(&self) -> Result<(), ServiceError> {
-        if let Self::Explicit(profile_id) = self
-            && (profile_id.trim() != profile_id
-                || profile_id.is_empty()
-                || profile_id.len() > 128
-                || profile_id.chars().any(char::is_control))
-        {
-            return Err(ServiceError::InvalidInput);
-        }
-        Ok(())
-    }
-}
+/// Which model profile a turn runs on is Conversation's own choice of words.
+pub use floe_conversation::ProfileSelection;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContinuationRef {
@@ -229,7 +214,7 @@ mod tests {
 
 /// The calendar actions one caller may see, with the authority they stand
 /// under when the caller is allowed to know it.
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct CalendarActionsResult {
     pub actions: Vec<floe_actions::CalendarAction>,
     #[serde(skip_serializing_if = "Option::is_none")]

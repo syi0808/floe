@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     future::Future,
     io::{Read, Write},
@@ -108,13 +108,6 @@ pub struct EncryptedAgentVault<Keys> {
     _host_lock: File,
 }
 
-pub struct GovernedAgentSessionStore<'vault, Keys> {
-    vault: &'vault EncryptedAgentVault<Keys>,
-    session_id: Uuid,
-    coverage: floe_context::CoverageRegistry,
-    liveness: Option<&'vault dyn GovernedDependencyLiveness>,
-}
-
 struct VaultTransactionAuthority<'vault, 'transaction, Keys> {
     vault: &'vault EncryptedAgentVault<Keys>,
     transaction: &'transaction turso::transaction::Transaction<'transaction>,
@@ -158,261 +151,9 @@ impl<Keys: VaultKeyProvider> floe_access::CurrentAuthority
     }
 }
 
-impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
-    pub fn session_id(&self) -> Uuid {
-        self.session_id
-    }
-
-    pub async fn record_dependency(
-        &self,
-        turn_id: Uuid,
-        dependency: ContextDependency,
-    ) -> Result<(), AgentFailure> {
-        if turn_id.is_nil() || dependency.observation_id().is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let stored = if self.coverage.has_turn(turn_id)? {
-            None
-        } else {
-            let session = self
-                .vault
-                .load(self.vault.person_id, self.session_id)
-                .await?;
-            if session
-                .messages
-                .iter()
-                .any(|message| message.turn_id() == turn_id)
-            {
-                Some(
-                    self.vault
-                        .read_turn_coverage(self.session_id, turn_id)
-                        .await?,
-                )
-            } else {
-                None
-            }
-        };
-        self.coverage.record_dependency(turn_id, dependency, stored)
-    }
-
-    pub fn record_result_dependency(
-        &self,
-        turn_id: Uuid,
-        result_id: Uuid,
-        dependency: ContextDependency,
-    ) -> Result<(), AgentFailure> {
-        if turn_id.is_nil() || result_id.is_nil() || dependency.observation_id().is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.coverage
-            .record_result_dependency(turn_id, result_id, dependency)
-    }
-
-    pub fn record_result_independent(
-        &self,
-        turn_id: Uuid,
-        result_id: Uuid,
-    ) -> Result<(), AgentFailure> {
-        if turn_id.is_nil() || result_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.coverage.record_result_independent(turn_id, result_id)
-    }
-
-    pub fn result_coverage(
-        &self,
-        turn_id: Uuid,
-        result_id: Uuid,
-    ) -> Result<Option<DependencyCoverage>, AgentFailure> {
-        if turn_id.is_nil() || result_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.coverage.result_coverage(turn_id, result_id)
-    }
-
-    pub async fn project_model_request(
-        &self,
-        request: &mut floe_conversation::ModelRequest,
-        resolver: Option<&dyn GovernedDependencyResolver>,
-    ) -> Result<(), AgentFailure> {
-        self.project_model_request_with_coverage(request, resolver)
-            .await
-            .map(|_| ())
-    }
-
-    pub async fn revalidate_current_coverage(
-        &self,
-        request: &floe_conversation::ModelRequest,
-        resolver: &dyn GovernedDependencyResolver,
-    ) -> Result<(), AgentFailure> {
-        if request.session_id != self.session_id {
-            return Err(AgentFailure::Conflict);
-        }
-        let coverage = self.coverage.turn_coverage(request.turn_id)?;
-        let coverage = match coverage {
-            Some(value) => value,
-            None => {
-                self.vault
-                    .read_turn_coverage(self.session_id, request.turn_id)
-                    .await?
-            }
-        };
-        match coverage {
-            DependencyCoverage::Independent => Ok(()),
-            DependencyCoverage::Unknown => Err(AgentFailure::PolicyDenied),
-            DependencyCoverage::Dependent { dependencies } => {
-                for dependency in dependencies {
-                    resolver.authorize(&dependency, request).await?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    pub async fn project_model_request_with_coverage(
-        &self,
-        request: &mut floe_conversation::ModelRequest,
-        resolver: Option<&dyn GovernedDependencyResolver>,
-    ) -> Result<bool, AgentFailure> {
-        if request.session_id != self.session_id {
-            return Err(AgentFailure::Conflict);
-        }
-        let messages = std::mem::take(&mut request.messages);
-        let reader =
-            crate::repositories::ContextEvidenceReader::new(self.vault, self.session_id);
-        let coverage_by_turn = floe_context::read_history_coverage(
-            &reader,
-            self.session_id,
-            messages.iter().map(floe_conversation::AgentMessage::turn_id),
-        )
-        .await?;
-        let mut retained = Vec::with_capacity(messages.len());
-        let mut filtered = false;
-        for message in messages {
-            let turn_id = message.turn_id();
-            let coverage = coverage_by_turn
-                .get(&turn_id)
-                .cloned()
-                .unwrap_or(DependencyCoverage::Unknown);
-            let authorization_request = &*request;
-            let projection = floe_context::project_coverage(&coverage, |dependency| async move {
-                match resolver {
-                    Some(resolver) => {
-                        match resolver.authorize(&dependency, authorization_request).await {
-                            Ok(()) => Ok(true),
-                            Err(AgentFailure::PolicyDenied) => Ok(false),
-                            Err(error) => Err(error),
-                        }
-                    }
-                    None => Ok(false),
-                }
-            })
-            .await?;
-            if projection.retain_derived() {
-                for dependency in projection.authorized_dependencies() {
-                    self.coverage
-                        .record_dependency(request.turn_id, dependency.clone(), None)
-                        .map_err(|error| match error {
-                            AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
-                            error => error,
-                        })?;
-                }
-                retained.push(message);
-            } else {
-                if !matches!(message, floe_conversation::AgentMessage::User { .. }) {
-                    filtered = true;
-                } else {
-                    retained.push(message);
-                }
-            }
-        }
-        request.messages = retained;
-        if filtered || !request.replay.is_empty() {
-            request.replay.clear();
-        }
-        Ok(filtered)
-    }
-}
-
-impl<Keys: VaultKeyProvider> SessionStore for GovernedAgentSessionStore<'_, Keys> {
-    fn protection(&self) -> SessionProtection {
-        self.vault.protection()
-    }
-
-    async fn load(
-        &self,
-        person_id: PersonId,
-        session_id: Uuid,
-    ) -> Result<AgentSession, AgentFailure> {
-        self.vault.load(person_id, session_id).await
-    }
-
-    async fn compare_and_swap(
-        &self,
-        session: &AgentSession,
-        previous_revision: u64,
-    ) -> Result<(), AgentFailure> {
-        if session.id != self.session_id {
-            return Err(AgentFailure::Conflict);
-        }
-        let stored = self.vault.load(session.person_id, session.id).await?;
-        if stored.revision != previous_revision || session.messages.len() < stored.messages.len() {
-            return Err(AgentFailure::Conflict);
-        }
-        let appended = &session.messages[stored.messages.len()..];
-        let mut initial = BTreeMap::new();
-        let mut stored_turns = HashMap::new();
-        for message in &stored.messages {
-            stored_turns.insert(message.turn_id(), ());
-        }
-        for turn_id in appended.iter().map(floe_conversation::AgentMessage::turn_id) {
-            if stored_turns.contains_key(&turn_id) && !initial.contains_key(&turn_id) {
-                initial.insert(
-                    turn_id,
-                    self.vault.read_turn_coverage(session.id, turn_id).await?,
-                );
-            }
-        }
-        let facts = appended
-            .iter()
-            .map(|message| floe_context::CoverageMessageFact {
-                turn_id: message.turn_id(),
-                existing_turn: stored_turns.contains_key(&message.turn_id()),
-                is_user: matches!(message, floe_conversation::AgentMessage::User { .. }),
-                result_id: match message {
-                    floe_conversation::AgentMessage::Capability { call_id, .. } => Some(*call_id),
-                    floe_conversation::AgentMessage::Delegation { task, .. } => Some(task.id),
-                    _ => None,
-                },
-            })
-            .collect::<Vec<_>>();
-        let snapshot = self.coverage.fold_messages(&facts, &initial)?;
-        self.vault
-            .compare_and_swap_checked_with_liveness(
-                session,
-                previous_revision,
-                &snapshot,
-                self.liveness,
-                Some(floe_access::ReleaseRecipient::Storage {
-                    person_id: session.person_id,
-                    vault_id: self.vault.vault_id,
-                }),
-            )
-            .await
-    }
-}
-
-pub trait GovernedDependencyResolver: Send + Sync {
-    fn authorize<'a>(
-        &'a self,
-        dependency: &'a ContextDependency,
-        request: &'a floe_conversation::ModelRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>;
-}
-
-pub trait GovernedDependencyLiveness: Send + Sync {
-    fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure>;
-}
+/// The Session store a governed turn runs against is Conversation's; this
+/// adapter only supplies the storage behind it.
+pub use floe_context::{DependencyLiveness, DependencyResolver};
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub fn person_id(&self) -> PersonId {
@@ -590,23 +331,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.insert_session(AgentSession::new(self.person_id)).await
     }
 
-    pub fn governed_general_store(&self, session_id: Uuid) -> GovernedAgentSessionStore<'_, Keys> {
-        GovernedAgentSessionStore {
-            vault: self,
-            session_id,
-            coverage: floe_context::CoverageRegistry::new(),
-            liveness: None,
-        }
+    /// The Session store Conversation drives, backed by this vault.
+    pub fn governed_general_store(
+        &self,
+        session_id: Uuid,
+    ) -> floe_conversation::GovernedSessionStore<'_, Self> {
+        floe_conversation::GovernedSessionStore::new(self, session_id)
     }
 
     pub fn governed_general_store_with_liveness<'vault>(
         &'vault self,
         session_id: Uuid,
-        liveness: &'vault dyn GovernedDependencyLiveness,
-    ) -> GovernedAgentSessionStore<'vault, Keys> {
-        let mut store = self.governed_general_store(session_id);
-        store.liveness = Some(liveness);
-        store
+        liveness: &'vault dyn DependencyLiveness,
+    ) -> floe_conversation::GovernedSessionStore<'vault, Self> {
+        self.governed_general_store(session_id)
+            .with_liveness(liveness)
     }
 
     pub(crate) async fn read_turn_coverage(
@@ -832,7 +571,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         session: &AgentSession,
         previous_revision: u64,
         coverage: &BTreeMap<Uuid, DependencyCoverage>,
-        liveness: Option<&dyn GovernedDependencyLiveness>,
+        liveness: Option<&dyn DependencyLiveness>,
         release_recipient: Option<floe_access::ReleaseRecipient>,
     ) -> Result<(), AgentFailure> {
         if previous_revision.checked_add(1) != Some(session.revision) {
@@ -1000,4 +739,59 @@ fn unavailable(_: impl std::fmt::Debug) -> AgentFailure {
 
 fn storage(_: impl std::fmt::Debug) -> AgentFailure {
     AgentFailure::StorageUnavailable
+}
+
+/// The storage behind a governed Session turn.
+///
+/// The SQL transaction, the compare-and-swap, the authority re-check and the
+/// encryption stay here; which messages that turn may show a model, and what its
+/// coverage means, do not.
+impl<Keys: VaultKeyProvider> floe_conversation::GovernedSessionRepository
+    for EncryptedAgentVault<Keys>
+{
+    fn protection(&self) -> SessionProtection {
+        <Self as SessionStore>::protection(self)
+    }
+
+    fn person_id(&self) -> PersonId {
+        self.person_id
+    }
+
+    fn load<'a>(
+        &'a self,
+        person_id: PersonId,
+        session_id: Uuid,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<AgentSession, AgentFailure>> {
+        Box::pin(async move { <Self as SessionStore>::load(self, person_id, session_id).await })
+    }
+
+    fn read_turn_coverage<'a>(
+        &'a self,
+        session_id: Uuid,
+        turn_id: Uuid,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<DependencyCoverage, AgentFailure>> {
+        Box::pin(async move { self.read_turn_coverage(session_id, turn_id).await })
+    }
+
+    fn commit_session_with_coverage<'a>(
+        &'a self,
+        session: &'a AgentSession,
+        previous_revision: u64,
+        coverage: &'a BTreeMap<Uuid, DependencyCoverage>,
+        liveness: Option<&'a dyn DependencyLiveness>,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            self.compare_and_swap_checked_with_liveness(
+                session,
+                previous_revision,
+                coverage,
+                liveness,
+                Some(floe_access::ReleaseRecipient::Storage {
+                    person_id: session.person_id,
+                    vault_id: self.vault_id,
+                }),
+            )
+            .await
+        })
+    }
 }

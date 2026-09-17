@@ -1,9 +1,16 @@
+//! The Calendar mirror seen as a connector observation.
+//!
+//! Context owns what a source projection says about freshness, state and view
+//! size; Connections owns the connector shapes this returns, and Day owns the
+//! mirror it reads.
+
 use chrono::{DateTime, Utc};
 use floe_context_contract::DataClass;
-use floe_day::{CalendarFailure, CalendarMirror, CalendarProvider, CalendarSyncStatus, SourceRef};
+use floe_day::{CalendarFailure, CalendarMirror, CalendarSyncStatus, SourceRef};
+use floe_context_contract::CalendarProvider;
 use sha2::{Digest, Sha256};
 
-use crate::application::connected_context::{
+use floe_connections::{
     CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConnectionState,
     ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor,
     ConnectorSnapshot, ExecutionLocation, RetentionClass, SourceFailure, SourceFailureKind,

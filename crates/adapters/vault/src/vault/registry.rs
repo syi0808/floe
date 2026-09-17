@@ -1,4 +1,4 @@
-use floe_conversation::{AgentMessage};
+use floe_conversation::AgentMessage;
 use floe_experts::{AgentRegistry, ExpertResult, RegistrySnapshot};
 use floe_agent_contract::{TaskId, TaskSnapshot, TaskState};
 use floe_access::DependencyCoverage;
@@ -265,7 +265,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
         if matches!(
             request.provider,
-            floe_day::CalendarProvider::EventKit | floe_day::CalendarProvider::Android
+            floe_agent_contract::CalendarProvider::EventKit | floe_agent_contract::CalendarProvider::Android
         ) {
             return Err(AgentFailure::AccessReviewRequired);
         }
@@ -340,8 +340,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .map(|view| {
                         matches!(
                             view.provider,
-                            floe_day::CalendarProvider::EventKit
-                                | floe_day::CalendarProvider::Android
+                            floe_agent_contract::CalendarProvider::EventKit
+                                | floe_agent_contract::CalendarProvider::Android
                         )
                     })
                     .unwrap_or(false)
@@ -385,8 +385,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .map(|view| {
                         matches!(
                             view.provider,
-                            floe_day::CalendarProvider::EventKit
-                                | floe_day::CalendarProvider::Android
+                            floe_agent_contract::CalendarProvider::EventKit
+                                | floe_agent_contract::CalendarProvider::Android
                         )
                     })
             })

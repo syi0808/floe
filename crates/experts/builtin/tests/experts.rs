@@ -14,7 +14,7 @@ use floe_agent_contract::{
     ExpertModelAnswer, ExpertModelCall, ExpertReasoner, ExpertReasoningStep, ExpertStep,
     ExpertStepOutcome, ExpertTranscriptEntry, ModelPlacement, TransferConsent,
 };
-use floe_context_contract::{ContextEvidence};
+use floe_context_contract::ContextEvidence;
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_experts::{
@@ -185,7 +185,7 @@ fn expert_cards_use_resolved_grants_and_publish_domain_metadata() {
 
 #[test]
 fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() {
-    use floe_day::CalendarProvider;
+    use floe_context_contract::CalendarProvider;
     let mut registry = AgentRegistry::new(Uuid::new_v4());
     let person = PersonId::new();
     let handle = registry
@@ -195,7 +195,7 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
             CalendarProvider::EventKit,
             "test-device".into(),
             vec!["work".into(), "home".into()],
-            floe_day::CalendarScope::Selected,
+            floe_context_contract::CalendarScope::Selected,
             1,
             Some(floe_context_contract::SourceAuthority::new()),
         )
@@ -241,7 +241,7 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
                 CalendarProvider::Fixture,
                 "test-device".into(),
                 calendars,
-                floe_day::CalendarScope::Selected,
+                floe_context_contract::CalendarScope::Selected,
                 1,
                 Some(floe_context_contract::SourceAuthority::new()),
             ),
@@ -262,7 +262,7 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
 
 #[test]
 fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
-    use floe_day::CalendarProvider;
+    use floe_context_contract::CalendarProvider;
     let fixture = Fixture::new();
     let snapshot = fixture.registry.lock().unwrap().snapshot();
     for mode in 0..6 {
@@ -273,7 +273,7 @@ fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
             provider: CalendarProvider::Fixture,
             device_id: "test-device".into(),
             calendar_ids: vec!["home".into()],
-            connection_scope: floe_day::CalendarScope::Selected,
+            connection_scope: floe_context_contract::CalendarScope::Selected,
             connection_revision: 1,
             source_authority: Some(floe_context_contract::SourceAuthority::new()),
             enabled: true,

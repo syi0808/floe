@@ -8,6 +8,7 @@ mod capability;
 mod context;
 mod delegation;
 mod endpoint;
+mod envelope;
 mod expert;
 mod expert_model;
 mod history;
@@ -16,6 +17,7 @@ mod model;
 mod ports;
 pub mod prompts;
 mod replay;
+mod timeline_view;
 
 pub use archive::{
     ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
@@ -30,6 +32,11 @@ pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
     MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
+pub use envelope::{
+    AgentCardManifestEntry, ContextEnvelope, ContextManifest, ContextualData, ConversationContext,
+    EvidenceManifestEntry, MemoryManifestEntry, PromptManifestEntry, RuntimeContext,
+    ScopedInstructions,
+};
 pub use expert::{
     AdmittedExpert, ExpertAssignments, ExpertBudget, ExpertFocusProposal, ExpertInput,
     ExpertInsight, ExpertInvocation, ExpertResult, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
@@ -41,8 +48,9 @@ pub use expert_model::{
     SourceHistoryBoundary,
 };
 pub use floe_context_contract::{
-    ContextDependency, ContextEvidence, ContextIssue, ContextIssueReason, ContextMemory,
-    ContextSource, DataClass,
+    CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,
+    ContextIssue, ContextIssueReason, ContextMemory, ContextSource, DataClass, ExpertTimelineView,
+    MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem,
     DependencyCoverage, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     MemoryContextSnapshot, ModelPlacement, PersonalMemoryKind, SourceAuthority, SourceGrant,
@@ -65,6 +73,7 @@ pub use ports::{
     BoxFuture, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort, ToolPort,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
+pub use timeline_view::TimelineViewRead;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionProtection {

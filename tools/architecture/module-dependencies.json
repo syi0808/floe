@@ -261,6 +261,7 @@
       "path": "crates/adapters/providers",
       "responsibility": "models/, sources/, control/; HTTP and OS adapters",
       "group": "adapters",
+      "adapter_note": "day is allowed for calendar value conversion and for implementing a public source port only; DayService, query or policy orchestration and direct Day storage access are not.",
       "allowed_internal_dependencies": [
         "agent_contract",
         "context_contract",
@@ -271,7 +272,8 @@
         "context",
         "connections",
         "actions",
-        "access"
+        "access",
+        "day"
       ]
     },
     {
@@ -280,6 +282,7 @@
       "path": "crates/adapters/vault",
       "responsibility": "Encrypted engine and module-specific repository adapters",
       "group": "adapters",
+      "adapter_note": "context is allowed for implementing Context-defined repository ports only; owning a CoverageRegistry, calling project_coverage, filtering or replaying messages and running Context use cases are not.",
       "allowed_internal_dependencies": [
         "kernel",
         "agent_contract",
@@ -292,7 +295,8 @@
         "access",
         "knowledge",
         "actions",
-        "day"
+        "day",
+        "context"
       ]
     },
     {

@@ -7,6 +7,7 @@
 mod abi;
 mod app_wire;
 mod bridge;
+pub mod conversion;
 mod diagnostics;
 
 pub use abi::*;
@@ -21,7 +22,10 @@ use std::{
 use chrono::Utc;
 
 use bridge::core_error;
-use floe_app::{AppComposition, CalendarActionCommand, CalendarActionsResult};
+use floe_app::{
+    AppComposition, CalendarActionCommand, CalendarActionsResult, CaptureId, DomainRef, EventId,
+    NoteId, Revision, TaskId, TimedSchedule, TimelineItem,
+};
 use floe_protocol::wire::{
     WireResult, agent_failure, check_version, conversion_error, invalid, parse_date, parse_id,
     parse_person, parse_time, protocol_payload,
@@ -51,9 +55,12 @@ pub fn local_context(
     } else {
         None
     };
-    handle
+    let command = conversion::native::local_context_command(request.operation)?;
+    let outcome = handle
         .local_context()
-        .request_bound(person_id, request.operation, connection.as_ref())
+        .execute(person_id, command, connection.as_ref())
+        .map_err(agent_failure)?;
+    Ok(conversion::native::local_context_result(person_id, outcome))
 }
 
 fn c_input<'a>(value: *const c_char, field: &'static str) -> WireResult<&'a str> {
@@ -278,8 +285,8 @@ fn timed_schedule(
     starts_at: &str,
     ends_at: &str,
     timezone: &str,
-) -> WireResult<floe_protocol::TimedSchedule> {
-    floe_protocol::TimedSchedule::new(
+) -> WireResult<TimedSchedule> {
+    TimedSchedule::new(
         parse_time(starts_at, "starts_at")?,
         parse_time(ends_at, "ends_at")?,
         timezone,

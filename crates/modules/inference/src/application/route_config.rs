@@ -52,12 +52,15 @@ impl std::fmt::Debug for RemoteRoute {
         formatter
             .debug_struct("RemoteRoute")
             .field("base_url", &self.base_url)
+            // The credential is named but never rendered, so a reader can see
+            // that something was withheld rather than that nothing was there.
+            .field("bearer_token", &"[REDACTED]")
             .field("purpose", &self.purpose)
             .field("external", &self.external)
             .field("allow_external", &self.allow_external)
             .field("recipient", &self.recipient)
             .field("pairing", &self.pairing)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 

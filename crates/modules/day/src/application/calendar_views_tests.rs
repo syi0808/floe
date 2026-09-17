@@ -1027,7 +1027,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         provider: CalendarProvider::Fixture,
         device_id: "test-device".into(),
         calendar_ids: fixture.grant().calendar_ids,
-        connection_scope: floe_day::CalendarScope::Selected,
+        connection_scope: floe_context_contract::CalendarScope::Selected,
         connection_revision: fixture.grant().connection_revision,
         source_authority: Some(floe_context_contract::SourceAuthority::new()),
         enabled: true,

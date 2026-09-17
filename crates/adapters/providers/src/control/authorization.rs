@@ -6,8 +6,11 @@ use floe_connections::{
     PairingConfirmation, PairingConfirmationRequest, PairingIssuer, PairingStatus,
     PairingStatusRequest, ProducerIdentity, RemoteControl,
 };
-use floe_vault::{EncryptedAgentVault, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemoteProducerIdentity, VaultKeyProvider};
-use floe_protocol::AgentRemoteRouteDto;
+use floe_access::{
+    RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
+    RemoteOwnerPublicKey, RemoteProducerIdentity,
+};
+use floe_inference::RemoteRoute;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
@@ -340,7 +343,7 @@ pub struct RemoteViewAuthorizationRequest<'value> {
 }
 
 impl RemoteAuthorizationClient {
-    pub fn new(route: &AgentRemoteRouteDto) -> Result<Self, AgentFailure> {
+    pub fn new(route: &RemoteRoute) -> Result<Self, AgentFailure> {
         let address = Url::parse(&route.base_url).map_err(|_| AgentFailure::InvalidInput)?;
         if address.scheme() != "http"
             || address.host_str() != Some("127.0.0.1")
@@ -537,9 +540,9 @@ impl RemoteAuthorizationClient {
         .await
     }
 
-    pub async fn enroll<Keys: VaultKeyProvider>(
+    pub async fn enroll<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         client_id: &str,
         device_id: &str,
         pinned_producer: &RemoteProducerIdentity,
@@ -556,11 +559,11 @@ impl RemoteAuthorizationClient {
             public_key: producer.public_key,
             fingerprint: producer.fingerprint,
         };
-        if &observed != pinned_producer || vault.remote_pinned_producer().await? != *pinned_producer
+        if &observed != pinned_producer || keys.pinned_producer().await? != *pinned_producer
         {
             return Err(AgentFailure::PolicyDenied);
         }
-        let owner_key = vault.remote_owner_public_key().await?;
+        let owner_key = keys.owner_public_key().await?;
         let enrollment = self
             .begin_enrollment(
                 &owner_key,
@@ -569,8 +572,8 @@ impl RemoteAuthorizationClient {
                 cancellation,
             )
             .await?;
-        let signature = vault
-            .remote_sign_enrollment(
+        let signature = keys
+            .sign_enrollment(
                 client_id,
                 device_id,
                 &enrollment.challenge_b64url,
@@ -726,9 +729,9 @@ impl RemoteAuthorizationClient {
             .await
     }
 
-    pub async fn read_view_admission<Keys: VaultKeyProvider>(
+    pub async fn read_view_admission<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         expected: &RemoteCalendarAuthorizationExpectation,
         challenge: &CalendarChallengeResponse,
         path: &str,
@@ -738,8 +741,8 @@ impl RemoteAuthorizationClient {
         if !path.ends_with("/read") || challenge.operation != "admission" {
             return Err(AgentFailure::InvalidInput);
         }
-        let signature = vault
-            .remote_sign_calendar_authorization(
+        let signature = keys
+            .sign_calendar_authorization(
                 expected,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
@@ -763,9 +766,9 @@ impl RemoteAuthorizationClient {
         .await
     }
 
-    pub async fn release_view<Keys: VaultKeyProvider>(
+    pub async fn release_view<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         expected: &RemoteCalendarAuthorizationExpectation,
         challenge: &CalendarChallengeResponse,
         path: &str,
@@ -775,8 +778,8 @@ impl RemoteAuthorizationClient {
         if !path.ends_with("/release") || challenge.operation != "release" {
             return Err(AgentFailure::InvalidInput);
         }
-        let signature = vault
-            .remote_sign_calendar_authorization(
+        let signature = keys
+            .sign_calendar_authorization(
                 expected,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
@@ -814,9 +817,9 @@ impl RemoteAuthorizationClient {
         serde_json::from_str(response.view.get()).map_err(|_| AgentFailure::CapabilityUnavailable)
     }
 
-    pub async fn read_calendar_admission<Keys: VaultKeyProvider>(
+    pub async fn read_calendar_admission<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         expected: &RemoteCalendarAuthorizationExpectation,
         challenge: &CalendarChallengeResponse,
         deadline: tokio::time::Instant,
@@ -825,8 +828,8 @@ impl RemoteAuthorizationClient {
         if challenge.operation != "admission" {
             return Err(AgentFailure::InvalidInput);
         }
-        let signature = vault
-            .remote_sign_calendar_authorization(
+        let signature = keys
+            .sign_calendar_authorization(
                 expected,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
@@ -850,9 +853,9 @@ impl RemoteAuthorizationClient {
         .await
     }
 
-    pub async fn release_calendar<Keys: VaultKeyProvider>(
+    pub async fn release_calendar<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         expected: &RemoteCalendarAuthorizationExpectation,
         challenge: &CalendarChallengeResponse,
         deadline: tokio::time::Instant,
@@ -861,8 +864,8 @@ impl RemoteAuthorizationClient {
         if challenge.operation != "release" {
             return Err(AgentFailure::InvalidInput);
         }
-        let signature = vault
-            .remote_sign_calendar_authorization(
+        let signature = keys
+            .sign_calendar_authorization(
                 expected,
                 &challenge.challenge_b64url,
                 &challenge.producer_signature,
@@ -1066,18 +1069,7 @@ impl RemoteControl for HttpRemoteControl {
                 cancellation,
             )
             .await?;
-        Ok(PairingStatus {
-            schema_version: response.schema_version,
-            pairing_id: response.pairing_id,
-            status: response.status,
-            person_id: response.person_id,
-            device_id: response.device_id,
-            producer: response.producer.map(producer_identity),
-            issuer: response.issuer.map(pairing_issuer),
-            issuer_fingerprint: response.issuer_fingerprint,
-            client_id: response.client_id,
-            token: response.token,
-        })
+        Ok(pairing_report(response))
     }
 }
 
@@ -1220,22 +1212,21 @@ mod tests {
     };
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use floe_vault::{VaultKey, VaultKeyProvider};
+    use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
     use floe_agent_contract::PersonId;
     use tokio::io::AsyncWriteExt;
     use uuid::Uuid;
 
     use super::*;
 
-    fn route(address: std::net::SocketAddr) -> AgentRemoteRouteDto {
-        AgentRemoteRouteDto {
+    fn route(address: std::net::SocketAddr) -> RemoteRoute {
+        RemoteRoute {
             base_url: format!("http://127.0.0.1:{}", address.port()),
             bearer_token: "secret_token_value_that_is_long_enough".into(),
             purpose: "everyday_assistance".into(),
             external: true,
             allow_external: false,
             recipient: Some("fixture.example".into()),
-            calendar_connections: vec![],
             pairing: None,
         }
     }
@@ -1696,5 +1687,51 @@ mod tests {
             .unwrap();
         assert!(!status.active);
         server.await.unwrap();
+    }
+}
+
+/// The producer identity as Access states it.
+pub fn access_producer_identity(identity: &ProducerIdentityResponse) -> RemoteProducerIdentity {
+    RemoteProducerIdentity {
+        schema_version: identity.schema_version,
+        instance_id: identity.instance_id.clone(),
+        execution_owner: identity.execution_owner.clone(),
+        audience: identity.audience.clone(),
+        key_id: identity.key_id.clone(),
+        public_key: identity.public_key.clone(),
+        fingerprint: identity.fingerprint.clone(),
+    }
+}
+
+/// The enrollment state as Access states it.
+pub fn enrollment_status(
+    status: EnrollmentStatusResponse,
+) -> floe_access::RemoteEnrollmentStatus {
+    floe_access::RemoteEnrollmentStatus {
+        enrollment_id: status.enrollment_id,
+        key_id: status.key_id,
+        fingerprint: status.fingerprint,
+        local_confirmed: status.local_confirmed,
+        admin_approved: status.admin_approved,
+        active: status.active,
+    }
+}
+
+/// One pairing report, read as Connections states it.
+///
+/// Nothing here decides whether the report may be acted on; the caller admits
+/// it through Connections before it does anything with it.
+pub fn pairing_report(response: PairingStatusResponse) -> PairingStatus {
+    PairingStatus {
+        schema_version: response.schema_version,
+        pairing_id: response.pairing_id,
+        status: response.status,
+        person_id: response.person_id,
+        device_id: response.device_id,
+        producer: response.producer.map(producer_identity),
+        issuer: response.issuer.map(pairing_issuer),
+        issuer_fingerprint: response.issuer_fingerprint,
+        client_id: response.client_id,
+        token: response.token,
     }
 }

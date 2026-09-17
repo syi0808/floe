@@ -23,7 +23,6 @@ floe-experts-builtin = { path = "../experts/builtin" }
 floe-inference = { path = "../modules/inference" }
 floe-kernel = { path = "../contracts/kernel" }
 floe-knowledge = { path = "../modules/knowledge" }
-floe-protocol = { path = "../bindings/protocol" }
 floe-provider-adapters = { path = "../adapters/providers" }
 floe-vault = { path = "../adapters/vault" }
 serde.workspace = true
@@ -35,5 +34,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# The regressions here drive this host the way the binding does, so they
+# speak the wire the binding parses. No production path names it.
+floe-protocol = { path = "../bindings/protocol" }
 ring = "0.17.14"
 tempfile = "3.23.0"

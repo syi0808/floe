@@ -14,6 +14,7 @@ pub mod application {
     pub mod learner;
     pub mod learner_service;
     pub mod learner_scheduling;
+    pub mod learner_transport;
     pub mod memory;
     pub mod playbooks;
     pub mod review;
@@ -40,6 +41,10 @@ pub use application::learner::{
 pub use application::inference::{
     InferenceLearnerModel, LearnerInferenceResponse, LearnerInferenceTransport,
     LEARNER_INFERENCE_CAPABILITY, LEARNER_INFERENCE_CONSUMER, LEARNER_INFERENCE_PURPOSE,
+};
+pub use application::learner_transport::{
+    FOUNDATION_LEARNER_PROFILE, LearnerModelAvailability, TransportLearnerModel, learner_profile,
+    review_with_model,
 };
 pub use application::memory::{
     admit_learning_evidence, project_memory_summary,

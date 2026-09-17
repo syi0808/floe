@@ -1,5 +1,5 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use floe_context_contract::SourceAuthority;
+use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -13,18 +13,6 @@ pub struct CalendarSource {
     pub calendar_name: String,
     pub external_id: String,
     pub external_revision: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CalendarProvider {
-    Fixture,
-    EventKit,
-    #[serde(rename = "google_calendar")]
-    Google,
-    #[serde(rename = "microsoft_calendar")]
-    Microsoft,
-    Android,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,13 +77,6 @@ impl CalendarRange {
 pub struct CalendarSelection {
     pub calendar_id: String,
     pub calendar_name: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CalendarScope {
-    Selected,
-    All,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

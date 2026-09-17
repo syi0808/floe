@@ -10,7 +10,8 @@ use chrono::{DateTime, Duration, Utc};
 
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_agent_contract::InferencePolicyDecision;
-use floe_day::{CalendarProvider, CalendarRange};
+use floe_day::CalendarRange;
+use floe_context_contract::CalendarProvider;
 
 /// The explicit user shortcut that asks for a protected focus window today.
 pub const FOCUS_REQUEST: &str = "/focus";

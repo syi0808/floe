@@ -3,14 +3,33 @@ mod data_access_grant;
 pub mod ports;
 
 pub use application::{
+    ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
+    ContactsAccessConfiguration, PersonalAccessChange, PersonalAccessConfiguration,
+    PersonalAccessOverview, PersonalAccessState, attention_consumer, matches_source,
+    source_and_scope,
+};
+pub use application::personal_grants::{
+    apply as apply_personal_access, apply_contacts,
+    validate_request as validate_personal_access_request,
+};
+pub use application::{
+    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
+    FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
+    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
+    attention_source, contacts_connection, contacts_execution_owner, contacts_source,
+    feasibility_source, source_binding, wellbeing_source,
+};
+pub use application::{
     AccessGrantMutation, FeasibilityGrantQuery, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
     ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
-    RemoteViewApproval, RemoteViewGrantReview, RemoteViewSourceReference, ReplayRequest,
+    RemoteViewApproval, RemoteViewGrantExpectation, RemoteViewGrantPreview,
+    RemoteViewGrantRequest, RemoteViewGrantReview, RemoteViewSourceReference, ReplayRequest,
     ReplayTrust, active_read_grant, active_resource_grant, admit_release, admit_remote_view_binding,
     admit_remote_view_source, admit_replay, apply_grant_mutation, authorize_grant, consume_release,
     create_grant, grant_unchanged, matches_review, producer_is_pinned,
     remote_dependency_binding_matches, remote_dependency_live, remote_dependency_resource,
     remote_dependency_source_admits, remote_view_scope, remote_view_source,
+    preview_remote_view_grant, review_and_activate_remote_view_grant,
     review_remote_view_grant, source_matches_producer, subject_unchanged,
     valid_subject_fingerprint, validate_grant_dependency, validate_read_authority,
     validate_read_continuity,
@@ -26,10 +45,24 @@ pub use floe_context_contract::{
 };
 pub use floe_kernel::PersonId;
 pub use ports::CurrentAuthority;
+pub use ports::dependency_authorization::{
+    DependencyAuthorization, DependencyLiveness, DependencyResolver,
+};
+pub use ports::personal_grants::{
+    PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
+};
+pub use ports::remote_grants::{
+    RemoteCallWindow, RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport,
+    RemotePairingIdentity, RemoteSourceQuery, SignedSourcePreview,
+};
+pub use ports::remote_authorization::{
+    RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
+    RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemotePairingChallenge,
+};
 
 pub use application::calendar_lease::{CalendarLeaseKey, calendar_lease_dependency};
 pub use application::calendar_read::{
-    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessAdmission,
-    CalendarReadAccessRequest, CalendarReadAccessStamp, ProjectedCalendarItem,
-    ProjectedCalendarObservation, admission_matches, admission_matches_dependency,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
+    admission_matches, admission_matches_dependency,
 };
+pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};

@@ -10,7 +10,6 @@ chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context = { path = "../context" }
-floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-experts = { path = "../experts" }
 floe-inference = { path = "../inference" }

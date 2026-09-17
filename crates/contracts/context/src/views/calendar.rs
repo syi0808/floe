@@ -100,3 +100,34 @@ pub fn calendar_context_evidence(
 fn valid_handle(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128
 }
+
+pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
+pub const MAX_TIMELINE_VIEW_ITEMS: usize = 128;
+pub const MAX_TIMELINE_VIEW_BYTES: usize = 65_536;
+
+/// One bounded event an Expert may read out of a timeline view.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineViewItem {
+    pub evidence_handle: uuid::Uuid,
+    pub untrusted_title: String,
+    pub starts_at_unix_ms: u64,
+    pub ends_at_unix_ms: u64,
+}
+
+/// The bounded timeline an Expert reads once under a single grant.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertTimelineView {
+    pub schema_version: u32,
+    pub handle: uuid::Uuid,
+    pub person_id: floe_kernel::PersonId,
+    pub data_class: DataClass,
+    pub source_handle: String,
+    pub range_start_unix_ms: u64,
+    pub range_end_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub coverage_complete: bool,
+    pub next_cursor: Option<String>,
+    pub items: Vec<TimelineViewItem>,
+}

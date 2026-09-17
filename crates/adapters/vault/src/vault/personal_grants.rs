@@ -5,7 +5,6 @@ use floe_access::DataAccessGrant;
 /// it; this module stores and reads the record.
 pub use floe_access::FeasibilityGrantQuery;
 use floe_access::{ConsumerPolicyAuthority, GrantConsumer, GrantId, SourceAuthority};
-use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 
 use super::access_grants::AccessGrantMutation;

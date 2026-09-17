@@ -164,3 +164,13 @@ fn day_error(error: StoreError) -> floe_day::DayError {
     }
     result
 }
+
+/// The stored calendar mirror, bounded, as Context's timeline read asks for it.
+impl floe_context::CalendarMirrorReader for crate::TursoStore {
+    async fn bounded_calendar_mirror(
+        &self,
+        person_id: floe_kernel::PersonId,
+    ) -> Result<floe_day::CalendarMirror, floe_agent_contract::AgentFailure> {
+        crate::TursoStore::bounded_calendar_mirror(self, person_id).await
+    }
+}

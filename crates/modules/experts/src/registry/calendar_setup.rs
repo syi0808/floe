@@ -5,7 +5,7 @@
 //! supplied as [`ExpertPackaging`]; the data class follows from the provider
 //! the registry already records.
 
-use floe_day::{CalendarProvider, CalendarScope};
+use floe_agent_contract::{CalendarProvider, CalendarScope};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

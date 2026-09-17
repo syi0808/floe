@@ -3,6 +3,7 @@ mod archive;
 mod cancellation;
 mod coordinator;
 mod finalization;
+pub mod governed_session;
 mod query;
 mod recovery;
 mod session;
@@ -14,6 +15,7 @@ pub use cancellation::{
     CancelRunStatus, RunCancellationRegistry, cancel_run_command,
 };
 pub use coordinator::{ConversationService, continuation, recover_session};
+pub use governed_session::{GovernedSessionRepository, GovernedSessionStore};
 pub use query::{get_command, get_run};
 pub use recovery::project_continuation;
 pub use session::{get_session, resume_session, start_session};

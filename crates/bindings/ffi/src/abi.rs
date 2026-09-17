@@ -201,14 +201,15 @@ pub unsafe extern "C" fn floe_core_agent_vault(
         #[cfg(unix)]
         {
             check_version(request.schema_version)?;
-            handle
+            let result = handle
                 .agent_vault()
                 .request(
                     parse_person(&request.person_id)?,
                     parse_id(&request.request_id, "request_id", |id| id)?,
-                    request.operation,
+                    crate::conversion::worker::worker_operation(request.operation)?,
                 )
-                .map_err(vault_request_failure)
+                .map_err(vault_request_failure)?;
+            crate::conversion::worker::worker_result(result).map_err(agent_failure)
         }
         #[cfg(not(unix))]
         {

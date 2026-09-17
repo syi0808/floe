@@ -13,7 +13,8 @@ use floe_actions::{
 };
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::ContextDependency;
-use floe_day::{CalendarProvider, TimedSchedule};
+use floe_day::TimedSchedule;
+use floe_context_contract::CalendarProvider;
 use floe_kernel::{EventId, PersonId, Revision};
 use floe_provider_adapters::sources::native_calendar::{LOCAL_PERSON, NativeCalendar};
 use floe_vault::TursoStore;
@@ -329,7 +330,7 @@ impl FloeCore {
         device_id: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<floe_connections::ConnectorSnapshot>, AgentFailure> {
-        floe_connections::validate_connector_device(device_id)
+        floe_context::validate_connector_device(device_id)
             .map_err(|_| AgentFailure::InvalidInput)?;
         let Some(mirror) = floe_day::TimelineRepository::calendar_mirror(&self.store, person_id)
             .await
@@ -337,7 +338,7 @@ impl FloeCore {
         else {
             return Ok(None);
         };
-        floe_connections::project_calendar_connector(&mirror, device_id, now)
+        floe_context::project_calendar_connector(&mirror, device_id, now)
             .map(Some)
             .map_err(|_| AgentFailure::StorageUnavailable)
     }

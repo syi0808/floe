@@ -6,9 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
 chrono.workspace = true
 floe-context-contract = { path = "../../contracts/context" }
-floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true

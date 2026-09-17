@@ -3,8 +3,7 @@
 use std::{future::Future, time::SystemTime};
 
 use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
-use floe_agent_contract::PersonId;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -21,47 +20,12 @@ use floe_agent_contract::InferencePolicyDecision;
 use floe_execution::Cancellation;
 use floe_agent_contract::AGENT_VERSION;
 
-pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
-pub const MAX_TIMELINE_VIEW_ITEMS: usize = 128;
-pub const MAX_TIMELINE_VIEW_BYTES: usize = 65_536;
+pub use floe_agent_contract::{
+    ExpertTimelineView, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,
+    TimelineViewItem, TimelineViewRead,
+};
+
 const MAX_TIMELINE_VIEW_DURATION_MS: u64 = (MAX_TIMELINE_VIEW_DAYS as u64 + 1) * 86_400_000;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TimelineViewItem {
-    pub evidence_handle: Uuid,
-    pub untrusted_title: String,
-    pub starts_at_unix_ms: u64,
-    pub ends_at_unix_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExpertTimelineView {
-    pub schema_version: u32,
-    pub handle: Uuid,
-    pub person_id: PersonId,
-    pub data_class: DataClass,
-    pub source_handle: String,
-    pub range_start_unix_ms: u64,
-    pub range_end_unix_ms: u64,
-    pub expires_at_unix_ms: u64,
-    pub coverage_complete: bool,
-    pub next_cursor: Option<String>,
-    pub items: Vec<TimelineViewItem>,
-}
-
-pub struct TimelineViewRead {
-    pub person_id: PersonId,
-    pub handle: Uuid,
-    pub range_start_unix_ms: Option<u64>,
-    pub range_end_unix_ms: Option<u64>,
-    pub cursor: Option<String>,
-    pub max_items: usize,
-    pub max_bytes: usize,
-    pub deadline: Instant,
-    pub cancellation: Cancellation,
-}
 
 pub trait ExpertViews: Sync {
     fn timeline(

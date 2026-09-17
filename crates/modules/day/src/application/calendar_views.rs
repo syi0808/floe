@@ -8,7 +8,8 @@ use floe_kernel::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
-use crate::{CalendarProvider, CalendarRange};
+use crate::CalendarRange;
+use floe_context_contract::CalendarProvider;
 
 /// The longest span a single timeline grant may cover.
 pub const MAX_TIMELINE_GRANT_DAYS: i64 = 31;

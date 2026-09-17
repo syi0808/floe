@@ -4,7 +4,10 @@ pub mod admission;
 pub mod authority;
 pub mod dependency;
 pub mod grants;
+pub mod personal_grants;
 pub mod personal_read;
+pub mod personal_sources;
+pub mod remote_grants;
 pub mod remote_view;
 pub mod release;
 
@@ -16,9 +19,26 @@ pub use dependency::validate_grant_dependency;
 pub use grants::{
     AccessGrantMutation, GrantPolicyError, apply_grant_mutation, authorize_grant, create_grant,
 };
+pub use personal_grants::{
+    ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
+    ContactsAccessConfiguration, PersonalAccessChange, PersonalAccessConfiguration,
+    PersonalAccessOverview, PersonalAccessState, apply, apply_contacts, attention_consumer,
+    matches_source, source_and_scope, validate_request,
+};
+pub use personal_sources::{
+    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
+    FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
+    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
+    attention_source, contacts_connection, contacts_execution_owner, contacts_source,
+    feasibility_source, source_binding, wellbeing_source,
+};
 pub use personal_read::{
     FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant, grant_unchanged,
     subject_unchanged, valid_subject_fingerprint,
+};
+pub use remote_grants::{
+    RemoteViewGrantExpectation, RemoteViewGrantPreview, RemoteViewGrantRequest,
+    preview_remote_view_grant, review_and_activate_remote_view_grant,
 };
 pub use remote_view::{
     RemoteProducerIdentity, RemoteViewApproval, RemoteViewGrantReview, RemoteViewSourceReference,

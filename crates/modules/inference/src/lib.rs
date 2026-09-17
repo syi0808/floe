@@ -6,11 +6,15 @@
 
 mod api;
 mod application;
+pub mod ports;
 mod transfer;
 
 pub use api::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
     PlannedRoute, RecipientConstraint, RouteRequest,
+};
+pub use ports::model_transport::{
+    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
 };
 pub use transfer::{RouteRecipient, external_transfer_consent};
 pub use application::{

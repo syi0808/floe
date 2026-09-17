@@ -11,10 +11,10 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use floe_access::{
-    ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantConsumer,
-    GrantDataCategory, GrantOperation, GrantPurpose, GrantSourceBinding, PersonalReadRequirement,
-    ProcessingRestriction, ResourceHandle, SourceAuthority, active_read_grant, grant_unchanged,
-    subject_unchanged, valid_subject_fingerprint,
+    ContextDependency, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose,
+    GrantSourceBinding, PersonalReadRequirement, ProcessingRestriction, ResourceHandle,
+    SourceAuthority, active_read_grant, grant_unchanged, subject_unchanged,
+    valid_subject_fingerprint,
 };
 use floe_agent_contract::{AgentFailure, ModelPlacement, PersonId};
 use floe_execution::Cancellation;
@@ -33,99 +33,15 @@ use crate::{
     validate_people_view, validate_wellbeing_view,
 };
 
-pub const ATTENTION_CONNECTOR: &str = "attention.macos";
-pub const ATTENTION_CONNECTION: &str = "attention.macos.local";
-pub const ATTENTION_RESOURCE: &str = "attention.coarse";
-pub const PEOPLE_RESOURCE: &str = "people.identity";
-pub const FEASIBILITY_CONNECTOR: &str = "feasibility.apple";
-pub const FEASIBILITY_CONNECTION: &str = "feasibility.apple.local";
-pub const FEASIBILITY_RESOURCE: &str = "schedule.feasibility";
-pub const WELLBEING_CONNECTOR: &str = "health.apple";
-pub const WELLBEING_CONNECTION: &str = "health.apple.local";
-pub const WELLBEING_RESOURCE: &str = "wellbeing.derived";
-
-/// The device that answers for attention on this Person's behalf.
-pub fn attention_execution_owner(device_id: &str) -> String {
-    format!("macos:{device_id}")
-}
-
-/// The device that answers for the Apple personal sources.
-pub fn apple_execution_owner(device_id: &str) -> String {
-    format!("apple:{device_id}")
-}
-
-/// The connection a contacts source is bound to.
-pub fn contacts_connection(connector: &str) -> String {
-    format!("{connector}.local")
-}
-
-/// The device that answers for a contacts source.
-pub fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
-    let platform = connector.strip_prefix("contacts.").unwrap_or("unknown");
-    format!("{platform}:{device_id}")
-}
-
-fn source_binding(
-    person_id: PersonId,
-    connection: &str,
-    connector: &str,
-    execution_owner: String,
-    authority: SourceAuthority,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    GrantSourceBinding::try_new(
-        person_id,
-        ConnectionId::try_new(connection).map_err(|_| AgentFailure::InvalidInput)?,
-        ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
-        ExecutionOwnerId::try_new(execution_owner).map_err(|_| AgentFailure::InvalidInput)?,
-        authority,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)
-}
-
-/// The source binding a feasibility grant is bound to.
-pub fn feasibility_source(
-    person_id: PersonId,
-    device_id: &str,
-    authority: SourceAuthority,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    source_binding(
-        person_id,
-        FEASIBILITY_CONNECTION,
-        FEASIBILITY_CONNECTOR,
-        apple_execution_owner(device_id),
-        authority,
-    )
-}
-
-/// The source binding a wellbeing grant is bound to.
-pub fn wellbeing_source(
-    person_id: PersonId,
-    device_id: &str,
-    authority: SourceAuthority,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    source_binding(
-        person_id,
-        WELLBEING_CONNECTION,
-        WELLBEING_CONNECTOR,
-        apple_execution_owner(device_id),
-        authority,
-    )
-}
-
-/// The source binding an attention grant is bound to.
-pub fn attention_source(
-    person_id: PersonId,
-    device_id: &str,
-    authority: SourceAuthority,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    source_binding(
-        person_id,
-        ATTENTION_CONNECTION,
-        ATTENTION_CONNECTOR,
-        attention_execution_owner(device_id),
-        authority,
-    )
-}
+/// The names a grant binds a personal source under belong to Access; a read
+/// only quotes them.
+pub use floe_access::{
+    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
+    FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
+    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
+    attention_source, contacts_connection, contacts_execution_owner, contacts_source,
+    feasibility_source, wellbeing_source,
+};
 
 /// A read that has not run out of time and has not been cancelled.
 fn within_read_window(deadline: Instant, cancellation: &Cancellation) -> Result<(), AgentFailure> {

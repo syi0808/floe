@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
-use floe_day::CalendarScope;
+use floe_agent_contract::CalendarScope;
 use floe_agent_contract::AGENT_VERSION;
 
 mod calendar_setup;
@@ -277,10 +277,10 @@ pub struct RegistrySnapshot {
 pub struct CalendarViewBinding {
     pub handle: Uuid,
     pub person_id: PersonId,
-    pub provider: floe_day::CalendarProvider,
+    pub provider: floe_agent_contract::CalendarProvider,
     pub device_id: String,
     pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_day::CalendarScope,
+    pub connection_scope: floe_agent_contract::CalendarScope,
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_authority: Option<floe_agent_contract::SourceAuthority>,
@@ -290,11 +290,11 @@ pub struct CalendarViewBinding {
 impl CalendarViewBinding {
     pub fn data_class(&self) -> DataClass {
         match self.provider {
-            floe_day::CalendarProvider::Fixture => DataClass::Synthetic,
-            floe_day::CalendarProvider::EventKit
-            | floe_day::CalendarProvider::Google
-            | floe_day::CalendarProvider::Microsoft
-            | floe_day::CalendarProvider::Android => DataClass::Personal,
+            floe_agent_contract::CalendarProvider::Fixture => DataClass::Synthetic,
+            floe_agent_contract::CalendarProvider::EventKit
+            | floe_agent_contract::CalendarProvider::Google
+            | floe_agent_contract::CalendarProvider::Microsoft
+            | floe_agent_contract::CalendarProvider::Android => DataClass::Personal,
         }
     }
 
@@ -312,7 +312,7 @@ impl CalendarViewBinding {
             || self.connection_revision == 0
             || (matches!(
                 self.provider,
-                floe_day::CalendarProvider::EventKit | floe_day::CalendarProvider::Android
+                floe_agent_contract::CalendarProvider::EventKit | floe_agent_contract::CalendarProvider::Android
             ) && self.source_authority.is_none())
             || self
                 .source_authority
@@ -811,10 +811,10 @@ impl AgentRegistry {
         &mut self,
         expected_revision: u64,
         person_id: PersonId,
-        provider: floe_day::CalendarProvider,
+        provider: floe_agent_contract::CalendarProvider,
         device_id: String,
         mut calendar_ids: Vec<String>,
-        connection_scope: floe_day::CalendarScope,
+        connection_scope: floe_agent_contract::CalendarScope,
         connection_revision: u64,
         source_authority: Option<floe_agent_contract::SourceAuthority>,
     ) -> Result<Uuid, AgentFailure> {

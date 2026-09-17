@@ -68,7 +68,7 @@ pub(super) fn registered_experts<'turn, 'host>() -> floe_experts::ExpertDispatch
 
 #[derive(Clone)]
 pub(crate) struct BuiltinExpertEndpointContext {
-    pub request: floe_protocol::AgentConversationTurnRequestDto,
+    pub request: crate::ConversationTurnRequest,
     pub context: AgentContext,
     pub session_id: Uuid,
     pub max_output_bytes: usize,
@@ -79,7 +79,7 @@ pub(crate) struct BuiltinExpertEndpointContext {
 pub(crate) struct BuiltinExpertEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
-    local_context: Arc<LocalContextStore>,
+    local_context: Arc<LocalContextHost>,
     contexts: Mutex<HashMap<Uuid, BuiltinExpertEndpointContext>>,
 }
 
@@ -87,7 +87,7 @@ impl<Keys> BuiltinExpertEndpoint<Keys> {
     pub(crate) fn new(
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
-        local_context: Arc<LocalContextStore>,
+        local_context: Arc<LocalContextHost>,
     ) -> Self {
         Self {
             core,
@@ -144,7 +144,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             let registrations = registered_experts();
             if invocation.request.principal != self.vault.person_id().to_string()
                 || !registrations.is_registered(&invocation.request.selected_agent_id)
-                || staged.session_id != super::session_uuid(&staged.request.session_id)?
+                || staged.session_id != staged.request.session_id
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
@@ -152,27 +152,31 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 .request
                 .remote_route
                 .as_ref()
-                .map(|route| ServerSourceClient::new(route.clone()))
+                .map(|route| {
+                    ServerSourceClient::new(
+                        route.route.clone(),
+                        route.calendar_connections.clone(),
+                    )
+                })
                 .transpose()?;
             let model = Model::new(staged.request.remote_route.clone())?;
             let remote_reader = match (&model, staged.request.remote_route.as_ref()) {
                 (Model::Server(_), Some(route)) => {
-                    let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+                    let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
                     if pairing.person_id != self.vault.person_id().to_string()
                         || pairing.device_id != staged.request.device_id
                     {
                         return Err(AgentFailure::PolicyDenied);
                     }
-                    Some(remote_views::RemoteViewReader {
-                        vault: &self.vault,
-                        source_client: source_client
+                    Some(remote_views::RemoteViewReader::new(
+                        &self.vault,
+                        source_client
                             .as_ref()
                             .ok_or(AgentFailure::CapabilityUnavailable)?,
-                        person_id: self.vault.person_id(),
-                        client_id: &pairing.client_id,
-                        device_id: &pairing.device_id,
-                        route,
-                    })
+                        self.vault.person_id(),
+                        &pairing.client_id,
+                        &pairing.device_id,
+                    ))
                 }
                 _ => None,
             };
@@ -280,7 +284,7 @@ pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
         floe_vault::VaultTaskRepository<Keys>,
     >,
     pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
-    pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
+    pub turn_request: &'a crate::ConversationTurnRequest,
     pub context: &'a AgentContext,
     pub recorder: Option<&'a dyn floe_experts::TaskCoverageRecorder>,
 }
@@ -329,7 +333,7 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
-    pub(super) local_context: &'model LocalContextStore,
+    pub(super) local_context: &'model LocalContextHost,
     pub(super) attention: Option<&'model dyn super::PersonalAttentionReaderApi>,
     pub(super) people_reader: Option<&'model dyn super::PersonalPeopleReaderApi>,
     pub(super) feasibility_reader: Option<&'model dyn super::PersonalFeasibilityReaderApi>,
@@ -514,7 +518,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .read(
                     request.person_id,
-                    personal_grants::ATTENTION_EXPERT_CONSUMER,
+                    floe_access::ATTENTION_EXPERT_CONSUMER,
                     request.invocation_id,
                     request.invocation_id,
                     request.deadline,
@@ -561,7 +565,10 @@ impl InProcessAgent for ConversationExperts<'_> {
     ///
     /// Each card states where its Expert runs; nothing here reads the agent id.
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        floe_experts::eligible_cards(&self.cards, self.model.placement())
+        floe_experts::eligible_cards(
+            &self.cards,
+            floe_inference::ModelTransport::placement(self.model),
+        )
     }
 
     async fn handle_message(

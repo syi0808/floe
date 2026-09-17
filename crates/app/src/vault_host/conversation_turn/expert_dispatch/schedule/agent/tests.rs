@@ -165,7 +165,7 @@ struct NativeObserveAccess {
     rollback_clock: Option<Arc<AtomicI64>>,
 }
 
-impl CalendarReadAccess for Access {
+impl CalendarSource for Access {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -230,7 +230,7 @@ impl CalendarReadAccess for Access {
     }
 }
 
-impl CalendarReadAccess for NativeObserveAccess {
+impl CalendarSource for NativeObserveAccess {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -514,7 +514,7 @@ impl Fixture {
                     provider,
                     "test-device".into(),
                     vec!["private-calendar-id".into()],
-                    floe_day::CalendarScope::Selected,
+                    floe_context_contract::CalendarScope::Selected,
                     1,
                     Some(floe_context_contract::SourceAuthority::new()),
                 )
@@ -1170,7 +1170,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
                     provider: fixture.grant.provider,
                     device_id: "test-device".into(),
                     calendar_ids: fixture.grant.calendar_ids.clone(),
-                    connection_scope: floe_day::CalendarScope::Selected,
+                    connection_scope: floe_context_contract::CalendarScope::Selected,
                     connection_revision: fixture.grant.connection_revision,
                     source_authority: None,
                     reviewed_native_subject_fingerprint: None,
@@ -2467,7 +2467,7 @@ async fn cached_native_view_expiring_during_authorization_is_not_returned() {
         advance_to: AtomicI64,
     }
 
-    impl CalendarReadAccess for AdvancingAccess {
+    impl CalendarSource for AdvancingAccess {
         async fn check(
             &self,
             request: CalendarReadAccessRequest,

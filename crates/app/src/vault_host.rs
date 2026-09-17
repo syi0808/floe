@@ -16,37 +16,47 @@ use std::{
 
 #[cfg(target_os = "android")]
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
-use base64::Engine as _;
-use floe_agent_contract::{AgentFailure};
-use floe_connections::{ConnectionState};
-use floe_conversation::{AgentEvent, AgentOutcome, AgentSession, SessionStore};
-use floe_execution::{Cancellation};
+use floe_agent_contract::AgentFailure;
+use floe_connections::ConnectionState;
+use floe_conversation::{AgentEvent, AgentSession, SessionStore};
+// What the regressions below read off a finished turn.
+#[cfg(test)]
+use floe_conversation::AgentOutcome;
+use floe_execution::Cancellation;
 use floe_experts::{BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState};
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 #[cfg(not(target_os = "android"))]
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
-use floe_access::{CalendarReadAccess, CalendarReadAccessRequest};
-use floe_actions::{CalendarActionState, ExpertCalendarInspection, ExpertProposalReference};
+use crate::{
+    CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
+    CalendarSubjectRequest, ConversationSessionOperation, ConversationTurnRequest,
+    FixtureOperation, MemoryReviewOverview, RemoteGrantOverview, RemoteTurnRoute, VaultState,
+    WorkerAction, WorkerOperation, WorkerResult,
+};
+use floe_access::CalendarReadAccessRequest;
+use floe_context::CalendarSource;
+use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
-use floe_vault::{EncryptedAgentVault, RemotePairingChallenge, RemoteProducerIdentity, VaultKeyProvider};
-use floe_access::{GrantState};
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
+use floe_access::RemoteProducerIdentity;
 use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle};
-use floe_day::{CalendarProvider};
-use floe_kernel::{PersonId};
+use floe_context_contract::CalendarProvider;
+use floe_kernel::PersonId;
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
-use floe_provider_adapters::control::authorization::{RemoteAuthorizationClient, RemotePairingClient};
-use floe_knowledge::{KnowledgeActor, KnowledgeDecisionKind};
-use floe_protocol::*;
-use serde::{Serialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256};
+use floe_provider_adapters::control::authorization::{
+    RemoteAuthorizationClient, RemotePairingClient, access_producer_identity, enrollment_status,
+    pairing_report,
+};
+#[cfg(not(target_os = "macos"))]
+use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
+use floe_knowledge::KnowledgeActor;
 use uuid::Uuid;
 
-use crate::local_context::LocalContextStore;
+use crate::local_context::LocalContextHost;
 use crate::{FloeCore, diagnostics};
 
 mod conversation_turn;
 mod learner_worker;
-mod personal_driver;
 mod personal_grants;
 mod remote_views;
 
@@ -59,106 +69,11 @@ const AGENT_VAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
 const MAX_VAULT_JOBS: usize = 64;
 const MAX_IN_FLIGHT_VAULT_JOBS: usize = 8;
 
-fn operation_name(operation: &AgentVaultOperationDto) -> &'static str {
-    match operation {
-        AgentVaultOperationDto::Submit { action } => action_name(action),
-        AgentVaultOperationDto::Poll { .. } => "poll",
-        AgentVaultOperationDto::Stop {} => "stop",
-        AgentVaultOperationDto::Release {} => "release",
-    }
-}
-
-fn action_name(action: &AgentVaultActionDto) -> &'static str {
-    match action {
-        AgentVaultActionDto::Status {} => "status",
-        AgentVaultActionDto::Create {} => "create",
-        AgentVaultActionDto::Unlock {} => "unlock",
-        AgentVaultActionDto::Lock {} => "lock",
-        AgentVaultActionDto::Session { .. } => "session",
-        AgentVaultActionDto::Registry { .. } => "registry",
-        AgentVaultActionDto::CalendarExperts { .. } => "calendar_experts",
-        AgentVaultActionDto::CalendarAccess { .. } => "calendar_access",
-        AgentVaultActionDto::PersonalAccess { .. } => "personal_access",
-        AgentVaultActionDto::ContactsAccess { .. } => "contacts_access",
-        AgentVaultActionDto::CalendarAction { .. } => "calendar_action",
-        AgentVaultActionDto::CalendarSubjectPreview { .. } => "calendar_subject_preview",
-        AgentVaultActionDto::InspectProposal { .. } => "inspect_proposal",
-        AgentVaultActionDto::ConversationSession { .. } => "conversation_session",
-        AgentVaultActionDto::ConversationTurn { .. } => "conversation_turn",
-        AgentVaultActionDto::MemoryReview { .. } => "memory_review",
-        AgentVaultActionDto::Memory {} => "memory",
-        AgentVaultActionDto::Connections {} => "connections",
-        AgentVaultActionDto::RemoteAuthorityInspectProducer { .. } => {
-            "remote_authority_inspect_producer"
-        }
-        AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { .. } => {
-            "remote_authority_review_and_enroll"
-        }
-        AgentVaultActionDto::RemoteAuthorityEnrollmentStatus { .. } => {
-            "remote_authority_enrollment_status"
-        }
-        AgentVaultActionDto::RemotePairingPrepare {} => "remote_pairing_prepare",
-        AgentVaultActionDto::RemotePairingConfirm { .. } => "remote_pairing_confirm",
-        AgentVaultActionDto::RemotePairingStatus { .. } => "remote_pairing_status",
-        AgentVaultActionDto::RemotePairingFinalize { .. } => "remote_pairing_finalize",
-        AgentVaultActionDto::RemoteCalendarGrantPreview { .. } => "remote_calendar_grant_preview",
-        AgentVaultActionDto::RemoteCalendarGrantReview { .. } => "remote_calendar_grant_review",
-        AgentVaultActionDto::RemoteCalendarGrantStatus { .. } => "remote_calendar_grant_status",
-        AgentVaultActionDto::RemoteCalendarGrantPause { .. } => "remote_calendar_grant_pause",
-        AgentVaultActionDto::RemoteViewGrantPreview { .. } => "remote_view_grant_preview",
-        AgentVaultActionDto::RemoteViewGrantReview { .. } => "remote_view_grant_review",
-        AgentVaultActionDto::RemoteViewGrantStatus { .. } => "remote_view_grant_status",
-        AgentVaultActionDto::RemoteViewGrantPause { .. } => "remote_view_grant_pause",
-    }
-}
-
-fn exclusive_host_action(action: &AgentVaultActionDto) -> bool {
-    matches!(
-        action,
-        AgentVaultActionDto::Create {}
-            | AgentVaultActionDto::Unlock {}
-            | AgentVaultActionDto::Lock {}
-    )
-}
-
-fn concurrent_host_action(action: &AgentVaultActionDto) -> bool {
-    matches!(
-        action,
-        AgentVaultActionDto::Status {}
-            | AgentVaultActionDto::Registry { .. }
-            | AgentVaultActionDto::CalendarExperts { .. }
-            | AgentVaultActionDto::CalendarAccess { .. }
-            | AgentVaultActionDto::PersonalAccess { .. }
-            | AgentVaultActionDto::ContactsAccess { .. }
-            | AgentVaultActionDto::CalendarSubjectPreview { .. }
-            | AgentVaultActionDto::ConversationTurn { .. }
-            | AgentVaultActionDto::InspectProposal { .. }
-            | AgentVaultActionDto::MemoryReview { .. }
-            | AgentVaultActionDto::Memory {}
-            | AgentVaultActionDto::Connections {}
-            | AgentVaultActionDto::RemoteAuthorityInspectProducer { .. }
-            | AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { .. }
-            | AgentVaultActionDto::RemoteAuthorityEnrollmentStatus { .. }
-            | AgentVaultActionDto::RemotePairingPrepare {}
-            | AgentVaultActionDto::RemotePairingConfirm { .. }
-            | AgentVaultActionDto::RemotePairingStatus { .. }
-            | AgentVaultActionDto::RemotePairingFinalize { .. }
-            | AgentVaultActionDto::RemoteCalendarGrantPreview { .. }
-            | AgentVaultActionDto::RemoteCalendarGrantReview { .. }
-            | AgentVaultActionDto::RemoteCalendarGrantStatus { .. }
-            | AgentVaultActionDto::RemoteCalendarGrantPause { .. }
-            | AgentVaultActionDto::RemoteViewGrantPreview { .. }
-            | AgentVaultActionDto::RemoteViewGrantReview { .. }
-            | AgentVaultActionDto::RemoteViewGrantStatus { .. }
-            | AgentVaultActionDto::RemoteViewGrantPause { .. }
-    )
-}
-
 pub struct VaultBridge {
     root: PathBuf,
     core: Arc<FloeCore>,
     worker: RefCell<Option<Worker>>,
-    local_context: Arc<LocalContextStore>,
+    local_context: Arc<LocalContextHost>,
     app_events: Arc<crate::events::AppEventBuffer>,
 }
 
@@ -176,7 +91,7 @@ impl VaultBridge {
     pub(crate) fn new(
         database_path: &str,
         core: Arc<FloeCore>,
-        local_context: Arc<LocalContextStore>,
+        local_context: Arc<LocalContextHost>,
     ) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
@@ -196,12 +111,11 @@ impl VaultBridge {
         &self,
         person: PersonId,
         request_id: Uuid,
-        operation: AgentVaultOperationDto,
-    ) -> Result<AgentVaultResultDto, VaultRequestFailure> {
-        let stage = operation_name(&operation);
+        operation: WorkerOperation,
+    ) -> Result<WorkerResult, VaultRequestFailure> {
+        let stage = operation.name();
         self.worker()
             .and_then(|worker| worker.request(person, request_id, operation))
-            .and_then(VaultJobResult::into_protocol)
             .map_err(|failure| VaultRequestFailure {
                 failure,
                 request_id,
@@ -233,7 +147,7 @@ impl VaultBridge {
         &self,
         person: PersonId,
         command_id: floe_kernel::CommandId,
-        request: AgentConversationTurnRequestDto,
+        request: ConversationTurnRequest,
     ) -> Result<floe_conversation::RunReceipt, AgentFailure> {
         self.worker()?
             .start_conversation(person, command_id, request)
@@ -295,7 +209,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
     async fn activate(
         vault: EncryptedAgentVault<Keys>,
         core: Arc<FloeCore>,
-        local_context: Arc<LocalContextStore>,
+        local_context: Arc<LocalContextHost>,
     ) -> Result<Self, AgentFailure> {
         let vault = Arc::new(vault);
         let conversation_activation = vault.activate_conversation_executor().await?;
@@ -399,7 +313,7 @@ impl<Keys> Deref for OpenVault<Keys> {
 struct Job {
     person: PersonId,
     id: Uuid,
-    action: AgentVaultActionDto,
+    action: Box<WorkerAction>,
     cancellation: Cancellation,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
@@ -479,106 +393,33 @@ struct ConversationCancelJob {
     reply: mpsc::SyncSender<Result<floe_conversation::CancelRunStatus, AgentFailure>>,
 }
 
+/// How far one command has got, as the worker records it.
+///
+/// Every slot holds the owner's own value; nothing here is a wire shape.
 #[derive(Default)]
 struct Progress {
     events: Vec<AgentEvent>,
     done: bool,
-    state: Option<AgentVaultStateDto>,
+    state: Option<VaultState>,
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
     calendar_experts: Option<floe_experts::CalendarExpertOverview>,
-    calendar_subject_preview: Option<CalendarSubjectPreviewDto>,
-    proposal: Option<AgentProposalInspectionDto>,
-    memory_review: Option<AgentMemoryReviewOverviewDto>,
-    memory: Option<AgentMemoryOverviewDto>,
+    calendar_subject_preview: Option<CalendarSubjectPreview>,
+    proposal: Option<CalendarProposalInspection>,
+    memory_review: Option<MemoryReviewOverview>,
+    memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
     connections: Option<Vec<floe_connections::ConnectorSnapshot>>,
-    remote_producer: Option<RemoteProducerIdentityDto>,
-    remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
-    remote_pairing: Option<RemotePairingStatusDto>,
-    remote_owner: Option<RemoteOwnerPublicKeyDto>,
-    remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
-    remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
-    remote_view_grant: Option<RemoteViewGrantOverviewDto>,
-    remote_view_preview: Option<RemoteViewGrantPreviewDto>,
-    personal_access: Option<PersonalAccessOverviewDto>,
-    calendar_actions: Option<serde_json::Value>,
+    remote_producer: Option<floe_access::RemoteProducerIdentity>,
+    remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
+    remote_pairing: Option<floe_connections::PairingStatus>,
+    remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
+    remote_calendar_grant: Option<RemoteGrantOverview>,
+    remote_calendar_preview: Option<crate::RemoteCalendarGrantPreview>,
+    remote_view_grant: Option<RemoteGrantOverview>,
+    remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
+    personal_access: Option<floe_access::PersonalAccessOverview>,
+    calendar_actions: Option<crate::CalendarActionsResult>,
     failure: Option<AgentFailure>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct VaultJobResult {
-    request_id: String,
-    stage: String,
-    events: Vec<AgentEvent>,
-    next_sequence: usize,
-    done: bool,
-    state: Option<AgentVaultStateDto>,
-    session: Option<AgentSession>,
-    registry: Option<floe_experts::RegistryOverview>,
-    calendar_experts: Option<floe_experts::CalendarExpertOverview>,
-    calendar_subject_preview: Option<CalendarSubjectPreviewDto>,
-    proposal: Option<AgentProposalInspectionDto>,
-    memory_review: Option<AgentMemoryReviewOverviewDto>,
-    memory: Option<AgentMemoryOverviewDto>,
-    connections: Option<Vec<floe_connections::ConnectorSnapshot>>,
-    remote_producer: Option<RemoteProducerIdentityDto>,
-    remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
-    remote_pairing: Option<RemotePairingStatusDto>,
-    remote_owner: Option<RemoteOwnerPublicKeyDto>,
-    remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
-    remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
-    remote_view_grant: Option<RemoteViewGrantOverviewDto>,
-    remote_view_preview: Option<RemoteViewGrantPreviewDto>,
-    personal_access: Option<PersonalAccessOverviewDto>,
-    calendar_actions: Option<serde_json::Value>,
-    failure: Option<AgentFailure>,
-}
-
-impl VaultJobResult {
-    fn into_protocol(self) -> Result<AgentVaultResultDto, AgentFailure> {
-        let request_id = self.request_id.clone();
-        let failure = self.failure.as_ref().or_else(|| {
-            match self
-                .session
-                .as_ref()
-                .and_then(|session| session.last_outcome.as_ref())
-            {
-                Some(AgentOutcome::Halted { reason }) => Some(reason),
-                _ => None,
-            }
-        });
-        Ok(AgentVaultResultDto {
-            request_id,
-            events: encode_contracts(self.events)?,
-            next_sequence: self.next_sequence,
-            done: self.done,
-            state: self.state,
-            session: self.session.as_ref().map(encode_contract).transpose()?,
-            registry: self.registry.as_ref().map(encode_contract).transpose()?,
-            calendar_experts: self
-                .calendar_experts
-                .as_ref()
-                .map(encode_contract)
-                .transpose()?,
-            calendar_subject_preview: self.calendar_subject_preview,
-            proposal: self.proposal,
-            memory_review: self.memory_review,
-            memory: self.memory,
-            connections: self.connections.map(encode_contracts).transpose()?,
-            remote_producer: self.remote_producer,
-            remote_enrollment: self.remote_enrollment,
-            remote_pairing: self.remote_pairing,
-            remote_owner: self.remote_owner,
-            remote_calendar_grant: self.remote_calendar_grant,
-            remote_calendar_preview: self.remote_calendar_preview,
-            remote_view_grant: self.remote_view_grant,
-            remote_view_preview: self.remote_view_preview,
-            personal_access: self.personal_access,
-            calendar_actions: self.calendar_actions,
-            failure: failure
-                .map(|failure| failure_envelope(failure, &self.stage, &self.request_id)),
-        })
-    }
 }
 
 impl Worker {
@@ -586,7 +427,7 @@ impl Worker {
         root: PathBuf,
         keys: Keys,
         core: Arc<FloeCore>,
-        local_context: Arc<LocalContextStore>,
+        local_context: Arc<LocalContextHost>,
         app_events: Arc<crate::events::AppEventBuffer>,
     ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_IN_FLIGHT_VAULT_JOBS);
@@ -713,12 +554,12 @@ impl Worker {
                                     continue;
                                 }
                             };
-                            let operation = action_name(&job.action);
+                            let operation = job.action.name();
                             let started = Instant::now();
                             let trace_context = diagnostics::trace_context(job.id);
                             let request_id = trace_context.request_id().to_string();
                             tracing::info!(request_id, operation, "agent_job_started");
-                            if matches!(job.action, AgentVaultActionDto::ConversationTurn { .. }) {
+                            if matches!(*job.action, WorkerAction::ConversationTurn { .. }) {
                                 let failure = match (&conversation_runtime, vault.as_ref()) {
                                     (Ok(runtime), Some((person, open_vault)))
                                         if *person == job.person =>
@@ -733,9 +574,9 @@ impl Worker {
                                             let execution_job = Arc::clone(&task_job);
                                             let execution = tokio::spawn(diagnostics::instrument(
                                                 async move {
-                                                    let AgentVaultActionDto::ConversationTurn {
+                                                    let WorkerAction::ConversationTurn {
                                                         request,
-                                                    } = &execution_job.action
+                                                    } = &*execution_job.action
                                                     else {
                                                         return Err(AgentFailure::InvalidInput);
                                                     };
@@ -923,19 +764,41 @@ impl Worker {
         &self,
         person: PersonId,
         id: Uuid,
-        operation: AgentVaultOperationDto,
-    ) -> Result<VaultJobResult, AgentFailure> {
-        if let AgentVaultOperationDto::Submit { ref action } = operation {
-            self.submit_job(person, id, action.clone())?;
+        operation: WorkerOperation,
+    ) -> Result<WorkerResult, AgentFailure> {
+        let person_id = person;
+        if let WorkerOperation::Submit { action } = operation {
+            self.submit_job(person, id, action)?;
+            return self.poll_job(person_id, id, 0, false, false);
         }
+        let (after_sequence, stop, release) = match operation {
+            WorkerOperation::Poll { after_sequence } => (after_sequence, false, false),
+            WorkerOperation::Stop => (0, true, false),
+            WorkerOperation::Release => (0, false, true),
+            WorkerOperation::Submit { .. } => unreachable!("submitted above"),
+        };
+        self.poll_job(person_id, id, after_sequence, stop, release)
+    }
+
+    /// Read how far one job got, after any stop or release the caller asked for.
+    fn poll_job(
+        &self,
+        person: PersonId,
+        id: Uuid,
+        after_sequence: usize,
+        stop: bool,
+        release: bool,
+    ) -> Result<WorkerResult, AgentFailure> {
         let jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         let job = jobs.get(&id).cloned().ok_or(AgentFailure::NotFound)?;
         if job.person != person {
             return Err(AgentFailure::NotFound);
         }
         drop(jobs);
-        if matches!(operation, AgentVaultOperationDto::Stop {}) {
-            if matches!(job.action, AgentVaultActionDto::ConversationTurn { .. }) {
+        if stop {
+            // A turn is cancelled through its Run, so a cancel that the
+            // conversation owner has never heard of still stops the job.
+            if matches!(*job.action, WorkerAction::ConversationTurn { .. }) {
                 let command_id = floe_agent_contract::CommandId::from_uuid(job.id)
                     .ok_or(AgentFailure::InvalidInput)?;
                 if matches!(
@@ -958,17 +821,14 @@ impl Worker {
                 job.cancellation.cancel();
             }
         }
-        let after_sequence = match operation {
-            AgentVaultOperationDto::Poll { after_sequence } => after_sequence,
-            _ => 0,
-        };
         let progress = job.progress.lock().map_err(|_| AgentFailure::Interrupted)?;
         if after_sequence > progress.events.len() {
             return Err(AgentFailure::InvalidInput);
         }
-        let response = VaultJobResult {
-            request_id: id.to_string(),
-            stage: action_name(&job.action).into(),
+        let response = WorkerResult {
+            request_id: id,
+            person_id: person,
+            stage: job.action.name().into(),
             events: progress.events[after_sequence..].to_vec(),
             next_sequence: progress.events.len(),
             done: progress.done,
@@ -994,7 +854,7 @@ impl Worker {
             failure: progress.failure,
         };
         drop(progress);
-        if matches!(operation, AgentVaultOperationDto::Release {}) {
+        if release {
             if !response.done {
                 return Err(AgentFailure::Conflict);
             }
@@ -1010,12 +870,14 @@ impl Worker {
         &self,
         person: PersonId,
         command_id: floe_kernel::CommandId,
-        request: AgentConversationTurnRequestDto,
+        request: ConversationTurnRequest,
     ) -> Result<floe_conversation::RunReceipt, AgentFailure> {
         let job = self.submit_job(
             person,
             command_id.as_uuid(),
-            AgentVaultActionDto::ConversationTurn { request },
+            Box::new(WorkerAction::ConversationTurn {
+                request: Box::new(request),
+            }),
         )?;
         job.wait_for_admission()
     }
@@ -1024,14 +886,16 @@ impl Worker {
         &self,
         person: PersonId,
         id: Uuid,
-        action: AgentVaultActionDto,
+        action: Box<WorkerAction>,
     ) -> Result<Arc<Job>, AgentFailure> {
         let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         if let Some(job) = jobs.get(&id) {
             if job.person != person {
                 return Err(AgentFailure::NotFound);
             }
-            if job.action != action {
+            // One request id means one command; a second one under the same id
+            // is a different request, whatever it asks for.
+            if job.action.name() != action.name() {
                 return Err(AgentFailure::Conflict);
             }
             return Ok(Arc::clone(job));
@@ -1050,16 +914,15 @@ impl Worker {
                 completed.push(*request_id);
             } else {
                 in_flight += 1;
-                exclusive_in_flight |= exclusive_host_action(&job.action);
+                exclusive_in_flight |= job.action.is_exclusive_host();
                 incompatible_in_flight |=
-                    !matches!(job.action, AgentVaultActionDto::ConversationTurn { .. });
+                    !matches!(*job.action, WorkerAction::ConversationTurn { .. });
             }
         }
         if in_flight >= MAX_IN_FLIGHT_VAULT_JOBS
-            || (in_flight > 0 && exclusive_host_action(&action))
+            || (in_flight > 0 && action.is_exclusive_host())
             || exclusive_in_flight
-            || (in_flight > 0
-                && (!concurrent_host_action(&action) || incompatible_in_flight))
+            || (in_flight > 0 && (!action.is_concurrent_host() || incompatible_in_flight))
         {
             return Err(AgentFailure::Conflict);
         }
@@ -1181,290 +1044,48 @@ impl Drop for Worker {
     }
 }
 
+/// What one command produced, before anything says it on a wire.
+#[derive(Default)]
 struct VaultExecutionResult {
-    state: AgentVaultStateDto,
+    state: VaultState,
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
     calendar_experts: Option<floe_experts::CalendarExpertOverview>,
-    calendar_subject_preview: Option<CalendarSubjectPreviewDto>,
-    proposal: Option<AgentProposalInspectionDto>,
-    memory_review: Option<AgentMemoryReviewOverviewDto>,
-    memory: Option<AgentMemoryOverviewDto>,
-    remote_producer: Option<RemoteProducerIdentityDto>,
-    remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
-    remote_pairing: Option<RemotePairingStatusDto>,
-    remote_owner: Option<RemoteOwnerPublicKeyDto>,
-    remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
-    remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
-    remote_view_grant: Option<RemoteViewGrantOverviewDto>,
-    remote_view_preview: Option<RemoteViewGrantPreviewDto>,
-    personal_access: Option<PersonalAccessOverviewDto>,
-    calendar_actions: Option<serde_json::Value>,
+    calendar_subject_preview: Option<CalendarSubjectPreview>,
+    proposal: Option<CalendarProposalInspection>,
+    memory_review: Option<MemoryReviewOverview>,
+    memory: Option<floe_knowledge::MemoryOverviewSnapshot>,
+    remote_producer: Option<floe_access::RemoteProducerIdentity>,
+    remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
+    remote_pairing: Option<floe_connections::PairingStatus>,
+    remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
+    remote_calendar_grant: Option<RemoteGrantOverview>,
+    remote_calendar_preview: Option<crate::RemoteCalendarGrantPreview>,
+    remote_view_grant: Option<RemoteGrantOverview>,
+    remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
+    personal_access: Option<floe_access::PersonalAccessOverview>,
+    calendar_actions: Option<crate::CalendarActionsResult>,
 }
 
-fn protocol_producer_identity(
-    identity: &floe_provider_adapters::control::authorization::ProducerIdentityResponse,
-) -> RemoteProducerIdentityDto {
-    RemoteProducerIdentityDto {
-        schema_version: identity.schema_version,
-        instance_id: identity.instance_id.clone(),
-        execution_owner: identity.execution_owner.clone(),
-        audience: identity.audience.clone(),
-        key_id: identity.key_id.clone(),
-        public_key: identity.public_key.clone(),
-        fingerprint: identity.fingerprint.clone(),
-    }
-}
 
-fn core_producer_identity(identity: &RemoteProducerIdentityDto) -> RemoteProducerIdentity {
-    RemoteProducerIdentity {
-        schema_version: identity.schema_version,
-        instance_id: identity.instance_id.clone(),
-        execution_owner: identity.execution_owner.clone(),
-        audience: identity.audience.clone(),
-        key_id: identity.key_id.clone(),
-        public_key: identity.public_key.clone(),
-        fingerprint: identity.fingerprint.clone(),
-    }
-}
 
-fn protocol_enrollment_status(
-    status: floe_provider_adapters::control::authorization::EnrollmentStatusResponse,
-) -> RemoteAuthorityEnrollmentStatusDto {
-    RemoteAuthorityEnrollmentStatusDto {
-        enrollment_id: status.enrollment_id,
-        key_id: status.key_id,
-        fingerprint: status.fingerprint,
-        local_confirmed: status.local_confirmed,
-        admin_approved: status.admin_approved,
-        active: status.active,
-    }
-}
 
-fn remote_calendar_grant_overview(
-    grant: &floe_access::DataAccessGrant,
-) -> Result<RemoteCalendarGrantOverviewDto, AgentFailure> {
-    let resource = grant
-        .scope()
-        .resources()
-        .first()
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .as_str()
-        .to_owned();
-    let consumer = grant
-        .scope()
-        .consumers()
-        .iter()
-        .find(|candidate| candidate.identifier() == "calendar.expert")
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .identifier()
-        .to_owned();
-    let recipient = match grant.scope().processing() {
-        ProcessingRestriction::ApprovedRecipient { recipient, .. } => recipient.clone(),
-        ProcessingRestriction::LocalOnly => "local_only".into(),
-    };
-    Ok(RemoteCalendarGrantOverviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: grant.source().person_id().to_string(),
-        grant_id: grant.id(),
-        grant_authority: grant.authority(),
-        connector_id: grant.source().connector().as_str().to_owned(),
-        connection_id: grant.source().connection_id().as_str().to_owned(),
-        resource,
-        source_authority: grant.source().source_authority(),
-        execution_owner: grant.source().execution_owner().as_str().to_owned(),
-        state: match grant.state() {
-            GrantState::Paused => "paused",
-            GrantState::Active => "active",
-            GrantState::Revoked => "revoked",
-        }
-        .into(),
-        review_required: grant.review_required(),
-        consumer,
-        purpose: "everyday_assistance".into(),
-        recipient,
-    })
-}
 
-fn remote_view_grant_overview(
-    grant: &floe_access::DataAccessGrant,
-    connection_revision: Option<u64>,
-) -> Result<RemoteViewGrantOverviewDto, AgentFailure> {
-    let resource = grant
-        .scope()
-        .resources()
-        .first()
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .as_str()
-        .to_owned();
-    let (view_id, _) = resource
-        .split_once(':')
-        .ok_or(AgentFailure::VaultUnavailable)?;
-    if !matches!(
-        view_id,
-        "mail.communication" | "work.context" | "life.logistics"
-    ) {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    let consumer = grant
-        .scope()
-        .consumers()
-        .first()
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .identifier()
-        .to_owned();
-    let recipient = match grant.scope().processing() {
-        ProcessingRestriction::ApprovedRecipient { recipient, .. } => recipient.clone(),
-        ProcessingRestriction::LocalOnly => "local_only".into(),
-    };
-    Ok(RemoteViewGrantOverviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: grant.source().person_id().to_string(),
-        grant_id: grant.id(),
-        grant_authority: grant.authority(),
-        view_id: view_id.into(),
-        connector_id: grant.source().connector().as_str().into(),
-        connection_id: grant.source().connection_id().as_str().into(),
-        connection_revision,
-        resource,
-        source_authority: grant.source().source_authority(),
-        execution_owner: grant.source().execution_owner().as_str().into(),
-        state: match grant.state() {
-            GrantState::Paused => "paused",
-            GrantState::Active => "active",
-            GrantState::Revoked => "revoked",
-        }
-        .into(),
-        review_required: grant.review_required(),
-        consumer,
-        purpose: "everyday_assistance".into(),
-        recipient,
-    })
-}
 
-fn remote_view_grant_preview(
-    person_id: PersonId,
-    preview: &remote_views::RemoteViewGrantPreview,
-) -> RemoteViewGrantPreviewDto {
-    RemoteViewGrantPreviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: person_id.to_string(),
-        view_id: preview.reference.view_id.clone(),
-        connector_id: preview.reference.connector_id.clone(),
-        connection_id: preview.reference.connection_id.clone(),
-        connection_revision: preview.connection_revision,
-        resource: preview.reference.resource.clone(),
-        source_authority: preview.reference.source_authority,
-        provider_identity: preview.reference.provider_identity.clone(),
-        execution_owner: preview.reference.execution_owner.clone(),
-        producer: protocol_producer_identity(&preview.producer),
-        consumer: preview.consumer.clone(),
-        purpose: "everyday_assistance".into(),
-        recipient: preview.producer.audience.clone(),
-    }
-}
 
-fn protocol_owner_key(key: floe_vault::RemoteOwnerPublicKey) -> RemoteOwnerPublicKeyDto {
-    let public_key = key.public_key.clone();
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(public_key.as_bytes())
-        .unwrap_or_default();
-    let fingerprint = Sha256::digest(decoded)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    RemoteOwnerPublicKeyDto {
-        key_id: key.key_id,
-        public_key,
-        fingerprint,
-    }
-}
 
-fn protocol_pairing_status(
-    response: floe_provider_adapters::control::authorization::PairingStatusResponse,
-) -> Result<RemotePairingStatusDto, AgentFailure> {
-    if response.schema_version != PROTOCOL_VERSION
-        || response.pairing_id.is_empty()
-        || response.person_id.is_empty()
-        || response.device_id.is_empty()
-        || response
-            .client_id
-            .as_deref()
-            .is_some_and(|client_id| client_id != response.pairing_id)
-        || response.issuer.as_ref().is_some_and(|issuer| {
-            response
-                .issuer_fingerprint
-                .as_deref()
-                .is_some_and(|fingerprint| fingerprint != issuer.fingerprint)
-        })
-    {
-        return Err(AgentFailure::CapabilityUnavailable);
-    }
-    let issuer = response.issuer.map(protocol_pairing_issuer).transpose()?;
-    Ok(RemotePairingStatusDto {
-        schema_version: response.schema_version,
-        pairing_id: response.pairing_id,
-        status: response.status,
-        person_id: response.person_id,
-        device_id: response.device_id,
-        producer: response.producer.as_ref().map(protocol_producer_identity),
-        issuer,
-        issuer_fingerprint: response.issuer_fingerprint,
-        token: response.token,
-    })
-}
 
-fn protocol_pairing_issuer(
-    response: floe_provider_adapters::control::authorization::PairingIssuerResponse,
-) -> Result<RemoteOwnerPublicKeyDto, AgentFailure> {
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(response.public_key.as_bytes())
-        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    if decoded.len() != 32
-        || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != response.public_key
-    {
-        return Err(AgentFailure::CapabilityUnavailable);
-    }
-    let fingerprint = Sha256::digest(&decoded)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    if fingerprint != response.fingerprint {
-        return Err(AgentFailure::CapabilityUnavailable);
-    }
-    Ok(RemoteOwnerPublicKeyDto {
-        key_id: response.key_id,
-        public_key: response.public_key,
-        fingerprint,
-    })
-}
 
 impl VaultExecutionResult {
-    fn new(state: AgentVaultStateDto) -> Self {
+    fn new(state: VaultState) -> Self {
         Self {
             state,
-            session: None,
-            registry: None,
-            calendar_experts: None,
-            calendar_subject_preview: None,
-            proposal: None,
-            memory_review: None,
-            memory: None,
-            remote_producer: None,
-            remote_enrollment: None,
-            remote_pairing: None,
-            remote_owner: None,
-            remote_calendar_grant: None,
-            remote_calendar_preview: None,
-            remote_view_grant: None,
-            remote_view_preview: None,
-            personal_access: None,
-            calendar_actions: None,
+            ..Self::default()
         }
     }
 
     fn ready() -> Self {
-        Self::new(AgentVaultStateDto::Ready)
+        Self::new(VaultState::Ready)
     }
 }
 
@@ -1525,9 +1146,9 @@ fn finish_job(
                         AgentFailure::VaultUnavailable | AgentFailure::Interrupted
                     ) || !vault_available
                     {
-                        AgentVaultStateDto::Unavailable
+                        VaultState::Unavailable
                     } else {
-                        AgentVaultStateDto::Ready
+                        VaultState::Ready
                     },
                 );
                 progress.failure = Some(failure);
@@ -1542,7 +1163,7 @@ async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
     root: &std::path::Path,
     keys: &Keys,
     core: &Arc<FloeCore>,
-    local_context: &Arc<LocalContextStore>,
+    local_context: &Arc<LocalContextHost>,
     current: &mut Option<(PersonId, Arc<OpenVault<Keys>>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
@@ -1569,9 +1190,9 @@ async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
 async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     core: &FloeCore,
     vault: &OpenVault<Keys>,
-    local_context: &LocalContextStore,
+    local_context: &LocalContextHost,
     job: &Job,
-    request: &AgentConversationTurnRequestDto,
+    request: &ConversationTurnRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
     if vault.builtin_expert_overview().await?.is_some()
         && let Err(failure) = Box::pin(ensure_builtin_experts(
@@ -1665,12 +1286,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
     root: &std::path::Path,
     keys: &Keys,
     core: &Arc<FloeCore>,
-    local_context: &Arc<LocalContextStore>,
+    local_context: &Arc<LocalContextHost>,
     current: &mut Option<(PersonId, Arc<OpenVault<Keys>>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
-    match &job.action {
-        AgentVaultActionDto::Status {} => {
+    match job.action.as_ref() {
+        WorkerAction::Status => {
             if let Some((_, vault)) = current {
                 vault.check_access()?;
                 return Ok(VaultExecutionResult::ready());
@@ -1678,7 +1299,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let state = stored_vault_state(root, job.person);
             Ok(VaultExecutionResult::new(state))
         }
-        AgentVaultActionDto::Create {} => {
+        WorkerAction::Create => {
             if current.is_some() {
                 return Err(AgentFailure::Conflict);
             }
@@ -1696,7 +1317,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             *current = Some((job.person, Arc::new(vault)));
             Ok(VaultExecutionResult::ready())
         }
-        AgentVaultActionDto::Unlock {} => {
+        WorkerAction::Unlock => {
             if current.is_some() {
                 return Err(AgentFailure::Conflict);
             }
@@ -1709,32 +1330,32 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             *current = Some((job.person, Arc::new(vault)));
             Ok(VaultExecutionResult::ready())
         }
-        AgentVaultActionDto::Lock {} => {
+        WorkerAction::Lock => {
             *current = None;
-            Ok(VaultExecutionResult::new(AgentVaultStateDto::Locked))
+            Ok(VaultExecutionResult::new(VaultState::Locked))
         }
-        AgentVaultActionDto::Session { operation } => {
+        WorkerAction::Session { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {
-                AgentFixtureOperationDto::Start {} => vault.create_sample_session().await?,
-                AgentFixtureOperationDto::Resume {} => vault.resume_sample_session().await?,
-                AgentFixtureOperationDto::Get { session_id } => {
-                    sample_session(&***vault, job.person, session_uuid(session_id)?).await?
+                FixtureOperation::Start => vault.create_sample_session().await?,
+                FixtureOperation::Resume => vault.resume_sample_session().await?,
+                FixtureOperation::Get { session_id } => {
+                    sample_session(&***vault, job.person, *session_id).await?
                 }
-                AgentFixtureOperationDto::Recover {
+                FixtureOperation::Recover {
                     session_id,
                     expected_revision,
                 } => {
-                    sample_session(&***vault, job.person, session_uuid(session_id)?).await?;
+                    sample_session(&***vault, job.person, *session_id).await?;
                     recover_agent_sample(
                         &***vault,
                         job.person,
-                        session_uuid(session_id)?,
+                        *session_id,
                         *expected_revision,
                     )
                     .await?
                 }
-                AgentFixtureOperationDto::Turn {
+                FixtureOperation::Turn {
                     session_id,
                     expected_revision,
                     prompt,
@@ -1743,9 +1364,9 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             vault,
                             AgentFixtureTurn {
                                 person_id: job.person,
-                                session_id: session_uuid(session_id)?,
+                                session_id: *session_id,
                                 expected_revision: *expected_revision,
-                                prompt: fixture_prompt(*prompt),
+                                prompt: *prompt,
                             },
                             job.cancellation.clone(),
                             Duration::from_millis(500),
@@ -1769,15 +1390,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::Registry { change } => {
+        WorkerAction::Registry { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let registry = match change {
                 Some(configuration) => Some(
                     vault
-                        .configure_registry(
-                            decode_contract(configuration)?,
-                            job.cancellation.clone(),
-                        )
+                        .configure_registry(configuration.clone(), job.cancellation.clone())
                         .await?,
                 ),
                 None => vault.registry_overview().await?,
@@ -1790,10 +1408,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::CalendarExperts { setup } => {
+        WorkerAction::CalendarExperts { setup } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             if let Some(request) = setup {
-                let mut request: floe_experts::CalendarExpertSetup = decode_contract(request)?;
+                let mut request: floe_experts::CalendarExpertSetup = (**request).clone();
                 let connection_id = match Box::pin(calendar_grant_authority(
                     core,
                     local_context,
@@ -1827,7 +1445,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::CalendarSubjectPreview { request } => {
+        WorkerAction::CalendarSubjectPreview { request } => {
             let preview = Box::pin(calendar_subject_preview(
                 core,
                 local_context,
@@ -1841,9 +1459,9 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::CalendarAccess { change } => {
+        WorkerAction::CalendarAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let mut change: floe_experts::CalendarAccessConfiguration = decode_contract(change)?;
+            let mut change: floe_experts::CalendarAccessConfiguration = (**change).clone();
             let overview = Box::pin(vault.calendar_expert_overview()).await?;
             let native_setup = overview
                 .setups
@@ -1857,8 +1475,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         .filter(|view| {
                             matches!(
                                 view.provider,
-                                floe_day::CalendarProvider::EventKit
-                                    | floe_day::CalendarProvider::Android
+                                floe_context_contract::CalendarProvider::EventKit
+                                    | floe_context_contract::CalendarProvider::Android
                             )
                         })
                         .map(|view| (setup, view))
@@ -2002,13 +1620,13 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::PersonalAccess { change } => {
+        WorkerAction::PersonalAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let overview = personal_grants::apply(
-                vault,
-                local_context,
+            let overview = floe_access::apply_personal_access(
+                vault.vault.as_ref(),
+                &personal_grants::native_driver(local_context),
                 job.person,
-                change.clone(),
+                (**change).clone(),
                 job.cancellation.clone(),
             )
             .await?;
@@ -2017,13 +1635,13 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::ContactsAccess { change } => {
+        WorkerAction::ContactsAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let overview = personal_grants::apply_contacts(
-                vault,
-                local_context,
+            let overview = floe_access::apply_contacts(
+                vault.vault.as_ref(),
+                &personal_grants::native_driver(local_context),
                 job.person,
-                change.clone(),
+                (**change).clone(),
                 job.cancellation.clone(),
             )
             .await?;
@@ -2032,7 +1650,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::CalendarAction { operation } => {
+        WorkerAction::CalendarAction { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let result = execute_agent_calendar_action(
                 core,
@@ -2043,16 +1661,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             )
             .await?;
             Ok(VaultExecutionResult {
-                calendar_actions: Some(
-                    serde_json::to_value(result).map_err(|_| AgentFailure::InvalidInput)?,
-                ),
+                calendar_actions: Some(result),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::ConversationSession { operation } => {
+        WorkerAction::ConversationSession { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {
-                AgentConversationSessionOperationDto::Start {} => {
+                ConversationSessionOperation::Start => {
                     if vault.builtin_expert_overview().await?.is_none() {
                         ensure_builtin_experts(
                             vault,
@@ -2073,7 +1689,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     .await?;
                     conversation_session_view(vault, job.person, receipt).await?
                 }
-                AgentConversationSessionOperationDto::Resume {} => {
+                ConversationSessionOperation::Resume => {
                     let receipt = floe_conversation::resume_session(
                         vault.conversation_repository.as_ref(),
                         floe_conversation::SessionRequest {
@@ -2083,18 +1699,18 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     .await?;
                     conversation_session_view(vault, job.person, receipt).await?
                 }
-                AgentConversationSessionOperationDto::Get { session_id } => {
+                ConversationSessionOperation::Get { session_id } => {
                     let receipt = floe_conversation::get_session(
                         vault.conversation_repository.as_ref(),
                         floe_conversation::SessionReadRequest {
                             principal: job.person.to_string(),
-                            session_id: session_uuid(session_id)?,
+                            session_id: *session_id,
                         },
                     )
                     .await?;
                     conversation_session_view(vault, job.person, receipt).await?
                 }
-                AgentConversationSessionOperationDto::Recover {
+                ConversationSessionOperation::Recover {
                     session_id,
                     expected_revision,
                 } => {
@@ -2102,7 +1718,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         vault,
                         &vault.conversation_repository,
                         job.person,
-                        session_id,
+                        *session_id,
                         *expected_revision,
                     )
                     .await?
@@ -2113,19 +1729,19 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::ConversationTurn { request } => {
+        WorkerAction::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             execute_conversation_turn_action(core, vault, local_context, job, request).await
         }
-        AgentVaultActionDto::InspectProposal {
+        WorkerAction::InspectProposal {
             session_id,
             invocation_id,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let reference = ExpertProposalReference {
                 person_id: job.person,
-                session_id: session_uuid(session_id)?,
-                invocation_id: session_uuid(invocation_id)?,
+                session_id: *session_id,
+                invocation_id: *invocation_id,
             };
             let action = core
                 .inspect_expert_calendar_action(
@@ -2137,19 +1753,18 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     },
                 )
                 .await?;
-            let proposal = AgentProposalInspectionDto {
-                schema_version: PROTOCOL_VERSION,
-                person_id: job.person.to_string(),
-                session_id: reference.session_id.to_string(),
-                invocation_id: reference.invocation_id.to_string(),
-                action: action.map(calendar_action),
+            let proposal = CalendarProposalInspection {
+                person_id: job.person,
+                session_id: reference.session_id,
+                invocation_id: reference.invocation_id,
+                action,
             };
             Ok(VaultExecutionResult {
                 proposal: Some(proposal),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::MemoryReview { decision } => {
+        WorkerAction::MemoryReview { decision } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
@@ -2160,26 +1775,19 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             }
             let decision = match decision {
                 Some(request) => {
-                    let candidate_id = session_uuid(&request.candidate_id)?;
+                    // A decision only counts on a candidate that is still pending.
                     if !pending
                         .candidates
                         .iter()
-                        .any(|candidate| candidate.id == candidate_id)
+                        .any(|candidate| candidate.id == request.candidate_id)
                     {
                         return Err(AgentFailure::NotFound);
                     }
                     Some(
                         vault
                             .decide_knowledge_candidate(
-                                candidate_id,
-                                match request.decision {
-                                    AgentMemoryReviewDecisionKindDto::Approve => {
-                                        KnowledgeDecisionKind::Approve
-                                    }
-                                    AgentMemoryReviewDecisionKindDto::Reject => {
-                                        KnowledgeDecisionKind::Reject
-                                    }
-                                },
+                                request.candidate_id,
+                                request.kind,
                                 KnowledgeActor::User,
                                 chrono::Utc::now(),
                             )
@@ -2193,23 +1801,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             } else {
                 pending
             };
-            let candidates = snapshot
-                .candidates
-                .into_iter()
-                .map(|candidate| encode_contract(&candidate))
-                .collect::<Result<Vec<_>, _>>()?;
-            let decision = decision.as_ref().map(encode_contract).transpose()?;
             Ok(VaultExecutionResult {
-                memory_review: Some(AgentMemoryReviewOverviewDto {
-                    schema_version: PROTOCOL_VERSION,
-                    person_id: snapshot.person_id.to_string(),
-                    candidates,
-                    decision,
-                }),
+                memory_review: Some(MemoryReviewOverview { snapshot, decision }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::Memory {} => {
+        WorkerAction::Memory => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
@@ -2218,42 +1815,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            let memories = snapshot
-                .memories
-                .into_iter()
-                .map(|memory| {
-                    Ok::<_, AgentFailure>(AgentMemorySummaryDto {
-                        target_id: memory.target_id.to_string(),
-                        revision: memory.revision,
-                        statement: memory.statement,
-                        memory_kind: encode_contract(&memory.memory_kind)?,
-                        epistemic_status: encode_contract(&memory.epistemic_status)?,
-                        confidence_millis: memory.confidence_millis,
-                        source_count: memory.source_count,
-                        origin: match memory.origin {
-                            floe_knowledge::MemoryOrigin::UserProvided => {
-                                AgentMemoryOriginDto::UserProvided
-                            }
-                            floe_knowledge::MemoryOrigin::Learned => AgentMemoryOriginDto::Learned,
-                        },
-                        created_at: memory.created_at,
-                        valid_from: memory.valid_from,
-                        valid_until: memory.valid_until,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
             Ok(VaultExecutionResult {
-                memory: Some(AgentMemoryOverviewDto {
-                    schema_version: PROTOCOL_VERSION,
-                    person_id: snapshot.person_id.to_string(),
-                    saved_count: snapshot.saved_count,
-                    pending_count: snapshot.pending_count,
-                    memories,
-                }),
+                memory: Some(snapshot),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::Connections {} => {
+        WorkerAction::Connections => {
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
@@ -2273,25 +1840,23 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 .connections = Some(connections);
             Ok(VaultExecutionResult::new(current.as_ref().map_or_else(
                 || stored_vault_state(root, job.person),
-                |_| AgentVaultStateDto::Ready,
+                |_| VaultState::Ready,
             )))
         }
-        AgentVaultActionDto::RemotePairingPrepare {} => {
+        WorkerAction::RemotePairingPrepare => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             Ok(VaultExecutionResult {
-                remote_owner: Some(protocol_owner_key(
-                    Box::pin(vault.remote_owner_public_key()).await?,
-                )),
+                remote_owner: Some(Box::pin(vault.remote_owner_public_key()).await?),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemotePairingConfirm {
+        WorkerAction::RemotePairingConfirm {
             route,
             challenge,
             polling_proof,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             if pairing.person_id != job.person.to_string()
                 || pairing.client_id != challenge.pairing_id
                 || pairing.device_id.is_empty()
@@ -2299,26 +1864,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let core_challenge = RemotePairingChallenge {
-                pairing_id: challenge.pairing_id.clone(),
-                challenge_id: challenge.challenge_id.clone(),
-                challenge_b64url: challenge.challenge_b64url.clone(),
-                producer_signature: challenge.producer_signature.clone(),
-                producer: core_producer_identity(&challenge.producer),
-                issuer: floe_vault::RemoteOwnerPublicKey {
-                    key_id: challenge.issuer.key_id.clone(),
-                    public_key: challenge.issuer.public_key.clone(),
-                },
-                expires_at_unix_ms: challenge.expires_at_unix_ms,
-            };
             let owner_signature = Box::pin(vault.remote_sign_pairing(
-                &core_challenge,
+                challenge,
                 &pairing.person_id,
                 &pairing.client_id,
                 &pairing.device_id,
             ))
             .await?;
-            let client = RemotePairingClient::new(&route.base_url)?;
+            let client = RemotePairingClient::new(&route.route.base_url)?;
             let response = client
                 .confirm(
                     &challenge.pairing_id,
@@ -2329,15 +1882,28 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     &job.cancellation,
                 )
                 .await?;
-            let status = RemotePairingStatusDto {
+            let status = floe_connections::PairingStatus {
                 schema_version: response.schema_version,
                 pairing_id: response.pairing_id,
                 status: response.status,
                 person_id: pairing.person_id.clone(),
                 device_id: pairing.device_id.clone(),
-                producer: Some(challenge.producer.clone()),
-                issuer: Some(challenge.issuer.clone()),
-                issuer_fingerprint: Some(challenge.issuer.fingerprint.clone()),
+                producer: Some(floe_connections::ProducerIdentity {
+                    schema_version: challenge.producer.schema_version,
+                    instance_id: challenge.producer.instance_id.clone(),
+                    execution_owner: challenge.producer.execution_owner.clone(),
+                    audience: challenge.producer.audience.clone(),
+                    key_id: challenge.producer.key_id.clone(),
+                    public_key: challenge.producer.public_key.clone(),
+                    fingerprint: challenge.producer.fingerprint.clone(),
+                }),
+                issuer: Some(floe_connections::PairingIssuer {
+                    key_id: challenge.issuer.key_id.clone(),
+                    public_key: challenge.issuer.public_key.clone(),
+                    fingerprint: challenge.issuer.fingerprint(),
+                }),
+                issuer_fingerprint: Some(challenge.issuer.fingerprint()),
+                client_id: None,
                 token: None,
             };
             Ok(VaultExecutionResult {
@@ -2345,12 +1911,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemotePairingStatus {
+        WorkerAction::RemotePairingStatus {
             route,
             pairing_id,
             polling_proof,
         } => {
-            let client = RemotePairingClient::new(&route.base_url)?;
+            let client = RemotePairingClient::new(&route.route.base_url)?;
             let response = client
                 .status(
                     pairing_id,
@@ -2359,8 +1925,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     &job.cancellation,
                 )
                 .await?;
-            let status = protocol_pairing_status(response)?;
-            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let status = floe_connections::admit_pairing_status(pairing_report(response))?;
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             if status.person_id != job.person.to_string()
                 || pairing.person_id != status.person_id
                 || pairing.device_id != status.device_id
@@ -2373,14 +1939,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemotePairingFinalize {
+        WorkerAction::RemotePairingFinalize {
             route,
             pairing_id,
             polling_proof,
             challenge,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let client = RemotePairingClient::new(&route.base_url)?;
+            let client = RemotePairingClient::new(&route.route.base_url)?;
             let response = client
                 .status(
                     pairing_id,
@@ -2389,8 +1955,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     &job.cancellation,
                 )
                 .await?;
-            let status = protocol_pairing_status(response)?;
-            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let status = floe_connections::admit_pairing_status(pairing_report(response))?;
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             let owner = Box::pin(vault.remote_owner_public_key()).await?;
             if status.person_id != job.person.to_string()
                 || status.pairing_id != challenge.pairing_id
@@ -2398,25 +1964,13 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 || pairing.person_id != status.person_id
                 || pairing.device_id != status.device_id
                 || pairing.client_id != status.pairing_id
-                || challenge.issuer != protocol_owner_key(owner)
+                || challenge.issuer != owner
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let producer = core_producer_identity(&challenge.producer);
             Box::pin(vault.finalize_remote_pairing(
                 pairing_id,
-                &RemotePairingChallenge {
-                    pairing_id: challenge.pairing_id.clone(),
-                    challenge_id: challenge.challenge_id.clone(),
-                    challenge_b64url: challenge.challenge_b64url.clone(),
-                    producer_signature: challenge.producer_signature.clone(),
-                    producer: producer.clone(),
-                    issuer: floe_vault::RemoteOwnerPublicKey {
-                        key_id: challenge.issuer.key_id.clone(),
-                        public_key: challenge.issuer.public_key.clone(),
-                    },
-                    expires_at_unix_ms: challenge.expires_at_unix_ms,
-                },
+                challenge,
                 status.status == "approved",
             ))
             .await?;
@@ -2425,58 +1979,46 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteAuthorityInspectProducer { route } => {
-            let client = RemoteAuthorizationClient::new(route)?;
+        WorkerAction::RemoteAuthorityInspectProducer { route } => {
+            let client = RemoteAuthorizationClient::new(&route.route)?;
             let producer = Box::pin(client.producer_identity(
                 tokio::time::Instant::now() + Duration::from_secs(10),
                 &job.cancellation,
             ))
             .await?;
             let remote_owner = if let Some((_, vault)) = current.as_ref() {
-                Some(protocol_owner_key(
-                    Box::pin(vault.remote_owner_public_key()).await?,
-                ))
+                Some(Box::pin(vault.remote_owner_public_key()).await?)
             } else {
                 None
             };
             Ok(VaultExecutionResult {
-                remote_producer: Some(protocol_producer_identity(&producer)),
+                remote_producer: Some(access_producer_identity(&producer)),
                 remote_owner,
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { route, producer } => {
+        WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             if pairing.person_id != job.person.to_string()
                 || pairing.client_id.trim().is_empty()
                 || pairing.device_id.trim().is_empty()
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let client = RemoteAuthorizationClient::new(route)?;
-            let pinned = core_producer_identity(producer);
+            let client = RemoteAuthorizationClient::new(&route.route)?;
+            let pinned = (**producer).clone();
             let observed = Box::pin(client.producer_identity(
                 tokio::time::Instant::now() + Duration::from_secs(10),
                 &job.cancellation,
             ))
             .await?;
-            if core_producer_identity(producer)
-                != (RemoteProducerIdentity {
-                    schema_version: observed.schema_version,
-                    instance_id: observed.instance_id.clone(),
-                    execution_owner: observed.execution_owner.clone(),
-                    audience: observed.audience.clone(),
-                    key_id: observed.key_id.clone(),
-                    public_key: observed.public_key.clone(),
-                    fingerprint: observed.fingerprint.clone(),
-                })
-            {
+            if pinned != access_producer_identity(&observed) {
                 return Err(AgentFailure::PolicyDenied);
             }
             Box::pin(vault.remote_pin_producer(pinned.clone())).await?;
             let status = Box::pin(client.enroll(
-                vault,
+                vault.vault.as_ref(),
                 &pairing.client_id,
                 &pairing.device_id,
                 &pinned,
@@ -2485,19 +2027,17 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             ))
             .await?;
             Ok(VaultExecutionResult {
-                remote_producer: Some(producer.clone()),
-                remote_enrollment: Some(protocol_enrollment_status(status)),
-                remote_owner: Some(protocol_owner_key(
-                    Box::pin(vault.remote_owner_public_key()).await?,
-                )),
+                remote_producer: Some(pinned),
+                remote_enrollment: Some(enrollment_status(status)),
+                remote_owner: Some(Box::pin(vault.remote_owner_public_key()).await?),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteAuthorityEnrollmentStatus {
+        WorkerAction::RemoteAuthorityEnrollmentStatus {
             route,
             enrollment_id,
         } => {
-            let client = RemoteAuthorizationClient::new(route)?;
+            let client = RemoteAuthorizationClient::new(&route.route)?;
             let status = Box::pin(client.enrollment_status(
                 enrollment_id,
                 tokio::time::Instant::now() + Duration::from_secs(10),
@@ -2505,25 +2045,25 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             ))
             .await?;
             Ok(VaultExecutionResult {
-                remote_enrollment: Some(protocol_enrollment_status(status)),
+                remote_enrollment: Some(enrollment_status(status)),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteCalendarGrantPreview {
+        WorkerAction::RemoteCalendarGrantPreview {
             route,
             connector_id,
             connection_id,
             resource,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             if pairing.person_id != job.person.to_string()
                 || pairing.client_id.trim().is_empty()
                 || pairing.device_id.trim().is_empty()
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let client = RemoteAuthorizationClient::new(route)?;
+            let client = RemoteAuthorizationClient::new(&route.route)?;
             let producer = Box::pin(client.producer_identity(
                 tokio::time::Instant::now() + Duration::from_secs(10),
                 &job.cancellation,
@@ -2588,24 +2128,23 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 return Err(AgentFailure::PolicyDenied);
             }
             Ok(VaultExecutionResult {
-                remote_calendar_preview: Some(RemoteCalendarGrantPreviewDto {
-                    schema_version: PROTOCOL_VERSION,
-                    person_id: job.person.to_string(),
+                remote_calendar_preview: Some(crate::RemoteCalendarGrantPreview {
+                    person_id: job.person,
                     connector_id: connector_id.clone(),
                     connection_id: connection_id.clone(),
                     resource: resource.clone(),
                     source_authority: source.source_authority,
                     provider_identity: source.provider_identity,
                     execution_owner: source.execution_owner,
-                    producer: protocol_producer_identity(&producer),
+                    producer: access_producer_identity(&producer),
                     consumer: "calendar.expert".into(),
-                    purpose: "everyday_assistance".into(),
+                    // A calendar source read on this device never leaves it.
                     recipient: "local_only".into(),
                 }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteCalendarGrantReview {
+        WorkerAction::RemoteCalendarGrantReview {
             route,
             connector_id,
             connection_id,
@@ -2613,14 +2152,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             expected_producer_fingerprint,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             if pairing.person_id != job.person.to_string()
                 || pairing.client_id.trim().is_empty()
                 || pairing.device_id.trim().is_empty()
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let client = RemoteAuthorizationClient::new(route)?;
+            let client = RemoteAuthorizationClient::new(&route.route)?;
             let producer = Box::pin(client.producer_identity(
                 tokio::time::Instant::now() + Duration::from_secs(10),
                 &job.cancellation,
@@ -2710,19 +2249,25 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 )
                 .await?;
             Ok(VaultExecutionResult {
-                remote_calendar_grant: Some(remote_calendar_grant_overview(&grant)?),
+                remote_calendar_grant: Some(RemoteGrantOverview {
+                    grant,
+                    connection_revision: None,
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteCalendarGrantStatus { grant_id } => {
+        WorkerAction::RemoteCalendarGrantStatus { grant_id } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let grant = vault.get_data_access_grant(*grant_id).await?;
             Ok(VaultExecutionResult {
-                remote_calendar_grant: Some(remote_calendar_grant_overview(&grant)?),
+                remote_calendar_grant: Some(RemoteGrantOverview {
+                    grant,
+                    connection_revision: None,
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteCalendarGrantPause {
+        WorkerAction::RemoteCalendarGrantPause {
             grant_id,
             expected_authority,
         } => {
@@ -2731,11 +2276,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 .pause_remote_calendar_grant(*grant_id, *expected_authority)
                 .await?;
             Ok(VaultExecutionResult {
-                remote_calendar_grant: Some(remote_calendar_grant_overview(&grant)?),
+                remote_calendar_grant: Some(RemoteGrantOverview {
+                    grant,
+                    connection_revision: None,
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteViewGrantPreview {
+        WorkerAction::RemoteViewGrantPreview {
             route,
             view_id,
             connector_id,
@@ -2744,25 +2292,47 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             consumer,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let preview = remote_views::preview_remote_view_grant(
-                vault,
-                route,
-                job.person,
-                view_id,
-                connector_id,
-                connection_id,
-                resource,
-                consumer,
-                tokio::time::Instant::now() + Duration::from_secs(10),
-                &job.cancellation,
+            let person_text = job.person.to_string();
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?.clone();
+            let source_client = floe_provider_adapters::sources::ServerSourceClient::new(
+                route.route.clone(),
+                route.calendar_connections.clone(),
+            )?;
+            let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                &source_client,
+                vault.vault.as_ref(),
+            );
+            let preview = floe_access::preview_remote_view_grant(
+                vault.vault.as_ref(),
+                &transport,
+                floe_access::RemoteViewGrantRequest {
+                    person_id: job.person,
+                    pairing: floe_access::RemotePairingIdentity {
+                        person_id: &person_text,
+                        client_id: &pairing.client_id,
+                        device_id: &pairing.device_id,
+                    },
+                    view_id,
+                    connector_id,
+                    connection_id,
+                    resource,
+                    consumer_name: consumer,
+                    data_category: floe_context::remote_view_data_category(view_id),
+                },
+                floe_context::remote_view_resource(view_id, connection_id) == *resource,
+                floe_context::is_remote_view(view_id),
+                &floe_access::RemoteCallWindow {
+                    deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+                    cancellation: job.cancellation.clone(),
+                },
             )
             .await?;
             Ok(VaultExecutionResult {
-                remote_view_preview: Some(remote_view_grant_preview(job.person, &preview)),
+                remote_view_preview: Some(preview),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteViewGrantReview {
+        WorkerAction::RemoteViewGrantReview {
             route,
             view_id,
             connector_id,
@@ -2776,41 +2346,68 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             expected_recipient,
         } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = remote_views::review_and_activate_remote_view_grant(
-                vault,
-                route,
-                job.person,
-                view_id,
-                connector_id,
-                connection_id,
-                resource,
-                consumer,
-                expected_producer_fingerprint,
-                *expected_source_authority,
-                *expected_connection_revision,
-                expected_provider_identity,
-                expected_recipient,
-                tokio::time::Instant::now() + Duration::from_secs(30),
-                &job.cancellation,
+            let person_text = job.person.to_string();
+            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?.clone();
+            let source_client = floe_provider_adapters::sources::ServerSourceClient::new(
+                route.route.clone(),
+                route.calendar_connections.clone(),
+            )?;
+            let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                &source_client,
+                vault.vault.as_ref(),
+            );
+            let grant = floe_access::review_and_activate_remote_view_grant(
+                vault.vault.as_ref(),
+                &transport,
+                floe_access::RemoteViewGrantRequest {
+                    person_id: job.person,
+                    pairing: floe_access::RemotePairingIdentity {
+                        person_id: &person_text,
+                        client_id: &pairing.client_id,
+                        device_id: &pairing.device_id,
+                    },
+                    view_id,
+                    connector_id,
+                    connection_id,
+                    resource,
+                    consumer_name: consumer,
+                    data_category: floe_context::remote_view_data_category(view_id),
+                },
+                floe_access::RemoteViewGrantExpectation {
+                    producer_fingerprint: expected_producer_fingerprint,
+                    source_authority: *expected_source_authority,
+                    connection_revision: *expected_connection_revision,
+                    provider_identity: expected_provider_identity,
+                    recipient: expected_recipient,
+                },
+                floe_context::remote_view_resource(view_id, connection_id) == *resource,
+                floe_context::is_remote_view(view_id),
+                &floe_access::RemoteCallWindow {
+                    deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                    cancellation: job.cancellation.clone(),
+                },
             )
             .await?;
             Ok(VaultExecutionResult {
-                remote_view_grant: Some(remote_view_grant_overview(
-                    &grant,
-                    Some(*expected_connection_revision),
-                )?),
+                remote_view_grant: Some(RemoteGrantOverview {
+                    grant,
+                    connection_revision: Some(*expected_connection_revision),
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteViewGrantStatus { grant_id } => {
+        WorkerAction::RemoteViewGrantStatus { grant_id } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let grant = vault.get_remote_view_grant(*grant_id).await?;
             Ok(VaultExecutionResult {
-                remote_view_grant: Some(remote_view_grant_overview(&grant, None)?),
+                remote_view_grant: Some(RemoteGrantOverview {
+                    grant,
+                    connection_revision: None,
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
-        AgentVaultActionDto::RemoteViewGrantPause {
+        WorkerAction::RemoteViewGrantPause {
             grant_id,
             expected_authority,
         } => {
@@ -2819,7 +2416,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 .pause_remote_view_grant(*grant_id, *expected_authority)
                 .await?;
             Ok(VaultExecutionResult {
-                remote_view_grant: Some(remote_view_grant_overview(&grant, None)?),
+                remote_view_grant: Some(RemoteGrantOverview {
+                    grant,
+                    connection_revision: None,
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
@@ -2851,21 +2451,16 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
     person_id: PersonId,
-    operation: &CalendarActionOperationDto,
+    operation: &CalendarActionOperation,
     cancellation: &Cancellation,
 ) -> Result<crate::services::CalendarActionsResult, AgentFailure> {
     if cancellation.is_cancelled() {
         return Err(AgentFailure::Cancelled);
     }
     let mode = match operation {
-        CalendarActionOperationDto::GetAuthority {} => Some(vault.agent_action_policy().await?),
-        CalendarActionOperationDto::SetAuthority { calendar_create } => {
-            let mode = match calendar_create {
-                ActionAuthorityModeDto::Allow => floe_actions::ActionAuthorityMode::Allow,
-                ActionAuthorityModeDto::Ask => floe_actions::ActionAuthorityMode::Ask,
-                ActionAuthorityModeDto::Deny => floe_actions::ActionAuthorityMode::Deny,
-            };
-            let mode = vault.set_agent_action_policy(mode).await?;
+        CalendarActionOperation::GetAuthority => Some(vault.agent_action_policy().await?),
+        CalendarActionOperation::SetAuthority { calendar_create } => {
+            let mode = vault.set_agent_action_policy(*calendar_create).await?;
             core.set_action_authority(person_id, mode)
                 .await
                 .map_err(|_| AgentFailure::StorageUnavailable)?;
@@ -2884,10 +2479,10 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
         });
     }
     let action_id = match operation {
-        CalendarActionOperationDto::Get { action_id }
-        | CalendarActionOperationDto::Decide { action_id, .. }
-        | CalendarActionOperationDto::Execute { action_id }
-        | CalendarActionOperationDto::Recover { action_id } => session_uuid(action_id)?,
+        CalendarActionOperation::Get { action_id }
+        | CalendarActionOperation::Decide { action_id, .. }
+        | CalendarActionOperation::Execute { action_id }
+        | CalendarActionOperation::Recover { action_id } => *action_id,
         _ => return Err(AgentFailure::InvalidInput),
     };
     let stored = vault.agent_calendar_action(action_id).await?;
@@ -2895,18 +2490,18 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
         return Err(AgentFailure::PolicyDenied);
     }
     let action = match operation {
-        CalendarActionOperationDto::Get { .. } => stored,
-        CalendarActionOperationDto::Decide { decision, .. } => {
+        CalendarActionOperation::Get { .. } => stored,
+        CalendarActionOperation::Decide { approve, .. } => {
             core.decide_expert_calendar_action(
                 vault,
                 person_id,
                 action_id,
-                *decision == CalendarActionDecisionDto::Approve,
+                *approve,
                 chrono::Utc::now(),
             )
             .await?
         }
-        CalendarActionOperationDto::Execute { .. } | CalendarActionOperationDto::Recover { .. } => {
+        CalendarActionOperation::Execute { .. } | CalendarActionOperation::Recover { .. } => {
             if person_id.to_string() != floe_provider_adapters::sources::native_calendar::LOCAL_PERSON
                 || stored.provider != CalendarProvider::EventKit
             {
@@ -2914,7 +2509,7 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
             }
             let provider =
                 floe_provider_adapters::sources::native_calendar::NativeCalendar::new(vec![stored.calendar_id.clone()]);
-            if matches!(operation, CalendarActionOperationDto::Recover { .. }) {
+            if matches!(operation, CalendarActionOperation::Recover { .. }) {
                 core.recover_expert_calendar_action(vault, person_id, action_id, &provider)
                     .await?
             } else {
@@ -2947,14 +2542,14 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
 
 async fn calendar_grant_authority(
     core: &FloeCore,
-    _local_context: &LocalContextStore,
+    _local_context: &LocalContextHost,
     person_id: PersonId,
     request: &floe_experts::CalendarExpertSetup,
     cancellation: Cancellation,
 ) -> Result<Option<(String, floe_context_contract::SourceAuthority, String)>, AgentFailure> {
     if !matches!(
         request.provider,
-        floe_day::CalendarProvider::EventKit | floe_day::CalendarProvider::Android
+        floe_context_contract::CalendarProvider::EventKit | floe_context_contract::CalendarProvider::Android
     ) {
         return Ok(None);
     }
@@ -2993,7 +2588,7 @@ async fn calendar_grant_authority(
     calendar_ids.sort();
     let fingerprint = match request.provider {
         #[cfg(target_os = "macos")]
-        floe_day::CalendarProvider::EventKit => {
+        floe_context_contract::CalendarProvider::EventKit => {
             let access = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
                 person_id,
                 request.device_id.clone(),
@@ -3016,26 +2611,28 @@ async fn calendar_grant_authority(
                 .native_subject_fingerprint
         }
         #[cfg(not(target_os = "macos"))]
-        floe_day::CalendarProvider::EventKit | floe_day::CalendarProvider::Android => {
-            let host_epoch = _local_context.acquisition_host_epoch(person_id)?;
+        floe_context_contract::CalendarProvider::EventKit | floe_context_contract::CalendarProvider::Android => {
+            let host_epoch = _local_context.calendar().host_epoch(person_id)?;
             let start = chrono::Utc::now().timestamp_millis();
             let result = _local_context
-                .inspect_calendar_subject(
-                    LocalContextAcquisitionRequestDto {
-                        request_id: Uuid::new_v4().to_string(),
+                .calendar()
+                .submit(
+                    CalendarAcquisitionRequest {
+                        request_id: Uuid::new_v4(),
                         host_epoch,
-                        person_id: person_id.to_string(),
+                        person_id,
                         device_id: request.device_id.clone(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: floe_protocol::conversion::calendar_provider_to_dto(request.provider),
-                        mode: LocalContextAcquisitionModeDto::InspectSubject,
+                        provider: request.provider,
+                        mode: CalendarAcquisitionMode::InspectSubject,
                         calendar_ids,
                         range_start_unix_ms: start,
                         range_end_unix_ms: start + 86_400_000,
                         deadline_unix_ms: start + 30_000,
                         expected_native_subject_fingerprint: None,
                     },
+                    start,
                     cancellation,
                 )
                 .await?;
@@ -3071,17 +2668,17 @@ async fn calendar_grant_authority(
 
 async fn calendar_subject_preview(
     core: &FloeCore,
-    _local_context: &LocalContextStore,
+    _local_context: &LocalContextHost,
     person_id: PersonId,
-    request: &CalendarSubjectPreviewRequestDto,
+    request: &CalendarSubjectRequest,
     cancellation: Cancellation,
-) -> Result<CalendarSubjectPreviewDto, AgentFailure> {
+) -> Result<CalendarSubjectPreview, AgentFailure> {
     if cancellation.is_cancelled() {
         return Err(AgentFailure::Cancelled);
     }
     let mut calendar_ids = request.calendar_ids.clone();
-    let provider = floe_protocol::conversion::calendar_provider_from_dto(request.provider);
-    let scope = floe_protocol::conversion::calendar_scope_from_dto(request.connection_scope);
+    let provider = request.provider;
+    let scope = request.connection_scope;
     calendar_ids.sort();
     if calendar_ids.is_empty()
         || calendar_ids.len() > 4
@@ -3115,7 +2712,7 @@ async fn calendar_subject_preview(
     }
     let fingerprint = match provider {
         #[cfg(target_os = "macos")]
-        floe_day::CalendarProvider::EventKit => {
+        floe_context_contract::CalendarProvider::EventKit => {
             let access = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
                 person_id,
                 request.device_id.clone(),
@@ -3138,26 +2735,28 @@ async fn calendar_subject_preview(
                 .native_subject_fingerprint
         }
         #[cfg(not(target_os = "macos"))]
-        floe_day::CalendarProvider::EventKit | floe_day::CalendarProvider::Android => {
-            let host_epoch = _local_context.acquisition_host_epoch(person_id)?;
+        floe_context_contract::CalendarProvider::EventKit | floe_context_contract::CalendarProvider::Android => {
+            let host_epoch = _local_context.calendar().host_epoch(person_id)?;
             let range_start = chrono::Utc::now().timestamp_millis();
             let result = _local_context
-                .inspect_calendar_subject(
-                    LocalContextAcquisitionRequestDto {
-                        request_id: Uuid::new_v4().to_string(),
+                .calendar()
+                .submit(
+                    CalendarAcquisitionRequest {
+                        request_id: Uuid::new_v4(),
                         host_epoch,
-                        person_id: person_id.to_string(),
+                        person_id,
                         device_id: request.device_id.clone(),
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: floe_protocol::conversion::calendar_provider_to_dto(provider),
-                        mode: LocalContextAcquisitionModeDto::InspectSubject,
+                        provider,
+                        mode: CalendarAcquisitionMode::InspectSubject,
                         calendar_ids: calendar_ids.clone(),
                         range_start_unix_ms: range_start,
                         range_end_unix_ms: range_start + 86_400_000,
                         deadline_unix_ms: range_start + 30_000,
                         expected_native_subject_fingerprint: None,
                     },
+                    range_start,
                     cancellation,
                 )
                 .await?;
@@ -3184,11 +2783,11 @@ async fn calendar_subject_preview(
     ) {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    Ok(CalendarSubjectPreviewDto {
-        provider: floe_protocol::conversion::calendar_provider_to_dto(provider),
+    Ok(CalendarSubjectPreview {
+        provider,
         device_id: request.device_id.clone(),
         calendar_ids,
-        connection_scope: floe_protocol::conversion::calendar_scope_to_dto(refreshed.scope),
+        connection_scope: refreshed.scope,
         connection_id: refreshed.connection_id,
         connection_revision: refreshed.revision,
         source_authority: refreshed.source_authority,
@@ -3199,9 +2798,9 @@ async fn calendar_subject_preview(
 fn calendar_connection_matches(
     connection: &floe_day::CalendarConnection,
     expected_connection_id: &str,
-    provider: floe_day::CalendarProvider,
+    provider: floe_context_contract::CalendarProvider,
     device_id: &str,
-    scope: floe_day::CalendarScope,
+    scope: floe_context_contract::CalendarScope,
     calendar_ids: &[String],
     source_authority: floe_context_contract::SourceAuthority,
 ) -> bool {
@@ -3222,14 +2821,14 @@ fn calendar_connection_matches(
 async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     core: &FloeCore,
-    local_context: &LocalContextStore,
+    local_context: &LocalContextHost,
     person_id: PersonId,
-    remote_route: Option<&AgentRemoteRouteDto>,
+    remote_route: Option<&RemoteTurnRoute>,
     cancellation: Cancellation,
 ) -> Result<(), AgentFailure> {
     let _ = local_context;
     let remote_available =
-        remote_route.is_some_and(|route| !route.external || route.allow_external);
+        remote_route.is_some_and(|route| !route.route.external || route.route.allow_external);
     let calendar = core
         .calendar_connector_snapshot(
             person_id,
@@ -3427,375 +3026,19 @@ fn builtin_source_handle(person_id: PersonId, source: BuiltinContextSource) -> U
     )
 }
 
-fn stored_vault_state(root: &std::path::Path, person: PersonId) -> AgentVaultStateDto {
-    match fs::symlink_metadata(root.join(person.to_string())) {
-        Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => AgentVaultStateDto::Missing,
-        _ => AgentVaultStateDto::Unavailable,
-    }
-}
 
-fn calendar_action(action: floe_actions::CalendarAction) -> AgentProposalActionDto {
-    AgentProposalActionDto {
-        action_id: action.id.to_string(),
-        execution_id: action.execution_id.to_string(),
-        expires_at: action.expires_at,
-        status: match action.state {
-            CalendarActionState::Pending => AgentProposalStatusDto::Pending,
-            CalendarActionState::Approved => AgentProposalStatusDto::Approved,
-            CalendarActionState::Rejected => AgentProposalStatusDto::Rejected,
-            CalendarActionState::Executing => AgentProposalStatusDto::Executing,
-            CalendarActionState::Blocked { .. } => AgentProposalStatusDto::Blocked,
-            CalendarActionState::Unknown { .. } => AgentProposalStatusDto::Unknown,
-            CalendarActionState::Succeeded { .. } => AgentProposalStatusDto::Succeeded,
-        },
-    }
-}
 
-fn session_uuid(value: &str) -> Result<Uuid, AgentFailure> {
-    Uuid::parse_str(value).map_err(|_| AgentFailure::InvalidInput)
-}
 
-fn decode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, AgentFailure> {
-    serde_json::to_value(value)
-        .and_then(serde_json::from_value)
-        .map_err(|_| AgentFailure::InvalidInput)
-}
 
-fn encode_contracts<Input: Serialize, Output: DeserializeOwned>(
-    values: Vec<Input>,
-) -> Result<Vec<Output>, AgentFailure> {
-    values
-        .iter()
-        .map(decode_contract)
-        .collect::<Result<Vec<_>, _>>()
-}
 
-fn encode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, AgentFailure> {
-    decode_contract(value)
-}
 
-fn failure_envelope(failure: &AgentFailure, stage: &str, request_id: &str) -> AgentVaultFailureDto {
-    let kind = serde_json::to_value(failure)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "unknown".into());
-    let classification = classify_failure(failure, stage);
-    let recovery = recovery_action(failure, stage);
-    AgentVaultFailureDto {
-        schema_version: PROTOCOL_VERSION,
-        domain: classification.domain,
-        category: classification.category,
-        reason_code: classification.reason_code,
-        kind: kind.clone(),
-        stage: stage.into(),
-        safe_actions: classification.safe_actions,
-        affected_refs: vec![],
-        incident_id: request_id.into(),
-        retry_policy: classification.retry_policy,
-        retryable: classification.retryable,
-        recovery_action: recovery,
-        reload_required: reload_required(recovery),
-        seal_session: seal_session(failure, recovery),
-        correlation_request_id: request_id.into(),
-    }
-}
-
-struct FailureClassification {
-    domain: AgentFailureDomain,
-    category: AgentFailureCategory,
-    reason_code: String,
-    safe_actions: Vec<AgentFailureSafeAction>,
-    retry_policy: AgentRetryPolicy,
-    retryable: bool,
-}
-
-fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassification {
-    let reason_code = serde_json::to_value(failure)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "unknown".into());
-    let source_stage = matches!(
-        stage,
-        "calendar_access"
-            | "calendar_experts"
-            | "calendar_subject_preview"
-            | "calendar_action"
-            | "personal_access"
-            | "contacts_access"
-            | "remote_authority_inspect_producer"
-            | "remote_authority_review_and_enroll"
-            | "remote_authority_enrollment_status"
-            | "remote_pairing_prepare"
-            | "remote_pairing_confirm"
-            | "remote_pairing_status"
-            | "remote_pairing_finalize"
-            | "remote_calendar_grant_preview"
-            | "remote_calendar_grant_review"
-            | "remote_calendar_grant_status"
-            | "remote_calendar_grant_pause"
-            | "remote_view_grant_preview"
-            | "remote_view_grant_review"
-            | "remote_view_grant_status"
-            | "remote_view_grant_pause"
-    );
-    let (domain, category, reason_code) = match failure {
-        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => (
-            AgentFailureDomain::Vault,
-            AgentFailureCategory::Transient,
-            reason_code.clone(),
-        ),
-        AgentFailure::PolicyDenied if stage == "conversation_session" => (
-            AgentFailureDomain::Session,
-            AgentFailureCategory::Integrity,
-            "session_integrity".into(),
-        ),
-        AgentFailure::PolicyDenied if stage == "conversation_turn" => (
-            AgentFailureDomain::Turn,
-            AgentFailureCategory::Security,
-            "data_release_or_policy_block".into(),
-        ),
-        AgentFailure::PolicyDenied if source_stage => (
-            AgentFailureDomain::Source,
-            AgentFailureCategory::Security,
-            "source_access_denied".into(),
-        ),
-        AgentFailure::PolicyDenied => (
-            AgentFailureDomain::App,
-            AgentFailureCategory::Internal,
-            "internal_policy_invariant".into(),
-        ),
-        AgentFailure::CapabilityDenied => (
-            AgentFailureDomain::Capability,
-            AgentFailureCategory::Security,
-            "capability_access_denied".into(),
-        ),
-        AgentFailure::AccessReviewRequired => (
-            AgentFailureDomain::Source,
-            AgentFailureCategory::UserConfiguration,
-            reason_code.clone(),
-        ),
-        AgentFailure::ConsentRequired => (
-            AgentFailureDomain::Capability,
-            AgentFailureCategory::UserConfiguration,
-            reason_code.clone(),
-        ),
-        AgentFailure::CapabilityUnavailable => (
-            AgentFailureDomain::Capability,
-            AgentFailureCategory::Transient,
-            reason_code.clone(),
-        ),
-        AgentFailure::Conflict | AgentFailure::StaleContext if stage == "conversation_session" => (
-            AgentFailureDomain::Session,
-            AgentFailureCategory::Integrity,
-            reason_code.clone(),
-        ),
-        AgentFailure::Conflict | AgentFailure::StaleContext if stage == "conversation_turn" => (
-            AgentFailureDomain::Turn,
-            AgentFailureCategory::Integrity,
-            reason_code.clone(),
-        ),
-        AgentFailure::Conflict | AgentFailure::StaleContext if source_stage => (
-            AgentFailureDomain::Source,
-            AgentFailureCategory::Integrity,
-            reason_code.clone(),
-        ),
-        AgentFailure::ModelUnavailable
-        | AgentFailure::LocalModelUnavailable
-        | AgentFailure::ServerModelUnavailable
-        | AgentFailure::ServerModelTimeout
-        | AgentFailure::ServerModelRequestRejected
-        | AgentFailure::InvalidModelOutput
-        | AgentFailure::LocalModelInvalidOutput
-        | AgentFailure::ServerModelInvalidOutput => (
-            AgentFailureDomain::Capability,
-            if matches!(
-                failure,
-                AgentFailure::InvalidModelOutput
-                    | AgentFailure::LocalModelInvalidOutput
-                    | AgentFailure::ServerModelInvalidOutput
-            ) {
-                AgentFailureCategory::Integrity
-            } else {
-                AgentFailureCategory::Transient
-            },
-            reason_code.clone(),
-        ),
-        AgentFailure::CredentialExpired | AgentFailure::QuotaExceeded => (
-            AgentFailureDomain::Capability,
-            AgentFailureCategory::UserConfiguration,
-            reason_code.clone(),
-        ),
-        AgentFailure::Interrupted | AgentFailure::DeadlineExceeded | AgentFailure::Stalled => (
-            AgentFailureDomain::Turn,
-            AgentFailureCategory::Transient,
-            reason_code.clone(),
-        ),
-        _ if stage == "conversation_turn" => (
-            AgentFailureDomain::Turn,
-            AgentFailureCategory::Integrity,
-            reason_code.clone(),
-        ),
-        _ if stage == "conversation_session" => (
-            AgentFailureDomain::Session,
-            AgentFailureCategory::Integrity,
-            reason_code.clone(),
-        ),
-        _ => (
-            AgentFailureDomain::App,
-            AgentFailureCategory::Internal,
-            reason_code,
-        ),
-    };
-
-    let mut safe_actions = match failure {
-        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => {
-            vec![AgentFailureSafeAction::ReopenVault]
-        }
-        _ if stage == "conversation_session" => {
-            vec![AgentFailureSafeAction::StartNewSession]
-        }
-        AgentFailure::PolicyDenied if stage == "conversation_turn" => vec![
-            AgentFailureSafeAction::ContinueWithoutSource,
-            AgentFailureSafeAction::ExportDiagnostics,
-        ],
-        AgentFailure::PolicyDenied if source_stage => vec![
-            AgentFailureSafeAction::ContinueWithoutSource,
-            AgentFailureSafeAction::ReviewSource,
-        ],
-        AgentFailure::AccessReviewRequired => vec![
-            AgentFailureSafeAction::ContinueWithoutSource,
-            AgentFailureSafeAction::ReviewSource,
-        ],
-        AgentFailure::ConsentRequired => vec![],
-        AgentFailure::Conflict if stage == "conversation_session" => vec![
-            AgentFailureSafeAction::StartNewSession,
-            AgentFailureSafeAction::RefreshSession,
-        ],
-        AgentFailure::Conflict if stage == "conversation_turn" => vec![
-            AgentFailureSafeAction::RefreshSession,
-            AgentFailureSafeAction::StartNewSession,
-        ],
-        AgentFailure::StaleContext if stage == "conversation_turn" => vec![
-            AgentFailureSafeAction::RefreshSession,
-            AgentFailureSafeAction::StartNewSession,
-        ],
-        AgentFailure::StaleContext => vec![AgentFailureSafeAction::ReviewSource],
-        AgentFailure::CredentialExpired => vec![AgentFailureSafeAction::RefreshSession],
-        AgentFailure::CapabilityUnavailable if source_stage => {
-            vec![AgentFailureSafeAction::ContinueWithoutSource]
-        }
-        AgentFailure::Cancelled => vec![],
-        AgentFailure::ModelUnavailable
-        | AgentFailure::LocalModelUnavailable
-        | AgentFailure::ServerModelUnavailable
-        | AgentFailure::ServerModelTimeout
-        | AgentFailure::InvalidModelOutput
-        | AgentFailure::LocalModelInvalidOutput
-        | AgentFailure::ServerModelInvalidOutput => vec![AgentFailureSafeAction::Retry],
-        _ if stage == "conversation_turn" && !matches!(failure, AgentFailure::Cancelled) => {
-            vec![AgentFailureSafeAction::StartNewSession]
-        }
-        _ => vec![],
-    };
-    if !matches!(failure, AgentFailure::Cancelled)
-        && matches!(
-            category,
-            AgentFailureCategory::Internal | AgentFailureCategory::Security
-        )
-        && !safe_actions.contains(&AgentFailureSafeAction::ExportDiagnostics)
-    {
-        safe_actions.push(AgentFailureSafeAction::ExportDiagnostics);
-    }
-    let retry_policy = if safe_actions.contains(&AgentFailureSafeAction::Retry) {
-        if matches!(
-            failure,
-            AgentFailure::ServerModelTimeout
-                | AgentFailure::Interrupted
-                | AgentFailure::DeadlineExceeded
-                | AgentFailure::Stalled
-        ) {
-            AgentRetryPolicy::Backoff
-        } else {
-            AgentRetryPolicy::Immediate
-        }
-    } else {
-        AgentRetryPolicy::Never
-    };
-    let retryable = !matches!(retry_policy, AgentRetryPolicy::Never);
-    FailureClassification {
-        domain,
-        category,
-        reason_code,
-        safe_actions,
-        retry_policy,
-        retryable,
-    }
-}
 
 /// Whether the client must reload the session before continuing.
 ///
 /// Recoveries that keep the current session usable do not force a reload.
-fn reload_required(recovery: AgentVaultRecoveryActionDto) -> bool {
-    !matches!(
-        recovery,
-        AgentVaultRecoveryActionDto::RetryRead
-            | AgentVaultRecoveryActionDto::ReviewSource
-            | AgentVaultRecoveryActionDto::RefreshContext
-    )
-}
 
 /// Whether the client must stop applying results for the current session.
-fn seal_session(failure: &AgentFailure, recovery: AgentVaultRecoveryActionDto) -> bool {
-    matches!(recovery, AgentVaultRecoveryActionDto::ReopenVault)
-        || matches!(
-            failure,
-            AgentFailure::VaultUnavailable
-                | AgentFailure::StorageUnavailable
-                | AgentFailure::Interrupted
-        )
-}
 
-fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryActionDto {
-    match failure {
-        AgentFailure::Conflict | AgentFailure::DeadlineExceeded | AgentFailure::Interrupted
-            if stage == "calendar_action" =>
-        {
-            AgentVaultRecoveryActionDto::Reconcile
-        }
-        AgentFailure::Conflict if matches!(stage, "conversation_session" | "conversation_turn") => {
-            AgentVaultRecoveryActionDto::RefreshSession
-        }
-        AgentFailure::Conflict | AgentFailure::StaleContext => {
-            AgentVaultRecoveryActionDto::RefreshContext
-        }
-        AgentFailure::ModelUnavailable
-        | AgentFailure::LocalModelUnavailable
-        | AgentFailure::ServerModelUnavailable
-        | AgentFailure::ServerModelTimeout
-        | AgentFailure::InvalidModelOutput
-        | AgentFailure::LocalModelInvalidOutput
-        | AgentFailure::ServerModelInvalidOutput => AgentVaultRecoveryActionDto::RetryRead,
-        AgentFailure::AccessReviewRequired
-            if matches!(
-                stage,
-                "calendar_access"
-                    | "calendar_experts"
-                    | "calendar_subject_preview"
-                    | "calendar_action"
-                    | "personal_access"
-                    | "contacts_access"
-                    | "conversation_turn"
-            ) =>
-        {
-            AgentVaultRecoveryActionDto::ReviewSource
-        }
-        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => {
-            AgentVaultRecoveryActionDto::ReopenVault
-        }
-        _ => AgentVaultRecoveryActionDto::None,
-    }
-}
 
 async fn sample_session(
     store: &impl SessionStore,
@@ -3812,8 +3055,13 @@ async fn sample_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    // These regressions drive the worker the way the binding does, so the
+    // fixtures they stand up are stated on the binding's wire.
+    use floe_protocol::*;
     use floe_vault::VaultKey;
+    use sha2::{Digest, Sha256};
     use ring::signature::{self, Ed25519KeyPair, KeyPair};
     use serde_json::json;
     use std::{
@@ -3841,7 +3089,7 @@ mod tests {
                 root,
                 keys,
                 Arc::new(core),
-                Arc::new(LocalContextStore::default()),
+                Arc::new(LocalContextHost::default()),
                 Arc::new(crate::events::AppEventBuffer::default()),
             )
         }
@@ -3891,15 +3139,11 @@ mod tests {
         }
     }
 
-    fn wait(worker: &Worker, person: PersonId, id: Uuid) -> VaultJobResult {
+    fn wait(worker: &Worker, person: PersonId, id: Uuid) -> WorkerResult {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let result = worker
-                .request(
-                    person,
-                    id,
-                    AgentVaultOperationDto::Poll { after_sequence: 0 },
-                )
+                .request(person, id, WorkerOperation::Poll { after_sequence: 0 })
                 .unwrap();
             if result.done {
                 return result;
@@ -3909,141 +3153,22 @@ mod tests {
         }
     }
 
-    fn perform(worker: &Worker, person: PersonId, action: AgentVaultActionDto) -> VaultJobResult {
+    fn perform(worker: &Worker, person: PersonId, action: WorkerAction) -> WorkerResult {
         let id = Uuid::new_v4();
         worker
-            .request(person, id, AgentVaultOperationDto::Submit { action })
+            .request(
+                person,
+                id,
+                WorkerOperation::Submit {
+                    action: Box::new(action),
+                },
+            )
             .unwrap();
         let result = wait(worker, person, id);
         worker
-            .request(person, id, AgentVaultOperationDto::Release {})
+            .request(person, id, WorkerOperation::Release)
             .unwrap();
         result
-    }
-
-    #[test]
-    fn failure_recovery_is_stage_aware_and_conservative() {
-        let conversation =
-            failure_envelope(&AgentFailure::Conflict, "conversation_turn", "request");
-        assert_eq!(
-            conversation.recovery_action,
-            AgentVaultRecoveryActionDto::RefreshSession
-        );
-        assert!(!conversation.retryable);
-        assert_eq!(conversation.domain, AgentFailureDomain::Turn);
-        assert_eq!(conversation.category, AgentFailureCategory::Integrity);
-        assert_eq!(conversation.reason_code, "conflict");
-        assert!(
-            conversation
-                .safe_actions
-                .contains(&AgentFailureSafeAction::StartNewSession)
-        );
-
-        let session_policy = failure_envelope(
-            &AgentFailure::PolicyDenied,
-            "conversation_session",
-            "request",
-        );
-        assert_eq!(session_policy.domain, AgentFailureDomain::Session);
-        assert_eq!(session_policy.category, AgentFailureCategory::Integrity);
-        assert_eq!(session_policy.reason_code, "session_integrity");
-        assert_eq!(
-            session_policy.safe_actions,
-            vec![AgentFailureSafeAction::StartNewSession]
-        );
-
-        let release_block =
-            failure_envelope(&AgentFailure::PolicyDenied, "conversation_turn", "request");
-        assert_eq!(release_block.domain, AgentFailureDomain::Turn);
-        assert_eq!(release_block.category, AgentFailureCategory::Security);
-        assert_eq!(release_block.reason_code, "data_release_or_policy_block");
-        assert!(
-            release_block
-                .safe_actions
-                .contains(&AgentFailureSafeAction::ContinueWithoutSource)
-        );
-        assert!(
-            release_block
-                .safe_actions
-                .contains(&AgentFailureSafeAction::ExportDiagnostics)
-        );
-
-        let model_refusal = failure_envelope(
-            &AgentFailure::CapabilityDenied,
-            "conversation_turn",
-            "request",
-        );
-        assert_eq!(model_refusal.reason_code, "capability_access_denied");
-        assert_eq!(model_refusal.category, AgentFailureCategory::Security);
-        assert!(
-            model_refusal
-                .safe_actions
-                .contains(&AgentFailureSafeAction::ExportDiagnostics)
-        );
-
-        let model_retry = failure_envelope(
-            &AgentFailure::ServerModelTimeout,
-            "conversation_turn",
-            "request",
-        );
-        assert_eq!(model_retry.retry_policy, AgentRetryPolicy::Backoff);
-        assert!(model_retry.retryable);
-        assert!(
-            model_retry
-                .safe_actions
-                .contains(&AgentFailureSafeAction::Retry)
-        );
-
-        let setup = failure_envelope(&AgentFailure::Conflict, "calendar_access", "request");
-        assert_eq!(
-            setup.recovery_action,
-            AgentVaultRecoveryActionDto::RefreshContext
-        );
-
-        let review = failure_envelope(
-            &AgentFailure::AccessReviewRequired,
-            "calendar_access",
-            "request",
-        );
-        assert_eq!(
-            review.recovery_action,
-            AgentVaultRecoveryActionDto::ReviewSource
-        );
-        let turn_review = failure_envelope(
-            &AgentFailure::AccessReviewRequired,
-            "conversation_turn",
-            "request",
-        );
-        assert_eq!(
-            turn_review.recovery_action,
-            AgentVaultRecoveryActionDto::ReviewSource
-        );
-        let model_consent = failure_envelope(
-            &AgentFailure::ConsentRequired,
-            "conversation_turn",
-            "request",
-        );
-        assert_eq!(model_consent.domain, AgentFailureDomain::Capability);
-        assert_eq!(
-            model_consent.category,
-            AgentFailureCategory::UserConfiguration
-        );
-        assert!(model_consent.safe_actions.is_empty());
-        assert_eq!(
-            model_consent.recovery_action,
-            AgentVaultRecoveryActionDto::None
-        );
-
-        for failure in [
-            AgentFailure::CapabilityUnavailable,
-            AgentFailure::Cancelled,
-            AgentFailure::Interrupted,
-            AgentFailure::DeadlineExceeded,
-        ] {
-            let envelope = failure_envelope(&failure, "calendar_experts", "request");
-            assert_eq!(envelope.recovery_action, AgentVaultRecoveryActionDto::None);
-            assert!(!envelope.retryable);
-        }
     }
 
     #[test]
@@ -4051,13 +3176,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
         let person = PersonId::new();
-        let created = perform(&worker, person, AgentVaultActionDto::Create {});
+        let created = perform(&worker, person, WorkerAction::Create {});
         assert_eq!(
             created.failure, None,
             "create failed: {:?}",
             created.failure
         );
-        let route = AgentRemoteRouteDto {
+        let route = RemoteTurnRoute {
             base_url: "http://not-loopback.invalid".into(),
             bearer_token: "not-a-real-token".into(),
             purpose: "everyday_assistance".into(),
@@ -4079,7 +3204,7 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { route, producer },
+            WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer },
         );
         assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
     }
@@ -4089,13 +3214,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
         let person = PersonId::new();
-        let created = perform(&worker, person, AgentVaultActionDto::Create {});
+        let created = perform(&worker, person, WorkerAction::Create {});
         assert_eq!(
             created.failure, None,
             "create failed: {:?}",
             created.failure
         );
-        let route = AgentRemoteRouteDto {
+        let route = RemoteTurnRoute {
             base_url: "http://not-loopback.invalid".into(),
             bearer_token: "not-a-real-token".into(),
             purpose: "everyday_assistance".into(),
@@ -4121,7 +3246,7 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { route, producer },
+            WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer },
         );
         assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
     }
@@ -4131,7 +3256,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let person = PersonId::new();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-        let created = perform(&worker, person, AgentVaultActionDto::Create {});
+        let created = perform(&worker, person, WorkerAction::Create {});
         assert_eq!(
             created.failure, None,
             "create failed: {:?}",
@@ -4164,7 +3289,7 @@ mod tests {
         let server = thread::spawn(move || {
             serve_signed_enrollment(listener, producer_key, server_producer, person)
         });
-        let route = AgentRemoteRouteDto {
+        let route = RemoteTurnRoute {
             base_url: format!("http://127.0.0.1:{}", address.port()),
             bearer_token: "secret_token_value_that_is_long_enough".into(),
             purpose: "everyday_assistance".into(),
@@ -4181,7 +3306,7 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { route, producer },
+            WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer },
         );
         let server_result = server.join().unwrap();
         assert!(
@@ -4386,7 +3511,7 @@ mod tests {
         let person = PersonId::new();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
 
-        let result = perform(&worker, person, AgentVaultActionDto::Connections {});
+        let result = perform(&worker, person, WorkerAction::Connections {});
 
         assert!(result.failure.is_none());
         assert_eq!(result.connections, Some(vec![]));
@@ -4398,12 +3523,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let person = PersonId::new();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-        perform(&worker, person, AgentVaultActionDto::Create {});
+        perform(&worker, person, WorkerAction::Create {});
         let changed = perform(
             &worker,
             person,
-            AgentVaultActionDto::CalendarAction {
-                operation: CalendarActionOperationDto::SetAuthority {
+            WorkerAction::CalendarAction {
+                operation: CalendarActionOperation::SetAuthority {
                     calendar_create: ActionAuthorityModeDto::Deny,
                 },
             },
@@ -4413,21 +3538,21 @@ mod tests {
             changed.calendar_actions.unwrap()["authority"]["calendar_create"],
             "deny"
         );
-        perform(&worker, person, AgentVaultActionDto::Lock {});
+        perform(&worker, person, WorkerAction::Lock {});
         let locked = perform(
             &worker,
             person,
-            AgentVaultActionDto::CalendarAction {
-                operation: CalendarActionOperationDto::GetAuthority {},
+            WorkerAction::CalendarAction {
+                operation: CalendarActionOperation::GetAuthority {},
             },
         );
         assert_eq!(locked.failure, Some(AgentFailure::VaultUnavailable));
-        perform(&worker, person, AgentVaultActionDto::Unlock {});
+        perform(&worker, person, WorkerAction::Unlock {});
         let restored = perform(
             &worker,
             person,
-            AgentVaultActionDto::CalendarAction {
-                operation: CalendarActionOperationDto::GetAuthority {},
+            WorkerAction::CalendarAction {
+                operation: CalendarActionOperation::GetAuthority {},
             },
         );
         assert_eq!(restored.failure, None);
@@ -4451,7 +3576,7 @@ mod tests {
                 person,
                 id,
                 AgentVaultOperationDto::Submit {
-                    action: AgentVaultActionDto::Status {},
+                    action: WorkerAction::Status {},
                 },
             )
             .unwrap();
@@ -4468,12 +3593,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let person = PersonId::new();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-        perform(&worker, person, AgentVaultActionDto::Create {});
+        perform(&worker, person, WorkerAction::Create {});
         let created = perform(
             &worker,
             person,
-            AgentVaultActionDto::ConversationSession {
-                operation: AgentConversationSessionOperationDto::Start {},
+            WorkerAction::ConversationSession {
+                operation: ConversationSessionOperation::Start,
             },
         )
         .session
@@ -4484,8 +3609,8 @@ mod tests {
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::ConversationSession {
-                    operation: AgentConversationSessionOperationDto::Recover {
+                WorkerAction::ConversationSession {
+                    operation: ConversationSessionOperation::Recover {
                         session_id: created.id.to_string(),
                         expected_revision: created.revision + 1,
                     },
@@ -4498,8 +3623,8 @@ mod tests {
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::ConversationSession {
-                    operation: AgentConversationSessionOperationDto::Recover {
+                WorkerAction::ConversationSession {
+                    operation: ConversationSessionOperation::Recover {
                         session_id: created.id.to_string(),
                         expected_revision: created.revision,
                     },
@@ -4511,7 +3636,7 @@ mod tests {
         let installed_revision = perform(
             &worker,
             person,
-            AgentVaultActionDto::Registry { change: None },
+            WorkerAction::Registry { change: None },
         )
         .registry
         .unwrap()
@@ -4519,8 +3644,8 @@ mod tests {
         let resumed = perform(
             &worker,
             person,
-            AgentVaultActionDto::ConversationSession {
-                operation: AgentConversationSessionOperationDto::Resume {},
+            WorkerAction::ConversationSession {
+                operation: ConversationSessionOperation::Resume,
             },
         )
         .session
@@ -4530,7 +3655,7 @@ mod tests {
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::Registry { change: None },
+                WorkerAction::Registry { change: None },
             )
             .registry
             .unwrap()
@@ -4540,8 +3665,8 @@ mod tests {
         let sample = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Resume {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Resume,
             },
         )
         .session
@@ -4561,25 +3686,25 @@ mod tests {
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::Registry { change: None }
+                WorkerAction::Registry { change: None }
             )
             .failure,
             Some(AgentFailure::VaultUnavailable)
         );
         assert!(!root.exists());
-        perform(&worker, person, AgentVaultActionDto::Create {});
+        perform(&worker, person, WorkerAction::Create {});
         let empty = perform(
             &worker,
             person,
-            AgentVaultActionDto::Registry { change: None },
+            WorkerAction::Registry { change: None },
         );
-        assert_eq!(empty.state, Some(AgentVaultStateDto::Ready));
+        assert_eq!(empty.state, Some(VaultState::Ready));
         assert!(empty.registry.is_none());
         let session = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Start {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Start,
             },
         )
         .session
@@ -4587,8 +3712,8 @@ mod tests {
         perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Turn {
+            WorkerAction::Session {
+                operation: FixtureOperation::Turn {
                     session_id: session.id.to_string(),
                     expected_revision: 0,
                     prompt: AgentFixturePromptDto::Today,
@@ -4598,7 +3723,7 @@ mod tests {
         let before = perform(
             &worker,
             person,
-            AgentVaultActionDto::Registry { change: None },
+            WorkerAction::Registry { change: None },
         )
         .registry
         .unwrap();
@@ -4607,18 +3732,15 @@ mod tests {
             .iter()
             .find(|assignment| assignment.granted_tool_count == 1)
             .unwrap();
-        let action = AgentVaultActionDto::Registry {
-            change: Some(
-                encode_contract(&RegistryConfiguration {
-                    instance_id: before.instance_id,
-                    expected_revision: before.revision,
-                    target: RegistryConfigurationTarget::Assignment {
-                        id: assignment.id,
-                        enabled: false,
-                    },
-                })
-                .unwrap(),
-            ),
+        let action = WorkerAction::Registry {
+            change: Some(RegistryConfiguration {
+                instance_id: before.instance_id,
+                expected_revision: before.revision,
+                target: RegistryConfigurationTarget::Assignment {
+                    id: assignment.id,
+                    enabled: false,
+                },
+            }),
         };
         let id = Uuid::new_v4();
         worker
@@ -4669,13 +3791,13 @@ mod tests {
             perform(&worker, person, action).failure,
             Some(AgentFailure::Conflict)
         );
-        perform(&worker, person, AgentVaultActionDto::Lock {});
-        perform(&worker, person, AgentVaultActionDto::Unlock {});
+        perform(&worker, person, WorkerAction::Lock {});
+        perform(&worker, person, WorkerAction::Unlock {});
         assert_eq!(
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::Registry { change: None }
+                WorkerAction::Registry { change: None }
             )
             .registry
             .as_ref(),
@@ -4684,8 +3806,8 @@ mod tests {
         let session = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Start {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Start,
             },
         )
         .session
@@ -4693,8 +3815,8 @@ mod tests {
         let denied = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Turn {
+            WorkerAction::Session {
+                operation: FixtureOperation::Turn {
                     session_id: session.id.to_string(),
                     expected_revision: 0,
                     prompt: AgentFixturePromptDto::Today,
@@ -4713,12 +3835,12 @@ mod tests {
         let current = perform(
             &worker,
             person,
-            AgentVaultActionDto::Registry { change: None },
+            WorkerAction::Registry { change: None },
         )
         .registry
         .unwrap();
         assert_eq!(current, *after);
-        perform(&worker, person, AgentVaultActionDto::Lock {});
+        perform(&worker, person, WorkerAction::Lock {});
     }
 
     #[test]
@@ -4744,29 +3866,29 @@ mod tests {
         });
         let worker = Worker::new(root, keys).unwrap();
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Unlock {}).state,
-            Some(AgentVaultStateDto::Ready)
+            perform(&worker, person, WorkerAction::Unlock {}).state,
+            Some(VaultState::Ready)
         );
         for operation in [
-            AgentFixtureOperationDto::Get {
+            FixtureOperation::Get {
                 session_id: session.id.to_string(),
             },
-            AgentFixtureOperationDto::Recover {
+            FixtureOperation::Recover {
                 session_id: session.id.to_string(),
                 expected_revision: session.revision,
             },
         ] {
-            let result = perform(&worker, person, AgentVaultActionDto::Session { operation });
+            let result = perform(&worker, person, WorkerAction::Session { operation });
             assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
-            assert_eq!(result.state, Some(AgentVaultStateDto::Ready));
+            assert_eq!(result.state, Some(VaultState::Ready));
             assert!(result.session.is_none());
             assert!(result.events.is_empty());
         }
         let sample = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Resume {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Resume,
             },
         )
         .session
@@ -4783,15 +3905,15 @@ mod tests {
         let person = PersonId::new();
         let worker = Worker::new(root.clone(), keys.clone()).unwrap();
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Create {}).state,
-            Some(AgentVaultStateDto::Ready)
+            perform(&worker, person, WorkerAction::Create {}).state,
+            Some(VaultState::Ready)
         );
         fn run(worker: &Worker, person: PersonId) -> floe_experts::ExpertResult {
             let session = perform(
                 worker,
                 person,
-                AgentVaultActionDto::Session {
-                    operation: AgentFixtureOperationDto::Start {},
+                WorkerAction::Session {
+                    operation: FixtureOperation::Start,
                 },
             )
             .session
@@ -4799,8 +3921,8 @@ mod tests {
             let completed = perform(
                 worker,
                 person,
-                AgentVaultActionDto::Session {
-                    operation: AgentFixtureOperationDto::Turn {
+                WorkerAction::Session {
+                    operation: FixtureOperation::Turn {
                         session_id: session.id.to_string(),
                         expected_revision: 0,
                         prompt: AgentFixturePromptDto::Today,
@@ -4825,14 +3947,14 @@ mod tests {
         let first = run(&worker, person);
         assert_eq!(first.state_revision, 1);
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Lock {}).state,
-            Some(AgentVaultStateDto::Locked)
+            perform(&worker, person, WorkerAction::Lock {}).state,
+            Some(VaultState::Locked)
         );
         drop(worker);
         let worker = Worker::new(root, keys).unwrap();
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Unlock {}).state,
-            Some(AgentVaultStateDto::Ready)
+            perform(&worker, person, WorkerAction::Unlock {}).state,
+            Some(VaultState::Ready)
         );
         let second = run(&worker, person);
         assert_eq!(second.state_revision, 2);
@@ -4840,8 +3962,8 @@ mod tests {
         assert_eq!(second.instance_id, first.instance_id);
         assert_eq!(second.view_handle, first.view_handle);
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Lock {}).state,
-            Some(AgentVaultStateDto::Locked)
+            perform(&worker, person, WorkerAction::Lock {}).state,
+            Some(VaultState::Locked)
         );
     }
 
@@ -4853,42 +3975,42 @@ mod tests {
         let person = PersonId::new();
         let worker = Worker::new(root.clone(), keys.clone()).unwrap();
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Status {}).state,
-            Some(AgentVaultStateDto::Missing)
+            perform(&worker, person, WorkerAction::Status {}).state,
+            Some(VaultState::Missing)
         );
         assert!(!root.exists());
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Create {}).state,
-            Some(AgentVaultStateDto::Ready)
+            perform(&worker, person, WorkerAction::Create {}).state,
+            Some(VaultState::Ready)
         );
         let session = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Resume {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Resume,
             },
         )
         .session
         .unwrap();
         assert_eq!(session.data_classes, [floe_agent_contract::DataClass::Synthetic]);
         assert_eq!(
-            perform(&worker, PersonId::new(), AgentVaultActionDto::Lock {}).failure,
+            perform(&worker, PersonId::new(), WorkerAction::Lock {}).failure,
             Some(AgentFailure::NotFound)
         );
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Lock {}).state,
-            Some(AgentVaultStateDto::Locked)
+            perform(&worker, person, WorkerAction::Lock {}).state,
+            Some(VaultState::Locked)
         );
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Unlock {}).state,
-            Some(AgentVaultStateDto::Ready)
+            perform(&worker, person, WorkerAction::Unlock {}).state,
+            Some(VaultState::Ready)
         );
         assert_eq!(
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::Session {
-                    operation: AgentFixtureOperationDto::Resume {}
+                WorkerAction::Session {
+                    operation: FixtureOperation::Resume
                 }
             )
             .session
@@ -4897,15 +4019,15 @@ mod tests {
         );
         keys.0.unavailable.store(true, Ordering::Release);
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Status {}).failure,
+            perform(&worker, person, WorkerAction::Status {}).failure,
             Some(AgentFailure::VaultUnavailable)
         );
         assert_eq!(
             perform(
                 &worker,
                 person,
-                AgentVaultActionDto::Session {
-                    operation: AgentFixtureOperationDto::Resume {}
+                WorkerAction::Session {
+                    operation: FixtureOperation::Resume
                 }
             )
             .failure,
@@ -4913,8 +4035,8 @@ mod tests {
         );
         keys.0.unavailable.store(false, Ordering::Release);
         assert_eq!(
-            perform(&worker, person, AgentVaultActionDto::Unlock {}).state,
-            Some(AgentVaultStateDto::Ready)
+            perform(&worker, person, WorkerAction::Unlock {}).state,
+            Some(VaultState::Ready)
         );
         assert_eq!(keys.0.values.lock().unwrap().len(), 1);
     }
@@ -4924,20 +4046,20 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let person = PersonId::new();
         let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-        perform(&worker, person, AgentVaultActionDto::Create {});
+        perform(&worker, person, WorkerAction::Create {});
         let session = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Start {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Start,
             },
         )
         .session
         .unwrap();
         let id = Uuid::new_v4();
         let operation = AgentVaultOperationDto::Submit {
-            action: AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Turn {
+            action: WorkerAction::Session {
+                operation: FixtureOperation::Turn {
                     session_id: session.id.to_string(),
                     expected_revision: session.revision,
                     prompt: AgentFixturePromptDto::Today,
@@ -4963,8 +4085,8 @@ mod tests {
                 person,
                 Uuid::new_v4(),
                 AgentVaultOperationDto::Submit {
-                    action: AgentVaultActionDto::Session {
-                        operation: AgentFixtureOperationDto::Recover {
+                    action: WorkerAction::Session {
+                        operation: FixtureOperation::Recover {
                             session_id: session.id.to_string(),
                             expected_revision: 1
                         }
@@ -5004,8 +4126,8 @@ mod tests {
         let resumed = perform(
             &worker,
             person,
-            AgentVaultActionDto::Session {
-                operation: AgentFixtureOperationDto::Resume {},
+            WorkerAction::Session {
+                operation: FixtureOperation::Resume,
             },
         );
         assert_eq!(resumed.session, result.session);
@@ -5018,7 +4140,7 @@ mod tests {
         let keys = Keys::default();
         let person = PersonId::new();
         let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-        perform(&worker, person, AgentVaultActionDto::Create {});
+        perform(&worker, person, WorkerAction::Create {});
         keys.0.entered.store(false, Ordering::Release);
         *keys.0.paused.lock().unwrap() = true;
         let id = Uuid::new_v4();
@@ -5027,7 +4149,7 @@ mod tests {
                 person,
                 id,
                 AgentVaultOperationDto::Submit {
-                    action: AgentVaultActionDto::Status {},
+                    action: WorkerAction::Status {},
                 },
             )
             .unwrap();
@@ -5078,15 +4200,11 @@ mod tests {
     }
 }
 
-/// The scripted prompt the vault worker's own envelope names.
-///
-/// This is the legacy in-process transport, so the mapping lives with it; R003
-/// 07 replaces the envelope and takes this with it.
-fn fixture_prompt(prompt: AgentFixturePromptDto) -> crate::AgentFixturePrompt {
-    match prompt {
-        AgentFixturePromptDto::Today => crate::AgentFixturePrompt::Today,
-        AgentFixturePromptDto::FollowUp => crate::AgentFixturePrompt::FollowUp,
-        AgentFixturePromptDto::RepeatedCall => crate::AgentFixturePrompt::RepeatedCall,
-        AgentFixturePromptDto::Unavailable => crate::AgentFixturePrompt::Unavailable,
+/// The Person's vault, as this device's own storage shows it.
+fn stored_vault_state(root: &std::path::Path, person: PersonId) -> VaultState {
+    if root.join(person.to_string()).join("vault.id").exists() {
+        VaultState::Locked
+    } else {
+        VaultState::Missing
     }
 }

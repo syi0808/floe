@@ -1,0 +1,45 @@
+//! One conversation turn, as this host states it.
+//!
+//! What the Person asked for, which device asked, and which paired server this
+//! run may reach. None of it is a wire shape: the binding parses the request and
+//! the composition root resolves the route before either reaches a turn.
+
+use floe_conversation::ProfileSelection;
+use uuid::Uuid;
+
+/// The paired server one turn may use, and what it reported.
+///
+/// The model route and the source catalog are two different admissions that one
+/// resolution happens to observe together; they are kept apart here so that
+/// neither is mistaken for the other.
+#[derive(Clone)]
+pub struct RemoteTurnRoute {
+    pub route: floe_inference::RemoteRoute,
+    pub calendar_connections: Vec<floe_connections::CalendarConnectionRef>,
+}
+
+impl RemoteTurnRoute {
+    pub fn pairing(&self) -> Option<&floe_inference::RoutePairing> {
+        self.route.pairing.as_ref()
+    }
+
+    /// The recipient this route resolves to, for the consent question.
+    pub fn recipient(&self) -> floe_inference::RouteRecipient {
+        floe_inference::RouteRecipient {
+            external: self.route.external,
+            allowed: self.route.allow_external,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConversationTurnRequest {
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub text: String,
+    pub device_id: String,
+    pub profile: ProfileSelection,
+    pub continuation: bool,
+    pub retry_of: Option<Uuid>,
+    pub remote_route: Option<RemoteTurnRoute>,
+}

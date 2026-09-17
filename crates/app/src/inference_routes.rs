@@ -14,13 +14,17 @@ impl HostInferenceRoutes {
     pub async fn resolve(
         &self,
         caller: &CallerContext,
-    ) -> Result<Option<floe_protocol::AgentRemoteRouteDto>, floe_agent_contract::AgentFailure> {
-        floe_inference::select_remote_route(
+    ) -> Result<Option<crate::RemoteTurnRoute>, floe_agent_contract::AgentFailure> {
+        let resolved = floe_inference::select_remote_route(
             &floe_provider_adapters::control::SavedServerConnectionStore,
             &floe_provider_adapters::models::RemoteModelRouteResolver,
             &caller.person_id().to_string(),
             caller.device_id(),
         )
-        .await
+        .await?;
+        Ok(resolved.map(|resolved| crate::RemoteTurnRoute {
+            route: resolved.route,
+            calendar_connections: resolved.calendar_connections,
+        }))
     }
 }

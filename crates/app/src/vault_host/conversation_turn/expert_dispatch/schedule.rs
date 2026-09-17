@@ -6,33 +6,30 @@ use std::{
 };
 
 use floe_agent_contract::{AgentFailure, ModelPlacement};
-use floe_context::{InferencePolicyDecision};
-use floe_conversation::{ModelRequest, ModelResponse, ModelRunner};
-use floe_experts_builtin::{BuiltinExpertKind};
+use floe_experts_builtin::BuiltinExpertKind;
 use floe_experts_builtin::schedule::{self, SCHEDULE_DEFINITION_REVISION};
 
 pub(in crate::vault_host) use floe_experts_builtin::schedule::schedule_definition;
 use floe_agent_contract::{
-    AgentCard as ContractAgentCard, AgentDefinition, AgentEndpoint, BoxFuture, DelegationPort,
-    DelegationRequest, DependencyCoverage, EndpointInvocation, ExpertReport, TaskId, TaskReceipt,
-    TaskState,
+    AgentEndpoint, BoxFuture, DependencyCoverage, EndpointInvocation, ExpertReport,
 };
 use floe_access::{
-    CalendarReadAccess, CalendarReadAccessAdmission, CalendarReadAccessRequest,
-    CalendarReadAccessStamp,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
+    CalendarReadAdmission,
+};
+use floe_context::{
+    CalendarObservation, CalendarObserveRequest, CalendarSource, ProjectedCalendarItem,
+    ProjectedCalendarObservation,
 };
 
 use crate::FloeCore;
-use floe_access::{ProjectedCalendarItem, ProjectedCalendarObservation};
 use floe_day::CalendarTimelineGrant;
 use agent::CalendarExpertEndpointRequest;
 use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
-use floe_day::{CalendarBatch, CalendarConnection, CalendarProvider, CalendarRecord};
-use floe_kernel::{PersonId};
-use floe_execution::{
-    ExecutionScope,
-    budget::{BudgetConfig, BudgetLedger},
-};
+use floe_day::{CalendarBatch, CalendarConnection, CalendarRecord};
+use floe_context_contract::CalendarProvider;
+use floe_kernel::PersonId;
+use floe_execution::ExecutionScope;
 use floe_experts::TaskCoordinator;
 // BOUNDARY(stage-3): the Schedule Expert still reaches the provider adapter directly.
 // The acquisition must arrive through an owner-defined source port.
@@ -40,18 +37,16 @@ use floe_provider_adapters::control::{
     RemoteAuthorizationClient, calendar_query_sha256, parse_calendar_challenge,
 };
 use floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess;
-use floe_kernel::{RunId, TraceContext};
-use floe_protocol::{
-    CalendarBatchDto, LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
-    LocalContextAcquisitionResultDto, PROTOCOL_VERSION,
+use floe_provider_adapters::sources::native_acquisition::{
+    CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
+    NativeCalendarBatch, NativeCalendarFailure, NativeEventSchedule,
 };
 use uuid::Uuid;
 
-use crate::local_context::LocalContextStore;
+use crate::local_context::LocalContextHost;
 use floe_provider_adapters::models::{FoundationModelRunner, ServerModelRunner};
 
 mod agent;
-mod timeline_views;
 
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 
@@ -60,7 +55,7 @@ use floe_vault::VaultTaskRepository;
 
 #[derive(Clone)]
 pub(crate) struct ScheduleEndpointContext {
-    pub request: floe_protocol::AgentConversationTurnRequestDto,
+    pub request: crate::ConversationTurnRequest,
     pub context: floe_context::AgentContext,
     pub max_output_bytes: usize,
 }
@@ -68,7 +63,7 @@ pub(crate) struct ScheduleEndpointContext {
 pub(crate) struct ScheduleEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
-    local_context: Arc<LocalContextStore>,
+    local_context: Arc<LocalContextHost>,
     contexts: Mutex<HashMap<Uuid, ScheduleEndpointContext>>,
 }
 
@@ -76,7 +71,7 @@ impl<Keys> ScheduleEndpoint<Keys> {
     pub(crate) fn new(
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
-        local_context: Arc<LocalContextStore>,
+        local_context: Arc<LocalContextHost>,
     ) -> Self {
         Self {
             core,
@@ -217,7 +212,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                         .map(|backend| backend as &dyn RemoteCalendarBackend),
                 ),
             };
-            let placement = model.placement();
+            let placement = floe_inference::ModelTransport::placement(&model);
             let endpoint = self
                 .core
                 .run_calendar_expert_endpoint(
@@ -358,7 +353,7 @@ pub(crate) async fn run_registered<
     endpoint: &ScheduleEndpoint<Keys>,
     coordinator: &TaskCoordinator<VaultTaskRepository<Keys>>,
     request: floe_experts::A2ASendMessageRequest,
-    turn_request: &floe_protocol::AgentConversationTurnRequestDto,
+    turn_request: &crate::ConversationTurnRequest,
     context: &floe_context::AgentContext,
     recorder: Option<&dyn floe_experts::TaskCoverageRecorder>,
 ) -> Result<floe_experts::A2ATask, AgentFailure> {
@@ -390,7 +385,7 @@ struct BoundAccess<'host> {
     setup: &'host floe_experts::CalendarExpertSetupReceipt,
     binding: &'host floe_experts::CalendarViewBinding,
     request_device_id: &'host str,
-    remote_route: Option<&'host floe_protocol::AgentRemoteRouteDto>,
+    remote_route: Option<&'host crate::RemoteTurnRoute>,
     ambiguous: bool,
     access: Access<'host>,
 }
@@ -420,7 +415,7 @@ impl BoundAccess<'_> {
     }
 }
 
-impl CalendarReadAccess for BoundAccess<'_> {
+impl CalendarSource for BoundAccess<'_> {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -431,18 +426,37 @@ impl CalendarReadAccess for BoundAccess<'_> {
 
     async fn observe(
         &self,
-        request: floe_access::CalendarObserveRequest,
-    ) -> Result<Option<floe_access::CalendarObservation>, AgentFailure> {
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
         self.validate(request.person_id).await?;
         self.access.observe(request).await
     }
 
     async fn observe_projected(
         &self,
-        request: floe_access::CalendarObserveRequest,
+        request: CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
         self.validate(request.person_id).await?;
         self.access.observe_projected(request).await
+    }
+}
+
+impl CalendarReadAdmission for BoundAccess<'_> {
+    async fn admission(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        self.validate(request.person_id).await?;
+        self.access.admission(request).await
+    }
+
+    async fn admission_after_check(
+        &self,
+        request: &CalendarReadAccessRequest,
+        stamp: &CalendarReadAccessStamp,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        self.validate(request.person_id).await?;
+        self.access.admission_after_check(request, stamp).await
     }
 }
 
@@ -451,7 +465,7 @@ fn validate_active_connection(
     binding: &floe_experts::CalendarViewBinding,
     connection: &CalendarConnection,
     request_device_id: &str,
-    remote_route: Option<&floe_protocol::AgentRemoteRouteDto>,
+    remote_route: Option<&crate::RemoteTurnRoute>,
 ) -> Result<(), AgentFailure> {
     let calendar_ids: Vec<_> = connection
         .calendars
@@ -545,7 +559,7 @@ impl<'model> Access<'model> {
         connection_id: String,
         connection_revision: u64,
         model: &'model Model,
-        local_context: &'model LocalContextStore,
+        local_context: &'model LocalContextHost,
         core: &'model crate::FloeCore,
         source_authority: Option<floe_context_contract::SourceAuthority>,
         remote_backend: Option<&'model dyn RemoteCalendarBackend>,
@@ -609,7 +623,7 @@ impl<'model> Access<'model> {
     }
 }
 
-impl CalendarReadAccess for Access<'_> {
+impl CalendarSource for Access<'_> {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -624,8 +638,8 @@ impl CalendarReadAccess for Access<'_> {
 
     async fn observe(
         &self,
-        request: floe_access::CalendarObserveRequest,
-    ) -> Result<Option<floe_access::CalendarObservation>, AgentFailure> {
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
         match self {
             Self::Fixture(_) => Ok(None),
             Self::Device(access) => access.observe(request).await,
@@ -636,7 +650,7 @@ impl CalendarReadAccess for Access<'_> {
 
     async fn observe_projected(
         &self,
-        request: floe_access::CalendarObserveRequest,
+        request: CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
         match self {
             Self::Remote(access) => access.observe_projected(request).await,
@@ -646,11 +660,23 @@ impl CalendarReadAccess for Access<'_> {
     }
 }
 
+impl CalendarReadAdmission for Access<'_> {
+    async fn admission(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        match self {
+            Self::Remote(access) => access.admission(request).await,
+            Self::Fixture(_) | Self::Device(_) | Self::Native(_) => Ok(None),
+        }
+    }
+}
+
 struct DeviceCalendarAccess<'store> {
     core: &'store crate::FloeCore,
     connection_id: String,
     source_authority: Option<floe_context_contract::SourceAuthority>,
-    local_context: &'store LocalContextStore,
+    local_context: &'store LocalContextHost,
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
@@ -700,30 +726,30 @@ impl DeviceCalendarAccess<'_> {
     async fn acquire(
         &self,
         person_id: PersonId,
-        mode: LocalContextAcquisitionModeDto,
+        mode: CalendarAcquisitionMode,
         starts_at: chrono::DateTime<chrono::Utc>,
         ends_at: chrono::DateTime<chrono::Utc>,
         expected_native_subject_fingerprint: Option<String>,
         deadline: tokio::time::Instant,
         cancellation: floe_execution::Cancellation,
-    ) -> Result<LocalContextAcquisitionResultDto, AgentFailure> {
+    ) -> Result<CalendarAcquisitionResult, AgentFailure> {
         let connection = self.connection(person_id).await?;
-        let host_epoch = self.local_context.acquisition_host_epoch(person_id)?;
-        let result = self
-            .local_context
-            .acquire_calendar(
-                LocalContextAcquisitionRequestDto {
-                    request_id: Uuid::new_v4().to_string(),
-                    host_epoch,
-                    person_id: person_id.to_string(),
+        let broker = self.local_context.calendar();
+        let result = broker
+            .submit(
+                CalendarAcquisitionRequest {
+                    request_id: Uuid::new_v4(),
+                    host_epoch: broker.host_epoch(person_id)?,
+                    person_id,
                     device_id: self.device_id.clone(),
                     connection_id: connection.connection_id,
                     connection_revision: connection.revision,
-                    provider: floe_protocol::conversion::calendar_provider_to_dto(self.provider),
+                    provider: self.provider,
                     mode,
                     calendar_ids: self.calendar_ids.clone(),
                     range_start_unix_ms: starts_at.timestamp_millis(),
                     range_end_unix_ms: ends_at.timestamp_millis(),
+                    // A device read never waits longer than half a minute.
                     deadline_unix_ms: chrono::Utc::now().timestamp_millis()
                         + deadline
                             .saturating_duration_since(tokio::time::Instant::now())
@@ -731,9 +757,11 @@ impl DeviceCalendarAccess<'_> {
                             .min(30_000) as i64,
                     expected_native_subject_fingerprint,
                 },
+                chrono::Utc::now().timestamp_millis(),
                 cancellation,
             )
             .await?;
+        // The subject must not have moved while the device was reading.
         if result.native_subject_fingerprint_before != result.native_subject_fingerprint_after {
             return Err(AgentFailure::StaleContext);
         }
@@ -741,7 +769,7 @@ impl DeviceCalendarAccess<'_> {
     }
 }
 
-impl CalendarReadAccess for DeviceCalendarAccess<'_> {
+impl CalendarSource for DeviceCalendarAccess<'_> {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -762,7 +790,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         match self
             .acquire(
                 request.person_id,
-                LocalContextAcquisitionModeDto::InspectSubject,
+                CalendarAcquisitionMode::InspectSubject,
                 chrono::Utc::now(),
                 chrono::Utc::now() + chrono::Duration::days(1),
                 None,
@@ -779,7 +807,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
                     return Err(AgentFailure::AccessReviewRequired);
                 }
                 Ok(CalendarReadAccessStamp {
-                    schema_version: PROTOCOL_VERSION,
+                    schema_version: floe_kernel::AGENT_VERSION,
                     person_id: request.person_id,
                     device_id: request.device_id,
                     provider: request.provider,
@@ -794,8 +822,8 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
 
     async fn observe(
         &self,
-        request: floe_access::CalendarObserveRequest,
-    ) -> Result<Option<floe_access::CalendarObservation>, AgentFailure> {
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
         if request.device_id != self.device_id
             || request.provider != self.provider
             || request.calendar_ids != self.calendar_ids
@@ -805,7 +833,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         match self
             .acquire(
                 request.person_id,
-                LocalContextAcquisitionModeDto::ReadEvents,
+                CalendarAcquisitionMode::ReadEvents,
                 request.starts_at,
                 request.ends_at,
                 request.expected_native_subject_fingerprint.clone(),
@@ -818,11 +846,11 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
                 let batches = result
                     .batches
                     .into_iter()
-                    .map(calendar_batch_from_dto)
+                    .map(calendar_batch_from_native)
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Some(floe_access::CalendarObservation {
+                Ok(Some(CalendarObservation {
                     stamp: CalendarReadAccessStamp {
-                        schema_version: PROTOCOL_VERSION,
+                        schema_version: floe_kernel::AGENT_VERSION,
                         person_id: request.person_id,
                         device_id: request.device_id,
                         provider: request.provider,
@@ -839,7 +867,8 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
     }
 }
 
-fn calendar_batch_from_dto(batch: CalendarBatchDto) -> Result<CalendarBatch, AgentFailure> {
+/// One batch the device read, as Day states it.
+fn calendar_batch_from_native(batch: NativeCalendarBatch) -> Result<CalendarBatch, AgentFailure> {
     let records = batch
         .records
         .into_iter()
@@ -850,18 +879,60 @@ fn calendar_batch_from_dto(batch: CalendarBatchDto) -> Result<CalendarBatch, Age
                 external_id: record.external_id,
                 external_revision: record.external_revision,
                 title: record.title,
-                schedule: floe_protocol::conversion::event_schedule_from_dto(record.schedule)
-                    .map_err(|_| AgentFailure::InvalidInput)?,
+                schedule: native_schedule(record.schedule)?,
             })
         })
         .collect::<Result<Vec<_>, AgentFailure>>()?;
     Ok(CalendarBatch {
         calendar_id: batch.calendar_id,
         records,
-        failure: batch
-            .failure
-            .map(floe_protocol::conversion::calendar_failure_from_dto),
+        failure: batch.failure.map(native_failure),
     })
+}
+
+fn native_failure(value: NativeCalendarFailure) -> floe_day::CalendarFailure {
+    match value {
+        NativeCalendarFailure::PermissionDenied => floe_day::CalendarFailure::PermissionDenied,
+        NativeCalendarFailure::CalendarUnavailable => {
+            floe_day::CalendarFailure::CalendarUnavailable
+        }
+        NativeCalendarFailure::ProviderUnavailable => {
+            floe_day::CalendarFailure::ProviderUnavailable
+        }
+    }
+}
+
+fn native_schedule(value: NativeEventSchedule) -> Result<floe_day::EventSchedule, AgentFailure> {
+    match value {
+        NativeEventSchedule::Timed {
+            starts_at,
+            ends_at,
+            timezone,
+        } => Ok(floe_day::EventSchedule::Timed(
+            floe_day::TimedSchedule::new(
+                chrono::DateTime::parse_from_rfc3339(&starts_at)
+                    .map_err(|_| AgentFailure::InvalidInput)?
+                    .with_timezone(&chrono::Utc),
+                chrono::DateTime::parse_from_rfc3339(&ends_at)
+                    .map_err(|_| AgentFailure::InvalidInput)?
+                    .with_timezone(&chrono::Utc),
+                timezone,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        )),
+        NativeEventSchedule::AllDay {
+            start_date,
+            end_date_exclusive,
+        } => Ok(floe_day::EventSchedule::AllDay(
+            floe_day::AllDaySchedule::new(
+                chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+                chrono::NaiveDate::parse_from_str(&end_date_exclusive, "%Y-%m-%d")
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        )),
+    }
 }
 
 trait RemoteCalendarBackend: Sync {
@@ -876,7 +947,7 @@ trait RemoteCalendarBackend: Sync {
 
     fn read<'future>(
         &'future self,
-        request: &'future floe_access::CalendarObserveRequest,
+        request: &'future CalendarObserveRequest,
     ) -> Pin<
         Box<
             dyn Future<Output = Result<floe_context::CalendarContextView, AgentFailure>>
@@ -894,22 +965,22 @@ struct VaultRemoteCalendarBackend<'host, Keys> {
     provider: CalendarProvider,
     calendar_ids: Vec<String>,
     connection_revision: u64,
-    pairing: floe_protocol::AgentRemotePairingDto,
+    pairing: floe_inference::RoutePairing,
 }
 
 impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
     fn new(
         vault: &'host floe_vault::EncryptedAgentVault<Keys>,
         core: &'host crate::FloeCore,
-        route: &floe_protocol::AgentRemoteRouteDto,
+        route: &crate::RemoteTurnRoute,
         person_id: PersonId,
         provider: CalendarProvider,
         calendar_ids: Vec<String>,
         connection_revision: u64,
     ) -> Result<Self, AgentFailure> {
         let pairing = route
-            .pairing
-            .clone()
+            .pairing()
+            .cloned()
             .ok_or(AgentFailure::CapabilityDenied)?;
         if pairing.person_id != person_id.to_string() || pairing.device_id.is_empty() {
             return Err(AgentFailure::CapabilityDenied);
@@ -917,7 +988,7 @@ impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
         Ok(Self {
             vault,
             core,
-            client: RemoteAuthorizationClient::new(route)?,
+            client: RemoteAuthorizationClient::new(&route.route)?,
             person_id,
             provider,
             calendar_ids,
@@ -1087,7 +1158,7 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
 
     fn read<'future>(
         &'future self,
-        request: &'future floe_access::CalendarObserveRequest,
+        request: &'future CalendarObserveRequest,
     ) -> Pin<
         Box<
             dyn Future<Output = Result<floe_context::CalendarContextView, AgentFailure>>
@@ -1221,7 +1292,7 @@ struct RemoteCalendarAccess<'model> {
     calendar_ids: Vec<String>,
 }
 
-impl CalendarReadAccess for RemoteCalendarAccess<'_> {
+impl CalendarSource for RemoteCalendarAccess<'_> {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -1243,17 +1314,9 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
         Ok(self.stamp(request.person_id, &admission))
     }
 
-    async fn admission(
-        &self,
-        request: &CalendarReadAccessRequest,
-    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
-        let backend = self.backend.ok_or(AgentFailure::CapabilityUnavailable)?;
-        Ok(Some(backend.admission(request).await?))
-    }
-
     async fn observe_projected(
         &self,
-        request: floe_access::CalendarObserveRequest,
+        request: CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
         if request.device_id != self.device_id
             || request.provider != self.provider
@@ -1318,6 +1381,22 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
     }
 }
 
+impl CalendarReadAdmission for RemoteCalendarAccess<'_> {
+    async fn admission(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        let backend = self.backend.ok_or(AgentFailure::CapabilityUnavailable)?;
+        Ok(Some(backend.admission(request).await?))
+    }
+}
+
+/// A fixture source stands on no grant at all.
+impl CalendarReadAdmission for FixtureAccess {}
+
+/// A device read is admitted by the grant host that wraps it, not here.
+impl CalendarReadAdmission for DeviceCalendarAccess<'_> {}
+
 impl RemoteCalendarAccess<'_> {
     fn stamp(
         &self,
@@ -1325,7 +1404,7 @@ impl RemoteCalendarAccess<'_> {
         admission: &CalendarReadAccessAdmission,
     ) -> CalendarReadAccessStamp {
         CalendarReadAccessStamp {
-            schema_version: PROTOCOL_VERSION,
+            schema_version: floe_kernel::AGENT_VERSION,
             person_id,
             device_id: self.device_id.clone(),
             provider: self.provider,
@@ -1349,7 +1428,7 @@ struct FixtureAccess {
     calendar_ids: Vec<String>,
 }
 
-impl CalendarReadAccess for FixtureAccess {
+impl CalendarSource for FixtureAccess {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -1367,7 +1446,7 @@ impl CalendarReadAccess for FixtureAccess {
             return Err(AgentFailure::CapabilityDenied);
         }
         Ok(CalendarReadAccessStamp {
-            schema_version: PROTOCOL_VERSION,
+            schema_version: floe_kernel::AGENT_VERSION,
             person_id: request.person_id,
             device_id: request.device_id,
             provider: request.provider,
@@ -1385,16 +1464,16 @@ enum Model {
 
 impl Model {
     fn conversation(
-        remote_route: Option<floe_protocol::AgentRemoteRouteDto>,
+        remote_route: Option<crate::RemoteTurnRoute>,
     ) -> Result<Self, AgentFailure> {
         match remote_route {
-            Some(route) => ServerModelRunner::new_model_only(route).map(Self::Server),
+            Some(route) => ServerModelRunner::new_model_only(route.route).map(Self::Server),
             None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
         }
     }
 }
 
-impl ModelRunner for Model {
+impl floe_inference::ModelTransport for Model {
     fn placement(&self) -> ModelPlacement {
         match self {
             Self::Foundation(model) => model.placement(),
@@ -1402,7 +1481,10 @@ impl ModelRunner for Model {
         }
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(
+        &self,
+        request: floe_inference::ModelTransportRequest,
+    ) -> Result<floe_inference::ModelTransportResponse, AgentFailure> {
         match self {
             Self::Foundation(model) => model.generate(request).await,
             Self::Server(model) => model.generate(request).await,
@@ -1418,8 +1500,11 @@ mod tests {
     use crate::FloeCore;
 use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
     use floe_context_contract::{ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle};
-use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
-    use floe_protocol::{CalendarBatchDto, LocalContextOperationDto};
+use floe_day::{CalendarSelection, CalendarSyncStatus};
+use floe_context_contract::CalendarScope;
+    use floe_protocol::{
+        CalendarBatchDto, LocalContextAcquisitionResultDto, LocalContextOperationDto,
+    };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use sha2::{Digest, Sha256};
     use std::{
@@ -1852,8 +1937,8 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
     fn remote_route(
         connector_id: &str,
         connection: &CalendarConnection,
-    ) -> floe_protocol::AgentRemoteRouteDto {
-        floe_protocol::AgentRemoteRouteDto {
+    ) -> crate::RemoteTurnRoute {
+        crate::RemoteTurnRoute {
             base_url: "http://127.0.0.1:8080/".into(),
             bearer_token: "a".repeat(32),
             purpose: "everyday_assistance".into(),
@@ -1998,7 +2083,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
                     request_time,
                 )
             });
-            let route = floe_protocol::AgentRemoteRouteDto {
+            let route = crate::RemoteTurnRoute {
                 base_url: format!("http://127.0.0.1:{}/", address.port()),
                 bearer_token: "fixture-token-that-is-long-enough".into(),
                 purpose: "everyday_assistance".into(),
@@ -2029,7 +2114,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
                 calendar_ids: vec!["primary".into()],
             };
             let projection = access
-                .observe_projected(floe_access::CalendarObserveRequest {
+                .observe_projected(CalendarObserveRequest {
                     person_id,
                     device_id: "device-a".into(),
                     provider,
@@ -2233,7 +2318,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
                 Ok(())
             );
 
-            let store = LocalContextStore::default();
+            let store = LocalContextHost::default();
             let now = chrono::Utc::now().timestamp_millis();
             store
                 .request_bound(
@@ -2379,7 +2464,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
     }
 
     fn publish_device_calendar(
-        store: &LocalContextStore,
+        store: &LocalContextHost,
         person_id: PersonId,
         connection: &CalendarConnection,
         observed_at_unix_ms: i64,
@@ -2412,7 +2497,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
 
     #[tokio::test]
     async fn device_calendar_access_never_consumes_another_devices_observation() {
-        let store = LocalContextStore::default();
+        let store = LocalContextHost::default();
         let person_id = PersonId::new();
         let now = chrono::Utc::now().timestamp_millis();
         let directory = tempfile::tempdir().unwrap();
@@ -2470,7 +2555,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
 
     #[tokio::test]
     async fn device_calendar_access_rejects_a_stale_connection_revision() {
-        let store = LocalContextStore::default();
+        let store = LocalContextHost::default();
         let person_id = PersonId::new();
         let directory = tempfile::tempdir().unwrap();
         let core = FloeCore::open(directory.path().join("calendar.db"))
@@ -2520,7 +2605,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
 
     #[tokio::test]
     async fn device_calendar_access_reads_through_the_bound_acquisition_host() {
-        let store = LocalContextStore::default();
+        let store = LocalContextHost::default();
         let person_id = PersonId::new();
         let directory = tempfile::tempdir().unwrap();
         let core = FloeCore::open(directory.path().join("calendar.db"))
@@ -2627,7 +2712,7 @@ use floe_day::{CalendarScope, CalendarSelection, CalendarSyncStatus};
             calendar_ids: vec!["primary".into()],
         };
         let now = chrono::Utc::now();
-        let request = floe_access::CalendarObserveRequest {
+        let request = CalendarObserveRequest {
             person_id: PersonId::new(),
             device_id: "test-device".into(),
             provider: CalendarProvider::Google,

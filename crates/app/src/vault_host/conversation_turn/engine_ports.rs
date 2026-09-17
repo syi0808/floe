@@ -5,7 +5,8 @@ use floe_agent_contract::{
     DependencyCoverage, MessageRole, ModelPort, ModelRequest, ModelResponse, ModelStep,
     TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
-use floe_vault::{GovernedAgentSessionStore, VaultKeyProvider};
+use floe_conversation::GovernedSessionStore;
+use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use floe_kernel::PersonId;
 use floe_execution::ExecutionScope;
 use uuid::Uuid;
@@ -22,8 +23,8 @@ const MAX_ATTEMPT_COST_MICROS: u64 = 1_000_000;
 
 pub(super) struct LegacyModelPort<'a, Keys, Runner: LegacyModelRunner> {
     pub model: &'a Runner,
-    pub store: &'a GovernedAgentSessionStore<'a, Keys>,
-    pub resolver: &'a dyn floe_vault::GovernedDependencyResolver,
+    pub store: &'a GovernedSessionStore<'a, EncryptedAgentVault<Keys>>,
+    pub resolver: &'a dyn floe_access::DependencyResolver,
     pub policy: &'a InferencePolicyDecision,
     pub context: &'a AgentContext,
     pub person_id: PersonId,
@@ -140,7 +141,7 @@ where
 
 pub(super) struct LegacyToolPort<'a, Keys, Host: CapabilityHost> {
     pub host: &'a Host,
-    pub store: &'a GovernedAgentSessionStore<'a, Keys>,
+    pub store: &'a GovernedSessionStore<'a, EncryptedAgentVault<Keys>>,
     pub person_id: PersonId,
     pub session_id: Uuid,
     pub max_output_bytes: usize,
@@ -208,7 +209,7 @@ pub(super) struct LegacyDelegationPort<'a, Keys: VaultKeyProvider> {
     >,
     pub schedule_endpoint: &'a super::expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     pub builtin_expert_endpoint: &'a super::expert_dispatch::BuiltinExpertEndpoint<Keys>,
-    pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
+    pub turn_request: &'a crate::ConversationTurnRequest,
     pub context: &'a AgentContext,
     pub session_id: Uuid,
     pub max_output_bytes: usize,

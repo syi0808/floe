@@ -4,14 +4,17 @@ use floe_access::GrantState;
 
 /// The remote authority values this vault stores. Who a producer is and what a
 /// signed source names are Access's; this module holds and signs the records.
-pub use floe_access::{RemoteProducerIdentity, RemoteViewSourceReference};
+pub use floe_access::{
+    RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
+    RemotePairingChallenge, RemoteProducerIdentity, RemoteViewSourceReference,
+};
 use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 use ring::{
     aead, hkdf,
     rand::{SecureRandom, SystemRandom},
     signature::{self, KeyPair},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use turso::transaction::TransactionBehavior;
@@ -26,53 +29,6 @@ const MAX_PRODUCER_PROOF_BYTES: usize = 4 * 1024;
 const OWNER_WRAP_CONTEXT: &[u8] = b"floe.remote.owner-key.wrap.v1\0";
 const PRODUCER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.producer.v1\0";
 const OWNER_SIGNATURE_DOMAIN: &[u8] = b"floe.remote.authorization.v1\0";
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteOwnerPublicKey {
-    pub key_id: String,
-    pub public_key: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteEnrollmentSignature {
-    pub key_id: String,
-    pub signature: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemotePairingChallenge {
-    pub pairing_id: String,
-    pub challenge_id: String,
-    pub challenge_b64url: String,
-    pub producer_signature: String,
-    pub producer: RemoteProducerIdentity,
-    pub issuer: RemoteOwnerPublicKey,
-    pub expires_at_unix_ms: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteCalendarAuthorizationExpectation {
-    pub operation: String,
-    pub client_id: String,
-    pub device_id: String,
-    pub challenge_id: String,
-    pub admission_id: String,
-    pub query_sha256: String,
-    pub result_sha256: String,
-    pub grant_id: String,
-    pub grant_incarnation: String,
-    pub grant_epoch: u64,
-    pub source_connector: String,
-    pub source_connection: String,
-    pub source_execution_owner: String,
-    pub source_incarnation: String,
-    pub source_epoch: u64,
-    pub resources: Vec<String>,
-    pub max_items: u32,
-    pub max_bytes: u32,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteCalendarSourceReference {
@@ -2645,5 +2601,48 @@ mod tests {
                     .is_err()
             );
         }
+    }
+}
+
+/// The vault holds the owner key, so it is the key holder Access's remote
+/// authorization port names. Every check the signing bodies above perform stays
+/// where it is; this only states which port they satisfy.
+impl<Keys: VaultKeyProvider> floe_access::RemoteAuthorizationKeys for EncryptedAgentVault<Keys> {
+    async fn pinned_producer(&self) -> Result<RemoteProducerIdentity, AgentFailure> {
+        self.remote_pinned_producer().await
+    }
+
+    async fn owner_public_key(&self) -> Result<RemoteOwnerPublicKey, AgentFailure> {
+        self.remote_owner_public_key().await
+    }
+
+    async fn sign_enrollment(
+        &self,
+        client_id: &str,
+        device_id: &str,
+        challenge_b64url: &str,
+        producer_signature_b64url: &str,
+    ) -> Result<RemoteEnrollmentSignature, AgentFailure> {
+        self.remote_sign_enrollment(
+            client_id,
+            device_id,
+            challenge_b64url,
+            producer_signature_b64url,
+        )
+        .await
+    }
+
+    async fn sign_calendar_authorization(
+        &self,
+        expected: &RemoteCalendarAuthorizationExpectation,
+        challenge_b64url: &str,
+        producer_signature_b64url: &str,
+    ) -> Result<RemoteEnrollmentSignature, AgentFailure> {
+        self.remote_sign_calendar_authorization(
+            expected,
+            challenge_b64url,
+            producer_signature_b64url,
+        )
+        .await
     }
 }

@@ -9,8 +9,8 @@ pub use application::{
 };
 pub use domain::{
     AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarMirror,
-    CalendarProvider, CalendarRange, CalendarRecord, CalendarScope, CalendarSelection,
-    CalendarSource, CalendarSyncStatus, Capture, CaptureId, CaptureProcessing, CaptureSource,
+    CalendarRange, CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus,
+    Capture, CaptureId, CaptureProcessing, CaptureSource,
     DaySnapshot, DomainError, DomainRef, Event, EventId, EventSchedule, Note, NoteId, PersonId,
     Priority, Revision, SourceRef, Task, TaskId, TimedSchedule, TimelineItem, project_day,
     project_day_with_end_offset,

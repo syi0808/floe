@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use floe_day::{CalendarProvider, Event, PersonId, SourceRef, TimedSchedule};
+use floe_day::{Event, PersonId, SourceRef, TimedSchedule};
+use floe_context_contract::CalendarProvider;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

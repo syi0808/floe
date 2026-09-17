@@ -9,13 +9,12 @@ use crate::{
     AppHost, FloeCore, HostError, HostServices, agent_run,
     inference_routes, local_context, vault_host,
 };
-use floe_protocol::{AgentConversationTurnRequestDto, AppProfileSelectionDto};
 
 pub struct AppComposition {
     pub(crate) runtime: Runtime,
     pub(crate) core: Arc<FloeCore>,
     pub(crate) agent_runs: agent_run::AgentRuns,
-    pub(crate) local_context: Arc<local_context::LocalContextStore>,
+    pub(crate) local_context: Arc<local_context::LocalContextHost>,
     #[cfg(unix)]
     pub(crate) agent_vault: vault_host::VaultBridge,
     #[cfg(unix)]
@@ -63,17 +62,12 @@ impl crate::ConversationCommands for AppComposition {
             .start_conversation(
                 person,
                 command_id,
-                AgentConversationTurnRequestDto {
-                    session_id: request.session_id.to_string(),
+                crate::ConversationTurnRequest {
+                    session_id: request.session_id,
                     expected_revision: request.expected_revision,
                     text: request.text,
                     device_id: caller.device_id().to_owned(),
-                    profile: match request.profile {
-                        crate::ProfileSelection::Auto => AppProfileSelectionDto::Auto,
-                        crate::ProfileSelection::Explicit(profile_id) => {
-                            AppProfileSelectionDto::Explicit { profile_id }
-                        }
-                    },
+                    profile: request.profile,
                     continuation: precheck.continuation,
                     retry_of: request.retry_of,
                     remote_route,
@@ -189,7 +183,7 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
             .block_on(crate::FloeCore::open(path))
             .map_err(|error| AppOpenError::Store(error.to_string()))?,
     );
-    let local_context = Arc::new(crate::local_context::LocalContextStore::default());
+    let local_context = Arc::new(crate::local_context::LocalContextHost::default());
     let services = AppComposition {
         runtime,
         core: core.clone(),
@@ -226,7 +220,7 @@ impl AppComposition {
         &self.agent_runs
     }
 
-    pub fn local_context(&self) -> &crate::local_context::LocalContextStore {
+    pub fn local_context(&self) -> &crate::local_context::LocalContextHost {
         &self.local_context
     }
 

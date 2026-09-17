@@ -1,16 +1,18 @@
 use chrono::TimeZone;
 // FIXME(stage-2): glob import of the retired floe-agent crate
-use floe_access::{CalendarReadAccess, CalendarReadAccessRequest, CalendarReadAccessStamp};
+use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
+use floe_context::CalendarSource;
 use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
-use floe_day::{CalendarTimelineGrant};
-use floe_experts_builtin::{CalendarAgentTurnRequest};
-use floe_day::{CalendarProvider, CalendarRange};
+use floe_day::CalendarTimelineGrant;
+use floe_experts_builtin::CalendarAgentTurnRequest;
+use floe_day::CalendarRange;
+use floe_context_contract::CalendarProvider;
 
 use super::*;
 
 struct Access;
 
-impl CalendarReadAccess for Access {
+impl CalendarSource for Access {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -125,7 +127,7 @@ async fn seed(
                 provider: CalendarProvider::Fixture,
                 device_id: "test-device".into(),
                 calendar_ids: vec!["test-calendar".into()],
-                connection_scope: floe_day::CalendarScope::Selected,
+                connection_scope: floe_context_contract::CalendarScope::Selected,
                 connection_revision: 1,
                 source_authority: None,
                 reviewed_native_subject_fingerprint: None,
@@ -293,7 +295,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         session_id: session.id,
         invocation_id: evidence.invocation_id,
     };
-    let inspect = AgentVaultActionDto::InspectProposal {
+    let inspect = WorkerAction::InspectProposal {
         session_id: session.id.to_string(),
         invocation_id: evidence.invocation_id.to_string(),
     };
@@ -301,7 +303,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         root.clone(),
         keys.clone(),
         core.clone(),
-        Arc::new(LocalContextStore::default()),
+        Arc::new(LocalContextHost::default()),
         Arc::new(crate::app_events::AppEventBuffer::default()),
     )
     .unwrap();
@@ -309,7 +311,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         perform(&worker, person, inspect.clone()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
-    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    perform(&worker, person, WorkerAction::Unlock);
     let absent = perform(&worker, person, inspect.clone());
     assert_eq!(absent.state, Some(AgentVaultStateDto::Ready));
     assert!(absent.proposal.unwrap().action.is_none());
@@ -319,7 +321,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
             .unwrap()
             .is_empty()
     );
-    perform(&worker, person, AgentVaultActionDto::Lock {});
+    perform(&worker, person, WorkerAction::Lock);
     let publication = runtime.block_on(async {
         let vault = EncryptedAgentVault::open(&root, person, keys.clone())
             .await
@@ -343,28 +345,27 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         .await
     });
     assert_eq!(publication, Err(AgentFailure::PolicyDenied));
-    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    perform(&worker, person, WorkerAction::Unlock);
     let overview = perform(
         &worker,
         person,
-        AgentVaultActionDto::Registry { change: None },
+        WorkerAction::Registry { change: None },
     )
     .registry
     .unwrap();
     perform(
         &worker,
         person,
-        AgentVaultActionDto::Registry {
+        WorkerAction::Registry {
             change: Some(
-                encode_contract(&RegistryConfiguration {
+                RegistryConfiguration {
                     instance_id: overview.instance_id,
                     expected_revision: overview.revision,
                     target: RegistryConfigurationTarget::Assignment {
                         id: evidence.assignment_id,
                         enabled: false,
                     },
-                })
-                .unwrap(),
+                },
             ),
         },
     );
@@ -385,7 +386,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     let invalid = perform(
         &worker,
         person,
-        AgentVaultActionDto::InspectProposal {
+        WorkerAction::InspectProposal {
             session_id: "not-a-uuid".into(),
             invocation_id: evidence.invocation_id.to_string(),
         },
@@ -399,7 +400,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     let saved = perform(
         &worker,
         person,
-        AgentVaultActionDto::Session {
+        WorkerAction::Session {
             operation: AgentFixtureOperationDto::Get {
                 session_id: session.id.to_string(),
             },
@@ -424,11 +425,11 @@ fn stopped_proposal_inspection_retains_the_owned_job_until_key_access_finishes()
     let keys = Keys::default();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), keys.clone()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     keys.0.entered.store(false, Ordering::Release);
     *keys.0.paused.lock().unwrap() = true;
     let id = Uuid::new_v4();
-    let inspect = AgentVaultActionDto::InspectProposal {
+    let inspect = WorkerAction::InspectProposal {
         session_id: Uuid::new_v4().to_string(),
         invocation_id: Uuid::new_v4().to_string(),
     };

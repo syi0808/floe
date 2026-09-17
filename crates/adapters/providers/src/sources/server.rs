@@ -9,9 +9,10 @@ use crate::control::authorization::{
 use floe_agent_contract::{AgentFailure};
 use floe_agent_contract::AGENT_VERSION;
 use floe_context::{AttentionView, CalendarContextView, CommunicationView, ConfirmedInteractionView, LogisticsView, MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PERSONAL_CONTEXT_BYTES, MAX_PORTFOLIO_VIEW_BYTES, PeopleView, WellbeingView, WorkContextView, validate_attention_view, validate_calendar_context_view, validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view, validate_people_view, validate_wellbeing_view, validate_work_context_view};
-use floe_vault::{EncryptedAgentVault, RemoteCalendarAuthorizationExpectation, VaultKeyProvider};
+use floe_access::{RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation};
+use floe_connections::CalendarConnectionRef;
 use floe_execution::limits::{CallLimiter, CallLimits};
-use floe_protocol::{AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto};
+use floe_inference::RemoteRoute;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
@@ -36,7 +37,11 @@ pub struct AuthorizedViewRead<'a> {
 }
 
 pub struct ServerSourceClient {
-    route: AgentRemoteRouteDto,
+    route: RemoteRoute,
+    /// The source catalog the paired server reported, kept beside the route
+    /// rather than inside it: a model route and a source catalog are different
+    /// admissions.
+    calendar_connections: Vec<CalendarConnectionRef>,
     source_calls: CallLimiter,
 }
 
@@ -75,7 +80,10 @@ fn valid_connection_id(value: &str) -> bool {
     })
 }
 
-fn validate_route(route: &AgentRemoteRouteDto) -> Result<(), AgentFailure> {
+fn validate_route(
+    route: &RemoteRoute,
+    calendar_connections: &[CalendarConnectionRef],
+) -> Result<(), AgentFailure> {
     let address = Url::parse(&route.base_url).map_err(|_| AgentFailure::InvalidInput)?;
     if address.scheme() != "http"
         || address.host_str() != Some("127.0.0.1")
@@ -90,20 +98,19 @@ fn validate_route(route: &AgentRemoteRouteDto) -> Result<(), AgentFailure> {
             .bytes()
             .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
         || route.purpose != "everyday_assistance"
-        || route.calendar_connections.len() > 2
-        || route.calendar_connections.iter().any(|connection| {
+        || calendar_connections.len() > 2
+        || calendar_connections.iter().any(|connection| {
             !matches!(
                 connection.connector_id.as_str(),
                 "calendar.google" | "calendar.microsoft"
             ) || !valid_connection_id(&connection.connection_id)
                 || connection.connection_revision == 0
         })
-        || route
-            .calendar_connections
+        || calendar_connections
             .iter()
             .enumerate()
             .any(|(index, connection)| {
-                route.calendar_connections[..index]
+                calendar_connections[..index]
                     .iter()
                     .any(|candidate| candidate.connector_id == connection.connector_id)
             })
@@ -122,16 +129,20 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 impl ServerSourceClient {
-    pub fn new(route: AgentRemoteRouteDto) -> Result<Self, AgentFailure> {
-        validate_route(&route)?;
+    pub fn new(
+        route: RemoteRoute,
+        calendar_connections: Vec<CalendarConnectionRef>,
+    ) -> Result<Self, AgentFailure> {
+        validate_route(&route, &calendar_connections)?;
         Ok(Self {
             route,
+            calendar_connections,
             source_calls: source_calls().clone(),
         })
     }
 
-    pub fn calendar_connections(&self) -> &[AgentRemoteCalendarConnectionDto] {
-        &self.route.calendar_connections
+    pub fn calendar_connections(&self) -> &[CalendarConnectionRef] {
+        &self.calendar_connections
     }
 
     pub fn authorization_client(&self) -> Result<RemoteAuthorizationClient, AgentFailure> {
@@ -150,9 +161,9 @@ impl ServerSourceClient {
 
 
     /// Read one view the Person's grant admits, through their paired server.
-    pub async fn read_admitted_view<Keys: VaultKeyProvider>(
+    pub async fn read_admitted_view<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         read: AuthorizedViewRead<'_>,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
@@ -203,13 +214,13 @@ impl ServerSourceClient {
             max_bytes,
             query: read.query,
         };
-        self.read_authorized_view(vault, request, expected, deadline, cancellation)
+        self.read_authorized_view(keys, request, expected, deadline, cancellation)
             .await
     }
 
-    pub async fn read_authorized_view<Keys: VaultKeyProvider>(
+    pub async fn read_authorized_view<Keys: RemoteAuthorizationKeys>(
         &self,
-        vault: &EncryptedAgentVault<Keys>,
+        keys: &Keys,
         request: RemoteViewAuthorizationRequest<'_>,
         mut expected: RemoteCalendarAuthorizationExpectation,
         deadline: tokio::time::Instant,
@@ -254,7 +265,7 @@ impl ServerSourceClient {
         expected.result_sha256.clear();
         let release = client
             .read_view_admission(
-                vault,
+                keys,
                 &expected,
                 &challenge,
                 &read_path,
@@ -284,7 +295,7 @@ impl ServerSourceClient {
         expected.result_sha256 = release_parts.result_sha256;
         client
             .release_view(
-                vault,
+                keys,
                 &expected,
                 &release,
                 &release_path,
@@ -552,15 +563,14 @@ mod tests {
     use crate::models::server::ServerModelRunner;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn route() -> AgentRemoteRouteDto {
-        AgentRemoteRouteDto {
+    fn route() -> RemoteRoute {
+        RemoteRoute {
             base_url: "http://127.0.0.1:8431".into(),
             bearer_token: "secret_token_value_that_is_long_enough".into(),
             purpose: "everyday_assistance".into(),
             external: true,
             allow_external: false,
             recipient: Some("fixture.example".into()),
-            calendar_connections: vec![],
             pairing: None,
         }
     }
@@ -572,7 +582,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let mut route = route();
         route.base_url = format!("http://{}", listener.local_addr().unwrap());
-        let mut runner = ServerSourceClient::new(route).unwrap();
+        let mut runner = ServerSourceClient::new(route, vec![]).unwrap();
         runner.set_call_limiter(
             CallLimiter::new(CallLimits {
                 max_running: 1,
@@ -694,7 +704,7 @@ mod tests {
         });
         let mut route = route();
         route.base_url = format!("http://{address}");
-        let model = ServerSourceClient::new(route).unwrap();
+        let model = ServerSourceClient::new(route, vec![]).unwrap();
         let view = model
             .read_communication_view(
                 "reply",
@@ -766,7 +776,7 @@ mod tests {
             });
             let mut route = route();
             route.base_url = format!("http://{address}");
-            let model = ServerSourceClient::new(route).unwrap();
+            let model = ServerSourceClient::new(route, vec![]).unwrap();
             if path.ends_with("work.context") {
                 model
                     .read_work_context_view(
@@ -791,7 +801,7 @@ mod tests {
     #[test]
     fn route_accepts_only_loopback_and_redacts_credentials() {
         let valid = route();
-        assert!(ServerSourceClient::new(valid.clone()).is_ok());
+        assert!(ServerSourceClient::new(valid.clone(), vec![]).is_ok());
         let rendered = format!("{valid:?}");
         assert!(!rendered.contains(&valid.bearer_token));
         assert!(rendered.contains("[REDACTED]"));
@@ -807,38 +817,159 @@ mod tests {
         ] {
             let mut candidate = route();
             candidate.base_url = invalid.into();
-            assert!(ServerSourceClient::new(candidate).is_err());
+            assert!(ServerSourceClient::new(candidate, vec![]).is_err());
         }
 
         for token in ["short".to_owned(), "x".repeat(257), " ".repeat(32)] {
             let mut candidate = route();
             candidate.bearer_token = token;
-            assert!(ServerSourceClient::new(candidate).is_err());
+            assert!(ServerSourceClient::new(candidate, vec![]).is_err());
         }
         let mut wrong_purpose = route();
         wrong_purpose.purpose = "other".into();
-        assert!(ServerSourceClient::new(wrong_purpose).is_err());
+        assert!(ServerSourceClient::new(wrong_purpose, vec![]).is_err());
 
-        let mut invalid_binding = route();
-        invalid_binding.calendar_connections = vec![AgentRemoteCalendarConnectionDto {
-            connector_id: "invalid.connector".into(),
-            connection_id: "invalid-connection".into(),
-            connection_revision: 0,
-        }];
-        assert!(ServerSourceClient::new(invalid_binding).is_err());
+        // A catalog entry the transport cannot read is refused with the route.
+        assert!(
+            ServerSourceClient::new(
+                route(),
+                vec![CalendarConnectionRef {
+                    connector_id: "invalid.connector".into(),
+                    connection_id: "invalid-connection".into(),
+                    connection_revision: 0,
+                }],
+            )
+            .is_err()
+        );
 
         for (connection_id, revision) in [
             ("not-a-uuid", 1),
             ("00000000-0000-3000-8000-000000000001", 1),
             ("00000000-0000-4000-8000-000000000001", 0),
         ] {
-            let mut candidate = route();
-            candidate.calendar_connections = vec![AgentRemoteCalendarConnectionDto {
-                connector_id: "calendar.google".into(),
-                connection_id: connection_id.into(),
-                connection_revision: revision,
-            }];
-            assert!(ServerSourceClient::new(candidate).is_err());
+            assert!(
+                ServerSourceClient::new(
+                    route(),
+                    vec![CalendarConnectionRef {
+                        connector_id: "calendar.google".into(),
+                        connection_id: connection_id.into(),
+                        connection_revision: revision,
+                    }],
+                )
+                .is_err()
+            );
         }
+    }
+}
+
+/// The producer identity as Access states it.
+fn observed_producer(
+    producer: &crate::control::authorization::ProducerIdentityResponse,
+) -> floe_access::RemoteProducerIdentity {
+    floe_access::RemoteProducerIdentity {
+        schema_version: producer.schema_version,
+        instance_id: producer.instance_id.clone(),
+        execution_owner: producer.execution_owner.clone(),
+        audience: producer.audience.clone(),
+        key_id: producer.key_id.clone(),
+        public_key: producer.public_key.clone(),
+        fingerprint: producer.fingerprint.clone(),
+    }
+}
+
+/// The paired server together with the key holder that proves this device to it.
+///
+/// The transport only fetches and reads; which producer may be trusted, and what
+/// the descriptor it signs authorizes, are decided by the caller.
+pub struct AuthorizedSourceClient<'a, Keys> {
+    pub client: &'a ServerSourceClient,
+    pub keys: &'a Keys,
+}
+
+impl<'a, Keys> AuthorizedSourceClient<'a, Keys> {
+    pub fn new(client: &'a ServerSourceClient, keys: &'a Keys) -> Self {
+        Self { client, keys }
+    }
+}
+
+impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
+    for AuthorizedSourceClient<'_, Keys>
+{
+    fn producer_identity<'a>(
+        &'a self,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_access::RemoteProducerIdentity, AgentFailure>,
+    > {
+        Box::pin(async move {
+            let producer = self
+                .client
+                .authorization_client()?
+                .producer_identity(window.deadline, &window.cancellation)
+                .await?;
+            Ok(observed_producer(&producer))
+        })
+    }
+
+    fn view_source_preview<'a>(
+        &'a self,
+        query: floe_access::RemoteSourceQuery<'a>,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<floe_access::SignedSourcePreview, AgentFailure>>
+    {
+        Box::pin(async move {
+            let preview = self
+                .client
+                .authorization_client()?
+                .view_source_preview(
+                    query.view_id,
+                    query.connector_id,
+                    query.connection_id,
+                    query.resource,
+                    window.deadline,
+                    &window.cancellation,
+                )
+                .await?;
+            Ok(floe_access::SignedSourcePreview {
+                descriptor_b64url: preview.descriptor_b64url,
+                producer_signature: preview.producer_signature,
+                connection_revision: preview.connection_revision,
+                producer: observed_producer(&preview.producer),
+            })
+        })
+    }
+}
+
+impl<Keys: RemoteAuthorizationKeys> floe_context::RemoteViewTransport
+    for AuthorizedSourceClient<'_, Keys>
+{
+    fn read_admitted_view<'a>(
+        &'a self,
+        read: floe_context::AdmittedRemoteRead<'a>,
+        window: &'a floe_access::RemoteCallWindow,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<serde_json::Value, AgentFailure>> {
+        Box::pin(async move {
+            self.client
+                .read_admitted_view(
+                    self.keys,
+                    AuthorizedViewRead {
+                        view_id: read.view_id,
+                        grant: &read.binding.grant,
+                        consumer_policy: read.binding.consumer_policy,
+                        consumer: read.consumer,
+                        resource: read.resource,
+                        connection_revision: read.connection_revision,
+                        max_items: read.max_items,
+                        max_bytes: read.max_bytes,
+                        query: read.query,
+                        client_id: read.pairing.client_id,
+                        device_id: read.pairing.device_id,
+                    },
+                    window.deadline,
+                    &window.cancellation,
+                )
+                .await
+        })
     }
 }

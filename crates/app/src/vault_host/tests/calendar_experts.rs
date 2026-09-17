@@ -1,6 +1,6 @@
-use floe_conversation::{AgentMessage};
+use floe_conversation::AgentMessage;
 use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration, RegistryConfiguration, RegistryConfigurationTarget};
-use floe_experts_builtin::{CalendarExpertSetup};
+use floe_experts_builtin::CalendarExpertSetup;
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
@@ -18,7 +18,8 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         return;
     }
     use floe_experts::{CalendarAccessChange, CalendarAccessConfiguration};
-    use floe_day::{CalendarFailure, CalendarProvider, CalendarScope, CalendarSelection};
+    use floe_day::{CalendarFailure, CalendarSelection};
+use floe_context_contract::{CalendarProvider, CalendarScope};
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId(
         Uuid::parse_str(floe_provider_adapters::sources::native_calendar::LOCAL_PERSON)
@@ -57,16 +58,16 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         directory.path().join("vaults"),
         Keys::default(),
         core.clone(),
-        Arc::new(LocalContextStore::default()),
+        Arc::new(LocalContextHost::default()),
         Arc::new(crate::app_events::AppEventBuffer::default()),
     )
     .unwrap();
     assert!(
-        perform(&worker, person, AgentVaultActionDto::Create {})
+        perform(&worker, person, WorkerAction::Create)
             .failure
             .is_none()
     );
-    let inspect = AgentVaultActionDto::CalendarExperts { setup: None };
+    let inspect = WorkerAction::CalendarExperts { setup: None };
     let empty = perform(&worker, person, inspect.clone())
         .calendar_experts
         .unwrap();
@@ -88,15 +89,15 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         perform(
             &worker,
             person,
-            AgentVaultActionDto::CalendarExperts {
-                setup: Some(encode_contract(&invalid).unwrap())
+            WorkerAction::CalendarExperts {
+                setup: Some(Box::new(invalid.clone()))
             }
         )
         .failure,
         Some(AgentFailure::Conflict)
     );
-    let action = AgentVaultActionDto::CalendarExperts {
-        setup: Some(encode_contract(&request).unwrap()),
+    let action = WorkerAction::CalendarExperts {
+        setup: Some(Box::new(request.clone())),
     };
     let installed = perform(&worker, person, action.clone())
         .calendar_experts
@@ -138,8 +139,8 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     let changed = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarAccess {
-            change: encode_contract(&CalendarAccessConfiguration {
+        WorkerAction::CalendarAccess {
+            change: Box::new(CalendarAccessConfiguration {
                 instance_id: installed.registry.instance_id,
                 expected_revision: installed.registry.revision,
                 setup_id,
@@ -152,16 +153,15 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     source_authority: Some(authority),
                     reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                 },
-            })
-            .unwrap(),
+            }),
         },
     );
     assert_eq!(changed.failure, Some(AgentFailure::AccessReviewRequired));
     let changed = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarAccess {
-            change: encode_contract(&CalendarAccessConfiguration {
+        WorkerAction::CalendarAccess {
+            change: Box::new(CalendarAccessConfiguration {
                 instance_id: installed.registry.instance_id,
                 expected_revision: installed.registry.revision,
                 setup_id,
@@ -174,8 +174,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     source_authority: Some(connection.source_authority),
                     reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                 },
-            })
-            .unwrap(),
+            }),
         },
     );
     assert_eq!(changed.failure, None);
@@ -187,21 +186,20 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     let enabled = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarAccess {
-            change: encode_contract(&CalendarAccessConfiguration {
+        WorkerAction::CalendarAccess {
+            change: Box::new(CalendarAccessConfiguration {
                 instance_id: reviewed.registry.instance_id,
                 expected_revision: reviewed.registry.revision,
                 setup_id,
                 change: CalendarAccessChange::SetEnabled { enabled: true },
-            })
-            .unwrap(),
+            }),
         },
     );
     assert_eq!(enabled.failure, None);
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     );
@@ -240,7 +238,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         perform(
             &worker,
             person,
-            AgentVaultActionDto::ConversationTurn {
+            WorkerAction::ConversationTurn {
                 request: floe_protocol::AgentConversationTurnRequestDto {
                     session_id: session.id.to_string(),
                     expected_revision: session.revision,
@@ -305,12 +303,12 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
             setup_id.to_string(),
             1,
             "mac-local".into(),
-            floe_day::CalendarProvider::Fixture,
+            floe_context_contract::CalendarProvider::Fixture,
             vec![floe_day::CalendarSelection {
                 calendar_id: "fixture-calendar".into(),
                 calendar_name: "Fixture".into(),
             }],
-            floe_day::CalendarScope::Selected,
+            floe_context_contract::CalendarScope::Selected,
         ))
         .unwrap();
     let local = chrono::Local::now();
@@ -332,39 +330,38 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         root.clone(),
         keys.clone(),
         Arc::clone(&core),
-        Arc::new(LocalContextStore::default()),
+        Arc::new(LocalContextHost::default()),
         Arc::new(crate::app_events::AppEventBuffer::default()),
     )
     .unwrap();
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Create {}).failure,
+        perform(&worker, person, WorkerAction::Create).failure,
         None
     );
     let empty = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarExperts { setup: None },
+        WorkerAction::CalendarExperts { setup: None },
     )
     .calendar_experts
     .unwrap();
     let installed = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarExperts {
+        WorkerAction::CalendarExperts {
             setup: Some(
-                encode_contract(&CalendarExpertSetup {
+                Box::new(CalendarExpertSetup {
                     instance_id: empty.registry.instance_id,
                     expected_revision: empty.registry.revision,
                     setup_id,
-                    provider: floe_day::CalendarProvider::Fixture,
+                    provider: floe_context_contract::CalendarProvider::Fixture,
                     device_id: "mac-local".into(),
                     calendar_ids: vec!["fixture-calendar".into()],
-                    connection_scope: floe_day::CalendarScope::Selected,
+                    connection_scope: floe_context_contract::CalendarScope::Selected,
                     connection_revision: 2,
                     source_authority: None,
                     reviewed_native_subject_fingerprint: None,
-                })
-                .unwrap(),
+                }),
             ),
         },
     )
@@ -373,21 +370,20 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     let enabled = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarAccess {
-            change: encode_contract(&CalendarAccessConfiguration {
+        WorkerAction::CalendarAccess {
+            change: Box::new(CalendarAccessConfiguration {
                 instance_id: installed.registry.instance_id,
                 expected_revision: installed.registry.revision,
                 setup_id,
                 change: CalendarAccessChange::SetEnabled { enabled: true },
-            })
-            .unwrap(),
+            }),
         },
     );
     assert_eq!(enabled.failure, None);
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
@@ -423,7 +419,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     let result = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationTurn {
+        WorkerAction::ConversationTurn {
             request: floe_protocol::AgentConversationTurnRequestDto {
                 session_id: session.id.to_string(),
                 expected_revision: session.revision,
@@ -457,7 +453,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         .expect("completed Schedule delegation");
     assert_eq!(server.join().unwrap().len(), 4);
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Lock {}).failure,
+        perform(&worker, person, WorkerAction::Lock).failure,
         None
     );
     let reopened = runtime
@@ -479,11 +475,11 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
@@ -497,7 +493,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
-    let action = AgentVaultActionDto::ConversationTurn {
+    let action = WorkerAction::ConversationTurn {
         request: floe_protocol::AgentConversationTurnRequestDto {
             session_id: session.id.to_string(),
             expected_revision: session.revision,
@@ -555,7 +551,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     assert_eq!(replay.session, first.session);
 
     let mut changed = action;
-    let AgentVaultActionDto::ConversationTurn { request } = &mut changed else {
+    let WorkerAction::ConversationTurn { request } = &mut changed else {
         unreachable!()
     };
     request.text = "Changed payload".into();
@@ -579,11 +575,11 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
@@ -608,7 +604,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             person,
             first_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::ConversationTurn {
+                action: WorkerAction::ConversationTurn {
                     request: floe_protocol::AgentConversationTurnRequestDto {
                         session_id: session.id.to_string(),
                         expected_revision: session.revision,
@@ -633,7 +629,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             person,
             second_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::ConversationTurn {
+                action: WorkerAction::ConversationTurn {
                     request: floe_protocol::AgentConversationTurnRequestDto {
                         session_id: session.id.to_string(),
                         expected_revision: first_session.revision,
@@ -674,33 +670,32 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     let setup_id = Uuid::new_v4();
     let empty = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarExperts { setup: None },
+        WorkerAction::CalendarExperts { setup: None },
     )
     .calendar_experts
     .unwrap();
     let installed = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarExperts {
+        WorkerAction::CalendarExperts {
             setup: Some(
-                encode_contract(&CalendarExpertSetup {
+                Box::new(CalendarExpertSetup {
                     instance_id: empty.registry.instance_id,
                     expected_revision: empty.registry.revision,
                     setup_id,
-                    provider: floe_day::CalendarProvider::Fixture,
+                    provider: floe_context_contract::CalendarProvider::Fixture,
                     device_id: "mac-local".into(),
                     calendar_ids: vec!["fixture-calendar".into()],
-                    connection_scope: floe_day::CalendarScope::Selected,
+                    connection_scope: floe_context_contract::CalendarScope::Selected,
                     connection_revision: 1,
                     source_authority: None,
                     reviewed_native_subject_fingerprint: None,
-                })
-                .unwrap(),
+                }),
             ),
         },
     )
@@ -709,14 +704,13 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     let enabled = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarAccess {
-            change: encode_contract(&CalendarAccessConfiguration {
+        WorkerAction::CalendarAccess {
+            change: Box::new(CalendarAccessConfiguration {
                 instance_id: installed.registry.instance_id,
                 expected_revision: installed.registry.revision,
                 setup_id,
                 change: CalendarAccessChange::SetEnabled { enabled: true },
-            })
-            .unwrap(),
+            }),
         },
     )
     .calendar_experts
@@ -725,7 +719,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
@@ -744,7 +738,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             conversation_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::ConversationTurn {
+                action: WorkerAction::ConversationTurn {
                     request: floe_protocol::AgentConversationTurnRequestDto {
                         session_id: session.id.to_string(),
                         expected_revision: session.revision,
@@ -779,7 +773,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             competing_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::ConversationTurn {
+                action: WorkerAction::ConversationTurn {
                     request: floe_protocol::AgentConversationTurnRequestDto {
                         session_id: session.id.to_string(),
                         expected_revision: session.revision,
@@ -804,7 +798,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             preview_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::CalendarExperts { setup: None },
+                action: WorkerAction::CalendarExperts { setup: None },
             },
         )
         .unwrap();
@@ -819,14 +813,13 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             revoke_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::CalendarAccess {
-                    change: encode_contract(&CalendarAccessConfiguration {
+                action: WorkerAction::CalendarAccess {
+                    change: Box::new(CalendarAccessConfiguration {
                         instance_id: current.registry.instance_id,
                         expected_revision: current.registry.revision,
                         setup_id,
                         change: CalendarAccessChange::SetEnabled { enabled: false },
-                    })
-                    .unwrap(),
+                    }),
                 },
             },
         )
@@ -850,7 +843,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             query_id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::Connections {},
+                action: WorkerAction::Connections,
             },
         )
         .unwrap();
@@ -908,11 +901,11 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         worker.app_events.read(7, None, None, 16),
         crate::app_events::EventRead::ResyncRequired { snapshot_cursor: 0 }
     );
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
@@ -1074,11 +1067,11 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     drop(vault);
 
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    perform(&worker, person, WorkerAction::Unlock);
     let fetched = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Get {
                 session_id: session.id.to_string(),
             },
@@ -1089,7 +1082,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let resumed = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Resume {},
         },
     );
@@ -1106,7 +1099,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let result = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationTurn {
+        WorkerAction::ConversationTurn {
             request: floe_protocol::AgentConversationTurnRequestDto {
                 session_id: session.id.to_string(),
                 expected_revision: session.revision,
@@ -1125,7 +1118,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         Some(AgentMessage::Assistant { text, .. }) if text == "General answer without experts"
     ));
     assert_eq!(server.join().unwrap().len(), 1);
-    perform(&worker, person, AgentVaultActionDto::Lock {});
+    perform(&worker, person, WorkerAction::Lock);
     drop(worker);
 
     let vault = runtime
@@ -1144,17 +1137,17 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
     let person = PersonId::new();
     let keys = Keys::default();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
     .session
     .unwrap();
-    perform(&worker, person, AgentVaultActionDto::Lock {});
+    perform(&worker, person, WorkerAction::Lock);
     drop(worker);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1200,7 +1193,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
     drop(vault);
 
     let worker = Worker::new(root, keys).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    perform(&worker, person, WorkerAction::Unlock);
     let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "Continued once".into(),
     }]);
@@ -1209,7 +1202,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         person_id: person.to_string(),
         device_id: "mac-local".into(),
     });
-    let action = AgentVaultActionDto::ConversationTurn {
+    let action = WorkerAction::ConversationTurn {
         request: floe_protocol::AgentConversationTurnRequestDto {
             session_id: session.id.to_string(),
             expected_revision: session.revision + 2,
@@ -1275,13 +1268,13 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     let person = PersonId::new();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Create {}).failure,
+        perform(&worker, person, WorkerAction::Create).failure,
         None
     );
     let session = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationSession {
+        WorkerAction::ConversationSession {
             operation: AgentConversationSessionOperationDto::Start {},
         },
     )
@@ -1296,7 +1289,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     let result = perform(
         &worker,
         person,
-        AgentVaultActionDto::ConversationTurn {
+        WorkerAction::ConversationTurn {
             request: floe_protocol::AgentConversationTurnRequestDto {
                 session_id: session.id.to_string(),
                 expected_revision: session.revision,
@@ -1327,7 +1320,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         .unwrap_or_else(|| panic!("durable Commitments denial: {session:?}"));
     assert_eq!(server.join().unwrap().len(), 2);
     assert_eq!(
-        perform(&worker, person, AgentVaultActionDto::Lock {}).failure,
+        perform(&worker, person, WorkerAction::Lock).failure,
         None
     );
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1665,13 +1658,13 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
     let person = PersonId::new();
     let keys = Keys::default();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-    let inspect = AgentVaultActionDto::CalendarExperts { setup: None };
+    let inspect = WorkerAction::CalendarExperts { setup: None };
     assert_eq!(
         perform(&worker, person, inspect.clone()).failure,
         Some(AgentFailure::VaultUnavailable)
     );
     assert!(!root.exists());
-    perform(&worker, person, AgentVaultActionDto::Create {});
+    perform(&worker, person, WorkerAction::Create);
     let empty = perform(&worker, person, inspect.clone())
         .calendar_experts
         .unwrap();
@@ -1681,7 +1674,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         perform(
             &worker,
             person,
-            AgentVaultActionDto::Registry { change: None }
+            WorkerAction::Registry { change: None }
         )
         .registry
         .is_none()
@@ -1690,16 +1683,16 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         instance_id: empty.registry.instance_id,
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        provider: floe_day::CalendarProvider::Fixture,
+        provider: floe_context_contract::CalendarProvider::Fixture,
         device_id: "mac-local".into(),
         calendar_ids: vec!["explicit-native-setup-canary".into()],
-        connection_scope: floe_day::CalendarScope::Selected,
+        connection_scope: floe_context_contract::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: None,
         reviewed_native_subject_fingerprint: None,
     };
-    let action = AgentVaultActionDto::CalendarExperts {
-        setup: Some(encode_contract(&setup).unwrap()),
+    let action = WorkerAction::CalendarExperts {
+        setup: Some(Box::new(setup.clone())),
     };
     let id = Uuid::new_v4();
     worker
@@ -1760,8 +1753,8 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         perform(
             &worker,
             person,
-            AgentVaultActionDto::CalendarExperts {
-                setup: Some(encode_contract(&changed).unwrap())
+            WorkerAction::CalendarExperts {
+                setup: Some(Box::new(changed.clone()))
             }
         )
         .failure,
@@ -1774,17 +1767,16 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         let result = perform(
             &worker,
             person,
-            AgentVaultActionDto::Registry {
+            WorkerAction::Registry {
                 change: Some(
-                    encode_contract(&RegistryConfiguration {
+                    RegistryConfiguration {
                         instance_id: current.registry.instance_id,
                         expected_revision: current.registry.revision,
                         target: RegistryConfigurationTarget::CalendarView {
                             id: installed.views[0].handle,
                             enabled,
                         },
-                    })
-                    .unwrap(),
+                    },
                 ),
             },
         );
@@ -1793,10 +1785,10 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
     let before = perform(&worker, person, inspect.clone())
         .calendar_experts
         .unwrap();
-    perform(&worker, person, AgentVaultActionDto::Lock {});
+    perform(&worker, person, WorkerAction::Lock);
     drop(worker);
     let worker = Worker::new(root, keys.clone()).unwrap();
-    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    perform(&worker, person, WorkerAction::Unlock);
     assert_eq!(
         perform(&worker, person, action).calendar_experts.as_ref(),
         Some(&before)
@@ -1822,8 +1814,8 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
     let keys = Keys::default();
     let worker = Worker::new(directory.path().join("vaults"), keys.clone()).unwrap();
     let person = PersonId::new();
-    perform(&worker, person, AgentVaultActionDto::Create {});
-    let inspect = AgentVaultActionDto::CalendarExperts { setup: None };
+    perform(&worker, person, WorkerAction::Create);
+    let inspect = WorkerAction::CalendarExperts { setup: None };
     let empty = perform(&worker, person, inspect.clone())
         .calendar_experts
         .unwrap();
@@ -1831,10 +1823,10 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         instance_id: empty.registry.instance_id,
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        provider: floe_day::CalendarProvider::Fixture,
+        provider: floe_context_contract::CalendarProvider::Fixture,
         device_id: "test-device".into(),
         calendar_ids: vec!["bounded-scope".into()],
-        connection_scope: floe_day::CalendarScope::Selected,
+        connection_scope: floe_context_contract::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: None,
         reviewed_native_subject_fingerprint: None,
@@ -1847,8 +1839,8 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             person,
             id,
             AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::CalendarExperts {
-                    setup: Some(encode_contract(&request).unwrap()),
+                action: WorkerAction::CalendarExperts {
+                    setup: Some(Box::new(request.clone())),
                 },
             },
         )
@@ -1893,8 +1885,8 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
     let retry = perform(
         &worker,
         person,
-        AgentVaultActionDto::CalendarExperts {
-            setup: Some(encode_contract(&request).unwrap()),
+        WorkerAction::CalendarExperts {
+            setup: Some(Box::new(request.clone())),
         },
     );
     assert_eq!(retry.calendar_experts.unwrap().registry.revision, 1);

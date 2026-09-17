@@ -1,5 +1,5 @@
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_day::{CalendarProvider, CalendarScope};
+use floe_context_contract::{CalendarProvider, CalendarScope};
 use floe_experts::{
     AgentId, AgentRegistry, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup,
     ExpertPackaging, ExpertPrivateState, PackageImplementation, PackageKind, PackageRef,
@@ -35,7 +35,7 @@ fn setup_request(registry: &AgentRegistry, provider: CalendarProvider) -> Calend
         provider,
         device_id: "test-device".into(),
         calendar_ids: vec!["work".into(), "home".into()],
-        connection_scope: floe_day::CalendarScope::Selected,
+        connection_scope: floe_context_contract::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: Some(floe_context_contract::SourceAuthority::new()),
         reviewed_native_subject_fingerprint: matches!(
@@ -170,7 +170,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
                     provider: CalendarProvider::EventKit,
                     device_id: "test-device".into(),
                     calendar_ids: vec!["shared".into(), "home".into()],
-                    connection_scope: floe_day::CalendarScope::All,
+                    connection_scope: floe_context_contract::CalendarScope::All,
                     connection_revision: 2,
                     source_authority: Some(floe_context_contract::SourceAuthority::new()),
                     reviewed_native_subject_fingerprint: Some("a".repeat(64)),
@@ -196,7 +196,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
             provider: CalendarProvider::Fixture,
             device_id: "test-device".into(),
             calendar_ids: vec![],
-            connection_scope: floe_day::CalendarScope::Selected,
+            connection_scope: floe_context_contract::CalendarScope::Selected,
             connection_revision: 2,
             source_authority: Some(floe_context_contract::SourceAuthority::new()),
             reviewed_native_subject_fingerprint: None,
@@ -273,7 +273,7 @@ fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
             3 => owner = PersonId::new(),
             4 => changed.instance_id = Uuid::new_v4(),
             5 => changed.device_id = "other-device".into(),
-            6 => changed.connection_scope = floe_day::CalendarScope::All,
+            6 => changed.connection_scope = floe_context_contract::CalendarScope::All,
             7 => changed.connection_revision += 1,
             _ => changed.setup_id = Uuid::new_v4(),
         }
@@ -364,7 +364,7 @@ fn corrupt_setup_receipts_fail_restore() {
             6 => invalid.calendar_views[0].device_id.clear(),
             7 => invalid.calendar_setups[0].connection_revision = 0,
             8 => invalid.calendar_views[0].connection_revision += 1,
-            9 => invalid.calendar_views[0].connection_scope = floe_day::CalendarScope::All,
+            9 => invalid.calendar_views[0].connection_scope = floe_context_contract::CalendarScope::All,
             _ => invalid.calendar_setups[0].expert_assignment_id = Uuid::new_v4(),
         }
         assert!(AgentRegistry::restore(invalid, registry.instance_id()).is_err());

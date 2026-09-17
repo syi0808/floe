@@ -9,7 +9,6 @@ rust-version.workspace = true
 chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context = { path = "../context" }
-floe-day = { path = "../day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-inference = { path = "../inference" }
 serde.workspace = true

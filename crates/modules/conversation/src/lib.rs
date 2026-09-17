@@ -1,6 +1,6 @@
 //! Conversation-owned Session admission, root Run execution, and finalization.
 
-mod adapters;
+pub mod adapters;
 mod api;
 pub mod prompts;
 pub mod turn;
@@ -8,13 +8,15 @@ mod application;
 mod domain;
 mod ports;
 
+pub use adapters::model_transport::{TransportModelRunner, transport_request};
 pub use api::{
     ConversationPorts, FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_PROMPT, ManagerConfig,
     TurnRequest,
 };
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
-    CancelRunStatus, ConversationService, RunCancellationRegistry, TurnPrecheck,
+    CancelRunStatus, ConversationService, GovernedSessionRepository, GovernedSessionStore,
+    RunCancellationRegistry, TurnPrecheck,
     TurnPrecheckRequest, cancel_run_command, compact_session, continuation, get_command, get_run,
     get_session, precheck_turn, project_continuation, read_archive, recover_session,
     resume_session, start_session,

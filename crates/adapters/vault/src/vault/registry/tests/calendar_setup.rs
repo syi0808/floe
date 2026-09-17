@@ -5,10 +5,10 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
         instance_id: fixture.vault.registry_instance_id(),
         expected_revision: revision,
         setup_id: Uuid::new_v4(),
-        provider: floe_day::CalendarProvider::EventKit,
+        provider: floe_agent_contract::CalendarProvider::EventKit,
         device_id: "test-device".into(),
         calendar_ids: vec!["setup-private-calendar-canary".into()],
-        connection_scope: floe_day::CalendarScope::Selected,
+        connection_scope: floe_agent_contract::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: Some(floe_access::SourceAuthority::new()),
         reviewed_native_subject_fingerprint: Some("a".repeat(64)),
@@ -89,10 +89,10 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
             2,
             installed.setup.setup_id,
             CalendarAccessChange::SetScope {
-                provider: floe_day::CalendarProvider::EventKit,
+                provider: floe_agent_contract::CalendarProvider::EventKit,
                 device_id: "test-device".into(),
                 calendar_ids: vec!["work".into(), "home".into()],
-                connection_scope: floe_day::CalendarScope::All,
+                connection_scope: floe_agent_contract::CalendarScope::All,
                 connection_revision: 2,
                 source_authority: Some(floe_access::SourceAuthority::new()),
                 reviewed_native_subject_fingerprint: Some("a".repeat(64)),
@@ -362,7 +362,7 @@ async fn setup_rejects_changed_retry_stale_new_request_wrong_instance_and_cancel
         let mut changed = request.clone();
         match mode {
             0 => changed.calendar_ids = vec!["different".into()],
-            1 => changed.provider = floe_day::CalendarProvider::Fixture,
+            1 => changed.provider = floe_agent_contract::CalendarProvider::Fixture,
             2 => changed.expected_revision = before.revision,
             3 => changed.setup_id = Uuid::new_v4(),
             _ => changed.instance_id = Uuid::new_v4(),
@@ -524,7 +524,7 @@ async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_an
             1 => changed.calendar_setups[0].setup_id = Uuid::new_v4(),
             2 => changed.calendar_setups[0].expected_revision = before.revision,
             3 => changed.calendar_setups[0].connection_revision += 1,
-            4 => changed.calendar_setups[0].connection_scope = floe_day::CalendarScope::All,
+            4 => changed.calendar_setups[0].connection_scope = floe_agent_contract::CalendarScope::All,
             _ => {
                 let mut registry =
                     AgentRegistry::restore(before.clone(), request.instance_id).unwrap();

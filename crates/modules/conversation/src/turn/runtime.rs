@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::*;
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_execution::tasks::run_bounded as bounded;
 use floe_agent_contract::{CapabilityExecutionState, ModelPlacement, ModelReplay};

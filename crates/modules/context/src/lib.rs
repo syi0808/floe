@@ -1,5 +1,7 @@
 pub mod application {
     pub mod archive;
+    pub mod calendar_connector;
+    pub mod calendar_timeline;
     pub mod day_context_views;
     pub mod routing;
     pub mod assembler;
@@ -7,9 +9,12 @@ pub mod application {
     pub mod coverage;
     pub mod history;
     pub mod leases;
+    pub mod model_coverage;
+    pub mod observations;
     pub mod personal_lineage;
     pub mod personal_sources;
     pub mod projection;
+    pub mod remote_sources;
     pub mod remote_views;
     pub mod service;
     pub mod source_view;
@@ -17,6 +22,7 @@ pub mod application {
 
 pub mod ports {
     pub mod archive_reader;
+    pub mod calendar_source;
     pub mod personal_source;
     pub mod evidence_reader;
     pub mod source_reader;
@@ -26,6 +32,12 @@ pub mod ports {
 pub const ASSISTANT_CONSUMER: &str = "assistant";
 
 pub use application::archive::read_authorized_archive;
+pub use application::calendar_timeline::{
+    CalendarTimelineViews, GovernedDependencyResolver,
+};
+pub use application::calendar_connector::{
+    ConnectorProjectionError, project_calendar_connector, validate_connector_device,
+};
 pub use application::assembler::acquire_memory_context;
 pub use floe_context_contract::{
     OptionalSource, acquire_optional_source, record_source_issue,
@@ -50,11 +62,33 @@ pub use application::personal_sources::{
     feasibility_source, personal_dependency_holds, read_feasibility, read_people, read_wellbeing,
     wellbeing_source,
 };
+pub use ports::calendar_source::{
+    CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
+    ProjectedCalendarItem, ProjectedCalendarObservation,
+};
 pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
     PersonalDomain, PersonalGrantRecords, PersonalSourceDriver, TrustedObservation,
 };
+pub use application::model_coverage::{
+    TurnCoverageDecision, project_history, revalidate_turn_coverage,
+};
+/// The authorization input Context's own coverage entry points take.
+pub use floe_access::{
+    DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,
+    RemoteGrantBinding, RemoteGrantStore, RemoteGrantTransport, RemotePairingIdentity,
+    RemoteSourceQuery, SignedSourcePreview,
+};
+pub use application::observations::{
+    ALLOWED_VIEW_IDS, ObservationEntry, ObservationRegistry, PublishedCalendarObservation,
+    TrustedPersonalObservation, valid_native_subject_fingerprint, validate_calendar_observation,
+    validate_view,
+};
 pub use application::projection::{CoverageProjection, project_coverage};
+pub use application::remote_sources::{
+    AdmittedRemoteRead, RemoteViewTransport, authorize_remote_dependency, read_remote_view,
+    remote_view_grant_resource,
+};
 pub use application::remote_views::{
     LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_connector_admissible,
     remote_view_data_category, remote_view_dependency, remote_view_resource,
