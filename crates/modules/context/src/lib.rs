@@ -10,6 +10,7 @@ pub mod application {
     pub mod history;
     pub mod leases;
     pub mod model_coverage;
+    pub mod native_calendar;
     pub mod observations;
     pub mod personal_lineage;
     pub mod personal_sources;
@@ -69,6 +70,11 @@ pub use ports::calendar_source::{
 pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
     PersonalDomain, PersonalGrantRecords, PersonalSourceDriver, TrustedObservation,
+};
+pub use application::native_calendar::{
+    AdmittedNativeCalendarSource, CalendarConnectionReader, NativeCalendarSourceRequest,
+    NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
+    admit_native_calendar_source, preview_native_calendar_subject,
 };
 pub use application::model_coverage::{
     TurnCoverageDecision, project_history, revalidate_turn_coverage,

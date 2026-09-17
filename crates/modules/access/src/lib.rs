@@ -20,6 +20,11 @@ pub use application::{
     feasibility_source, source_binding, wellbeing_source,
 };
 pub use application::{
+    NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
+    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
+    reviewed_native_subject,
+};
+pub use application::{
     AccessGrantMutation, FeasibilityGrantQuery, GrantPolicyError, PersonalReadRequirement, ReadAuthorityEvidence,
     ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient, RemoteProducerIdentity,
     RemoteViewApproval, RemoteViewGrantExpectation, RemoteViewGrantPreview,

@@ -29,12 +29,10 @@ use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use crate::{
     CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
-    CalendarSubjectRequest, ConversationSessionOperation, ConversationTurnRequest,
+    ConversationSessionOperation, ConversationTurnRequest,
     FixtureOperation, MemoryReviewOverview, RemoteGrantOverview, RemoteTurnRoute, VaultState,
     WorkerAction, WorkerOperation, WorkerResult,
 };
-use floe_access::CalendarReadAccessRequest;
-use floe_context::CalendarSource;
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
@@ -55,6 +53,7 @@ use uuid::Uuid;
 use crate::local_context::LocalContextHost;
 use crate::{FloeCore, diagnostics};
 
+mod calendar_access;
 mod conversation_turn;
 mod learner_worker;
 mod personal_grants;
@@ -1410,33 +1409,28 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         WorkerAction::CalendarExperts { setup } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            if let Some(request) = setup {
-                let mut request: floe_experts::CalendarExpertSetup = (**request).clone();
-                let connection_id = match Box::pin(calendar_grant_authority(
-                    core,
-                    local_context,
-                    job.person,
-                    &request,
-                    job.cancellation.clone(),
-                ))
-                .await?
-                {
-                    Some((connection_id, source_authority, fingerprint)) => {
-                        request.source_authority = Some(source_authority);
-                        request.reviewed_native_subject_fingerprint = Some(fingerprint);
-                        connection_id
-                    }
-                    None => request.setup_id.to_string(),
-                };
-                Box::pin(vault.install_calendar_expert_with_connection(
-                    request,
-                    &schedule_packaging(),
-                    connection_id,
-                    job.cancellation.clone(),
-                ))
-                .await?;
-            }
-            let overview = Box::pin(vault.calendar_expert_overview()).await?;
+            let store = calendar_access::VaultCalendarSetups {
+                vault: vault.vault.as_ref(),
+                packaging: schedule_packaging(),
+                cancellation: job.cancellation.clone(),
+            };
+            let overview = match setup {
+                Some(request) => {
+                    let admission = calendar_access::DeviceCalendarAdmission::new(
+                        core,
+                        local_context,
+                        job.person,
+                        job.cancellation.clone(),
+                    );
+                    Box::pin(floe_experts::install_calendar_expert(
+                        &store,
+                        &admission,
+                        (**request).clone(),
+                    ))
+                    .await?
+                }
+                None => Box::pin(floe_experts::CalendarSetupStore::overview(&store)).await?,
+            };
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
@@ -1446,172 +1440,61 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             })
         }
         WorkerAction::CalendarSubjectPreview { request } => {
-            let preview = Box::pin(calendar_subject_preview(
+            let admission = calendar_access::DeviceCalendarAdmission::new(
                 core,
                 local_context,
                 job.person,
-                request,
                 job.cancellation.clone(),
+            );
+            let subject = Box::pin(floe_context::preview_native_calendar_subject(
+                &admission.connections,
+                &admission.device,
+                &floe_context::NativeCalendarSourceRequest {
+                    person_id: job.person,
+                    provider: request.provider,
+                    device_id: request.device_id.clone(),
+                    calendar_ids: request.calendar_ids.clone(),
+                    connection_scope: request.connection_scope,
+                    source_authority: Some(request.source_authority),
+                    reviewed_native_subject_fingerprint: None,
+                    connection_id: Some(request.connection_id.clone()),
+                },
+                &admission.window,
             ))
             .await?;
             Ok(VaultExecutionResult {
-                calendar_subject_preview: Some(preview),
+                calendar_subject_preview: Some(CalendarSubjectPreview {
+                    provider: subject.provider,
+                    device_id: subject.device_id,
+                    calendar_ids: subject.calendar_ids,
+                    connection_scope: subject.connection_scope,
+                    connection_id: subject.connection_id,
+                    connection_revision: subject.connection_revision,
+                    source_authority: subject.source_authority,
+                    native_subject_fingerprint: subject.native_subject_fingerprint,
+                }),
                 ..VaultExecutionResult::ready()
             })
         }
         WorkerAction::CalendarAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let mut change: floe_experts::CalendarAccessConfiguration = (**change).clone();
-            let overview = Box::pin(vault.calendar_expert_overview()).await?;
-            let native_setup = overview
-                .setups
-                .iter()
-                .find(|setup| setup.setup_id == change.setup_id)
-                .and_then(|setup| {
-                    overview
-                        .views
-                        .iter()
-                        .find(|view| view.handle == setup.view_handle)
-                        .filter(|view| {
-                            matches!(
-                                view.provider,
-                                floe_context_contract::CalendarProvider::EventKit
-                                    | floe_context_contract::CalendarProvider::Android
-                            )
-                        })
-                        .map(|view| (setup, view))
-                });
-            if let Some((setup, view)) = native_setup {
-                let source_request = match &change.change {
-                    floe_experts::CalendarAccessChange::SetScope {
-                        provider,
-                        device_id,
-                        calendar_ids,
-                        connection_scope,
-                        connection_revision,
-                        source_authority,
-                        reviewed_native_subject_fingerprint,
-                    } => floe_experts::CalendarExpertSetup {
-                        instance_id: change.instance_id,
-                        expected_revision: change.expected_revision,
-                        setup_id: setup.setup_id,
-                        provider: *provider,
-                        device_id: device_id.clone(),
-                        calendar_ids: calendar_ids.clone(),
-                        connection_scope: *connection_scope,
-                        connection_revision: *connection_revision,
-                        source_authority: *source_authority,
-                        reviewed_native_subject_fingerprint: reviewed_native_subject_fingerprint
-                            .clone(),
-                    },
-                    _ => floe_experts::CalendarExpertSetup {
-                        instance_id: change.instance_id,
-                        expected_revision: change.expected_revision,
-                        setup_id: setup.setup_id,
-                        provider: view.provider,
-                        device_id: view.device_id.clone(),
-                        calendar_ids: view.calendar_ids.clone(),
-                        connection_scope: view.connection_scope,
-                        connection_revision: view.connection_revision,
-                        source_authority: setup.source_authority.or(view.source_authority),
-                        reviewed_native_subject_fingerprint: setup
-                            .reviewed_native_subject_fingerprint
-                            .clone(),
-                    },
-                };
-                let requires_live_source = matches!(
-                    &change.change,
-                    floe_experts::CalendarAccessChange::SetEnabled { enabled: true }
-                        | floe_experts::CalendarAccessChange::SetScope { .. }
-                );
-                let connection_id = if !requires_live_source {
-                    vault.calendar_grant_connection_id(setup.setup_id).await?
-                } else {
-                    Box::pin(calendar_grant_authority(
-                        core,
-                        local_context,
-                        job.person,
-                        &source_request,
-                        job.cancellation.clone(),
-                    ))
-                    .await?
-                    .ok_or(AgentFailure::AccessReviewRequired)?
-                    .0
-                };
-                let overview = vault
-                    .configure_calendar_access_with_connection(
-                        change,
-                        connection_id,
-                        job.cancellation.clone(),
-                    )
-                    .await?;
-                if job.cancellation.is_cancelled() {
-                    return Err(AgentFailure::Cancelled);
-                }
-                return Ok(VaultExecutionResult {
-                    calendar_experts: Some(overview),
-                    ..VaultExecutionResult::ready()
-                });
-            }
-            if let floe_experts::CalendarAccessChange::SetScope {
-                provider,
-                device_id,
-                calendar_ids,
-                connection_scope,
-                connection_revision,
-                source_authority,
-                reviewed_native_subject_fingerprint,
-            } = &mut change.change
-            {
-                if let Some((connection_id, authority, fingerprint)) =
-                    Box::pin(calendar_grant_authority(
-                        core,
-                        local_context,
-                        job.person,
-                        &floe_experts::CalendarExpertSetup {
-                            instance_id: change.instance_id,
-                            expected_revision: change.expected_revision,
-                            setup_id: change.setup_id,
-                            provider: *provider,
-                            device_id: device_id.clone(),
-                            calendar_ids: calendar_ids.clone(),
-                            connection_scope: *connection_scope,
-                            connection_revision: *connection_revision,
-                            source_authority: *source_authority,
-                            reviewed_native_subject_fingerprint:
-                                reviewed_native_subject_fingerprint.clone(),
-                        },
-                        job.cancellation.clone(),
-                    ))
-                    .await?
-                {
-                    *source_authority = Some(authority);
-                    if let floe_experts::CalendarAccessChange::SetScope {
-                        reviewed_native_subject_fingerprint,
-                        ..
-                    } = &mut change.change
-                    {
-                        *reviewed_native_subject_fingerprint = Some(fingerprint);
-                    }
-                    let overview = vault
-                        .configure_calendar_access_with_connection(
-                            change,
-                            connection_id,
-                            job.cancellation.clone(),
-                        )
-                        .await?;
-                    if job.cancellation.is_cancelled() {
-                        return Err(AgentFailure::Cancelled);
-                    }
-                    return Ok(VaultExecutionResult {
-                        calendar_experts: Some(overview),
-                        ..VaultExecutionResult::ready()
-                    });
-                }
-            }
-            let overview = vault
-                .configure_calendar_access(change, job.cancellation.clone())
-                .await?;
+            let store = calendar_access::VaultCalendarSetups {
+                vault: vault.vault.as_ref(),
+                packaging: schedule_packaging(),
+                cancellation: job.cancellation.clone(),
+            };
+            let admission = calendar_access::DeviceCalendarAdmission::new(
+                core,
+                local_context,
+                job.person,
+                job.cancellation.clone(),
+            );
+            let overview = Box::pin(floe_experts::apply_calendar_access(
+                &store,
+                &admission,
+                (**change).clone(),
+            ))
+            .await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
@@ -2538,284 +2421,6 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
         writes_enabled: None,
         authority: None,
     })
-}
-
-async fn calendar_grant_authority(
-    core: &FloeCore,
-    _local_context: &LocalContextHost,
-    person_id: PersonId,
-    request: &floe_experts::CalendarExpertSetup,
-    cancellation: Cancellation,
-) -> Result<Option<(String, floe_context_contract::SourceAuthority, String)>, AgentFailure> {
-    if !matches!(
-        request.provider,
-        floe_context_contract::CalendarProvider::EventKit | floe_context_contract::CalendarProvider::Android
-    ) {
-        return Ok(None);
-    }
-    let connection = core
-        .calendar_connection(person_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if connection.disconnected
-        || connection.device_id != request.device_id
-        || connection.provider != request.provider
-        || connection.scope != request.connection_scope
-        || !request.calendar_ids.iter().all(|identifier| {
-            connection
-                .calendars
-                .iter()
-                .any(|calendar| &calendar.calendar_id == identifier)
-        })
-    {
-        return Err(AgentFailure::Conflict);
-    }
-    if !connection.source_authority.is_valid() {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let reviewed_authority = request
-        .source_authority
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if reviewed_authority != connection.source_authority {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let expected_fingerprint = request
-        .reviewed_native_subject_fingerprint
-        .as_deref()
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    let mut calendar_ids = request.calendar_ids.clone();
-    calendar_ids.sort();
-    let fingerprint = match request.provider {
-        #[cfg(target_os = "macos")]
-        floe_context_contract::CalendarProvider::EventKit => {
-            let access = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
-                person_id,
-                request.device_id.clone(),
-                request.provider,
-                calendar_ids,
-                connection.connection_id.clone(),
-                connection.revision,
-            );
-            access
-                .check(CalendarReadAccessRequest {
-                    person_id,
-                    device_id: request.device_id.clone(),
-                    provider: request.provider,
-                    calendar_ids: request.calendar_ids.clone(),
-                    expected_native_subject_fingerprint: None,
-                    deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                    cancellation,
-                })
-                .await?
-                .native_subject_fingerprint
-        }
-        #[cfg(not(target_os = "macos"))]
-        floe_context_contract::CalendarProvider::EventKit | floe_context_contract::CalendarProvider::Android => {
-            let host_epoch = _local_context.calendar().host_epoch(person_id)?;
-            let start = chrono::Utc::now().timestamp_millis();
-            let result = _local_context
-                .calendar()
-                .submit(
-                    CalendarAcquisitionRequest {
-                        request_id: Uuid::new_v4(),
-                        host_epoch,
-                        person_id,
-                        device_id: request.device_id.clone(),
-                        connection_id: connection.connection_id.clone(),
-                        connection_revision: connection.revision,
-                        provider: request.provider,
-                        mode: CalendarAcquisitionMode::InspectSubject,
-                        calendar_ids,
-                        range_start_unix_ms: start,
-                        range_end_unix_ms: start + 86_400_000,
-                        deadline_unix_ms: start + 30_000,
-                        expected_native_subject_fingerprint: None,
-                    },
-                    start,
-                    cancellation,
-                )
-                .await?;
-            result.native_subject_fingerprint_before
-        }
-        _ => return Err(AgentFailure::CapabilityUnavailable),
-    };
-    if fingerprint != expected_fingerprint {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let refreshed = core
-        .calendar_connection(person_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if !calendar_connection_matches(
-        &refreshed,
-        &connection.connection_id,
-        request.provider,
-        &request.device_id,
-        connection.scope,
-        &request.calendar_ids,
-        reviewed_authority,
-    ) {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    Ok(Some((
-        refreshed.connection_id,
-        reviewed_authority,
-        fingerprint,
-    )))
-}
-
-async fn calendar_subject_preview(
-    core: &FloeCore,
-    _local_context: &LocalContextHost,
-    person_id: PersonId,
-    request: &CalendarSubjectRequest,
-    cancellation: Cancellation,
-) -> Result<CalendarSubjectPreview, AgentFailure> {
-    if cancellation.is_cancelled() {
-        return Err(AgentFailure::Cancelled);
-    }
-    let mut calendar_ids = request.calendar_ids.clone();
-    let provider = request.provider;
-    let scope = request.connection_scope;
-    calendar_ids.sort();
-    if calendar_ids.is_empty()
-        || calendar_ids.len() > 4
-        || calendar_ids.windows(2).any(|pair| pair[0] == pair[1])
-        || calendar_ids
-            .iter()
-            .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let connection = core
-        .calendar_connection(person_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if connection.disconnected
-        || connection.connection_id != request.connection_id
-        || connection.device_id != request.device_id
-        || connection.provider != provider
-        || connection.scope != scope
-        || connection.source_authority != request.source_authority
-        || !connection.source_authority.is_valid()
-        || calendar_ids.iter().any(|identifier| {
-            !connection
-                .calendars
-                .iter()
-                .any(|calendar| &calendar.calendar_id == identifier)
-        })
-    {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let fingerprint = match provider {
-        #[cfg(target_os = "macos")]
-        floe_context_contract::CalendarProvider::EventKit => {
-            let access = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
-                person_id,
-                request.device_id.clone(),
-                provider,
-                calendar_ids.clone(),
-                connection.connection_id.clone(),
-                connection.revision,
-            );
-            access
-                .check(CalendarReadAccessRequest {
-                    person_id,
-                    device_id: request.device_id.clone(),
-                    provider,
-                    calendar_ids: calendar_ids.clone(),
-                    expected_native_subject_fingerprint: None,
-                    deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                    cancellation,
-                })
-                .await?
-                .native_subject_fingerprint
-        }
-        #[cfg(not(target_os = "macos"))]
-        floe_context_contract::CalendarProvider::EventKit | floe_context_contract::CalendarProvider::Android => {
-            let host_epoch = _local_context.calendar().host_epoch(person_id)?;
-            let range_start = chrono::Utc::now().timestamp_millis();
-            let result = _local_context
-                .calendar()
-                .submit(
-                    CalendarAcquisitionRequest {
-                        request_id: Uuid::new_v4(),
-                        host_epoch,
-                        person_id,
-                        device_id: request.device_id.clone(),
-                        connection_id: connection.connection_id.clone(),
-                        connection_revision: connection.revision,
-                        provider,
-                        mode: CalendarAcquisitionMode::InspectSubject,
-                        calendar_ids: calendar_ids.clone(),
-                        range_start_unix_ms: range_start,
-                        range_end_unix_ms: range_start + 86_400_000,
-                        deadline_unix_ms: range_start + 30_000,
-                        expected_native_subject_fingerprint: None,
-                    },
-                    range_start,
-                    cancellation,
-                )
-                .await?;
-            if result.native_subject_fingerprint_before != result.native_subject_fingerprint_after {
-                return Err(AgentFailure::StaleContext);
-            }
-            result.native_subject_fingerprint_before
-        }
-        _ => return Err(AgentFailure::CapabilityUnavailable),
-    };
-    let refreshed = core
-        .calendar_connection(person_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::AccessReviewRequired)?;
-    if !calendar_connection_matches(
-        &refreshed,
-        &connection.connection_id,
-        provider,
-        &request.device_id,
-        connection.scope,
-        &request.calendar_ids,
-        request.source_authority,
-    ) {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    Ok(CalendarSubjectPreview {
-        provider,
-        device_id: request.device_id.clone(),
-        calendar_ids,
-        connection_scope: refreshed.scope,
-        connection_id: refreshed.connection_id,
-        connection_revision: refreshed.revision,
-        source_authority: refreshed.source_authority,
-        native_subject_fingerprint: fingerprint,
-    })
-}
-
-fn calendar_connection_matches(
-    connection: &floe_day::CalendarConnection,
-    expected_connection_id: &str,
-    provider: floe_context_contract::CalendarProvider,
-    device_id: &str,
-    scope: floe_context_contract::CalendarScope,
-    calendar_ids: &[String],
-    source_authority: floe_context_contract::SourceAuthority,
-) -> bool {
-    !connection.disconnected
-        && connection.connection_id == expected_connection_id
-        && connection.provider == provider
-        && connection.device_id == device_id
-        && connection.scope == scope
-        && connection.source_authority == source_authority
-        && calendar_ids.iter().all(|identifier| {
-            connection
-                .calendars
-                .iter()
-                .any(|calendar| &calendar.calendar_id == identifier)
-        })
 }
 
 async fn ensure_builtin_experts<Keys: VaultKeyProvider>(

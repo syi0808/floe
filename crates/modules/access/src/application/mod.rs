@@ -4,6 +4,7 @@ pub mod admission;
 pub mod authority;
 pub mod dependency;
 pub mod grants;
+pub mod native_calendar;
 pub mod personal_grants;
 pub mod personal_read;
 pub mod personal_sources;
@@ -18,6 +19,11 @@ pub use authority::{
 pub use dependency::validate_grant_dependency;
 pub use grants::{
     AccessGrantMutation, GrantPolicyError, apply_grant_mutation, authorize_grant, create_grant,
+};
+pub use native_calendar::{
+    NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
+    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
+    reviewed_native_subject,
 };
 pub use personal_grants::{
     ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
