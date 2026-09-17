@@ -137,6 +137,74 @@ pub trait CalendarReadAdmission: Sync {
     }
 }
 
+/// That a calendar read request stays inside the grant it runs under.
+///
+/// A read for another Person, another device, another provider, or a calendar
+/// the grant does not name is not this grant's read, whatever admitted it.
+pub fn admits_calendar_read_request(
+    request: &CalendarReadAccessRequest,
+    person_id: PersonId,
+    provider: CalendarProvider,
+    device_id: &str,
+    calendar_ids: &[String],
+) -> Result<(), AgentFailure> {
+    if request.person_id != person_id
+        || request.provider != provider
+        || request.device_id != device_id
+        || request
+            .calendar_ids
+            .iter()
+            .any(|calendar_id| !calendar_ids.contains(calendar_id))
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    Ok(())
+}
+
+/// That an admission is one the grant this read runs under may stand on.
+///
+/// The admission has to be this Person's, on the connector their source is
+/// reached through, and narrowed to calendars the grant names.
+pub fn admits_calendar_read(
+    admission: &CalendarReadAccessAdmission,
+    person_id: PersonId,
+    connector: &str,
+    calendar_ids: &[String],
+) -> Result<(), AgentFailure> {
+    if admission.person_id() != person_id
+        || admission.source().connector().as_str() != connector
+        || admission.scope().resources().iter().any(|resource| {
+            !calendar_ids
+                .iter()
+                .any(|calendar_id| calendar_id == resource.as_str())
+        })
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    Ok(())
+}
+
+/// That where this run's model runs is where the grant said its contents may be
+/// processed.
+///
+/// A grant the Person confined to their device may not be read into a model
+/// somewhere else, and one approved for a named recipient is not what a
+/// device-local read stands on.
+pub fn admits_processing(
+    processing: &ProcessingRestriction,
+    remote_processing: bool,
+) -> Result<(), AgentFailure> {
+    match processing {
+        ProcessingRestriction::LocalOnly if remote_processing => Err(AgentFailure::PolicyDenied),
+        ProcessingRestriction::ApprovedRecipient { .. } if !remote_processing => {
+            Err(AgentFailure::PolicyDenied)
+        }
+        ProcessingRestriction::LocalOnly | ProcessingRestriction::ApprovedRecipient { .. } => {
+            Ok(())
+        }
+    }
+}
+
 /// Whether an admission still covers the source view that was assembled from it.
 ///
 /// Access does not know which Expert's view this is; it only checks that the

@@ -83,6 +83,7 @@ pub use ports::remote_authorization::{
 pub use application::calendar_lease::{CalendarLeaseKey, calendar_lease_dependency};
 pub use application::calendar_read::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
-    admission_matches, admission_matches_dependency,
+    admission_matches, admission_matches_dependency, admits_calendar_read,
+    admits_calendar_read_request, admits_processing,
 };
 pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};

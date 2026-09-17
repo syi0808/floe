@@ -624,29 +624,14 @@ impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission>
             .admission_after_check(request, stamp)
             .await?
             .ok_or(AgentFailure::AccessReviewRequired)?;
-        let expected_connector = floe_access::hosted_calendar_connector(self.grant.provider)
-            .ok_or(AgentFailure::CapabilityDenied)?;
-        if admission.person_id() != self.grant.person_id
-            || admission.source().connector().as_str() != expected_connector
-            || admission.scope().resources().iter().any(|resource| {
-                !self
-                    .grant
-                    .calendar_ids
-                    .iter()
-                    .any(|calendar_id| calendar_id == resource.as_str())
-            })
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        match admission.processing() {
-            ProcessingRestriction::LocalOnly if self.remote_processing => {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            ProcessingRestriction::ApprovedRecipient { .. } if !self.remote_processing => {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            ProcessingRestriction::LocalOnly | ProcessingRestriction::ApprovedRecipient { .. } => {}
-        }
+        floe_access::admits_calendar_read(
+            &admission,
+            self.grant.person_id,
+            floe_access::hosted_calendar_connector(self.grant.provider)
+                .ok_or(AgentFailure::CapabilityDenied)?,
+            &self.grant.calendar_ids,
+        )?;
+        floe_access::admits_processing(admission.processing(), self.remote_processing)?;
         Ok(Some(admission))
     }
 
@@ -661,19 +646,18 @@ impl<Keys: VaultKeyProvider, Access: CalendarSource + CalendarReadAdmission>
         ) {
             return Ok(None);
         }
+        // A calendar this device answers for itself is never read into a model
+        // somewhere else.
         if self.remote_processing {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if request.person_id != self.grant.person_id
-            || request.provider != self.grant.provider
-            || request.device_id != self.grant.device_id
-            || request
-                .calendar_ids
-                .iter()
-                .any(|calendar_id| !self.grant.calendar_ids.contains(calendar_id))
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
+        floe_access::admits_calendar_read_request(
+            request,
+            self.grant.person_id,
+            self.grant.provider,
+            &self.grant.device_id,
+            &self.grant.calendar_ids,
+        )?;
         let snapshot = self
             .vault
             .expert_registry()
