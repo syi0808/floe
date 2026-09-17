@@ -7,8 +7,9 @@
 
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_context::{
-    AcquiredSource, AttentionAcquisition, AttentionView, PersonalAcquisition, PersonalDomain,
-    PersonalGrantRecords, PersonalSourceDriver,
+    AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, AttentionView,
+    PersonalAcquisition, PersonalDomain, PersonalGrantRecords, PersonalSourceDriver,
+    TrustedObservation,
 };
 use floe_execution::Cancellation;
 use floe_protocol::{
@@ -143,7 +144,14 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                 host_epoch: request.host_epoch,
                 person_id: request.person_id.to_string(),
                 device_id: request.device_id.to_owned(),
-                mode: LocalContextAttentionAcquisitionModeDto::ReadProjection,
+                mode: match request.mode {
+                    AttentionAcquisitionMode::ReadProjection => {
+                        LocalContextAttentionAcquisitionModeDto::ReadProjection
+                    }
+                    AttentionAcquisitionMode::InspectSubject => {
+                        LocalContextAttentionAcquisitionModeDto::InspectSubject
+                    }
+                },
                 deadline_unix_ms: chrono::Utc::now()
                     .timestamp_millis()
                     .checked_add(
@@ -157,7 +165,7 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
                         .map_err(|_| AgentFailure::DeadlineExceeded)?,
                     )
                     .ok_or(AgentFailure::DeadlineExceeded)?,
-                expected_native_subject_fingerprint: Some(request.expected_subject),
+                expected_native_subject_fingerprint: request.expected_subject,
             };
             let result = self
                 .local_context
@@ -192,6 +200,42 @@ impl PersonalSourceDriver for NativePersonalDriver<'_> {
             observed_at_unix_ms,
             expires_at_unix_ms,
             query_fingerprint,
+        )
+    }
+
+    fn trusted_personal_observation(
+        &self,
+        person_id: PersonId,
+        device_id: &str,
+        observation_id: Uuid,
+        process_incarnation_id: Uuid,
+    ) -> Result<TrustedObservation, AgentFailure> {
+        let observation = self.local_context.trusted_personal_observation(
+            person_id,
+            device_id,
+            observation_id,
+            process_incarnation_id,
+        )?;
+        Ok(TrustedObservation {
+            native_subject_fingerprint: observation.native_subject_fingerprint,
+            observed_at_unix_ms: observation.observed_at_unix_ms,
+            expires_at_unix_ms: observation.expires_at_unix_ms,
+            query_fingerprint: observation.query_fingerprint,
+        })
+    }
+
+    fn trusted_attention_observation(
+        &self,
+        person_id: PersonId,
+        device_id: &str,
+        observation_id: Uuid,
+        process_incarnation_id: Uuid,
+    ) -> Result<(AttentionView, String), AgentFailure> {
+        self.local_context.trusted_attention_observation(
+            person_id,
+            device_id,
+            observation_id,
+            process_incarnation_id,
         )
     }
 

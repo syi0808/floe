@@ -16,16 +16,17 @@ use floe_access::{
     ProcessingRestriction, ResourceHandle, SourceAuthority, active_read_grant, grant_unchanged,
     subject_unchanged, valid_subject_fingerprint,
 };
-use floe_agent_contract::{AgentFailure, PersonId};
+use floe_agent_contract::{AgentFailure, ModelPlacement, PersonId};
 use floe_execution::Cancellation;
 use tokio::time::Instant;
 
 use crate::application::personal_lineage::{
-    FeasibilityQueryLineage, feasibility_query_fingerprint, people_query_fingerprint,
-    wellbeing_query_fingerprint,
+    FeasibilityQueryLineage, attention_query_fingerprint, feasibility_query_fingerprint,
+    people_query_fingerprint, wellbeing_query_fingerprint,
 };
 use crate::ports::personal_source::{
-    PersonalAcquisition, PersonalDomain, PersonalGrantRecords, PersonalSourceDriver,
+    AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition, PersonalDomain,
+    PersonalGrantRecords, PersonalSourceDriver,
 };
 use crate::{
     AttentionView, FeasibilityView, PeopleView, WellbeingView, validate_feasibility_view,
@@ -51,6 +52,17 @@ pub fn attention_execution_owner(device_id: &str) -> String {
 /// The device that answers for the Apple personal sources.
 pub fn apple_execution_owner(device_id: &str) -> String {
     format!("apple:{device_id}")
+}
+
+/// The connection a contacts source is bound to.
+pub fn contacts_connection(connector: &str) -> String {
+    format!("{connector}.local")
+}
+
+/// The device that answers for a contacts source.
+pub fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
+    let platform = connector.strip_prefix("contacts.").unwrap_or("unknown");
+    format!("{platform}:{device_id}")
 }
 
 fn source_binding(
@@ -516,7 +528,8 @@ pub async fn admit_attention(
                 person_id,
                 device_id,
                 host_epoch: host_epoch.clone(),
-                expected_subject: reviewed_subject.clone(),
+                mode: crate::ports::personal_source::AttentionAcquisitionMode::ReadProjection,
+                expected_subject: Some(reviewed_subject.clone()),
                 deadline,
             },
             cancellation.clone(),
@@ -558,7 +571,7 @@ pub async fn admit_attention(
         ProcessingRestriction::LocalOnly,
         policy,
         observation_id,
-        crate::application::personal_lineage::attention_query_fingerprint(
+        attention_query_fingerprint(
             person_id,
             device_id,
             &view,
@@ -573,6 +586,450 @@ pub async fn admit_attention(
     .map_err(|_| AgentFailure::InvalidInput)?;
     within_read_window(deadline, cancellation)?;
     Ok((view, dependency))
+}
+
+/// The consumer an Expert reads attention as.
+pub const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
+
+/// Whether a stored personal dependency still describes a read this host made.
+///
+/// A dependency names the source it came from, the shape it was read under and
+/// the observation behind it. All three have to still agree, or what it points
+/// at is not what a later turn would be shown.
+pub fn personal_dependency_holds(
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    dependency: &ContextDependency,
+) -> Result<(), AgentFailure> {
+    if dependency.person_id() != person_id
+        || dependency.source().person_id() != person_id
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if dependency.source().connector().as_str() == ATTENTION_CONNECTOR {
+        if dependency.source().connection_id().as_str() != ATTENTION_CONNECTION
+            || dependency.source().execution_owner().as_str() != attention_execution_owner(device_id)
+            || !matches!(
+                dependency.consumer().identifier(),
+                crate::ASSISTANT_CONSUMER | ATTENTION_EXPERT_CONSUMER
+            )
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let (view, subject) = driver.trusted_attention_observation(
+            person_id,
+            device_id,
+            dependency.observation_id(),
+            dependency.process_incarnation_id(),
+        )?;
+        if dependency.observed_at().timestamp_millis() != view.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != view.expires_at_unix_ms
+            || dependency.query_fingerprint()
+                != attention_query_fingerprint(
+                    person_id,
+                    device_id,
+                    &view,
+                    dependency.observation_id(),
+                    dependency.process_incarnation_id(),
+                )
+            || subject.is_empty()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        return Ok(());
+    }
+    if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
+        if dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
+            || dependency.source().execution_owner().as_str()
+                != apple_execution_owner(device_id)
+            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
+            || dependency.operation() != GrantOperation::Read
+            || dependency.purpose() != GrantPurpose::Assistant
+            || dependency.processing() != &ProcessingRestriction::LocalOnly
+            || dependency.resources()
+                != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                    .map_err(|_| AgentFailure::PolicyDenied)?]
+            || dependency.categories() != [GrantDataCategory::Derived]
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let observation = driver.trusted_personal_observation(
+            person_id,
+            device_id,
+            dependency.observation_id(),
+            dependency.process_incarnation_id(),
+        )?;
+        if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+            || dependency.query_fingerprint() != observation.query_fingerprint
+            || observation.native_subject_fingerprint.is_empty()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        return Ok(());
+    }
+    if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
+        if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
+            || dependency.source().execution_owner().as_str()
+                != apple_execution_owner(device_id)
+            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
+            || dependency.operation() != GrantOperation::Read
+            || dependency.purpose() != GrantPurpose::Assistant
+            || dependency.processing() != &ProcessingRestriction::LocalOnly
+            || dependency.resources()
+                != [ResourceHandle::try_new(WELLBEING_RESOURCE)
+                    .map_err(|_| AgentFailure::PolicyDenied)?]
+            || dependency.categories() != [GrantDataCategory::Derived]
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let observation = driver.trusted_personal_observation(
+            person_id,
+            device_id,
+            dependency.observation_id(),
+            dependency.process_incarnation_id(),
+        )?;
+        if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+            || dependency.query_fingerprint() != observation.query_fingerprint
+            || observation.native_subject_fingerprint.is_empty()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        return Ok(());
+    }
+    if !matches!(
+        dependency.source().connector().as_str(),
+        "contacts.apple" | "contacts.android"
+    ) || dependency.source().connection_id().as_str()
+        != contacts_connection(dependency.source().connector().as_str())
+        || dependency.source().execution_owner().as_str()
+            != contacts_execution_owner(
+                dependency.source().connector().as_str(),
+                device_id,
+            )
+        || !matches!(
+            dependency.consumer().identifier(),
+            "assistant" | "contacts.expert"
+        )
+        || dependency.operation() != GrantOperation::Read
+        || dependency.purpose() != GrantPurpose::Assistant
+        || dependency.processing() != &ProcessingRestriction::LocalOnly
+        || dependency.resources()
+            != [ResourceHandle::try_new(PEOPLE_RESOURCE)
+                .map_err(|_| AgentFailure::PolicyDenied)?]
+        || dependency.categories() != [GrantDataCategory::Derived]
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let observation = driver.trusted_personal_observation(
+        person_id,
+        device_id,
+        dependency.observation_id(),
+        dependency.process_incarnation_id(),
+    )?;
+    if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+        || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+        || dependency.query_fingerprint() != observation.query_fingerprint
+        || observation.native_subject_fingerprint.is_empty()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+/// Whether the Person's grant still admits a stored personal dependency.
+///
+/// Holding is not the same as being allowed: the grant behind the dependency
+/// has to still be the grant it was recorded under, reviewed against the same
+/// device subject, with the same consumer policy — and for attention, against
+/// the device that would answer right now.
+#[allow(clippy::too_many_arguments)]
+pub async fn authorize_personal_dependency(
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    dependency: &ContextDependency,
+    placements: &[ModelPlacement],
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<(), AgentFailure> {
+    if matches!(
+        dependency.source().connector().as_str(),
+        "contacts.apple" | "contacts.android"
+    ) {
+        if placements != [ModelPlacement::DeviceLocal]
+            || dependency.source().connection_id().as_str()
+                != contacts_connection(dependency.source().connector().as_str())
+            || dependency.source().execution_owner().as_str()
+                != contacts_execution_owner(
+                    dependency.source().connector().as_str(),
+                    device_id,
+                )
+            || dependency.operation() != GrantOperation::Read
+            || dependency.purpose() != GrantPurpose::Assistant
+            || dependency.processing() != &ProcessingRestriction::LocalOnly
+            || dependency.resources()
+                != [ResourceHandle::try_new(PEOPLE_RESOURCE)
+                    .map_err(|_| AgentFailure::PolicyDenied)?]
+            || dependency.categories() != [GrantDataCategory::Derived]
+            || !matches!(
+                dependency.consumer().identifier(),
+                "assistant" | "contacts.expert"
+            )
+            || dependency.lease_invocation_id().is_nil()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let grants = records.grants().await?;
+        let grant = active_read_grant(
+            &grants,
+            &PersonalReadRequirement {
+                source: dependency.source(),
+                resource: PEOPLE_RESOURCE,
+                consumer: dependency.consumer(),
+                same_authority: true,
+                reject_ambiguous: false,
+            },
+        )?;
+        if dependency.grant_id() != grant.id()
+            || dependency.grant_authority() != grant.authority()
+            || dependency.source() != grant.source()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let observation = driver.trusted_personal_observation(
+                person_id,
+                device_id,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let reviewed_subject = records.reviewed_subject(grant.id()).await?;
+        if observation.native_subject_fingerprint != reviewed_subject
+            || dependency.observed_at().timestamp_millis()
+                != observation.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+            || dependency.query_fingerprint() != observation.query_fingerprint
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let policy = records.consumer_policy(grant.id()).await?;
+        if dependency.consumer_policy() != policy {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        return Ok(());
+    }
+    if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
+        if placements != [ModelPlacement::DeviceLocal]
+            || dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
+            || dependency.source().execution_owner().as_str()
+                != apple_execution_owner(device_id)
+            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
+            || dependency.operation() != GrantOperation::Read
+            || dependency.purpose() != GrantPurpose::Assistant
+            || dependency.processing() != &ProcessingRestriction::LocalOnly
+            || dependency.resources()
+                != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                    .map_err(|_| AgentFailure::PolicyDenied)?]
+            || dependency.categories() != [GrantDataCategory::Derived]
+            || dependency.lease_invocation_id().is_nil()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let grants = records.grants().await?;
+        let grant =
+            active_read_grant(
+                &grants,
+                &PersonalReadRequirement {
+                    source: dependency.source(),
+                    resource: FEASIBILITY_RESOURCE,
+                    consumer: dependency.consumer(),
+                    same_authority: false,
+                    reject_ambiguous: true,
+                },
+            )?;
+        if dependency.grant_id() != grant.id()
+            || dependency.grant_authority() != grant.authority()
+            || dependency.source() != grant.source()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let observation = driver.trusted_personal_observation(
+                person_id,
+                device_id,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+            || dependency.query_fingerprint() != observation.query_fingerprint
+            || observation.native_subject_fingerprint
+                != records.reviewed_subject(grant.id()).await?
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if dependency.consumer_policy()
+            != records.consumer_policy(grant.id()).await?
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        return Ok(());
+    }
+    if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
+        if placements != [ModelPlacement::DeviceLocal]
+            || dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
+            || dependency.source().execution_owner().as_str()
+                != apple_execution_owner(device_id)
+            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
+            || dependency.operation() != GrantOperation::Read
+            || dependency.purpose() != GrantPurpose::Assistant
+            || dependency.processing() != &ProcessingRestriction::LocalOnly
+            || dependency.resources()
+                != [ResourceHandle::try_new(WELLBEING_RESOURCE)
+                    .map_err(|_| AgentFailure::PolicyDenied)?]
+            || dependency.categories() != [GrantDataCategory::Derived]
+            || dependency.lease_invocation_id().is_nil()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let grants = records.grants().await?;
+        let grant = active_read_grant(
+            &grants,
+            &PersonalReadRequirement {
+                source: dependency.source(),
+                resource: WELLBEING_RESOURCE,
+                consumer: dependency.consumer(),
+                same_authority: false,
+                reject_ambiguous: true,
+            },
+        )?;
+        if dependency.grant_id() != grant.id()
+            || dependency.grant_authority() != grant.authority()
+            || dependency.source() != grant.source()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let observation = driver.trusted_personal_observation(
+                person_id,
+                device_id,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+            || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+            || dependency.query_fingerprint() != observation.query_fingerprint
+            || observation.native_subject_fingerprint
+                != records.reviewed_subject(grant.id()).await?
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if dependency.consumer_policy()
+            != records.consumer_policy(grant.id()).await?
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        return Ok(());
+    }
+    if placements != [ModelPlacement::DeviceLocal]
+        || dependency.person_id() != person_id
+        || dependency.source().person_id() != person_id
+        || dependency.source().connector().as_str() != ATTENTION_CONNECTOR
+        || dependency.source().connection_id().as_str() != ATTENTION_CONNECTION
+        || dependency.source().execution_owner().as_str() != attention_execution_owner(device_id)
+        || dependency.operation() != GrantOperation::Read
+        || dependency.purpose() != GrantPurpose::Assistant
+        || dependency.processing() != &ProcessingRestriction::LocalOnly
+        || dependency.resources().len() != 1
+        || dependency.resources()[0].as_str() != ATTENTION_RESOURCE
+        || dependency.categories() != [GrantDataCategory::Derived]
+        || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
+            && dependency.consumer().identifier() != ATTENTION_EXPERT_CONSUMER
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let grants = records.grants().await?;
+    let attention_source = attention_source(person_id, device_id, SourceAuthority::new())?;
+    let grant = active_read_grant(
+        &grants,
+        &PersonalReadRequirement {
+            source: &attention_source,
+            resource: ATTENTION_RESOURCE,
+            consumer: dependency.consumer(),
+            same_authority: false,
+            reject_ambiguous: false,
+        },
+    )?;
+    if dependency.grant_id() != grant.id()
+        || dependency.grant_authority() != grant.authority()
+        || dependency.source() != grant.source()
+        || dependency.operation() != GrantOperation::Read
+        || dependency.purpose() != GrantPurpose::Assistant
+        || dependency.processing() != &ProcessingRestriction::LocalOnly
+        || dependency
+            .resources()
+            .iter()
+            .any(|item| !grant.scope().resources().contains(item))
+        || dependency
+            .categories()
+            .iter()
+            .any(|item| !grant.scope().categories().contains(item))
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let (current_view, trusted_observation_subject) = driver.trusted_attention_observation(
+            person_id,
+            device_id,
+            dependency.observation_id(),
+            dependency.process_incarnation_id(),
+        )
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    let reviewed_subject = records.reviewed_subject(grant.id()).await?;
+    if trusted_observation_subject != reviewed_subject
+        || dependency.lease_invocation_id().is_nil()
+        || dependency.observed_at().timestamp_millis() != current_view.observed_at_unix_ms
+        || dependency.expires_at().timestamp_millis() != current_view.expires_at_unix_ms
+        || dependency.query_fingerprint()
+            != attention_query_fingerprint(
+                person_id,
+                device_id,
+                &current_view,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let policy = records.consumer_policy(grant.id()).await?;
+    if dependency.consumer_policy() != policy {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    // The device is asked once more which subject would answer now: a Person
+    // who re-paired or switched devices has not re-reviewed this grant.
+    let probe = driver
+        .acquire_attention(
+            AttentionAcquisition {
+                person_id,
+                device_id,
+                host_epoch: driver
+                    .attention_host_epoch(person_id)
+                    .map_err(|_| AgentFailure::PolicyDenied)?,
+                mode: AttentionAcquisitionMode::InspectSubject,
+                expected_subject: None,
+                deadline,
+            },
+            cancellation.clone(),
+        )
+        .await
+        .map_err(|_| AgentFailure::PolicyDenied)?;
+    if probe.subject_before != reviewed_subject || probe.subject_after != reviewed_subject {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -729,6 +1186,26 @@ mod tests {
             _: Vec<u8>,
         ) -> Result<(), AgentFailure> {
             Ok(())
+        }
+
+        fn trusted_personal_observation(
+            &self,
+            _: PersonId,
+            _: &str,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<crate::TrustedObservation, AgentFailure> {
+            Err(AgentFailure::NotFound)
+        }
+
+        fn trusted_attention_observation(
+            &self,
+            _: PersonId,
+            _: &str,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<(AttentionView, String), AgentFailure> {
+            Err(AgentFailure::NotFound)
         }
 
         fn commit_attention_projection(

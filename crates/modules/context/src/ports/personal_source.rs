@@ -53,13 +53,33 @@ pub struct PersonalAcquisition<'a> {
     pub deadline: Instant,
 }
 
+/// What an attention acquisition is for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttentionAcquisitionMode {
+    /// Read the projection itself.
+    ReadProjection,
+    /// Ask only which device subject would answer, without reading anything.
+    InspectSubject,
+}
+
 /// One attention acquisition.
 pub struct AttentionAcquisition<'a> {
     pub person_id: PersonId,
     pub device_id: &'a str,
     pub host_epoch: String,
-    pub expected_subject: String,
+    pub mode: AttentionAcquisitionMode,
+    /// The device subject this read insists answered it, when it has one to
+    /// insist on.
+    pub expected_subject: Option<String>,
     pub deadline: Instant,
+}
+
+/// One observation a personal read left behind, as the driver still holds it.
+pub struct TrustedObservation {
+    pub native_subject_fingerprint: String,
+    pub observed_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+    pub query_fingerprint: Vec<u8>,
 }
 
 /// What the device answered, and which subject answered it — before the read
@@ -106,6 +126,26 @@ pub trait PersonalSourceDriver: Sync {
         expires_at_unix_ms: i64,
         query_fingerprint: Vec<u8>,
     ) -> Result<(), AgentFailure>;
+
+    /// The observation a stored personal dependency was recorded against, if
+    /// this host still holds it.
+    fn trusted_personal_observation(
+        &self,
+        person_id: PersonId,
+        device_id: &str,
+        observation_id: Uuid,
+        process_incarnation_id: Uuid,
+    ) -> Result<TrustedObservation, AgentFailure>;
+
+    /// The attention projection a stored dependency was recorded against, and
+    /// the device subject that answered it.
+    fn trusted_attention_observation(
+        &self,
+        person_id: PersonId,
+        device_id: &str,
+        observation_id: Uuid,
+        process_incarnation_id: Uuid,
+    ) -> Result<(crate::AttentionView, String), AgentFailure>;
 
     /// Record the attention projection this read depends on, returning the
     /// observation and process it was recorded under.

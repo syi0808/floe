@@ -44,13 +44,15 @@ pub use application::personal_lineage::{
 pub use application::personal_sources::{
     ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
     FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
-    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention, apple_execution_owner,
-    attention_execution_owner, attention_source, feasibility_source, read_feasibility,
-    read_people, read_wellbeing, wellbeing_source,
+    ATTENTION_EXPERT_CONSUMER, WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention,
+    apple_execution_owner, attention_execution_owner, attention_source,
+    authorize_personal_dependency, contacts_connection, contacts_execution_owner,
+    feasibility_source, personal_dependency_holds, read_feasibility, read_people, read_wellbeing,
+    wellbeing_source,
 };
 pub use ports::personal_source::{
-    AcquiredSource, AttentionAcquisition, PersonalAcquisition, PersonalDomain,
-    PersonalGrantRecords, PersonalSourceDriver,
+    AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
+    PersonalDomain, PersonalGrantRecords, PersonalSourceDriver, TrustedObservation,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_views::{
