@@ -162,22 +162,38 @@ struct CompletedRead {
     policy: floe_access::ConsumerPolicyAuthority,
 }
 
-async fn acquire_personal_source(
-    records: &impl PersonalGrantRecords,
-    driver: &impl PersonalSourceDriver,
-    read: &PersonalRead<'_>,
-    feasibility: Option<&floe_access::FeasibilityGrantQuery>,
-    cancellation: &Cancellation,
-) -> Result<CompletedRead, AgentFailure> {
-    within_read_window(read.deadline, cancellation)?;
-    let requirement = PersonalReadRequirement {
+fn read_requirement<'a>(read: &'a PersonalRead<'a>) -> PersonalReadRequirement<'a> {
+    PersonalReadRequirement {
         source: &read.source,
         resource: read.resource,
         consumer: &read.consumer,
         same_authority: read.same_authority,
         reject_ambiguous: read.reject_ambiguous,
-    };
-    let grant = active_read_grant(&records.grants().await?, &requirement)?;
+    }
+}
+
+/// The one grant this read runs under, chosen once.
+///
+/// Every later question — what the grant admits reading, which device subject
+/// it was reviewed against, whether it is still the same grant afterwards — is
+/// asked of this grant and no other.
+async fn admit_personal_read(
+    records: &impl PersonalGrantRecords,
+    read: &PersonalRead<'_>,
+) -> Result<floe_access::DataAccessGrant, AgentFailure> {
+    active_read_grant(&records.grants().await?, &read_requirement(read))
+}
+
+async fn acquire_personal_source(
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    read: &PersonalRead<'_>,
+    grant: &floe_access::DataAccessGrant,
+    feasibility: Option<&floe_access::FeasibilityGrantQuery>,
+    cancellation: &Cancellation,
+) -> Result<CompletedRead, AgentFailure> {
+    within_read_window(read.deadline, cancellation)?;
+    let requirement = read_requirement(read);
     let subject = match &read.expected_subject {
         Some(subject) => subject.clone(),
         None => records.reviewed_subject(grant.id()).await?,
@@ -207,7 +223,7 @@ async fn acquire_personal_source(
     // The Person can revoke or re-review while the device is answering, so the
     // grant the read started under has to be the one it finished under.
     let current = active_read_grant(&records.grants().await?, &requirement)?;
-    grant_unchanged(&grant, &current)?;
+    grant_unchanged(grant, &current)?;
     let policy = records.consumer_policy(current.id()).await?;
     Ok(CompletedRead {
         value,
@@ -295,8 +311,9 @@ pub async fn read_people(
         lease_invocation_id: Uuid::new_v4(),
         deadline,
     };
+    let grant = admit_personal_read(records, &read).await?;
     let completed =
-        acquire_personal_source(records, driver, &read, None, cancellation).await?;
+        acquire_personal_source(records, driver, &read, &grant, None, cancellation).await?;
     let view: PeopleView = decode(completed.value.clone())?;
     validate_people_view(&view, Utc::now().timestamp_millis())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
@@ -342,17 +359,6 @@ pub async fn read_feasibility(
     let consumer =
         GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
     let source = feasibility_source(person_id, device_id, SourceAuthority::new())?;
-    let requirement = PersonalReadRequirement {
-        source: &source,
-        resource: FEASIBILITY_RESOURCE,
-        consumer: &consumer,
-        same_authority: false,
-        reject_ambiguous: true,
-    };
-    // The query is part of the grant, so it is read before anything is asked.
-    let query = records
-        .feasibility_query(active_read_grant(&records.grants().await?, &requirement)?.id())
-        .await?;
     let read = PersonalRead {
         person_id,
         device_id,
@@ -367,8 +373,13 @@ pub async fn read_feasibility(
         lease_invocation_id,
         deadline,
     };
+    // The query is part of the grant, so it is read from the very grant this
+    // read runs under. Asking for it separately would let the Person's grant
+    // change in between and leave one grant's query authorized by another's.
+    let grant = admit_personal_read(records, &read).await?;
+    let query = records.feasibility_query(grant.id()).await?;
     let completed =
-        acquire_personal_source(records, driver, &read, Some(&query), cancellation).await?;
+        acquire_personal_source(records, driver, &read, &grant, Some(&query), cancellation).await?;
     let view: FeasibilityView = decode(completed.value.clone())?;
     validate_feasibility_view(&view, Utc::now().timestamp_millis())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
@@ -438,8 +449,9 @@ pub async fn read_wellbeing(
         lease_invocation_id,
         deadline,
     };
+    let grant = admit_personal_read(records, &read).await?;
     let completed =
-        acquire_personal_source(records, driver, &read, None, cancellation).await?;
+        acquire_personal_source(records, driver, &read, &grant, None, cancellation).await?;
     let view: WellbeingView = decode(completed.value.clone())?;
     validate_wellbeing_view(&view, Utc::now().timestamp_millis())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
@@ -561,4 +573,202 @@ pub async fn admit_attention(
     .map_err(|_| AgentFailure::InvalidInput)?;
     within_read_window(deadline, cancellation)?;
     Ok((view, dependency))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use floe_access::{
+        DataAccessGrant, FeasibilityGrantQuery, GrantDataCategory, GrantId, GrantScope,
+    };
+    use floe_agent_contract::BoxFuture;
+
+    use super::*;
+    use crate::ports::personal_source::{AcquiredSource, AttentionAcquisition};
+
+    const SUBJECT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SUBJECT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn scope() -> GrantScope {
+        GrantScope::try_new(
+            vec![ResourceHandle::try_new(FEASIBILITY_RESOURCE).unwrap()],
+            vec![GrantDataCategory::Derived],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![GrantConsumer::builtin("assistant").unwrap()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap()
+    }
+
+    fn active_grant(person_id: PersonId, device_id: &str) -> DataAccessGrant {
+        let source = feasibility_source(person_id, device_id, SourceAuthority::new()).unwrap();
+        let mut grant =
+            DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source.clone(), scope()).unwrap();
+        grant
+            .activate_review(grant.authority(), source, scope())
+            .unwrap();
+        grant
+    }
+
+    fn query(event_handle: &str) -> FeasibilityGrantQuery {
+        FeasibilityGrantQuery {
+            event_handle: event_handle.into(),
+            evidence_handles: vec!["calendar:one".into()],
+            destination_latitude: 37.5,
+            destination_longitude: 127.0,
+            event_start_unix_ms: 1_000,
+            event_end_unix_ms: 2_000,
+            travel_mode: "transit".into(),
+        }
+    }
+
+    /// Records whose grant is replaced between the first read and the next,
+    /// exactly as a Person re-reviewing mid-read would do.
+    struct SwappingRecords {
+        grants: Vec<DataAccessGrant>,
+        reads: Mutex<usize>,
+        queries: Vec<FeasibilityGrantQuery>,
+        subjects: Vec<String>,
+    }
+
+    impl PersonalGrantRecords for SwappingRecords {
+        fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
+            let index = {
+                let mut reads = self.reads.lock().unwrap();
+                let index = (*reads).min(self.grants.len() - 1);
+                *reads += 1;
+                index
+            };
+            let grant = self.grants[index].clone();
+            Box::pin(async move { Ok(vec![grant]) })
+        }
+
+        fn reviewed_subject<'a>(
+            &'a self,
+            grant: GrantId,
+        ) -> BoxFuture<'a, Result<String, AgentFailure>> {
+            let subject = self
+                .grants
+                .iter()
+                .position(|held| held.id() == grant)
+                .map(|index| self.subjects[index].clone());
+            Box::pin(async move { subject.ok_or(AgentFailure::NotFound) })
+        }
+
+        fn consumer_policy<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<floe_access::ConsumerPolicyAuthority, AgentFailure>> {
+            Box::pin(async { Ok(floe_access::ConsumerPolicyAuthority::default()) })
+        }
+
+        fn feasibility_query<'a>(
+            &'a self,
+            grant: GrantId,
+        ) -> BoxFuture<'a, Result<FeasibilityGrantQuery, AgentFailure>> {
+            let query = self
+                .grants
+                .iter()
+                .position(|held| held.id() == grant)
+                .map(|index| self.queries[index].clone());
+            Box::pin(async move { query.ok_or(AgentFailure::NotFound) })
+        }
+    }
+
+    /// A device that answers whatever subject it was asked for.
+    struct EchoingDriver;
+
+    impl PersonalSourceDriver for EchoingDriver {
+        fn personal_host_epoch(&self, _: PersonId) -> Result<String, AgentFailure> {
+            Ok("host".into())
+        }
+
+        fn attention_host_epoch(&self, _: PersonId) -> Result<String, AgentFailure> {
+            Ok("host".into())
+        }
+
+        fn process_incarnation(&self) -> Uuid {
+            Uuid::new_v4()
+        }
+
+        fn acquire<'a>(
+            &'a self,
+            request: PersonalAcquisition<'a>,
+            _: Cancellation,
+        ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>> {
+            let subject = request.expected_subject.clone();
+            Box::pin(async move {
+                Ok(AcquiredSource {
+                    view: Some(serde_json::json!({})),
+                    subject_before: subject.clone(),
+                    subject_after: subject,
+                })
+            })
+        }
+
+        fn acquire_attention<'a>(
+            &'a self,
+            _: AttentionAcquisition<'a>,
+            _: Cancellation,
+        ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn commit_personal_observation(
+            &self,
+            _: PersonId,
+            _: &str,
+            _: Uuid,
+            _: Uuid,
+            _: &str,
+            _: i64,
+            _: i64,
+            _: Vec<u8>,
+        ) -> Result<(), AgentFailure> {
+            Ok(())
+        }
+
+        fn commit_attention_projection(
+            &self,
+            _: PersonId,
+            _: &str,
+            _: &str,
+            _: &AttentionView,
+            _: &str,
+        ) -> Result<(Uuid, Uuid), AgentFailure> {
+            Err(AgentFailure::CapabilityUnavailable)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_feasibility_read_never_carries_one_grants_query_under_another() {
+        let person_id = PersonId::new();
+        let first = active_grant(person_id, "device");
+        let second = active_grant(person_id, "device");
+        assert_ne!(first.id(), second.id());
+        let records = SwappingRecords {
+            grants: vec![first, second],
+            reads: Mutex::new(0),
+            queries: vec![query("event:reviewed"), query("event:other")],
+            subjects: vec![SUBJECT_A.into(), SUBJECT_B.into()],
+        };
+        assert_eq!(
+            read_feasibility(
+                &records,
+                &EchoingDriver,
+                person_id,
+                "device",
+                "assistant",
+                Uuid::new_v4(),
+                Instant::now() + std::time::Duration::from_secs(5),
+                &Cancellation::default(),
+            )
+            .await
+            .unwrap_err(),
+            AgentFailure::PolicyDenied
+        );
+    }
 }
