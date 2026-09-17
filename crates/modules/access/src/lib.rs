@@ -17,7 +17,7 @@ pub use application::{
     FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
     WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
     attention_source, contacts_connection, contacts_execution_owner, contacts_source,
-    feasibility_source, source_binding, wellbeing_source,
+    feasibility_source, is_device_local_source, source_binding, wellbeing_source,
 };
 pub use application::{
     CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview,
@@ -26,7 +26,8 @@ pub use application::{
     reviewed_native_subject,
 };
 pub use application::{
-    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_enrollment_pairing,
+    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_device_pairing,
+    admit_enrollment_pairing,
     inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
 };
 pub use application::{
@@ -42,6 +43,7 @@ pub use application::{
     RemoteViewApproval, RemoteViewGrantExpectation, RemoteViewGrantPreview,
     RemoteViewGrantRequest, RemoteViewGrantReview, RemoteViewSourceReference, ReplayRequest,
     ReplayTrust, active_read_grant, active_resource_grant, admit_release, admit_remote_view_binding,
+    people_read_grant,
     admit_remote_view_source, admit_replay, apply_grant_mutation, authorize_grant, consume_release,
     create_grant, grant_unchanged, matches_review, producer_is_pinned,
     remote_dependency_binding_matches, remote_dependency_live, remote_dependency_resource,

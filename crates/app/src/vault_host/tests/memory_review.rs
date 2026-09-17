@@ -1,4 +1,5 @@
 use super::*;
+use floe_knowledge::KnowledgeActor;
 use crate::MemoryReviewDecision;
 use chrono::Utc;
 use floe_conversation::{AgentMessage, AgentOutcome};

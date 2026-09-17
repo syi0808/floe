@@ -11,6 +11,8 @@ use chrono::{Duration as TimeDelta, TimeZone};
 // FIXME(stage-2): glob import of the retired floe-domain crate
 
 use super::*;
+use floe_agent_contract::DataClass;
+use floe_experts::ExpertTaskCompletion as CalendarExpertTaskCompletion;
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2050, 1, 15, 9, 0, 0).unwrap()

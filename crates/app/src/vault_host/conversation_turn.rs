@@ -197,10 +197,15 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     let remote_reader = match (&model, request.remote_route.as_ref()) {
         (Model::Server(_), Some(route)) => {
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            if pairing.person_id != person_id.to_string() || pairing.device_id != request.device_id
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
+            floe_access::admit_device_pairing(
+                person_id,
+                &request.device_id,
+                floe_access::RemotePairingIdentity {
+                    person_id: &pairing.person_id,
+                    client_id: &pairing.client_id,
+                    device_id: &pairing.device_id,
+                },
+            )?;
             Some(remote_views::RemoteViewReader::new(
                 vault,
                 source_client
@@ -848,7 +853,7 @@ struct CompositeDependencyLiveness<'a> {
 
 impl floe_access::DependencyLiveness for CompositeDependencyLiveness<'_> {
     fn validate(&self, dependency: &floe_context_contract::ContextDependency) -> Result<(), AgentFailure> {
-        if is_local_personal_connector(dependency.source().connector().as_str()) {
+        if floe_access::is_device_local_source(dependency.source().connector().as_str()) {
             self.personal.validate(dependency)
         } else {
             self.remote
@@ -869,7 +874,7 @@ impl floe_access::DependencyResolver for CompositeDependencyResolver<'_> {
         dependency: &'a floe_context_contract::ContextDependency,
         request: &'a floe_access::DependencyAuthorization,
     ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
-        if is_local_personal_connector(dependency.source().connector().as_str()) {
+        if floe_access::is_device_local_source(dependency.source().connector().as_str()) {
             self.personal.authorize(dependency, request)
         } else if let Some(remote) = self.remote {
             remote.authorize(dependency, request)
@@ -1426,34 +1431,8 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
     > {
         Box::pin(async move {
             let grants = self.vault.list_data_access_grants(128).await?;
-            let matches: Vec<_> = grants
-                .iter()
-                .filter(|grant| {
-                    let connector = grant.source().connector().as_str();
-                    matches!(connector, "contacts.apple" | "contacts.android")
-                        && grant.source().person_id() == person_id
-                        && grant.source().connection_id().as_str() == format!("{connector}.local")
-                        && grant.source().execution_owner().as_str()
-                            == contacts_execution_owner(connector, self.device_id)
-                        && grant.state() == floe_access::GrantState::Active
-                        && !grant.review_required()
-                        && grant
-                            .scope()
-                            .resources()
-                            .iter()
-                            .any(|resource| resource.as_str() == "people.identity")
-                        && grant
-                            .scope()
-                            .consumers()
-                            .iter()
-                            .any(|value| value.identifier() == consumer)
-                })
-                .collect();
-            let grant = match matches.as_slice() {
-                [grant] => *grant,
-                [] => return Err(AgentFailure::AccessReviewRequired),
-                _ => return Err(AgentFailure::AccessReviewRequired),
-            };
+            let grant =
+                floe_access::people_read_grant(&grants, person_id, self.device_id, consumer)?;
             let selected_handles = self
                 .vault
                 .personal_grant_selected_handles(grant.id())
@@ -1480,20 +1459,6 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
             .await
         })
     }
-}
-
-fn is_local_personal_connector(connector: &str) -> bool {
-    connector == floe_context::ATTENTION_CONNECTOR
-        || connector.starts_with("calendar.")
-        || matches!(
-            connector,
-            "contacts.apple" | "contacts.android" | "health.apple"
-        )
-}
-
-fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
-    let platform = connector.strip_prefix("contacts.").unwrap_or_default();
-    format!("{platform}:{device_id}")
 }
 
 impl CapabilityHost for ConversationCapabilities<'_> {

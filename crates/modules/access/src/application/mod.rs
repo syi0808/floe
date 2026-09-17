@@ -38,14 +38,15 @@ pub use personal_sources::{
     FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
     WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
     attention_source, contacts_connection, contacts_execution_owner, contacts_source,
-    feasibility_source, source_binding, wellbeing_source,
+    feasibility_source, is_device_local_source, source_binding, wellbeing_source,
 };
 pub use personal_read::{
-    FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant, grant_unchanged,
-    subject_unchanged, valid_subject_fingerprint,
+    FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant,
+    grant_unchanged, people_read_grant, subject_unchanged, valid_subject_fingerprint,
 };
 pub use remote_authority::{
-    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_enrollment_pairing,
+    RemoteAuthorityEnrollment, RemoteAuthorityInspection, admit_device_pairing,
+    admit_enrollment_pairing,
     inspect_remote_authority, remote_enrollment_status, review_and_enroll_remote_authority,
 };
 pub use remote_calendar::{

@@ -42,6 +42,19 @@ pub fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
     format!("{platform}:{device_id}")
 }
 
+/// Whether a source is one this device serves for the Person themselves.
+///
+/// A device-local source is read here and re-admitted here; anything else is
+/// served by the Person's paired server and re-admitted against it.
+pub fn is_device_local_source(connector: &str) -> bool {
+    connector == ATTENTION_CONNECTOR
+        || connector.starts_with("calendar.")
+        || matches!(
+            connector,
+            "contacts.apple" | "contacts.android" | "health.apple"
+        )
+}
+
 pub fn source_binding(
     person_id: PersonId,
     connection: &str,

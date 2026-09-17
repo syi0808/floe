@@ -43,6 +43,22 @@ pub fn admit_enrollment_pairing(
     Ok(())
 }
 
+/// That the pairing a remote read runs under is this Person's own, from the
+/// device they are running on.
+///
+/// A route paired for another device is not this run's, whatever it can reach.
+pub fn admit_device_pairing(
+    person_id: PersonId,
+    device_id: &str,
+    pairing: RemotePairingIdentity<'_>,
+) -> Result<(), AgentFailure> {
+    admit_enrollment_pairing(person_id, pairing)?;
+    if pairing.device_id != device_id {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
 /// Ask a server who it is, so the Person can decide whether to pin it.
 ///
 /// Nothing is pinned or stored here; a locked vault simply has no owner key to

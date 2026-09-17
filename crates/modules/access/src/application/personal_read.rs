@@ -15,6 +15,9 @@ use floe_context_contract::{
 use floe_kernel::AgentFailure;
 use serde::{Deserialize, Serialize};
 
+use crate::application::personal_sources::{
+    PEOPLE_RESOURCE, contacts_connection, contacts_execution_owner,
+};
 use crate::{DataAccessGrant, GrantState};
 
 /// What one read needs the Person to have granted.
@@ -383,4 +386,43 @@ impl FeasibilityGrantQuery {
         }
         Ok(())
     }
+}
+
+/// The single grant that admits reading this Person's contacts from this device.
+///
+/// Which connector answers for their contacts is the device's; that exactly one
+/// live grant admits the read, for this consumer and the people resource, is
+/// Access's. More than one is a review the Person owes rather than a choice a
+/// read may make on their behalf.
+pub fn people_read_grant(
+    grants: &[DataAccessGrant],
+    person_id: floe_kernel::PersonId,
+    device_id: &str,
+    consumer: &str,
+) -> Result<DataAccessGrant, AgentFailure> {
+    let mut admitted = grants.iter().filter(|grant| {
+        let connector = grant.source().connector().as_str();
+        matches!(connector, "contacts.apple" | "contacts.android")
+            && grant.source().person_id() == person_id
+            && grant.source().connection_id().as_str() == contacts_connection(connector)
+            && grant.source().execution_owner().as_str()
+                == contacts_execution_owner(connector, device_id)
+            && grant.state() == GrantState::Active
+            && !grant.review_required()
+            && grant
+                .scope()
+                .resources()
+                .iter()
+                .any(|resource| resource.as_str() == PEOPLE_RESOURCE)
+            && grant
+                .scope()
+                .consumers()
+                .iter()
+                .any(|value| value.identifier() == consumer)
+    });
+    let grant = admitted.next().ok_or(AgentFailure::AccessReviewRequired)?;
+    if admitted.next().is_some() {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(grant.clone())
 }
