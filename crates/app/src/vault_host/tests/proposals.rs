@@ -337,7 +337,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     assert!(absent.proposal.unwrap().action.is_none());
     assert!(
         runtime
-            .block_on(core.calendar_actions(person))
+            .block_on(core.actions().calendar_actions(person))
             .unwrap()
             .is_empty()
     );
@@ -384,33 +384,23 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         },
     );
     let id = Uuid::new_v4();
-    let submit = WorkerOperation::Submit {
+    let submit = || WorkerOperation::Submit {
         action: Box::new(inspect()),
     };
-    worker.request(person, id, submit.clone()).unwrap();
+    worker.request(person, id, submit()).unwrap();
     let result = wait(&worker, person, id);
-    let replayed = worker.request(person, id, submit).unwrap();
+    let replayed = worker.request(person, id, submit()).unwrap();
     assert_eq!(
         (replayed.request_id, replayed.stage.clone(), replayed.done),
         (result.request_id, result.stage.clone(), result.done)
     );
     assert!(result.failure.is_none() && result.events.is_empty() && result.session.is_none());
     let projection = result.proposal.unwrap();
-    assert_eq!(projection.session_id, session.id.to_string());
+    assert_eq!(projection.session_id, session.id);
     assert!(projection.action.is_none());
     worker
         .request(person, id, WorkerOperation::Release)
         .unwrap();
-    let invalid = perform(
-        &worker,
-        person,
-        WorkerAction::InspectProposal {
-            session_id: "not-a-uuid".into(),
-            invocation_id: evidence.invocation_id,
-        },
-    );
-    assert_eq!(invalid.failure, Some(AgentFailure::InvalidInput));
-    assert!(invalid.proposal.is_none());
     assert_eq!(
         perform(&worker, PersonId::new(), inspect()).failure,
         Some(AgentFailure::NotFound)
@@ -428,7 +418,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     .unwrap();
     assert_eq!(saved, session);
     assert_eq!(
-        runtime.block_on(core.calendar_actions(person)).unwrap(),
+        runtime.block_on(core.actions().calendar_actions(person)).unwrap(),
         Vec::<floe_actions::CalendarAction>::new()
     );
     keys.0.unavailable.store(true, Ordering::Release);

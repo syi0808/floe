@@ -1408,7 +1408,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
         } else {
             fixture
                 .vault
-                .install_calendar_expert(request, Cancellation::default())
+                .install_calendar_expert(request, &crate::vault_host::schedule_packaging(), Cancellation::default())
                 .await
                 .unwrap()
         };
@@ -1598,14 +1598,22 @@ async fn native_calendar_coverage_is_persisted_and_requires_live_resolution() {
 /// one before a transport is handed the immutable input.
 fn session_model_request(session: &AgentSession) -> ModelRequest {
     ModelRequest {
-        usage: session.usage.clone(),
+        usage: floe_inference::UsageLedger::default(),
         replay: vec![],
         schema_version: floe_agent_contract::AGENT_VERSION,
         prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
         person_id: session.person_id,
         session_id: session.id,
         turn_id: session.active_turn.unwrap_or_else(Uuid::new_v4),
-        policy: crate::vault_host::conversation_turn::policy(),
+        policy: InferencePolicyDecision {
+            purpose: "calendar-briefing".into(),
+            data_classes: vec![DataClass::Synthetic],
+            allowed_placements: vec![ModelPlacement::DeviceLocal],
+            performance_class: "fixture".into(),
+            projection_version: 1,
+            external_transfer_consent: TransferConsent::NotGranted,
+            bounded_sensitive_projection: false,
+        },
         context: AgentContext {
             projection_version: 1,
             persona: None,
@@ -1829,11 +1837,11 @@ async fn expired_or_paused_calendar_history_is_filtered_before_model_use() {
             Err(AgentFailure::StaleContext | AgentFailure::CapabilityDenied)
         ));
         let requests = second_model.requests.lock().unwrap();
+        // No evidence crossed into the immutable input the transport was given.
         assert!(requests.iter().all(|request| {
-            request
-                .messages
+            envelope_messages(request)
                 .iter()
-                .all(|message| matches!(message, AgentMessage::User { .. }))
+                .all(|message| message["role"] == "user")
         }));
     }
 }
@@ -1944,9 +1952,12 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
         first.proposals[0].reference.invocation_id
     );
     assert_eq!(fixture.state().await.revision, fixture.revision + 2);
-    let (history, _) = model.requests.lock().unwrap()[0].model_conversation();
+    let requests = model.requests.lock().unwrap();
     assert!(
-        history
+        requests[0]
+            .envelope
+            .conversation
+            .history
             .iter()
             .all(|message| message.get("tool_calls").is_none())
     );
@@ -2045,10 +2056,11 @@ async fn new_turn_without_calendar_reads_does_not_reuse_previous_calendar_eviden
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(access.calls.load(Ordering::Acquire), 0);
     let requests = model.requests.lock().unwrap();
-    assert!(!floe_conversation::carries_source_history(
-        &requests[0].messages,
-        &CalendarHistoryBoundary
-    ));
+    assert!(
+        envelope_messages(&requests[0])
+            .iter()
+            .all(|message| message["role"] != "tool")
+    );
     assert!(requests[0].replay.is_empty());
     assert!(floe_conversation::carries_source_history(
         &result.session.messages,
