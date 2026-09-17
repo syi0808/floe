@@ -90,6 +90,24 @@ impl<
     }
 }
 
+impl<
+    Access: CalendarSource + CalendarReadAdmission + Send,
+    Mirror: CalendarMirrorReader + Send,
+    Clock: Fn() -> DateTime<Utc> + Sync + Send,
+> floe_access::DependencyResolver
+    for GovernedDependencyResolver<'_, '_, Access, Mirror, Clock>
+{
+    fn authorize<'a>(
+        &'a self,
+        dependency: &'a ContextDependency,
+        request: &'a floe_access::DependencyAuthorization,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+    > {
+        Box::pin(self.resolve(dependency, request.deadline, request.cancellation.clone()))
+    }
+}
+
 struct AuthorizedRead {
     stamp: CalendarReadAccessStamp,
     admission: Option<CalendarReadAccessAdmission>,

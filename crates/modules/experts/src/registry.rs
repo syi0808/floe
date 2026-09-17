@@ -1144,3 +1144,107 @@ impl SetupValidator for NoSetupValidator {
         Ok(())
     }
 }
+
+/// The calendar view a registered Expert invocation claims to run against.
+///
+/// The claim is the caller's; whether the registry still binds that view to
+/// this Person is the registry's own answer.
+#[derive(Clone, Copy)]
+pub struct CalendarViewClaim<'a> {
+    pub person_id: PersonId,
+    pub handle: Uuid,
+    pub provider: floe_agent_contract::CalendarProvider,
+    pub device_id: &'a str,
+    pub calendar_ids: &'a [String],
+}
+
+/// One invocation of a registered Expert, as it asks to be admitted.
+#[derive(Clone, Copy)]
+pub struct RegisteredExpertInvocation<'a> {
+    pub view: CalendarViewClaim<'a>,
+    pub assignment_id: Uuid,
+    /// The invocation being started, when it must not repeat an earlier one.
+    pub invocation_id: Option<Uuid>,
+    /// The builtin Expert that must answer, when only one may.
+    pub required_builtin: Option<&'a AgentId>,
+}
+
+/// What the registry admitted an invocation as.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmittedExpertInvocation {
+    pub card: crate::AgentCard,
+    /// The revision the invocation is admitted at, and must settle against.
+    pub revision: u64,
+}
+
+impl AgentRegistry {
+    /// Admit one invocation of a registered Expert.
+    ///
+    /// The view the caller names has to be the one this Person's registry binds
+    /// — same provider, same device, and no calendar the binding does not carry
+    /// — and an invocation the assignment has already answered is a repeat
+    /// rather than a new run.
+    pub fn admit_registered_expert_invocation(
+        &self,
+        request: RegisteredExpertInvocation<'_>,
+    ) -> Result<AdmittedExpertInvocation, AgentFailure> {
+        let view = request.view;
+        let binding = self.calendar_view(view.person_id, view.handle)?;
+        let mut calendars = view.calendar_ids.to_vec();
+        calendars.sort();
+        if binding.provider != view.provider
+            || binding.device_id != view.device_id
+            || calendars
+                .iter()
+                .any(|calendar_id| !binding.calendar_ids.contains(calendar_id))
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let revision = self.revision();
+        let card = match request.required_builtin {
+            Some(expert) => self.builtin_expert_card(
+                view.person_id,
+                request.assignment_id,
+                revision,
+                view.handle,
+                expert.clone(),
+            )?,
+            None => {
+                self.expert_card(view.person_id, request.assignment_id, revision, view.handle)?
+            }
+        };
+        if let Some(invocation_id) = request.invocation_id
+            && self
+                .private_state(view.person_id, request.assignment_id)?
+                .last_invocation_id
+                == Some(invocation_id)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(AdmittedExpertInvocation { card, revision })
+    }
+
+    /// Stage this registry for the settlement of one registered invocation.
+    ///
+    /// The Task owner commits the staged registry and the Expert's result
+    /// together, or commits neither.
+    pub fn settle_registered_expert_invocation(
+        &self,
+        owner: impl Into<String>,
+        expected_revision: u64,
+        assignment_id: Uuid,
+        invocation_id: Uuid,
+        dependencies: Vec<floe_agent_contract::ContextDependency>,
+        task_result: String,
+    ) -> crate::ExpertSettlement {
+        crate::ExpertSettlement::new(
+            owner,
+            expected_revision,
+            self.snapshot(),
+            assignment_id,
+            invocation_id,
+            dependencies,
+            task_result,
+        )
+    }
+}

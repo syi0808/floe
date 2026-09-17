@@ -1,5 +1,4 @@
 use std::{
-    future::Future,
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
@@ -20,9 +19,7 @@ use floe_context::{
 use floe_actions::{
     CalendarAction, ExpertCalendarDestination, ExpertCalendarRequest, ExpertProposalReference,
 };
-use floe_agent_contract::{
-    AgentFailure, CancelReason, DataClass, ModelPlacement, SessionProtection,
-};
+use floe_agent_contract::{AgentFailure, CancelReason, ModelPlacement, SessionProtection};
 // What the regressions below stand a task and a registry up with.
 #[cfg(test)]
 use floe_agent_contract::{TaskId, TaskSnapshot};
@@ -30,7 +27,6 @@ use floe_agent_contract::{TaskId, TaskSnapshot};
 use floe_experts::RegistrySnapshot;
 use floe_context::{
     AgentContext, CoverageAccumulator, FeasibilityView, InferencePolicyDecision, WellbeingView,
-    native_context_evidence,
 };
 use floe_conversation::{
     AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentOutcome, AgentRuntime, AgentSession,
@@ -163,21 +159,13 @@ impl FloeCore {
             result = vault.expert_registry() => result?.ok_or(AgentFailure::CapabilityDenied)?,
         };
         let registry = AgentRegistry::restore(snapshot, vault.registry_instance_id())?;
-        let revision = registry.revision();
-        validated_calendar_card(
-            &registry,
+        let admitted = registry.admit_registered_expert_invocation(calendar_invocation(
             views.grant(),
             request.assignment_id,
-            revision,
-            Some(BuiltinExpertKind::Schedule),
-        )?;
-        if registry
-            .private_state(request.person_id, request.assignment_id)?
-            .last_invocation_id
-            == Some(request.invocation_id)
-        {
-            return Err(AgentFailure::Conflict);
-        }
+            Some(request.invocation_id),
+            Some(&schedule_expert()?),
+        ))?;
+        let revision = admitted.revision;
         if !request
             .policy
             .data_classes
@@ -186,85 +174,20 @@ impl FloeCore {
             return Err(AgentFailure::PolicyDenied);
         }
         let mut expert_context = request.context;
-        if request.policy.data_classes.contains(&DataClass::Personal) {
-            expert_context.evidence.retain(|evidence| {
-                !evidence.source_handle.starts_with("floe.tasks:")
-                    && !evidence.source_handle.starts_with("floe.notes:")
-            });
-        }
-        authorize_endpoint_context(
-            &request.policy,
-            model.placement(),
-            vault.protection(),
-            &expert_context,
-            clock(),
-        )?;
-        if request.policy.data_classes.contains(&DataClass::Personal) {
-            let context_now = clock();
-            let task_view = run_endpoint_bounded(
-                request.deadline,
-                &request.cancellation,
-                floe_context::acquire_optional_source(
-                    floe_agent_contract::ContextSource::Tasks,
-                    floe_context::application::day_context_views::task_context_view(
-                        &self.store,
-                        views.grant().person_id,
-                        Uuid::new_v5(&views.grant().person_id.0, b"floe.tasks"),
-                        context_now,
-                        16,
-                        8 * 1024,
-                    ),
-                ),
-            )
-            .await?;
-            let note_view = run_endpoint_bounded(
-                request.deadline,
-                &request.cancellation,
-                floe_context::acquire_optional_source(
-                    floe_agent_contract::ContextSource::Notes,
-                    floe_context::application::day_context_views::note_context_view(
-                        &self.store,
-                        views.grant().person_id,
-                        Uuid::new_v5(&views.grant().person_id.0, b"floe.notes"),
-                        context_now,
-                        16,
-                        8 * 1024,
-                    ),
-                ),
-            )
-            .await?;
-            floe_context::record_source_issue(
-                &mut expert_context.optional_context_issues,
-                floe_agent_contract::ContextSource::Tasks,
-                task_view.issue.map(|issue| issue.reason),
-            );
-            floe_context::record_source_issue(
-                &mut expert_context.optional_context_issues,
-                floe_agent_contract::ContextSource::Notes,
-                note_view.issue.map(|issue| issue.reason),
-            );
-            if let Some(task_view) = task_view.value
-                && !task_view.items.is_empty()
-            {
-                expert_context
-                    .evidence
-                    .push(native_context_evidence(&task_view)?);
-            }
-            if let Some(note_view) = note_view.value
-                && !note_view.items.is_empty()
-            {
-                expert_context
-                    .evidence
-                    .push(native_context_evidence(&note_view)?);
-            }
-        }
-        authorize_endpoint_context(
-            &request.policy,
-            model.placement(),
-            vault.protection(),
-            &expert_context,
-            clock(),
-        )?;
+        floe_context::prepare_expert_context(
+            &mut expert_context,
+            &self.store,
+            floe_context::ExpertContextRequest {
+                person_id: views.grant().person_id,
+                policy: &request.policy,
+                placement: model.placement(),
+                protection: vault.protection(),
+                now: clock(),
+                deadline: request.deadline,
+                cancellation: request.cancellation.clone(),
+            },
+        )
+        .await?;
         let registry = Mutex::new(registry);
         let invocation = ExpertInvocation {
             capabilities: std::sync::Arc::new(NoCapabilityJournal),
@@ -321,36 +244,35 @@ impl FloeCore {
             .await?;
         vault.check_access()?;
         let dependencies = views.consumed_context_dependencies()?;
-        let staged = registry
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-            .snapshot();
         check_running(request.deadline, &request.cancellation)?;
         for dependency in &dependencies {
             views.validate_dependency_liveness(dependency)?;
         }
         let task_result =
             serde_json::to_string(&report).map_err(|_| AgentFailure::InvalidModelOutput)?;
-        Ok(CalendarExpertEndpointResult {
-            report,
-            dependencies: dependencies.clone(),
-            settlement: CalendarExpertSettlement::new(
+        let settlement = registry
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .settle_registered_expert_invocation(
                 CALENDAR_EXPERT_SETTLEMENT_OWNER,
                 revision,
-                staged,
                 request.assignment_id,
                 request.invocation_id,
-                dependencies,
+                dependencies.clone(),
                 task_result,
-            ),
+            );
+        Ok(CalendarExpertEndpointResult {
+            report,
+            dependencies,
+            settlement,
         })
     }
 
     pub async fn run_calendar_agent_turn<
         Keys: VaultKeyProvider,
-        Access: CalendarSource + CalendarReadAdmission,
+        Access: CalendarSource + CalendarReadAdmission + Send,
         Model: floe_inference::ModelTransport + Sync,
-        Clock: Fn() -> DateTime<Utc> + Sync + Copy,
+        Clock: Fn() -> DateTime<Utc> + Sync + Copy + Send,
     >(
         &self,
         vault: &EncryptedAgentVault<Keys>,
@@ -418,9 +340,14 @@ impl FloeCore {
                 result = vault.expert_registry() => result?.ok_or(AgentFailure::CapabilityDenied)?,
             };
             let registry = AgentRegistry::restore(snapshot, vault.registry_instance_id())?;
-            let revision = registry.revision();
-            let card =
-                validated_calendar_card(&registry, views.grant(), request.assignment_id, revision, None)?;
+            let admitted = registry.admit_registered_expert_invocation(calendar_invocation(
+                views.grant(),
+                request.assignment_id,
+                None,
+                None,
+            ))?;
+            let revision = admitted.revision;
+            let card = admitted.card;
             if !request
                 .policy
                 .data_classes
@@ -429,57 +356,20 @@ impl FloeCore {
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut expert_context = request.context.clone();
-            if request.policy.data_classes.contains(&DataClass::Personal) {
-                expert_context.evidence.retain(|evidence| {
-                    !evidence.source_handle.starts_with("floe.tasks:")
-                        && !evidence.source_handle.starts_with("floe.notes:")
-                });
-                let context_now = clock();
-                let task_view = floe_context::acquire_optional_source(
-                    floe_agent_contract::ContextSource::Tasks,
-                    floe_context::application::day_context_views::task_context_view(
-                        &self.store,
-                        request.command.person_id,
-                        Uuid::new_v5(&request.command.person_id.0, b"floe.tasks"),
-                        context_now,
-                        16,
-                        8 * 1024,
-                    ),
-                ).await?;
-                let note_view = floe_context::acquire_optional_source(
-                    floe_agent_contract::ContextSource::Notes,
-                    floe_context::application::day_context_views::note_context_view(
-                        &self.store,
-                        request.command.person_id,
-                        Uuid::new_v5(&request.command.person_id.0, b"floe.notes"),
-                        context_now,
-                        16,
-                        8 * 1024,
-                    ),
-                ).await?;
-                floe_context::record_source_issue(
-                    &mut expert_context.optional_context_issues,
-                    floe_agent_contract::ContextSource::Tasks,
-                    task_view.issue.map(|issue| issue.reason),
-                );
-                floe_context::record_source_issue(
-                    &mut expert_context.optional_context_issues,
-                    floe_agent_contract::ContextSource::Notes,
-                    note_view.issue.map(|issue| issue.reason),
-                );
-                if let Some(task_view) = task_view.value
-                    && !task_view.items.is_empty() {
-                    expert_context
-                        .evidence
-                        .push(native_context_evidence(&task_view)?);
-                }
-                if let Some(note_view) = note_view.value
-                    && !note_view.items.is_empty() {
-                    expert_context
-                        .evidence
-                        .push(native_context_evidence(&note_view)?);
-                }
-            }
+            floe_context::prepare_expert_context(
+                &mut expert_context,
+                &self.store,
+                floe_context::ExpertContextRequest {
+                    person_id: request.command.person_id,
+                    policy: &request.policy,
+                    placement: model.placement(),
+                    protection: vault.protection(),
+                    now: clock(),
+                    deadline,
+                    cancellation: request.cancellation.clone(),
+                },
+            )
+            .await?;
             let turn = CalendarTurn {
                 vault,
                 views,
@@ -596,35 +486,31 @@ impl FloeCore {
     }
 }
 
-fn validated_calendar_card(
-    registry: &AgentRegistry,
-    grant: &CalendarTimelineGrant,
+/// The invocation a calendar-scoped Expert run asks the registry to admit.
+fn calendar_invocation<'a>(
+    grant: &'a CalendarTimelineGrant,
     assignment_id: Uuid,
-    revision: u64,
-    required_builtin: Option<BuiltinExpertKind>,
-) -> Result<AgentCard, AgentFailure> {
-    let binding = registry.calendar_view(grant.person_id, grant.handle)?;
-    let mut calendars = grant.calendar_ids.clone();
-    calendars.sort();
-    if binding.provider != grant.provider
-        || binding.device_id != grant.device_id
-        || calendars
-            .iter()
-            .any(|calendar_id| !binding.calendar_ids.contains(calendar_id))
-    {
-        return Err(AgentFailure::CapabilityDenied);
+    invocation_id: Option<Uuid>,
+    required_builtin: Option<&'a floe_experts::AgentId>,
+) -> floe_experts::RegisteredExpertInvocation<'a> {
+    floe_experts::RegisteredExpertInvocation {
+        view: floe_experts::CalendarViewClaim {
+            person_id: grant.person_id,
+            handle: grant.handle,
+            provider: grant.provider,
+            device_id: &grant.device_id,
+            calendar_ids: &grant.calendar_ids,
+        },
+        assignment_id,
+        invocation_id,
+        required_builtin,
     }
-    match required_builtin {
-        Some(expert) => registry.builtin_expert_card(
-            grant.person_id,
-            assignment_id,
-            revision,
-            grant.handle,
-            floe_experts::AgentId::try_new(expert.package_id())
-                .ok_or(AgentFailure::CapabilityDenied)?,
-        ),
-        None => registry.expert_card(grant.person_id, assignment_id, revision, grant.handle),
-    }
+}
+
+/// The only Expert a Schedule endpoint invocation may be answered by.
+fn schedule_expert() -> Result<floe_experts::AgentId, AgentFailure> {
+    floe_experts::AgentId::try_new(BuiltinExpertKind::Schedule.package_id())
+        .ok_or(AgentFailure::CapabilityDenied)
 }
 
 #[cfg(test)]
@@ -1015,8 +901,8 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarSource + CalendarReadAdmission,
-    Clock: Fn() -> DateTime<Utc> + Sync,
+    Access: CalendarSource + CalendarReadAdmission + Send,
+    Clock: Fn() -> DateTime<Utc> + Sync + Send,
     Model: Sync,
 > CalendarTurn<'_, Keys, Access, Clock, Model>
 {
@@ -1103,65 +989,45 @@ impl<
         Ok(())
     }
 
+    /// The transcript this attempt may still see.
+    ///
+    /// Context decides what each recorded turn authorizes and Conversation
+    /// applies that to the transcript; what is Schedule's own is the boundary —
+    /// a turn carrying a calendar result it can no longer re-admit is not
+    /// independent, whatever its recorded coverage claims.
     async fn project_history(&self, request: &mut ModelRequest) -> Result<(), AgentFailure> {
         let current_turn = request.turn_id;
         let resolver = GovernedDependencyResolver::new(&self.views);
-        let mut by_turn = Vec::<(Uuid, Vec<AgentMessage>)>::new();
-        for message in std::mem::take(&mut request.messages) {
-            let turn_id = message.turn_id();
-            if let Some((_, messages)) = by_turn.iter_mut().find(|(id, _)| *id == turn_id) {
-                messages.push(message);
-            } else {
-                by_turn.push((turn_id, vec![message]));
-            }
-        }
-        let reader =
-            ContextEvidenceReader::new(self.vault, request.session_id);
-        let coverage_by_turn = floe_context::read_history_coverage(
+        let reader = ContextEvidenceReader::new(self.vault, request.session_id);
+        let mut decisions = floe_context::project_history(
             &reader,
             request.session_id,
-            by_turn
+            request
+                .messages
                 .iter()
-                .map(|(turn_id, _)| *turn_id)
+                .map(AgentMessage::turn_id)
                 .filter(|turn_id| *turn_id != current_turn),
+            Some(&resolver),
+            &floe_access::DependencyAuthorization {
+                allowed_placements: request.policy.allowed_placements.clone(),
+                deadline: self.deadline,
+                cancellation: self.cancellation.clone(),
+            },
         )
         .await?;
-        let mut projected = Vec::new();
-        for (turn_id, messages) in by_turn {
-            if turn_id == current_turn {
-                projected.extend(messages);
-                continue;
-            }
-            let has_calendar_boundary = messages.iter().any(calendar_history_boundary);
-            let coverage = coverage_by_turn
-                .get(&turn_id)
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            let coverage_independent = matches!(coverage, DependencyCoverage::Independent);
-            let projection = floe_context::project_coverage(coverage, |dependency| {
-                let resolver = &resolver;
-                async move {
-                    Ok(resolver
-                        .resolve(&dependency, self.deadline, self.cancellation.clone())
-                        .await
-                        .is_ok())
-                }
-            })
-            .await?;
-            let retain_derived = projection.retain_derived()
-                && (!projection.authorized_dependencies().is_empty()
-                    || (!has_calendar_boundary && coverage_independent));
-            if projection.retain_derived() {
-                self.retain_historical_dependencies(projection.authorized_dependencies().to_vec())?;
-            }
-            for message in messages {
-                let retain = matches!(message, AgentMessage::User { .. }) || retain_derived;
-                if retain {
-                    projected.push(message);
-                }
-            }
-        }
-        request.replay.clear();
-        request.messages = projected;
+        floe_conversation::narrow_by_source_boundary(
+            &mut decisions,
+            &request.messages,
+            &floe_experts_builtin::schedule::CalendarHistoryBoundary,
+        );
+        floe_conversation::project_history_into(
+            request,
+            floe_conversation::HistoryProjection {
+                decisions: &decisions,
+                current_turn: Some(current_turn),
+            },
+            |_, dependencies| self.retain_historical_dependencies(dependencies.to_vec()),
+        )?;
         Ok(())
     }
 
@@ -1202,8 +1068,8 @@ impl<
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarSource + CalendarReadAdmission,
-    Clock: Fn() -> DateTime<Utc> + Sync,
+    Access: CalendarSource + CalendarReadAdmission + Send,
+    Clock: Fn() -> DateTime<Utc> + Sync + Send,
     Model: Sync,
 > SessionStore for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
@@ -1321,8 +1187,8 @@ impl<
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarSource + CalendarReadAdmission,
-    Clock: Fn() -> DateTime<Utc> + Sync,
+    Access: CalendarSource + CalendarReadAdmission + Send,
+    Clock: Fn() -> DateTime<Utc> + Sync + Send,
     Model: floe_inference::ModelTransport + Sync,
 > CapabilityHost for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
@@ -1337,8 +1203,8 @@ impl<
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarSource + CalendarReadAdmission,
-    Clock: Fn() -> DateTime<Utc> + Sync,
+    Access: CalendarSource + CalendarReadAdmission + Send,
+    Clock: Fn() -> DateTime<Utc> + Sync + Send,
     Model: floe_inference::ModelTransport + Sync,
 > InProcessAgent for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
@@ -1451,8 +1317,8 @@ struct CalendarModel<'model, 'host, Keys, Access, Clock, Model> {
 
 impl<
     Keys: VaultKeyProvider,
-    Access: CalendarSource + CalendarReadAdmission,
-    Clock: Fn() -> DateTime<Utc> + Sync,
+    Access: CalendarSource + CalendarReadAdmission + Send,
+    Clock: Fn() -> DateTime<Utc> + Sync + Send,
     Model: floe_inference::ModelTransport + Sync,
 > ModelRunner for CalendarModel<'_, '_, Keys, Access, Clock, Model>
 {
@@ -1512,52 +1378,6 @@ fn check_running(deadline: Instant, cancellation: &Cancellation) -> Result<(), A
         return Err(AgentFailure::DeadlineExceeded);
     }
     Ok(())
-}
-
-async fn run_endpoint_bounded<Value>(
-    deadline: Instant,
-    cancellation: &Cancellation,
-    future: impl Future<Output = Result<Value, AgentFailure>>,
-) -> Result<Value, AgentFailure> {
-    check_running(deadline, cancellation)?;
-    tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
-        _ = tokio::time::sleep_until(deadline) => Err(AgentFailure::DeadlineExceeded),
-        result = future => result,
-    }
-}
-
-fn authorize_endpoint_context(
-    policy: &InferencePolicyDecision,
-    placement: ModelPlacement,
-    protection: SessionProtection,
-    context: &AgentContext,
-    now: DateTime<Utc>,
-) -> Result<(), AgentFailure> {
-    policy.authorize(
-        placement,
-        protection,
-        context,
-        u64::try_from(now.timestamp_millis()).map_err(|_| AgentFailure::StaleContext)?,
-    )
-}
-
-fn calendar_history_boundary(message: &AgentMessage) -> bool {
-    match message {
-        AgentMessage::Compaction { .. } => true,
-        AgentMessage::Delegation { task, .. } => {
-            (task.agent_id == BuiltinExpertKind::Schedule.package_id()
-                || task.agent_id == "schedule")
-                && (task.state == A2ATaskState::Completed || !task.artifacts.is_empty())
-        }
-        AgentMessage::Capability {
-            capability_id,
-            result: Ok(_),
-            ..
-        } => capability_id.starts_with("calendar.") || capability_id.starts_with("schedule."),
-        _ => false,
-    }
 }
 
 fn validate_budget(budget: AgentBudget) -> Result<(), AgentFailure> {

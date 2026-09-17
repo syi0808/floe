@@ -16,10 +16,10 @@ pub use api::{
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationService, GovernedSessionRepository, GovernedSessionStore,
-    PreparedTurn, RunCancellationRegistry, TurnPrecheck,
+    HistoryProjection, PreparedTurn, RunCancellationRegistry, TurnPrecheck,
     TurnPrecheckRequest, TurnPreparationRequest, cancel_run_command, prepare_turn, compact_session, continuation, get_command, get_run,
-    get_session, precheck_turn, project_continuation, read_archive, recover_session,
-    resume_session, start_session,
+    get_session, narrow_by_source_boundary, precheck_turn, project_continuation,
+    project_history_into, read_archive, recover_session, resume_session, start_session,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest,

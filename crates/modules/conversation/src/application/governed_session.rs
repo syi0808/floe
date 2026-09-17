@@ -211,7 +211,6 @@ impl<'a, Repository: GovernedSessionRepository> GovernedSessionStore<'a, Reposit
         if request.session_id != self.session_id {
             return Err(AgentFailure::Conflict);
         }
-        let messages = std::mem::take(&mut request.messages);
         let evidence = SessionEvidence {
             repository: self.repository,
             session_id: self.session_id,
@@ -219,40 +218,30 @@ impl<'a, Repository: GovernedSessionRepository> GovernedSessionStore<'a, Reposit
         let decisions = floe_context::project_history(
             &evidence,
             self.session_id,
-            messages.iter().map(AgentMessage::turn_id),
+            request.messages.iter().map(AgentMessage::turn_id),
             resolver,
             &authorization(request),
         )
         .await?;
-        let mut retained = Vec::with_capacity(messages.len());
-        let mut filtered = false;
-        let mut recorded: HashMap<Uuid, ()> = HashMap::new();
-        for message in messages {
-            let turn_id = message.turn_id();
-            let decision = decisions.get(&turn_id).cloned().unwrap_or_default();
-            if decision.retain_derived {
-                if recorded.insert(turn_id, ()).is_none() {
-                    for dependency in &decision.authorized_dependencies {
-                        self.coverage
-                            .record_dependency(request.turn_id, dependency.clone(), None)
-                            .map_err(|error| match error {
-                                AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
-                                error => error,
-                            })?;
-                    }
+        let current_turn = request.turn_id;
+        super::history_projection::project_history_into(
+            request,
+            super::history_projection::HistoryProjection {
+                decisions: &decisions,
+                current_turn: None,
+            },
+            |_, dependencies| {
+                for dependency in dependencies {
+                    self.coverage
+                        .record_dependency(current_turn, dependency.clone(), None)
+                        .map_err(|error| match error {
+                            AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
+                            error => error,
+                        })?;
                 }
-                retained.push(message);
-            } else if matches!(message, AgentMessage::User { .. }) {
-                retained.push(message);
-            } else {
-                filtered = true;
-            }
-        }
-        request.messages = retained;
-        if filtered || !request.replay.is_empty() {
-            request.replay.clear();
-        }
-        Ok(filtered)
+                Ok(())
+            },
+        )
     }
 }
 

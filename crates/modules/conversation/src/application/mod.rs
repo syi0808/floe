@@ -4,6 +4,7 @@ mod cancellation;
 mod coordinator;
 mod finalization;
 pub mod governed_session;
+mod history_projection;
 mod query;
 mod recovery;
 mod session;
@@ -19,6 +20,7 @@ pub use cancellation::{
 };
 pub use coordinator::{ConversationService, continuation, recover_session};
 pub use governed_session::{GovernedSessionRepository, GovernedSessionStore};
+pub use history_projection::{HistoryProjection, narrow_by_source_boundary, project_history_into};
 pub use query::{get_command, get_run};
 pub use recovery::project_continuation;
 pub use session::{get_session, resume_session, start_session};

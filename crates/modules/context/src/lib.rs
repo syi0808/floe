@@ -3,6 +3,7 @@ pub mod application {
     pub mod calendar_connector;
     pub mod calendar_timeline;
     pub mod day_context_views;
+    pub mod expert_context;
     pub mod routing;
     pub mod assembler;
     pub mod consumed;
@@ -40,6 +41,7 @@ pub use application::calendar_connector::{
     ConnectorProjectionError, project_calendar_connector, validate_connector_device,
 };
 pub use application::assembler::acquire_memory_context;
+pub use application::expert_context::{ExpertContextRequest, prepare_expert_context};
 pub use floe_context_contract::{
     OptionalSource, acquire_optional_source, record_source_issue,
 };
