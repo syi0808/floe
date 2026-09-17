@@ -5,17 +5,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use floe_agent_contract::{ModelPlacement};
-use floe_conversation::{SessionStore};
+use crate::{VaultConversationAdmissionRequest, VaultKey};
+use floe_agent_contract::ModelPlacement;
 use floe_agent_contract::{
     AllowedCatalog, BoundedContext, DelegationPort, DelegationRequest, ModelPort, ModelRequest,
     ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
+use floe_conversation::SessionStore;
 use floe_conversation::{
     ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnMode,
     TurnRequest,
 };
-use crate::{VaultConversationAdmissionRequest, VaultKey};
 use floe_kernel::PersonId;
 
 use super::*;
@@ -308,7 +308,11 @@ fn request(
 
 fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
     use chrono::{Duration, Utc};
-    use floe_access::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
 
     let now = Utc::now();
     floe_context::ContextDependency::try_new(

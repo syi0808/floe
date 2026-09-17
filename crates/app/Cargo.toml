@@ -42,3 +42,14 @@ tempfile = "3.23.0"
 # The registry regressions count the vault's durable expert receipts, which
 # have no reader of their own.
 turso.workspace = true
+# The keyring smoke example drives this host against a real Keychain.
+keyring-core = "1.0.0"
+zeroize = "1.9.0"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.177"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dev-dependencies]
+apple-native-keyring-store = { version = "1.0.2", default-features = false, features = [
+    "keychain",
+] }

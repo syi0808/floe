@@ -10,9 +10,7 @@ impl floe_day::TimelineRepository for TursoStore {
     }
 
     async fn put_event(&self, value: &floe_day::Event) -> Result<(), floe_day::DayError> {
-        TursoStore::put_event(self, value)
-            .await
-            .map_err(day_error)
+        TursoStore::put_event(self, value).await.map_err(day_error)
     }
 
     async fn put_event_if_revision(
@@ -26,9 +24,7 @@ impl floe_day::TimelineRepository for TursoStore {
     }
 
     async fn put_task(&self, value: &floe_day::Task) -> Result<(), floe_day::DayError> {
-        TursoStore::put_task(self, value)
-            .await
-            .map_err(day_error)
+        TursoStore::put_task(self, value).await.map_err(day_error)
     }
 
     async fn put_task_if_revision(
@@ -42,9 +38,7 @@ impl floe_day::TimelineRepository for TursoStore {
     }
 
     async fn put_note(&self, value: &floe_day::Note) -> Result<(), floe_day::DayError> {
-        TursoStore::put_note(self, value)
-            .await
-            .map_err(day_error)
+        TursoStore::put_note(self, value).await.map_err(day_error)
     }
 
     async fn put_note_if_revision(
@@ -61,36 +55,28 @@ impl floe_day::TimelineRepository for TursoStore {
         &self,
         id: floe_day::CaptureId,
     ) -> Result<Option<floe_day::Capture>, floe_day::DayError> {
-        TursoStore::get_capture(self, id)
-            .await
-            .map_err(day_error)
+        TursoStore::get_capture(self, id).await.map_err(day_error)
     }
 
     async fn get_event(
         &self,
         id: floe_day::EventId,
     ) -> Result<Option<floe_day::Event>, floe_day::DayError> {
-        TursoStore::get_event(self, id)
-            .await
-            .map_err(day_error)
+        TursoStore::get_event(self, id).await.map_err(day_error)
     }
 
     async fn get_task(
         &self,
         id: floe_day::TaskId,
     ) -> Result<Option<floe_day::Task>, floe_day::DayError> {
-        TursoStore::get_task(self, id)
-            .await
-            .map_err(day_error)
+        TursoStore::get_task(self, id).await.map_err(day_error)
     }
 
     async fn get_note(
         &self,
         id: floe_day::NoteId,
     ) -> Result<Option<floe_day::Note>, floe_day::DayError> {
-        TursoStore::get_note(self, id)
-            .await
-            .map_err(day_error)
+        TursoStore::get_note(self, id).await.map_err(day_error)
     }
 
     async fn list_events(

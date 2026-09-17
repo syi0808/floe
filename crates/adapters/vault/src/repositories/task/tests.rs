@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::VaultKey;
 use floe_agent_contract::{DependencyCoverage, InvocationKey, TaskSnapshot, TaskState};
-use crate::{VaultKey};
 use floe_kernel::PersonId;
 use uuid::Uuid;
 

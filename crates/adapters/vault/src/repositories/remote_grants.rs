@@ -9,8 +9,8 @@ use floe_access::{
     RemoteGrantStore, RemotePairingIdentity, RemoteProducerIdentity, RemoteSourceQuery,
     RemoteViewSourceReference, SignedCalendarPreview, SignedSourcePreview,
 };
-use floe_agent_contract::{AgentFailure, BoxFuture};
 use floe_access::{GrantAuthority, GrantId, GrantScope, GrantSourceBinding, SourceAuthority};
+use floe_agent_contract::{AgentFailure, BoxFuture};
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 
@@ -104,10 +104,8 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         scope: GrantScope,
     ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
         Box::pin(async move {
-            self.review_and_activate_remote_calendar_grant(
-                grant_id, expected, source, scope, None,
-            )
-            .await
+            self.review_and_activate_remote_calendar_grant(grant_id, expected, source, scope, None)
+                .await
         })
     }
 

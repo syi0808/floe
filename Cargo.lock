@@ -825,6 +825,7 @@ dependencies = [
 name = "floe-app"
 version = "0.1.0"
 dependencies = [
+ "apple-native-keyring-store",
  "base64",
  "chrono",
  "floe-access",
@@ -845,6 +846,8 @@ dependencies = [
  "floe-protocol",
  "floe-provider-adapters",
  "floe-vault",
+ "keyring-core",
+ "libc",
  "ring",
  "serde",
  "serde_json",
@@ -855,6 +858,7 @@ dependencies = [
  "tracing",
  "turso",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

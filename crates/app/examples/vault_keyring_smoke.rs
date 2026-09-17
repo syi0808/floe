@@ -8,12 +8,12 @@ mod macos {
     };
 
     use apple_native_keyring_store::keychain::{Cred, MacKeychainDomain};
-    use floe_agent_contract::{AgentFailure};
-use floe_conversation::{AgentOutcome, SessionStore};
-use floe_execution::{Cancellation};
-    use floe_conversation::{AgentFixturePrompt, AgentFixtureTurn};
-use floe_vault::{EncryptedAgentVault, KeyringVaultKeys};
+    use floe_agent_contract::AgentFailure;
+    use floe_app::{AgentFixturePrompt, AgentFixtureTurn, run_persisted_agent_sample};
+    use floe_conversation::{AgentOutcome, SessionStore};
+    use floe_execution::Cancellation;
     use floe_kernel::PersonId;
+    use floe_vault::{EncryptedAgentVault, KeyringVaultKeys};
     use keyring_core::{Entry, Error};
     use serde_json::json;
     use uuid::Uuid;
@@ -123,19 +123,19 @@ use floe_vault::{EncryptedAgentVault, KeyringVaultKeys};
     async fn exercise(root: &Path, person: PersonId) -> Result<(), AgentFailure> {
         let vault = EncryptedAgentVault::create(root, person, KeyringVaultKeys).await?;
         let initial = vault.create_sample_session().await?;
-        let completed = vault
-            ; floe_app::run_persisted_agent_sample(
-                AgentFixtureTurn {
-                    person_id: person,
-                    session_id: initial.id,
-                    expected_revision: 0,
-                    prompt: AgentFixturePrompt::Today,
-                },
-                Cancellation::default(),
-                Duration::ZERO,
-                |_| {},
-            )
-            .await?;
+        let completed = run_persisted_agent_sample(
+            &vault,
+            AgentFixtureTurn {
+                person_id: person,
+                session_id: initial.id,
+                expected_revision: 0,
+                prompt: AgentFixturePrompt::Today,
+            },
+            Cancellation::default(),
+            Duration::ZERO,
+            |_| {},
+        )
+        .await?;
         if completed.last_outcome != Some(AgentOutcome::Completed) || completed.messages.len() != 3
         {
             return Err(AgentFailure::InvalidModelOutput);

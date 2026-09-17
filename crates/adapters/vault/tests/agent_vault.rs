@@ -13,57 +13,57 @@ use std::{
 };
 
 use chrono::{TimeZone, Utc};
-use floe_vault::*;
-use floe_kernel::PersonId;
-use floe_knowledge::MAX_CONTEXT_MEMORIES;
-use uuid::Uuid;
-use floe_conversation::AGENT_VERSION;
 use floe_agent_contract::AgentContext;
 use floe_agent_contract::AgentFailure;
-use floe_conversation::AgentMessage;
 use floe_agent_contract::Cancellation;
-use floe_conversation::CapabilityDescriptor;
-use floe_conversation::CapabilityExecution;
-use floe_conversation::CapabilityExecutionState;
+use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::SessionProtection;
 use floe_context_contract::ContextIssueReason;
 use floe_context_contract::DataClass;
 use floe_context_contract::EpistemicStatus;
-use floe_agent_contract::InferencePolicyDecision;
 use floe_context_contract::ModelPlacement;
-use floe_conversation::ModelRequest;
-use floe_conversation::ModelResponse;
-use floe_conversation::ModelStep;
-use floe_conversation::ModelUsage;
 use floe_context_contract::PersonalMemoryKind;
-use floe_conversation::ProviderReplay;
-use floe_agent_contract::SessionProtection;
 use floe_context_contract::TransferConsent;
+use floe_conversation::AGENT_VERSION;
 use floe_conversation::AgentBudget;
 use floe_conversation::AgentCommand;
 use floe_conversation::AgentEventKind;
+use floe_conversation::AgentMessage;
 use floe_conversation::AgentOutcome;
 use floe_conversation::AgentRuntime;
 use floe_conversation::AgentSession;
 use floe_conversation::AgentUsage;
+use floe_conversation::CapabilityDescriptor;
+use floe_conversation::CapabilityExecution;
+use floe_conversation::CapabilityExecutionState;
 use floe_conversation::CapabilityHost;
 use floe_conversation::CapabilityInvocation;
+use floe_conversation::GovernedSessionRepository;
+use floe_conversation::ModelRequest;
+use floe_conversation::ModelResponse;
 use floe_conversation::ModelRunner;
+use floe_conversation::ModelStep;
+use floe_conversation::ModelUsage;
+use floe_conversation::ProviderReplay;
+use floe_conversation::SessionStore;
 use floe_inference::ModelAttemptRecord;
 use floe_inference::ModelAttemptState;
+use floe_kernel::PersonId;
 use floe_knowledge::KNOWLEDGE_VERSION;
 use floe_knowledge::KnowledgeActor;
 use floe_knowledge::KnowledgeCandidateState;
 use floe_knowledge::KnowledgeDecisionKind;
-use floe_conversation::GovernedSessionRepository;
-use floe_conversation::SessionStore;
 use floe_knowledge::KnowledgeRevisionState;
 use floe_knowledge::LearnerJobSettlement;
 use floe_knowledge::LearnerJobState;
 use floe_knowledge::LearnerReviewInput;
 use floe_knowledge::LearningObservationKind;
 use floe_knowledge::LearningOutcome;
+use floe_knowledge::MAX_CONTEXT_MEMORIES;
 use floe_knowledge::PersonalMemoryValue;
 use floe_knowledge::StageMemoryCandidate;
+use floe_vault::*;
+use uuid::Uuid;
 
 #[derive(Clone, Default)]
 struct Keys(Arc<KeyState>);
@@ -564,8 +564,14 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     assert_eq!(overview.memories.len(), 1);
     assert_eq!(overview.memories[0].target_id, active_revision.target_id);
     assert_eq!(overview.memories[0].revision, active_revision.revision);
-    assert_eq!(overview.memories[0].source_count, active_revision.source_refs.len());
-    assert_eq!(overview.memories[0].statement, "사용자는 회의를 14시 이후에 선호한다.");
+    assert_eq!(
+        overview.memories[0].source_count,
+        active_revision.source_refs.len()
+    );
+    assert_eq!(
+        overview.memories[0].statement,
+        "사용자는 회의를 14시 이후에 선호한다."
+    );
     assert_eq!(
         vault.memory_overview_snapshot(0).await,
         Err(AgentFailure::InvalidInput)
@@ -768,7 +774,9 @@ async fn session_archive_search_compaction_and_recovery_survive_reopen() {
             && hit.session_revision == compacted.recovery.source_revision
     }));
     assert_eq!(
-        vault.load(person, session.id).await.unwrap(),
+        SessionStore::load(&vault, person, session.id)
+            .await
+            .unwrap(),
         compacted.session
     );
 }
@@ -807,7 +815,12 @@ async fn session_compaction_rejects_a_boundary_that_splits_a_turn() {
             .await,
         Err(AgentFailure::InvalidInput)
     );
-    assert_eq!(vault.load(person, session.id).await.unwrap(), session);
+    assert_eq!(
+        SessionStore::load(&vault, person, session.id)
+            .await
+            .unwrap(),
+        session
+    );
 }
 
 #[tokio::test]
@@ -818,7 +831,10 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
         .await
         .unwrap();
-    assert_eq!(vault.protection(), SessionProtection::Encrypted);
+    assert_eq!(
+        SessionStore::protection(&vault),
+        SessionProtection::Encrypted
+    );
     let mut session = vault.create_session().await.unwrap();
     let turn = Uuid::new_v4();
     let markers = [
@@ -929,7 +945,12 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     for execution in &mut session.capability_executions {
         execution.replay = None;
     }
-    assert_eq!(vault.load(person, session.id).await.unwrap(), session);
+    assert_eq!(
+        SessionStore::load(&vault, person, session.id)
+            .await
+            .unwrap(),
+        session
+    );
 }
 
 #[tokio::test]
@@ -963,7 +984,7 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
         session_id: session.id,
         session_revision: session.revision,
         turn_ids: vec![turn_id],
-        outcome: AgentOutcome::Completed.into(),
+        outcome: floe_knowledge::LearningOutcome::Completed,
         digest: "User explicitly asked to remember a morning focus preference".into(),
         current_memories: vec![],
         observed_at: now,
@@ -1224,7 +1245,7 @@ async fn learner_review_queue_rejects_stale_sources_before_model_claim() {
         session_id: session.id,
         session_revision: 1,
         turn_ids: vec![turn_id],
-        outcome: AgentOutcome::Completed.into(),
+        outcome: floe_knowledge::LearningOutcome::Completed,
         digest: "Explicit remember request".into(),
         current_memories: vec![],
         observed_at: now,
@@ -1431,7 +1452,7 @@ async fn lineage_revocation_blocks_approval_settlement_and_memory_projection() {
         session_id: settlement_session.id,
         session_revision: 1,
         turn_ids: vec![settlement_turn],
-        outcome: AgentOutcome::Completed.into(),
+        outcome: floe_knowledge::LearningOutcome::Completed,
         digest: "learner review".into(),
         current_memories: vec![],
         observed_at: now,
@@ -1499,11 +1520,11 @@ async fn vaults_enforce_person_revision_version_and_size_boundaries() {
         .unwrap();
     let original = vault.create_session().await.unwrap();
     assert_eq!(
-        vault.load(other, original.id).await,
+        SessionStore::load(&vault, other, original.id).await,
         Err(AgentFailure::NotFound)
     );
     assert_eq!(
-        second.load(other, original.id).await,
+        SessionStore::load(&second, other, original.id).await,
         Err(AgentFailure::NotFound)
     );
     let mut next = original.clone();
@@ -1543,7 +1564,13 @@ async fn vaults_enforce_person_revision_version_and_size_boundaries() {
         vault.compare_and_swap(&next, 1).await,
         Err(AgentFailure::BudgetExceeded)
     );
-    assert_eq!(vault.load(person, original.id).await.unwrap().revision, 1);
+    assert_eq!(
+        SessionStore::load(&vault, person, original.id)
+            .await
+            .unwrap()
+            .revision,
+        1
+    );
     let values = keys.0.values.lock().unwrap();
     assert_eq!(values.len(), 2);
     let mut keys = values.values();
@@ -1561,10 +1588,13 @@ async fn missing_wrong_and_revoked_keys_never_create_replacement_data() {
     let session = vault.create_session().await.unwrap();
     keys.0.blocked.store(true, Ordering::SeqCst);
     assert_eq!(
-        vault.load(person, session.id).await,
+        SessionStore::load(&vault, person, session.id).await,
         Err(AgentFailure::VaultUnavailable)
     );
-    assert_eq!(vault.protection(), SessionProtection::KeyUnavailable);
+    assert_eq!(
+        SessionStore::protection(&vault),
+        SessionProtection::KeyUnavailable
+    );
     keys.0.blocked.store(false, Ordering::SeqCst);
     assert_eq!(
         vault.create_session().await,
@@ -1591,7 +1621,12 @@ async fn missing_wrong_and_revoked_keys_never_create_replacement_data() {
     let reopened = EncryptedAgentVault::open(root.path(), person, keys)
         .await
         .unwrap();
-    assert_eq!(reopened.load(person, session.id).await.unwrap(), session);
+    assert_eq!(
+        SessionStore::load(&reopened, person, session.id)
+            .await
+            .unwrap(),
+        session
+    );
 }
 
 #[tokio::test]
@@ -1741,7 +1776,12 @@ async fn encrypted_identity_rejects_relabeling_even_with_a_matching_key() {
     let original = EncryptedAgentVault::open(root.path(), person, keys)
         .await
         .unwrap();
-    assert_eq!(original.load(person, session.id).await.unwrap(), session);
+    assert_eq!(
+        SessionStore::load(&original, person, session.id)
+            .await
+            .unwrap(),
+        session
+    );
 }
 
 #[tokio::test]
@@ -1946,7 +1986,9 @@ async fn runtime_fails_closed_on_key_loss_and_recovers_without_model_replay() {
     let reopened = EncryptedAgentVault::open(root.path(), person, keys.clone())
         .await
         .unwrap();
-    let interrupted = reopened.load(person, session.id).await.unwrap();
+    let interrupted = SessionStore::load(&reopened, person, session.id)
+        .await
+        .unwrap();
     assert!(interrupted.active_turn.is_some());
     assert_eq!(interrupted.messages.len(), 1);
     let runtime = AgentRuntime {
@@ -1968,7 +2010,12 @@ async fn runtime_fails_closed_on_key_loss_and_recovers_without_model_replay() {
         })
     );
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(reopened.load(person, session.id).await.unwrap(), recovered);
+    assert_eq!(
+        SessionStore::load(&reopened, person, session.id)
+            .await
+            .unwrap(),
+        recovered
+    );
     let model = LocalModel {
         keys,
         revoke: false,

@@ -1,7 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use floe_agent_contract::AgentFailure;
 use floe_access::GrantState;
+use floe_agent_contract::AgentFailure;
 
+use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 /// The remote authority values this vault stores. Who a producer is and what a
 /// signed source names are Access's; this module holds and signs the records.
 pub use floe_access::{
@@ -9,7 +10,6 @@ pub use floe_access::{
     RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
     RemoteProducerIdentity, RemoteViewSourceReference,
 };
-use floe_access::{GrantOperation, GrantPurpose, ProcessingRestriction, SourceAuthority};
 use ring::{
     aead, hkdf,
     rand::{SecureRandom, SystemRandom},

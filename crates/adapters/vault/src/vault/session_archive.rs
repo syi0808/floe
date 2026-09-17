@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 
-use floe_agent_contract::{AgentFailure};
+use floe_agent_contract::AgentFailure;
 use floe_conversation::{AgentMessage, AgentSession, SessionRecoveryPointer};
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;

@@ -1,8 +1,8 @@
 use std::future::Future;
 
-use floe_conversation::{AgentMessage};
-use floe_experts::{AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertResult};
 use floe_access::DependencyCoverage;
+use floe_conversation::AgentMessage;
+use floe_experts::{AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertResult};
 use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
 

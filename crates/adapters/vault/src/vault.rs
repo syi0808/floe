@@ -9,11 +9,11 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentBudget, AgentSession, SessionStore};
 use floe_access::{ContextDependency, DependencyCoverage};
-use floe_kernel::{PersonId};
+use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
+use floe_conversation::{AgentBudget, AgentSession, SessionStore};
+use floe_kernel::AGENT_VERSION;
+use floe_kernel::PersonId;
 use subtle::ConstantTimeEq;
 use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
@@ -36,7 +36,6 @@ mod remote_view_grants;
 mod session_archive;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
-pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
@@ -45,6 +44,7 @@ pub use conversations::{
     VaultConversationJournalEntry, VaultConversationRunRecord, VaultConversationRunState,
     VaultConversationTerminal,
 };
+pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;
 pub use remote_authority::{

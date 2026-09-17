@@ -50,7 +50,9 @@ impl TursoStore {
         let action: floe_actions::CalendarAction = self
             .get("calendar_actions", id.to_string())
             .await?
-            .ok_or_else(|| StoreError::new(StoreErrorCode::NotFound, "calendar action not found"))?;
+            .ok_or_else(|| {
+                StoreError::new(StoreErrorCode::NotFound, "calendar action not found")
+            })?;
         if action.person_id != person_id {
             return Err(StoreError::new(
                 StoreErrorCode::NotFound,

@@ -934,7 +934,9 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use floe_access::{GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle};
+    use floe_access::{
+        GrantDataCategory, GrantOperation, GrantPurpose, ProcessingRestriction, ResourceHandle,
+    };
 
     use super::*;
 

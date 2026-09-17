@@ -1,6 +1,8 @@
+use floe_access::DataAccessGrant;
+use floe_access::{
+    ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding,
+};
 use floe_agent_contract::AgentFailure;
-use floe_access::{DataAccessGrant};
-use floe_access::{ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 
@@ -397,8 +399,12 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use floe_access::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
-use floe_kernel::{PersonId};
+    use floe_access::{
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory,
+        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
+        ResourceHandle, SourceAuthority,
+    };
+    use floe_kernel::PersonId;
     use uuid::Uuid;
 
     use super::*;

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_conversation::{AgentOutcome};
+use floe_conversation::AgentOutcome;
 use floe_knowledge::{
     ContextMemory, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
     KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
@@ -928,7 +928,10 @@ impl<Keys: VaultKeyProvider> floe_knowledge::LearnerJobRepository for EncryptedA
             .map(|_| ())
     }
 
-    async fn claim_review(&self, now: DateTime<Utc>) -> Result<Option<LearnerReviewJob>, AgentFailure> {
+    async fn claim_review(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Option<LearnerReviewJob>, AgentFailure> {
         self.claim_learner_review(now).await
     }
 
@@ -1086,7 +1089,9 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         let turn_ids = session
             .messages
             .iter()
-            .filter(|message| !matches!(message, floe_conversation::AgentMessage::Compaction { .. }))
+            .filter(|message| {
+                !matches!(message, floe_conversation::AgentMessage::Compaction { .. })
+            })
             .map(floe_conversation::AgentMessage::turn_id)
             .collect::<HashSet<_>>()
             .into_iter()

@@ -31,7 +31,11 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use floe_access::{ConnectionId, ConnectorId, ExecutionOwnerId, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::{
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantDataCategory, GrantOperation,
+        GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+        SourceAuthority,
+    };
     use uuid::Uuid;
 
     use super::*;

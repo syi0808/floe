@@ -1,8 +1,13 @@
 use std::sync::Arc;
 
+use crate::{
+    EncryptedAgentVault, VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
+};
 use floe_agent_contract::{AgentFailure, BoxFuture, EndpointSettlement, TaskId, TaskSnapshot};
-use crate::{EncryptedAgentVault, VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord};
-use floe_experts::{ExpertSettlement as CalendarExpertSettlement, ExpertTaskCompletion as CalendarExpertTaskCompletion};
+use floe_experts::{
+    ExpertSettlement as CalendarExpertSettlement,
+    ExpertTaskCompletion as CalendarExpertTaskCompletion,
+};
 use floe_experts::{TaskActivation, TaskAdmission, TaskRecord, TaskRepository};
 
 pub struct VaultTaskRepository<Keys> {
@@ -65,7 +70,8 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
     }
 
     fn validate_settlement(&self, settlement: &EndpointSettlement) -> Result<(), AgentFailure> {
-        CalendarExpertSettlement::from_endpoint_settlement(settlement, &self.settlement_owner).map(|_| ())
+        CalendarExpertSettlement::from_endpoint_settlement(settlement, &self.settlement_owner)
+            .map(|_| ())
     }
 
     fn settle<'a>(
@@ -87,8 +93,10 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
                     )
                     .await;
             };
-            let settlement =
-                CalendarExpertSettlement::from_endpoint_settlement(&settlement, &self.settlement_owner)?;
+            let settlement = CalendarExpertSettlement::from_endpoint_settlement(
+                &settlement,
+                &self.settlement_owner,
+            )?;
             self.vault
                 .settle_calendar_expert_task_checked(
                     CalendarExpertTaskCompletion {

@@ -1,14 +1,19 @@
 use std::sync::Arc;
 
-use floe_agent_contract::{ModelPlacement};
-use floe_conversation::{AgentMessage};
-use floe_experts::{A2AArtifact, A2APart, A2ATask, A2ATaskState};
+use crate::{
+    EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
+    VaultConversationCancelAdmission, VaultConversationCancelRequest,
+    VaultConversationContinuationRef, VaultConversationRunRecord, VaultConversationRunState,
+    VaultConversationTerminal, VaultKeyProvider,
+};
+use floe_agent_contract::ModelPlacement;
 use floe_agent_contract::{
     AgentFailure, AgentMessage as ContractMessage, ArchivePointer, ArchiveReadRequest,
     ArchiveSnapshot, ArchivedMessage, Artifact as ContractArtifact,
     ArtifactPart as ContractArtifactPart, BoxFuture, DependencyCoverage, EngineStep,
     ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId, TaskReceipt, TaskState,
 };
+use floe_conversation::AgentMessage;
 use floe_conversation::{
     AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
     CompactionRequest, ConversationRepository, JournalEntry, RecoveryReceipt, RecoveryRequest,
@@ -16,7 +21,7 @@ use floe_conversation::{
     SessionReceipt, SessionRepository, SessionRequest, TurnAdmission, TurnAdmissionRequest,
     TurnMode,
 };
-use crate::{EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest, VaultConversationCancelAdmission, VaultConversationCancelRequest, VaultConversationContinuationRef, VaultConversationRunRecord, VaultConversationRunState, VaultConversationTerminal, VaultKeyProvider};
+use floe_experts::{A2AArtifact, A2APart, A2ATask, A2ATaskState};
 use uuid::Uuid;
 
 pub struct VaultConversationRepository<Keys> {
@@ -499,7 +504,9 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
     Ok(receipt)
 }
 
-fn session_receipt(session: floe_conversation::AgentSession) -> Result<SessionReceipt, AgentFailure> {
+fn session_receipt(
+    session: floe_conversation::AgentSession,
+) -> Result<SessionReceipt, AgentFailure> {
     if session.scope.is_some()
         || session.data_classes != [floe_agent_contract::DataClass::Personal]
         || session.person_id.0.is_nil()

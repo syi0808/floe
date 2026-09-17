@@ -1,7 +1,7 @@
+use floe_access::DependencyCoverage;
+use floe_agent_contract::{TaskId, TaskSnapshot, TaskState};
 use floe_conversation::AgentMessage;
 use floe_experts::{AgentRegistry, ExpertResult, RegistrySnapshot};
-use floe_agent_contract::{TaskId, TaskSnapshot, TaskState};
-use floe_access::DependencyCoverage;
 use turso::transaction::TransactionBehavior;
 
 use super::tasks::VaultTaskRecord;
@@ -265,13 +265,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
         if matches!(
             request.provider,
-            floe_agent_contract::CalendarProvider::EventKit | floe_agent_contract::CalendarProvider::Android
+            floe_agent_contract::CalendarProvider::EventKit
+                | floe_agent_contract::CalendarProvider::Android
         ) {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let connection_id = request.setup_id.to_string();
-        self.install_calendar_expert_with_connection(request, packaging, connection_id, cancellation)
-            .await
+        self.install_calendar_expert_with_connection(
+            request,
+            packaging,
+            connection_id,
+            cancellation,
+        )
+        .await
     }
 
     pub async fn install_calendar_expert_with_connection(
@@ -1433,4 +1439,3 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 fn integer(value: u64) -> Result<i64, AgentFailure> {
     i64::try_from(value).map_err(|_| AgentFailure::BudgetExceeded)
 }
-

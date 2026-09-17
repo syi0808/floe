@@ -1,11 +1,11 @@
 //! Owner-scoped repository implementations over the local encrypted engine.
 
 mod actions;
-mod day;
 #[cfg(unix)]
 mod context_evidence;
 #[cfg(unix)]
 mod conversation;
+mod day;
 #[cfg(unix)]
 mod expert_actions;
 #[cfg(unix)]

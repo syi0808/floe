@@ -1,6 +1,6 @@
-use floe_agent_contract::{AgentFailure};
-use floe_conversation::{AgentSession};
 use floe_access::{DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
+use floe_agent_contract::AgentFailure;
+use floe_conversation::AgentSession;
 use turso::{Row, transaction::Transaction};
 use uuid::Uuid;
 
@@ -683,10 +683,16 @@ mod tests {
     };
 
     use chrono::{Duration, Utc};
-    use floe_agent_contract::{AgentFailure};
-use floe_conversation::{AgentMessage, CapabilityExecution, CapabilityExecutionState, ProviderReplay};
-    use floe_access::{DataAccessGrant};
-use floe_access::{ConnectionId, ConnectorId, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_access::DataAccessGrant;
+    use floe_access::{
+        ConnectionId, ConnectorId, ContextDependency, DependencyCoverage, ExecutionOwnerId,
+        GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+    use floe_agent_contract::AgentFailure;
+    use floe_conversation::{
+        AgentMessage, CapabilityExecution, CapabilityExecutionState, ProviderReplay,
+    };
 
     use super::super::context_dependencies::merge_context_dependency_coverage;
     use super::*;

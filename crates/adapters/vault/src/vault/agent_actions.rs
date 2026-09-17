@@ -1,12 +1,12 @@
+use chrono::{DateTime, Utc};
+use floe_access::{ContextDependency, DependencyCoverage};
 use floe_actions::{
     AgentActionAdmission, AgentActionEnvelope, CalendarAction, CalendarActionState,
     action_policy_mode_name as policy_mode_name, action_state_name as state_name,
     valid_action_digest as valid_digest,
 };
-use chrono::{DateTime, Utc};
 use floe_agent_contract::AgentFailure;
 use floe_execution::Cancellation;
-use floe_access::{ContextDependency, DependencyCoverage};
 use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
 
@@ -246,7 +246,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.check_access()
     }
 
-    pub async fn agent_action_policy(&self) -> Result<floe_actions::ActionAuthorityMode, AgentFailure> {
+    pub async fn agent_action_policy(
+        &self,
+    ) -> Result<floe_actions::ActionAuthorityMode, AgentFailure> {
         self.initialize_agent_action_store().await?;
         let connection = self.connection()?;
         let mut rows = connection
@@ -815,10 +817,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-
-
-
-
 fn parse_policy_mode(value: String) -> Result<floe_actions::ActionAuthorityMode, AgentFailure> {
     match value.as_str() {
         "allow" => Ok(floe_actions::ActionAuthorityMode::Allow),
@@ -827,7 +825,6 @@ fn parse_policy_mode(value: String) -> Result<floe_actions::ActionAuthorityMode,
         _ => Err(AgentFailure::VaultUnavailable),
     }
 }
-
 
 fn storage(_: turso::Error) -> AgentFailure {
     AgentFailure::StorageUnavailable

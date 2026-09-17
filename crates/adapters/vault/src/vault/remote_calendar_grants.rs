@@ -1,6 +1,8 @@
+use floe_access::DataAccessGrant;
+use floe_access::{
+    ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding,
+};
 use floe_agent_contract::AgentFailure;
-use floe_access::{DataAccessGrant};
-use floe_access::{ConsumerPolicyAuthority, GrantAuthority, GrantId, GrantScope, GrantSourceBinding};
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 use uuid::Uuid;

@@ -1,6 +1,6 @@
+use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use floe_agent_contract::{DataClass, ModelPlacement};
 use floe_conversation::{AgentContinuation, AgentMessage, AgentOutcome, AgentUsage};
-use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use serde::{Deserialize, Serialize};
 use turso::transaction::{Transaction, TransactionBehavior};
 

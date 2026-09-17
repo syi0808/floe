@@ -1,6 +1,6 @@
-use floe_agent_contract::AgentFailure;
 use floe_access::{ContextDependencyError, DependencyCoverage, MAX_CONTEXT_DEPENDENCY_BYTES};
-use floe_kernel::{PersonId};
+use floe_agent_contract::AgentFailure;
+use floe_kernel::PersonId;
 use turso::transaction::Transaction;
 use uuid::Uuid;
 
@@ -322,12 +322,20 @@ mod tests {
     use super::*;
     use crate::ContextEvidenceReader;
     use chrono::{Duration, Utc};
+    use floe_access::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage,
+        ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
+        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
+        ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
     use floe_agent_contract::{DataClass, ModelPlacement, TransferConsent};
-use floe_context::{AgentContext, InferencePolicyDecision};
-use floe_kernel::AGENT_VERSION;
-use floe_conversation::{AgentBudget, AgentMessage, ModelReplay, ModelRequest, ProviderReplay, SessionStore, prompts::manager_prompt};
-use floe_execution::{Cancellation};
-    use floe_access::{ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES, ProcessingRestriction, ResourceHandle, SourceAuthority};
+    use floe_context::{AgentContext, InferencePolicyDecision};
+    use floe_conversation::{
+        AgentBudget, AgentMessage, ModelReplay, ModelRequest, ProviderReplay, SessionStore,
+        prompts::manager_prompt,
+    };
+    use floe_execution::Cancellation;
+    use floe_kernel::AGENT_VERSION;
 
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -880,10 +888,12 @@ use floe_execution::{Cancellation};
             .unwrap();
         let mut session = vault.create_session().await.unwrap();
         let turn = Uuid::new_v4();
-        session.messages.push(floe_conversation::AgentMessage::User {
-            turn_id: turn,
-            text: "direct CAS".into(),
-        });
+        session
+            .messages
+            .push(floe_conversation::AgentMessage::User {
+                turn_id: turn,
+                text: "direct CAS".into(),
+            });
         session.revision = 1;
         vault.compare_and_swap(&session, 0).await.unwrap();
         assert_eq!(
@@ -901,10 +911,12 @@ use floe_execution::{Cancellation};
             .unwrap();
         let mut session = vault.create_session().await.unwrap();
         let turn = Uuid::new_v4();
-        session.messages.push(floe_conversation::AgentMessage::User {
-            turn_id: turn,
-            text: "ordinary chat".into(),
-        });
+        session
+            .messages
+            .push(floe_conversation::AgentMessage::User {
+                turn_id: turn,
+                text: "ordinary chat".into(),
+            });
         session.revision = 1;
         let governed = vault.governed_general_store(session.id);
         governed.compare_and_swap(&session, 0).await.unwrap();
@@ -923,10 +935,12 @@ use floe_execution::{Cancellation};
             .unwrap();
         let mut session = vault.create_session().await.unwrap();
         let turn = Uuid::new_v4();
-        session.messages.push(floe_conversation::AgentMessage::User {
-            turn_id: turn,
-            text: "unmanaged chat".into(),
-        });
+        session
+            .messages
+            .push(floe_conversation::AgentMessage::User {
+                turn_id: turn,
+                text: "unmanaged chat".into(),
+            });
         session.revision = 1;
         vault.compare_and_swap(&session, 0).await.unwrap();
         let governed = vault.governed_general_store(session.id);
@@ -934,10 +948,12 @@ use floe_execution::{Cancellation};
             .record_dependency(turn, dependency(person, b"late dependency"))
             .await
             .unwrap();
-        session.messages.push(floe_conversation::AgentMessage::Assistant {
-            turn_id: turn,
-            text: "reply".into(),
-        });
+        session
+            .messages
+            .push(floe_conversation::AgentMessage::Assistant {
+                turn_id: turn,
+                text: "reply".into(),
+            });
         session.revision = 2;
         governed.compare_and_swap(&session, 1).await.unwrap();
         assert_eq!(
