@@ -10,13 +10,41 @@ use floe_execution::{Cancellation};
 use crate::{AgentFixturePrompt, AgentFixtureTurn};
 use floe_diagnostics::{TraceContext, current_context};
 use floe_kernel::PersonId;
-use floe_protocol::*;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use floe_protocol::wire::{
-    WireResult, agent_failure, check_version, parse_id, parse_person, protocol_payload,
-};
+/// What a caller asks of the scripted agent run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentFixtureRunCommand {
+    /// Start the run, or rejoin the one already in flight.
+    Begin { prompt: AgentFixturePrompt },
+    /// Read what has happened since a sequence the caller already saw.
+    Poll { after_sequence: usize },
+    /// Cancel the run without releasing it.
+    Stop,
+    /// Release a finished run.
+    Release,
+}
+
+/// One request against the scripted agent run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentFixtureRunRequest {
+    pub person_id: PersonId,
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub command: AgentFixtureRunCommand,
+}
+
+/// Where the run has got to.
+pub struct AgentFixtureRunSnapshot {
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub events: Vec<AgentEvent>,
+    pub next_sequence: usize,
+    pub done: bool,
+    pub session: Option<AgentSession>,
+    pub failure: Option<AgentFailure>,
+}
 
 #[derive(Default)]
 pub struct AgentRuns(RefCell<Option<AgentRun>>);
@@ -25,7 +53,7 @@ struct AgentRun {
     person_id: PersonId,
     session_id: Uuid,
     expected_revision: u64,
-    prompt: AgentFixturePromptDto,
+    prompt: AgentFixturePrompt,
     cancellation: Cancellation,
     events: Arc<Mutex<Vec<AgentEvent>>>,
     task: JoinHandle<Result<AgentSession, AgentFailure>>,
@@ -33,11 +61,11 @@ struct AgentRun {
 }
 
 impl AgentRuns {
-    pub fn ensure_idle(&self, person_id: PersonId, session_id: Uuid) -> WireResult<()> {
+    pub fn ensure_idle(&self, person_id: PersonId, session_id: Uuid) -> Result<(), AgentFailure> {
         if self.0.borrow().as_ref().is_some_and(|run| {
             run.person_id == person_id && run.session_id == session_id && run.result.is_none()
         }) {
-            return Err(agent_failure(AgentFailure::Conflict));
+            return Err(AgentFailure::Conflict);
         }
         Ok(())
     }
@@ -59,28 +87,30 @@ impl AgentRuns {
 
 pub fn run(
     handle: &crate::AppComposition,
-    request: AgentFixtureRunRequestDto,
-) -> WireResult<AgentFixtureRunDto> {
-    check_version(request.schema_version)?;
-    let person_id = parse_person(&request.person_id)?;
-    let session_id = parse_id(&request.session_id, "session_id", |value| value)?;
+    request: AgentFixtureRunRequest,
+) -> Result<AgentFixtureRunSnapshot, AgentFailure> {
+    let AgentFixtureRunRequest {
+        person_id,
+        session_id,
+        expected_revision,
+        command,
+    } = request;
     let mut slot = handle.agent_runs.0.borrow_mut();
-    if let AgentFixtureRunOperationDto::Begin { prompt } = request.operation {
+    if let AgentFixtureRunCommand::Begin { prompt } = command {
         if let Some(run) = slot.as_ref() {
             if run.person_id != person_id
                 || run.session_id != session_id
-                || run.expected_revision != request.expected_revision
+                || run.expected_revision != expected_revision
                 || run.prompt != prompt
             {
-                return Err(agent_failure(AgentFailure::Conflict));
+                return Err(AgentFailure::Conflict);
             }
         } else {
             let session = handle
                 .runtime
-                .block_on(handle.core.agent_fixture_session(person_id, session_id))
-                .map_err(agent_failure)?;
-            if session.revision != request.expected_revision || session.active_turn.is_some() {
-                return Err(agent_failure(AgentFailure::Conflict));
+                .block_on(handle.core.agent_fixture_session(person_id, session_id))?;
+            if session.revision != expected_revision || session.active_turn.is_some() {
+                return Err(AgentFailure::Conflict);
             }
             let cancellation = Cancellation::default();
             let worker_cancellation = cancellation.clone();
@@ -93,8 +123,8 @@ pub fn run(
             let turn = AgentFixtureTurn {
                 person_id,
                 session_id,
-                expected_revision: request.expected_revision,
-                prompt: fixture_prompt(prompt),
+                expected_revision,
+                prompt,
             };
             let task = handle.runtime.spawn(crate::diagnostics::instrument(
                 async move {
@@ -117,7 +147,7 @@ pub fn run(
             *slot = Some(AgentRun {
                 person_id,
                 session_id,
-                expected_revision: request.expected_revision,
+                expected_revision,
                 prompt,
                 cancellation,
                 events,
@@ -126,16 +156,14 @@ pub fn run(
             });
         }
     }
-    let run = slot
-        .as_mut()
-        .ok_or_else(|| agent_failure(AgentFailure::NotFound))?;
+    let run = slot.as_mut().ok_or(AgentFailure::NotFound)?;
     if run.person_id != person_id
         || run.session_id != session_id
-        || run.expected_revision != request.expected_revision
+        || run.expected_revision != expected_revision
     {
-        return Err(agent_failure(AgentFailure::NotFound));
+        return Err(AgentFailure::NotFound);
     }
-    if matches!(request.operation, AgentFixtureRunOperationDto::Stop {}) {
+    if matches!(command, AgentFixtureRunCommand::Stop) {
         run.cancellation.cancel();
     }
     if run.result.is_none() {
@@ -146,57 +174,40 @@ pub fn run(
             run.result = Some(result.unwrap_or(Err(AgentFailure::Interrupted)));
         }
     }
-    let after_sequence = match request.operation {
-        AgentFixtureRunOperationDto::Poll { after_sequence } => after_sequence,
+    let after_sequence = match command {
+        AgentFixtureRunCommand::Poll { after_sequence } => after_sequence,
         _ => 0,
     };
     let result = snapshot(run, after_sequence)?;
-    if matches!(request.operation, AgentFixtureRunOperationDto::Release {}) {
+    if matches!(command, AgentFixtureRunCommand::Release) {
         if !result.done {
-            return Err(agent_failure(AgentFailure::Conflict));
+            return Err(AgentFailure::Conflict);
         }
         *slot = None;
     }
     Ok(result)
 }
 
-fn snapshot(run: &AgentRun, after_sequence: usize) -> WireResult<AgentFixtureRunDto> {
-    let events = run
-        .events
-        .lock()
-        .map_err(|_| agent_failure(AgentFailure::Interrupted))?;
+fn snapshot(run: &AgentRun, after_sequence: usize) -> Result<AgentFixtureRunSnapshot, AgentFailure> {
+    let events = run.events.lock().map_err(|_| AgentFailure::Interrupted)?;
     if after_sequence > events.len() {
-        return Err(agent_failure(AgentFailure::InvalidInput));
+        return Err(AgentFailure::InvalidInput);
     }
-    Ok(AgentFixtureRunDto {
-        session_id: run.session_id.to_string(),
+    Ok(AgentFixtureRunSnapshot {
+        session_id: run.session_id,
         expected_revision: run.expected_revision,
-        events: events[after_sequence..]
-            .iter()
-            .map(protocol_payload)
-            .collect::<Result<Vec<_>, _>>()?,
+        events: events[after_sequence..].to_vec(),
         next_sequence: events.len(),
         done: run.result.is_some(),
         session: run
             .result
             .as_ref()
             .and_then(|result| result.as_ref().ok())
-            .map(protocol_payload)
-            .transpose()?,
+            .cloned(),
         failure: run
             .result
             .as_ref()
             .and_then(|result| result.as_ref().err())
-            .map(protocol_payload)
-            .transpose()?,
+            .copied(),
     })
-}
-
-pub fn fixture_prompt(prompt: AgentFixturePromptDto) -> AgentFixturePrompt {
-    match prompt {
-        AgentFixturePromptDto::Today => AgentFixturePrompt::Today,
-        AgentFixturePromptDto::FollowUp => AgentFixturePrompt::FollowUp,
-        AgentFixturePromptDto::RepeatedCall => AgentFixturePrompt::RepeatedCall,
-        AgentFixturePromptDto::Unavailable => AgentFixturePrompt::Unavailable,
-    }
 }

@@ -144,7 +144,10 @@ pub fn agent_fixture(
             expected_revision,
         } => {
             let session_id = parse_id(&session_id, "session_id", |value| value)?;
-            handle.agent_runs().ensure_idle(person_id, session_id)?;
+            handle
+                .agent_runs()
+                .ensure_idle(person_id, session_id)
+                .map_err(agent_failure)?;
             handle.runtime().block_on(handle.core().recover_agent_fixture(
                 person_id,
                 session_id,
@@ -157,8 +160,11 @@ pub fn agent_fixture(
             prompt,
         } => {
             let session_id = parse_id(&session_id, "session_id", |value| value)?;
-            handle.agent_runs().ensure_idle(person_id, session_id)?;
-            let prompt = floe_app::agent_run::fixture_prompt(prompt);
+            handle
+                .agent_runs()
+                .ensure_idle(person_id, session_id)
+                .map_err(agent_failure)?;
+            let prompt = fixture_prompt(prompt);
             let result = handle
                 .runtime()
                 .block_on(handle.core().run_agent_fixture(
@@ -584,5 +590,58 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> WireResult<Mu
         snapshot: snapshot(handle, person_id, &request.day)?,
         changed_item,
         capture,
+    })
+}
+
+/// The scripted prompt one fixture request names.
+fn fixture_prompt(prompt: AgentFixturePromptDto) -> floe_app::AgentFixturePrompt {
+    match prompt {
+        AgentFixturePromptDto::Today => floe_app::AgentFixturePrompt::Today,
+        AgentFixturePromptDto::FollowUp => floe_app::AgentFixturePrompt::FollowUp,
+        AgentFixturePromptDto::RepeatedCall => floe_app::AgentFixturePrompt::RepeatedCall,
+        AgentFixturePromptDto::Unavailable => floe_app::AgentFixturePrompt::Unavailable,
+    }
+}
+
+/// Read one scripted-run request off the wire, and state where the run got to.
+pub fn agent_fixture_run(
+    handle: &FloeHandle,
+    request: AgentFixtureRunRequestDto,
+) -> WireResult<AgentFixtureRunDto> {
+    check_version(request.schema_version)?;
+    let command = match request.operation {
+        AgentFixtureRunOperationDto::Begin { prompt } => {
+            floe_app::AgentFixtureRunCommand::Begin {
+                prompt: fixture_prompt(prompt),
+            }
+        }
+        AgentFixtureRunOperationDto::Poll { after_sequence } => {
+            floe_app::AgentFixtureRunCommand::Poll { after_sequence }
+        }
+        AgentFixtureRunOperationDto::Stop {} => floe_app::AgentFixtureRunCommand::Stop,
+        AgentFixtureRunOperationDto::Release {} => floe_app::AgentFixtureRunCommand::Release,
+    };
+    let snapshot = floe_app::agent_run::run(
+        handle.services(),
+        floe_app::AgentFixtureRunRequest {
+            person_id: parse_person(&request.person_id)?,
+            session_id: parse_id(&request.session_id, "session_id", |value| value)?,
+            expected_revision: request.expected_revision,
+            command,
+        },
+    )
+    .map_err(agent_failure)?;
+    Ok(AgentFixtureRunDto {
+        session_id: snapshot.session_id.to_string(),
+        expected_revision: snapshot.expected_revision,
+        events: snapshot
+            .events
+            .iter()
+            .map(protocol_payload)
+            .collect::<Result<Vec<_>, _>>()?,
+        next_sequence: snapshot.next_sequence,
+        done: snapshot.done,
+        session: snapshot.session.as_ref().map(protocol_payload).transpose()?,
+        failure: snapshot.failure.as_ref().map(protocol_payload).transpose()?,
     })
 }

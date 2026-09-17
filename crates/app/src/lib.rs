@@ -37,6 +37,9 @@ pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalI
 pub use bootstrap::local_identity_for_database;
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
+pub use agent_run::{
+    AgentFixtureRunCommand, AgentFixtureRunRequest, AgentFixtureRunSnapshot,
+};
 pub use agent_fixture::{
     AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,
     run_persisted_agent_sample,

@@ -1734,7 +1734,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 person_id: job.person,
                                 session_id: session_uuid(session_id)?,
                                 expected_revision: *expected_revision,
-                                prompt: super::agent_run::fixture_prompt(*prompt),
+                                prompt: fixture_prompt(*prompt),
                             },
                             job.cancellation.clone(),
                             Duration::from_millis(500),
@@ -5064,5 +5064,18 @@ mod tests {
                 Err(error) => panic!("Vault did not release safely: {error:?}"),
             }
         }
+    }
+}
+
+/// The scripted prompt the vault worker's own envelope names.
+///
+/// This is the legacy in-process transport, so the mapping lives with it; R003
+/// 07 replaces the envelope and takes this with it.
+fn fixture_prompt(prompt: AgentFixturePromptDto) -> crate::AgentFixturePrompt {
+    match prompt {
+        AgentFixturePromptDto::Today => crate::AgentFixturePrompt::Today,
+        AgentFixturePromptDto::FollowUp => crate::AgentFixturePrompt::FollowUp,
+        AgentFixturePromptDto::RepeatedCall => crate::AgentFixturePrompt::RepeatedCall,
+        AgentFixturePromptDto::Unavailable => crate::AgentFixturePrompt::Unavailable,
     }
 }

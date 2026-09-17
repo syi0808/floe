@@ -183,9 +183,7 @@ pub unsafe extern "C" fn floe_core_agent_fixture_run(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, |handle: &FloeHandle, request| {
-        floe_app::agent_run::run(handle.services(), request)
-    })
+    invoke_json(handle_ptr, request_json, agent_fixture_run)
 }
 
 #[unsafe(no_mangle)]
