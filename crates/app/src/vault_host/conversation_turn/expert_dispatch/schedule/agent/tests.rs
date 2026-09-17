@@ -375,10 +375,16 @@ fn envelope_messages(request: &ModelTransportRequest) -> Vec<&serde_json::Value>
         .collect()
 }
 
+/// How many capability results this attempt was given.
+///
+/// A delegation also settles as a tool result, so it is not one of these: the
+/// Expert's own capability calls are what this counts.
 fn tool_results(request: &ModelTransportRequest) -> usize {
     envelope_messages(request)
         .iter()
-        .filter(|message| message["role"] == "tool")
+        .filter(|message| {
+            message["role"] == "tool" && message["capability_id"] != "floe.a2a.delegate"
+        })
         .count()
 }
 
@@ -1408,7 +1414,11 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
         } else {
             fixture
                 .vault
-                .install_calendar_expert(request, &crate::vault_host::schedule_packaging(), Cancellation::default())
+                .install_calendar_expert(
+                    request,
+                    &crate::vault_host::schedule_packaging(),
+                    Cancellation::default(),
+                )
                 .await
                 .unwrap()
         };
@@ -2522,9 +2532,11 @@ async fn personal_class_uses_encrypted_session_and_eventkit_shaped_fixture_not_s
     let requests = model.requests.lock().unwrap();
     assert!(requests[0].capabilities.is_empty());
     assert_eq!(requests[0].active_agents[0].id, fixture.expert_id);
-    let AgentMessage::Delegation { task, .. } = &requests[1].messages[1] else {
-        panic!("missing projection")
-    };
+    let delegation = envelope_messages(&requests[1])
+        .into_iter()
+        .find(|message| message["capability_id"] == "floe.a2a.delegate")
+        .expect("missing projection");
+    let task: A2ATask = serde_json::from_value(delegation["content"].clone()).unwrap();
     let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
     let expert_result = serde_json::from_str::<ExpertResult>(output).unwrap();
     assert_eq!(expert_result.data_class, DataClass::Personal);

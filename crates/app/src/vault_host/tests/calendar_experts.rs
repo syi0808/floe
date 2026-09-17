@@ -137,7 +137,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         .unwrap()
         .unwrap();
     assert_ne!(connection.source_authority, authority);
-    let retry = perform(&worker, person, action);
+    let retry = perform(&worker, person, action());
     assert_eq!(retry.failure, Some(AgentFailure::AccessReviewRequired));
     let changed = perform(
         &worker,
@@ -549,7 +549,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     assert_eq!(replay.failure, None, "replay: {replay:?}");
     assert_eq!(replay.session, first.session);
 
-    let mut changed = action;
+    let mut changed = action();
     let WorkerAction::ConversationTurn { request } = &mut changed else {
         unreachable!()
     };
@@ -1206,7 +1206,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             profile: ProfileSelection::Auto,
             continuation: true,
             retry_of: None,
-            remote_route: Some(route),
+            remote_route: Some(route.clone()),
         }),
     };
     let request_id = Uuid::new_v4();
@@ -1244,7 +1244,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             person,
             request_id,
             WorkerOperation::Submit {
-                action: Box::new(action),
+                action: Box::new(action()),
             },
         )
         .unwrap();
@@ -1704,7 +1704,11 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         .unwrap();
     assert_eq!(
         (replayed.request_id, replayed.stage.clone(), replayed.done),
-        (completed.request_id, completed.stage.clone(), completed.done)
+        (
+            completed.request_id,
+            completed.stage.clone(),
+            completed.done
+        )
     );
     assert!(matches!(
         worker.request(
@@ -1734,7 +1738,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         perform(&worker, person, action()).calendar_experts.as_ref(),
         Some(&installed)
     );
-    let mut changed = setup;
+    let mut changed = setup.clone();
     changed.calendar_ids = vec!["retarget".into()];
     assert_eq!(
         perform(
@@ -1775,7 +1779,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
     let worker = Worker::new(root, keys.clone()).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
     assert_eq!(
-        perform(&worker, person, action).calendar_experts.as_ref(),
+        perform(&worker, person, action()).calendar_experts.as_ref(),
         Some(&before)
     );
     assert_eq!(

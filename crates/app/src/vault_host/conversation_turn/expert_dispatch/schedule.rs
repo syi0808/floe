@@ -2479,9 +2479,7 @@ mod tests {
                     observation: Box::new(CalendarObservationPublication {
                         connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
-                        provider: floe_protocol::conversion::calendar_provider_to_dto(
-                            CalendarProvider::EventKit,
-                        ),
+                        provider: CalendarProvider::EventKit,
                         calendar_ids: vec!["primary".into()],
                         observed_at_unix_ms,
                         expires_at_unix_ms: observed_at_unix_ms + 240_000,

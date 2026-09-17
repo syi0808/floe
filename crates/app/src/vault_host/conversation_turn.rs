@@ -2533,6 +2533,7 @@ mod tests {
             description: format!("Bounded {name} fixture."),
             domain_tags: vec!["test".into()],
             skills: vec!["Read bounded context".into()],
+            supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
         })
         .collect()
     }
@@ -2664,11 +2665,13 @@ mod tests {
                     expected_revision: 0,
                     setup_id: uuid::Uuid::new_v4(),
                     sources: vec![floe_experts::BuiltinSourceBinding {
-                        source,
+                        source: floe_experts::AgentId::try_new(source.source_id())
+                            .expect("builtin source ids are valid"),
                         view_handle: uuid::Uuid::new_v4(),
                         state: floe_experts::BuiltinSourceState::Available,
                     }],
                 },
+                &crate::vault_host::builtin_setup_specs(),
             )
             .unwrap()
     }
@@ -2809,11 +2812,12 @@ mod tests {
         let local_context = Arc::new(LocalContextHost::default());
         let host_epoch = "attention-test-host".to_owned();
         local_context
-            .request(
+            .execute(
                 person_id,
-                LocalContextOperationDto::RegisterAttentionHost {
+                LocalContextCommand::RegisterAttentionHost {
                     host_epoch: host_epoch.clone(),
                 },
+                None,
             )
             .unwrap();
         let subject = "a".repeat(64);
@@ -3130,10 +3134,11 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         local_context
-            .request(
+            .execute(
                 person_id,
-                floe_protocol::LocalContextOperationDto::Publish {
+                LocalContextCommand::Publish {
                     device_id: "mac-local".into(),
+                    view_id: "attention.coarse".into(),
                     view: serde_json::json!({
                         "schema_version": AGENT_VERSION,
                         "view_id": "attention.coarse",
@@ -3145,6 +3150,7 @@ mod tests {
                         "evidence_handles": ["activity:coarse"]
                     }),
                 },
+                None,
             )
             .unwrap();
         let capabilities = ConversationCapabilities {

@@ -144,7 +144,7 @@ async fn storage_failure_escapes_without_terminal_settlement_but_model_failure_i
             session_id: session.id,
             session_revision: session.revision,
             turn_ids: vec![turn_id],
-            outcome: AgentOutcome::Completed.into(),
+            outcome: floe_knowledge::LearningOutcome::Completed,
             digest: format!("Distinct fixture for {failure:?}"),
             current_memories: vec![],
             observed_at: now,

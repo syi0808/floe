@@ -2524,7 +2524,7 @@ mod tests {
                 external: false,
                 allow_external: false,
                 recipient: None,
-                pairing: Some(AgentRemotePairingDto {
+                pairing: Some(floe_inference::RoutePairing {
                     client_id: "saved-client".into(),
                     person_id: PersonId::new().to_string(),
                     device_id: "saved-device".into(),
@@ -2598,7 +2598,7 @@ mod tests {
                 external: false,
                 allow_external: false,
                 recipient: None,
-                pairing: Some(AgentRemotePairingDto {
+                pairing: Some(floe_inference::RoutePairing {
                     client_id: "client-1".into(),
                     person_id: person.to_string(),
                     device_id: "device-1".into(),
@@ -2633,7 +2633,7 @@ mod tests {
     fn serve_signed_enrollment(
         listener: TcpListener,
         producer_key: Ed25519KeyPair,
-        producer: RemoteProducerIdentityDto,
+        producer: floe_access::RemoteProducerIdentity,
         person: PersonId,
     ) -> Result<(), String> {
         let mut owner_public_key = None;
@@ -2835,14 +2835,19 @@ mod tests {
             person,
             WorkerAction::CalendarAction {
                 operation: CalendarActionOperation::SetAuthority {
-                    calendar_create: ActionAuthorityModeDto::Deny,
+                    calendar_create: floe_actions::ActionAuthorityMode::Deny,
                 },
             },
         );
         assert_eq!(changed.failure, None);
         assert_eq!(
-            changed.calendar_actions.unwrap()["authority"]["calendar_create"],
-            "deny"
+            changed
+                .calendar_actions
+                .unwrap()
+                .authority
+                .unwrap()
+                .calendar_create,
+            floe_actions::ActionAuthorityMode::Deny
         );
         perform(&worker, person, WorkerAction::Lock {});
         let locked = perform(
@@ -2863,8 +2868,13 @@ mod tests {
         );
         assert_eq!(restored.failure, None);
         assert_eq!(
-            restored.calendar_actions.unwrap()["authority"]["calendar_create"],
-            "deny"
+            restored
+                .calendar_actions
+                .unwrap()
+                .authority
+                .unwrap()
+                .calendar_create,
+            floe_actions::ActionAuthorityMode::Deny
         );
     }
 
@@ -3080,7 +3090,7 @@ mod tests {
             .request(person, id, WorkerOperation::Release)
             .unwrap();
         assert_eq!(
-            perform(&worker, person, action).failure,
+            perform(&worker, person, action()).failure,
             Some(AgentFailure::Conflict)
         );
         perform(&worker, person, WorkerAction::Lock {});
@@ -3348,19 +3358,19 @@ mod tests {
         .session
         .unwrap();
         let id = Uuid::new_v4();
-        let operation = WorkerOperation::Submit {
-            action: WorkerAction::Session {
+        let operation = || WorkerOperation::Submit {
+            action: Box::new(WorkerAction::Session {
                 operation: FixtureOperation::Turn {
                     session_id: session.id,
                     expected_revision: session.revision,
                     prompt: AgentFixturePrompt::Today,
                 },
-            },
+            }),
         };
-        worker.request(person, id, operation.clone()).unwrap();
+        worker.request(person, id, operation()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let result = worker.request(person, id, operation.clone()).unwrap();
+            let result = worker.request(person, id, operation()).unwrap();
             if result.events.iter().any(|event| {
                 matches!(
                     event.event,
@@ -3377,12 +3387,12 @@ mod tests {
                 person,
                 Uuid::new_v4(),
                 WorkerOperation::Submit {
-                    action: WorkerAction::Session {
+                    action: Box::new(WorkerAction::Session {
                         operation: FixtureOperation::Recover {
                             session_id: session.id,
                             expected_revision: 1
                         }
-                    }
+                    })
                 }
             ),
             Err(AgentFailure::Conflict)

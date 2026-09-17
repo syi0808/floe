@@ -7,12 +7,10 @@ use floe_agent_contract::{
 use floe_context::CalendarSource;
 use floe_context_contract::{CalendarProvider, ModelPlacement, TransferConsent};
 use floe_conversation::{AgentBudget, AgentMessage};
-use floe_inference::{
-    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
-};
 use floe_day::{CalendarRange, CalendarTimelineGrant};
 use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
 use floe_experts::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget};
+use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
 
 use crate::vault_host::conversation_turn::expert_dispatch::schedule::agent::CalendarAgentTurnRequest;
 
@@ -86,9 +84,12 @@ impl ModelTransport for Model {
             else {
                 return Err(AgentFailure::InvalidModelOutput);
             };
-            // A capability result reaches a transport as a tool message.
+            // A capability result reaches a transport as a tool message; a
+            // delegation settles as one too, and is not a capability call.
             let latest = messages.iter().rev().find_map(|message| {
-                (message["role"] == "tool" && message["status"] == "success")
+                (message["role"] == "tool"
+                    && message["status"] == "success"
+                    && message["capability_id"] != "floe.a2a.delegate")
                     .then(|| message["capability_id"].as_str())
                     .flatten()
             });
@@ -152,6 +153,7 @@ async fn seed(
                 source_authority: None,
                 reviewed_native_subject_fingerprint: None,
             },
+            &crate::vault_host::schedule_packaging(),
             Cancellation::default(),
         )
         .await
@@ -409,7 +411,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         &worker,
         person,
         WorkerAction::Session {
-            operation: AgentFixtureOperationDto::Get {
+            operation: FixtureOperation::Get {
                 session_id: session.id,
             },
         },
@@ -418,7 +420,9 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     .unwrap();
     assert_eq!(saved, session);
     assert_eq!(
-        runtime.block_on(core.actions().calendar_actions(person)).unwrap(),
+        runtime
+            .block_on(core.actions().calendar_actions(person))
+            .unwrap(),
         Vec::<floe_actions::CalendarAction>::new()
     );
     keys.0.unavailable.store(true, Ordering::Release);
