@@ -8,6 +8,7 @@ pub mod application {
     pub mod history;
     pub mod leases;
     pub mod personal_lineage;
+    pub mod personal_sources;
     pub mod projection;
     pub mod remote_views;
     pub mod service;
@@ -20,6 +21,9 @@ pub mod ports {
     pub mod evidence_reader;
     pub mod source_reader;
 }
+
+/// The consumer identity a general assistant read is made under.
+pub const ASSISTANT_CONSUMER: &str = "assistant";
 
 pub use application::archive::read_authorized_archive;
 pub use application::assembler::acquire_memory_context;
@@ -36,6 +40,17 @@ pub use application::leases::{
 pub use application::personal_lineage::{
     FeasibilityQueryLineage, attention_query_fingerprint, attention_subject_fingerprint,
     feasibility_query_fingerprint, people_query_fingerprint, wellbeing_query_fingerprint,
+};
+pub use application::personal_sources::{
+    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
+    FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
+    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention, apple_execution_owner,
+    attention_execution_owner, attention_source, feasibility_source, read_feasibility,
+    read_people, read_wellbeing, wellbeing_source,
+};
+pub use ports::personal_source::{
+    AcquiredSource, AttentionAcquisition, PersonalAcquisition, PersonalDomain,
+    PersonalGrantRecords, PersonalSourceDriver,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_views::{

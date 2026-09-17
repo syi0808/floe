@@ -47,6 +47,7 @@ use crate::{FloeCore, diagnostics};
 
 mod conversation_turn;
 mod learner_worker;
+mod personal_driver;
 mod personal_grants;
 mod remote_views;
 

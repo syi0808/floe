@@ -1333,12 +1333,14 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
                     AgentFailure::DeadlineExceeded
                 });
             }
-            let (view, dependency) = personal_grants::admit_attention(
-                self.vault,
-                self.local_context,
+            let (view, dependency) = floe_context::admit_attention(
+                &super::personal_driver::VaultGrantRecords { vault: self.vault },
+                &super::personal_driver::NativePersonalDriver {
+                    local_context: self.local_context,
+                },
                 person_id,
                 self.device_id,
-                consumer,
+                personal_grants::attention_consumer(consumer)?,
                 call_id,
                 deadline,
                 cancellation,
@@ -1387,16 +1389,21 @@ impl<Keys: VaultKeyProvider> PersonalFeasibilityReaderApi for PersonalFeasibilit
                 + 'a,
         >,
     > {
-        Box::pin(personal_grants::read_feasibility(
-            self.vault,
-            self.local_context,
-            person_id,
-            self.device_id,
-            consumer,
-            call_id,
-            deadline,
-            cancellation,
-        ))
+        Box::pin(async move {
+            floe_context::read_feasibility(
+                &super::personal_driver::VaultGrantRecords { vault: self.vault },
+                &super::personal_driver::NativePersonalDriver {
+                    local_context: self.local_context,
+                },
+                person_id,
+                self.device_id,
+                consumer,
+                call_id,
+                deadline,
+                cancellation,
+            )
+            .await
+        })
     }
 }
 
@@ -1416,16 +1423,21 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
                 + 'a,
         >,
     > {
-        Box::pin(personal_grants::read_wellbeing(
-            self.vault,
-            self.local_context,
-            person_id,
-            self.device_id,
-            consumer,
-            call_id,
-            deadline,
-            cancellation,
-        ))
+        Box::pin(async move {
+            floe_context::read_wellbeing(
+                &super::personal_driver::VaultGrantRecords { vault: self.vault },
+                &super::personal_driver::NativePersonalDriver {
+                    local_context: self.local_context,
+                },
+                person_id,
+                self.device_id,
+                consumer,
+                call_id,
+                deadline,
+                cancellation,
+            )
+            .await
+        })
     }
 }
 
@@ -1484,9 +1496,11 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
                 .vault
                 .personal_grant_subject_fingerprint(grant.id())
                 .await?;
-            personal_grants::read_people(
-                self.vault,
-                self.local_context,
+            floe_context::read_people(
+                &super::personal_driver::VaultGrantRecords { vault: self.vault },
+                &super::personal_driver::NativePersonalDriver {
+                    local_context: self.local_context,
+                },
                 person_id,
                 self.device_id,
                 grant.source().clone(),
@@ -1502,7 +1516,7 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
 }
 
 fn is_local_personal_connector(connector: &str) -> bool {
-    connector == personal_grants::ATTENTION_CONNECTOR
+    connector == floe_context::ATTENTION_CONNECTOR
         || connector.starts_with("calendar.")
         || matches!(
             connector,
@@ -1957,7 +1971,7 @@ use floe_execution::{Cancellation};
             source_handle: "attention.macos:session_idle".into(),
             observed_at_unix_ms: now.saturating_sub(1),
             expires_at_unix_ms: now.saturating_add(60_000),
-            state: floe_experts_builtin::AttentionState::Available,
+            state: floe_context::AttentionState::Available,
             confidence_millis: 900,
             evidence_handles: vec!["attention:aggregate".into()],
         }

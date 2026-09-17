@@ -14,11 +14,11 @@ use uuid::Uuid;
 use floe_agent_contract::{
     AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent,
 };
-use floe_context::{AgentContext, ContextEvidence, InferencePolicyDecision};
+use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_conversation::{
     AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentRuntime, AgentSession,
     CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse,
-    ModelRunner, ModelStep, SessionStore, UsageLedger,
+    ModelRunner, ModelStep, SessionStore,
 };
 use floe_execution::Cancellation;
 use floe_experts::{
@@ -34,7 +34,7 @@ use floe_kernel::{AGENT_VERSION, PersonId};
 use floe_vault::TursoStore;
 
 use crate::{
-    CoreError, FloeCore,
+    FloeCore,
     prompts::{
         fixture_follow_up_prompt, fixture_repeated_call_prompt, fixture_today_prompt,
         fixture_unavailable_prompt,

@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use floe_day::{
     CalendarBatch, CalendarConnection, CalendarFailure, CalendarProvider, CalendarRange,
     CalendarRecord, CalendarScope,
-    CalendarSelection, CalendarSource, CalendarSyncStatus,
+    CalendarSelection,
 };
 use floe_kernel::PersonId;
 

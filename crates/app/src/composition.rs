@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 
 use crate::{
-    AppHost, CallerContext, FloeCore, HostError, HostServices, agent_run, events,
+    AppHost, FloeCore, HostError, HostServices, agent_run,
     inference_routes, local_context, vault_host,
 };
 use floe_protocol::{AgentConversationTurnRequestDto, AppProfileSelectionDto};

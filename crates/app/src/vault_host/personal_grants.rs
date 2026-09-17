@@ -1,18 +1,13 @@
 use std::{future::Future, pin::Pin};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use floe_agent_contract::{AgentFailure, ModelPlacement};
 use floe_conversation::{ModelRequest};
-use floe_context::{AttentionState, AttentionView, PeopleView, WellbeingView, validate_people_view, validate_wellbeing_view};
 use floe_vault::{EncryptedAgentVault, FeasibilityGrantQuery, GovernedDependencyLiveness, GovernedDependencyResolver, VaultKeyProvider};
 use floe_access::{
-    DataAccessGrant, GrantState, PersonalReadRequirement, active_read_grant, grant_unchanged,
-    subject_unchanged, valid_subject_fingerprint,
+    DataAccessGrant, GrantState, PersonalReadRequirement, active_read_grant,
 };
-use floe_context::{
-    FeasibilityQueryLineage, attention_query_fingerprint, feasibility_query_fingerprint,
-    people_query_fingerprint, wellbeing_query_fingerprint,
-};
+use floe_context::attention_query_fingerprint;
 use floe_context_contract::{ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority};
 use floe_kernel::{PersonId};
 use floe_protocol::{
@@ -37,417 +32,7 @@ const WELLBEING_RESOURCE: &str = "wellbeing.derived";
 pub(crate) const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
 pub(crate) const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
 
-fn check_read_window(
-    deadline: tokio::time::Instant,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<(), AgentFailure> {
-    if cancellation.is_cancelled() {
-        return Err(AgentFailure::Cancelled);
-    }
-    if tokio::time::Instant::now() >= deadline {
-        return Err(AgentFailure::DeadlineExceeded);
-    }
-    Ok(())
-}
-
-pub(crate) async fn read_people<Keys: VaultKeyProvider>(
-    vault: &EncryptedAgentVault<Keys>,
-    local_context: &crate::local_context::LocalContextStore,
-    person_id: PersonId,
-    device_id: &str,
-    source: GrantSourceBinding,
-    selected_handles: &[String],
-    expected_native_subject_fingerprint: &str,
-    consumer_name: &str,
-    deadline: tokio::time::Instant,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<(PeopleView, ContextDependency), AgentFailure> {
-    check_read_window(deadline, cancellation)?;
-    if source.person_id() != person_id
-        || !matches!(
-            source.connector().as_str(),
-            "contacts.apple" | "contacts.android"
-        )
-        || selected_handles.is_empty()
-        || selected_handles.len() > 64
-        || selected_handles.windows(2).any(|pair| pair[0] >= pair[1])
-        || !valid_subject_fingerprint(expected_native_subject_fingerprint)
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let requirement = PersonalReadRequirement {
-        source: &source,
-        resource: PEOPLE_RESOURCE,
-        consumer: &consumer,
-        same_authority: true,
-        reject_ambiguous: false,
-    };
-    let grant = active_read_grant(&vault.list_data_access_grants(128).await?, &requirement)?;
-    let host_epoch = local_context.personal_acquisition_host_epoch(person_id)?;
-    let request_id = Uuid::new_v4();
-    let observation_id = Uuid::new_v4();
-    let result = local_context
-        .acquire_personal(
-            LocalContextPersonalAcquisitionRequestDto {
-                request_id: request_id.to_string(),
-                host_epoch,
-                person_id: person_id.to_string(),
-                device_id: device_id.to_owned(),
-                domain: LocalContextPersonalDomainDto::People,
-                selected_handles: selected_handles.to_vec(),
-                event_handle: None,
-                evidence_handles: Vec::new(),
-                destination_latitude: None,
-                destination_longitude: None,
-                event_start_unix_ms: None,
-                event_end_unix_ms: None,
-                travel_mode: None,
-                deadline_unix_ms: chrono::Utc::now().timestamp_millis().saturating_add(
-                    i64::try_from(
-                        deadline
-                            .saturating_duration_since(tokio::time::Instant::now())
-                            .as_millis(),
-                    )
-                    .map_err(|_| AgentFailure::DeadlineExceeded)?,
-                ),
-                expected_native_subject_fingerprint: Some(
-                    expected_native_subject_fingerprint.to_owned(),
-                ),
-            },
-            cancellation.clone(),
-        )
-        .await?;
-    check_read_window(deadline, cancellation)?;
-    subject_unchanged(
-        expected_native_subject_fingerprint,
-        &result.native_subject_fingerprint_before,
-        &result.native_subject_fingerprint_after,
-    )?;
-    let view: PeopleView =
-        serde_json::from_value(result.view.ok_or(AgentFailure::CapabilityUnavailable)?)
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    validate_people_view(&view, Utc::now().timestamp_millis())
-        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let current = active_read_grant(&vault.list_data_access_grants(128).await?, &requirement)?;
-    grant_unchanged(&grant, &current)?;
-    let policy = vault.personal_grant_consumer_policy(current.id()).await?;
-    let process = local_context.process_incarnation();
-    let observed = DateTime::<Utc>::from_timestamp_millis(view.observed_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let expires = DateTime::<Utc>::from_timestamp_millis(view.expires_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let dependency_fingerprint = people_query_fingerprint(
-        &view,
-        selected_handles,
-        expected_native_subject_fingerprint,
-        observation_id,
-        process,
-    );
-    let dependency = ContextDependency::try_new(
-        person_id,
-        current.id(),
-        current.authority(),
-        current.source().clone(),
-        vec![ResourceHandle::try_new(PEOPLE_RESOURCE).map_err(|_| AgentFailure::InvalidInput)?],
-        vec![GrantDataCategory::Derived],
-        GrantOperation::Read,
-        GrantPurpose::Assistant,
-        consumer,
-        ProcessingRestriction::LocalOnly,
-        policy,
-        observation_id,
-        dependency_fingerprint.clone(),
-        request_id,
-        process,
-        observed,
-        expires,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)?;
-    local_context.commit_trusted_personal_observation(
-        person_id,
-        device_id,
-        observation_id,
-        process,
-        expected_native_subject_fingerprint,
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-        dependency_fingerprint,
-    )?;
-    Ok((view, dependency))
-}
-
-pub(crate) async fn read_feasibility<Keys: VaultKeyProvider>(
-    vault: &EncryptedAgentVault<Keys>,
-    local_context: &crate::local_context::LocalContextStore,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    lease_invocation_id: Uuid,
-    deadline: tokio::time::Instant,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<(floe_context::FeasibilityView, ContextDependency), AgentFailure> {
-    check_read_window(deadline, cancellation)?;
-    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let source = feasibility_source(person_id, device_id)?;
-    let grants = vault.list_data_access_grants(128).await?;
-    let requirement = PersonalReadRequirement {
-        source: &source,
-        resource: FEASIBILITY_RESOURCE,
-        consumer: &consumer,
-        same_authority: false,
-        reject_ambiguous: true,
-    };
-    let grant = active_read_grant(&grants, &requirement)?;
-    let query = vault.personal_feasibility_query(grant.id()).await?;
-    let reviewed_subject = vault.personal_grant_subject_fingerprint(grant.id()).await?;
-    let result = local_context
-        .acquire_personal(
-            feasibility_acquisition_request(
-                person_id,
-                device_id,
-                local_context.personal_acquisition_host_epoch(person_id)?,
-                &query,
-                reviewed_subject.clone(),
-                deadline,
-            )?,
-            cancellation.clone(),
-        )
-        .await?;
-    check_read_window(deadline, cancellation)?;
-    subject_unchanged(
-        &reviewed_subject,
-        &result.native_subject_fingerprint_before,
-        &result.native_subject_fingerprint_after,
-    )?;
-    let view: floe_context::FeasibilityView =
-        serde_json::from_value(result.view.ok_or(AgentFailure::CapabilityUnavailable)?)
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    floe_context::validate_feasibility_view(&view, Utc::now().timestamp_millis())
-        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let current = active_read_grant(&vault.list_data_access_grants(128).await?, &requirement)?;
-    grant_unchanged(&grant, &current)?;
-    let observed = DateTime::<Utc>::from_timestamp_millis(view.observed_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let expires = DateTime::<Utc>::from_timestamp_millis(view.expires_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let process = local_context.process_incarnation();
-    let observation_id = Uuid::new_v4();
-    let dependency_fingerprint = feasibility_query_fingerprint(
-        &view,
-        &feasibility_lineage(&query),
-        &reviewed_subject,
-        observation_id,
-        process,
-    );
-    let dependency = ContextDependency::try_new(
-        person_id,
-        current.id(),
-        current.authority(),
-        current.source().clone(),
-        vec![
-            ResourceHandle::try_new(FEASIBILITY_RESOURCE)
-                .map_err(|_| AgentFailure::InvalidInput)?,
-        ],
-        vec![GrantDataCategory::Derived],
-        GrantOperation::Read,
-        GrantPurpose::Assistant,
-        consumer,
-        ProcessingRestriction::LocalOnly,
-        vault.personal_grant_consumer_policy(current.id()).await?,
-        observation_id,
-        dependency_fingerprint.clone(),
-        lease_invocation_id,
-        process,
-        observed,
-        expires,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)?;
-    local_context.commit_trusted_personal_observation(
-        person_id,
-        device_id,
-        observation_id,
-        process,
-        &reviewed_subject,
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-        dependency_fingerprint,
-    )?;
-    Ok((view, dependency))
-}
-
-pub(crate) async fn read_wellbeing<Keys: VaultKeyProvider>(
-    vault: &EncryptedAgentVault<Keys>,
-    local_context: &crate::local_context::LocalContextStore,
-    person_id: PersonId,
-    device_id: &str,
-    consumer_name: &str,
-    lease_invocation_id: Uuid,
-    deadline: tokio::time::Instant,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<(WellbeingView, ContextDependency), AgentFailure> {
-    check_read_window(deadline, cancellation)?;
-    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    if consumer.identifier() != ATTENTION_ASSISTANT_CONSUMER {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    let source = wellbeing_source(person_id, device_id)?;
-    let grants = vault.list_data_access_grants(128).await?;
-    let requirement = PersonalReadRequirement {
-        source: &source,
-        resource: WELLBEING_RESOURCE,
-        consumer: &consumer,
-        same_authority: false,
-        reject_ambiguous: true,
-    };
-    let grant = active_read_grant(&grants, &requirement)?;
-    let reviewed_subject = vault.personal_grant_subject_fingerprint(grant.id()).await?;
-    let result = local_context
-        .acquire_personal(
-            wellbeing_acquisition_request(
-                person_id,
-                device_id,
-                local_context.personal_acquisition_host_epoch(person_id)?,
-                reviewed_subject.clone(),
-                deadline,
-            )?,
-            cancellation.clone(),
-        )
-        .await?;
-    check_read_window(deadline, cancellation)?;
-    subject_unchanged(
-        &reviewed_subject,
-        &result.native_subject_fingerprint_before,
-        &result.native_subject_fingerprint_after,
-    )?;
-    let view: WellbeingView = serde_json::from_value(
-        result
-            .view
-            .ok_or(AgentFailure::CapabilityUnavailable)?,
-    )
-    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    validate_wellbeing_view(&view, Utc::now().timestamp_millis())
-        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let current = active_read_grant(&vault.list_data_access_grants(128).await?, &requirement)?;
-    grant_unchanged(&grant, &current)?;
-    let observed = DateTime::<Utc>::from_timestamp_millis(view.observed_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let expires = DateTime::<Utc>::from_timestamp_millis(view.expires_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let process = local_context.process_incarnation();
-    let observation_id = Uuid::new_v4();
-    let dependency_fingerprint = wellbeing_query_fingerprint(
-        &view,
-        &reviewed_subject,
-        observation_id,
-        process,
-    );
-    let dependency = ContextDependency::try_new(
-        person_id,
-        current.id(),
-        current.authority(),
-        current.source().clone(),
-        vec![ResourceHandle::try_new(WELLBEING_RESOURCE)
-            .map_err(|_| AgentFailure::InvalidInput)?],
-        vec![GrantDataCategory::Derived],
-        GrantOperation::Read,
-        GrantPurpose::Assistant,
-        consumer,
-        ProcessingRestriction::LocalOnly,
-        vault.personal_grant_consumer_policy(current.id()).await?,
-        observation_id,
-        dependency_fingerprint.clone(),
-        lease_invocation_id,
-        process,
-        observed,
-        expires,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)?;
-    local_context.commit_trusted_personal_observation(
-        person_id,
-        device_id,
-        observation_id,
-        process,
-        &reviewed_subject,
-        view.observed_at_unix_ms,
-        view.expires_at_unix_ms,
-        dependency_fingerprint,
-    )?;
-    Ok((view, dependency))
-}
-
-fn wellbeing_acquisition_request(
-    person_id: PersonId,
-    device_id: &str,
-    host_epoch: String,
-    expected_native_subject_fingerprint: String,
-    deadline: tokio::time::Instant,
-) -> Result<LocalContextPersonalAcquisitionRequestDto, AgentFailure> {
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-    Ok(LocalContextPersonalAcquisitionRequestDto {
-        request_id: Uuid::new_v4().to_string(),
-        host_epoch,
-        person_id: person_id.to_string(),
-        device_id: device_id.to_owned(),
-        domain: LocalContextPersonalDomainDto::Wellbeing,
-        selected_handles: Vec::new(),
-        event_handle: None,
-        evidence_handles: Vec::new(),
-        destination_latitude: None,
-        destination_longitude: None,
-        event_start_unix_ms: None,
-        event_end_unix_ms: None,
-        travel_mode: None,
-        deadline_unix_ms: Utc::now().timestamp_millis().saturating_add(
-            i64::try_from(remaining.as_millis()).map_err(|_| AgentFailure::DeadlineExceeded)?,
-        ),
-        expected_native_subject_fingerprint: Some(expected_native_subject_fingerprint),
-    })
-}
-
-fn feasibility_acquisition_request(
-    person_id: PersonId,
-    device_id: &str,
-    host_epoch: String,
-    query: &FeasibilityGrantQuery,
-    expected_native_subject_fingerprint: String,
-    deadline: tokio::time::Instant,
-) -> Result<LocalContextPersonalAcquisitionRequestDto, AgentFailure> {
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-    Ok(LocalContextPersonalAcquisitionRequestDto {
-        request_id: Uuid::new_v4().to_string(),
-        host_epoch,
-        person_id: person_id.to_string(),
-        device_id: device_id.to_owned(),
-        domain: LocalContextPersonalDomainDto::Feasibility,
-        selected_handles: Vec::new(),
-        event_handle: Some(query.event_handle.clone()),
-        evidence_handles: query.evidence_handles.clone(),
-        destination_latitude: Some(query.destination_latitude),
-        destination_longitude: Some(query.destination_longitude),
-        event_start_unix_ms: Some(query.event_start_unix_ms),
-        event_end_unix_ms: Some(query.event_end_unix_ms),
-        travel_mode: Some(query.travel_mode.clone()),
-        deadline_unix_ms: Utc::now().timestamp_millis().saturating_add(
-            i64::try_from(remaining.as_millis()).map_err(|_| AgentFailure::DeadlineExceeded)?,
-        ),
-        expected_native_subject_fingerprint: Some(expected_native_subject_fingerprint),
-    })
-}
-
 /// The stored feasibility query, as the lineage Context records reads it.
-fn feasibility_lineage(query: &FeasibilityGrantQuery) -> FeasibilityQueryLineage<'_> {
-    FeasibilityQueryLineage {
-        event_handle: &query.event_handle,
-        evidence_handles: &query.evidence_handles,
-        destination_latitude: query.destination_latitude,
-        destination_longitude: query.destination_longitude,
-        event_start_unix_ms: query.event_start_unix_ms,
-        event_end_unix_ms: query.event_end_unix_ms,
-        travel_mode: &query.travel_mode,
-    }
-}
-
 fn feasibility_source_matches(grant: &DataAccessGrant, source: &GrantSourceBinding) -> bool {
     let binding = grant.source();
     binding.person_id() == source.person_id()
@@ -460,7 +45,36 @@ fn wellbeing_source_matches(grant: &DataAccessGrant, source: &GrantSourceBinding
     feasibility_source_matches(grant, source)
 }
 
-fn attention_consumer(value: &str) -> Result<GrantConsumer, AgentFailure> {
+fn attention_request(
+    person_id: PersonId,
+    device_id: &str,
+    host_epoch: String,
+    mode: LocalContextAttentionAcquisitionModeDto,
+    expected_native_subject_fingerprint: Option<String>,
+    caller_deadline: Option<tokio::time::Instant>,
+) -> Result<LocalContextAttentionAcquisitionRequestDto, AgentFailure> {
+    let remaining = caller_deadline
+        .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()))
+        .unwrap_or_else(|| std::time::Duration::from_secs(30))
+        .min(std::time::Duration::from_secs(30));
+    let deadline_unix_ms = chrono::Utc::now()
+        .timestamp_millis()
+        .checked_add(
+            i64::try_from(remaining.as_millis()).map_err(|_| AgentFailure::DeadlineExceeded)?,
+        )
+        .ok_or(AgentFailure::DeadlineExceeded)?;
+    Ok(LocalContextAttentionAcquisitionRequestDto {
+        request_id: Uuid::new_v4().to_string(),
+        host_epoch,
+        person_id: person_id.to_string(),
+        device_id: device_id.to_owned(),
+        mode,
+        deadline_unix_ms,
+        expected_native_subject_fingerprint,
+    })
+}
+
+pub(crate) fn attention_consumer(value: &str) -> Result<GrantConsumer, AgentFailure> {
     if !matches!(
         value,
         ATTENTION_ASSISTANT_CONSUMER | ATTENTION_EXPERT_CONSUMER
@@ -468,117 +82,6 @@ fn attention_consumer(value: &str) -> Result<GrantConsumer, AgentFailure> {
         return Err(AgentFailure::PolicyDenied);
     }
     GrantConsumer::builtin(value).map_err(|_| AgentFailure::InvalidInput)
-}
-
-pub(crate) async fn admit_attention<Keys: VaultKeyProvider>(
-    vault: &EncryptedAgentVault<Keys>,
-    local_context: &crate::local_context::LocalContextStore,
-    person_id: PersonId,
-    device_id: &str,
-    consumer: &str,
-    lease_invocation_id: Uuid,
-    deadline: tokio::time::Instant,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<(AttentionView, ContextDependency), AgentFailure> {
-    check_read_window(deadline, cancellation)?;
-    let consumer = attention_consumer(consumer)?;
-    let grants = vault.list_data_access_grants(128).await?;
-    let (source, _) = source_and_scope(
-        person_id,
-        device_id,
-        SourceAuthority::new(),
-        vec![ATTENTION_ASSISTANT_CONSUMER.into()],
-    )?;
-    let requirement = PersonalReadRequirement {
-        source: &source,
-        resource: ATTENTION_RESOURCE,
-        consumer: &consumer,
-        same_authority: false,
-        reject_ambiguous: false,
-    };
-    let grant = active_read_grant(&grants, &requirement)?;
-    let reviewed_subject = vault.personal_grant_subject_fingerprint(grant.id()).await?;
-    let host_epoch = local_context.attention_acquisition_host_epoch(person_id)?;
-    let result = local_context
-        .acquire_attention(
-            attention_request(
-                person_id,
-                device_id,
-                host_epoch.clone(),
-                LocalContextAttentionAcquisitionModeDto::ReadProjection,
-                Some(reviewed_subject.clone()),
-                Some(deadline),
-            )?,
-            cancellation.clone(),
-        )
-        .await?;
-    subject_unchanged(
-        &reviewed_subject,
-        &result.native_subject_fingerprint_before,
-        &result.native_subject_fingerprint_after,
-    )?;
-    let native_subject = result.native_subject_fingerprint_before.clone();
-    let view: AttentionView =
-        serde_json::from_value(result.view.ok_or(AgentFailure::CapabilityUnavailable)?)
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    if view.state == AttentionState::Unknown || view.evidence_handles.is_empty() {
-        return Err(AgentFailure::CapabilityUnavailable);
-    }
-    let observed_at = DateTime::<Utc>::from_timestamp_millis(view.observed_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    let expires_at = DateTime::<Utc>::from_timestamp_millis(view.expires_at_unix_ms)
-        .ok_or(AgentFailure::StaleContext)?;
-    check_read_window(deadline, cancellation)?;
-    let current_grant =
-        active_read_grant(&vault.list_data_access_grants(128).await?, &requirement)?;
-    grant_unchanged(&grant, &current_grant)?;
-    let current_subject = vault
-        .personal_grant_subject_fingerprint(current_grant.id())
-        .await?;
-    if current_subject != reviewed_subject || current_subject != native_subject {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    let policy = vault
-        .personal_grant_consumer_policy(current_grant.id())
-        .await?;
-    let (observation_id, process_incarnation_id) = local_context
-        .commit_trusted_attention_projection_for_host(
-            person_id,
-            &host_epoch,
-            device_id,
-            &view,
-            &native_subject,
-        )?;
-    let source = current_grant.source().clone();
-    let fingerprint = attention_query_fingerprint(
-        person_id,
-        device_id,
-        &view,
-        observation_id,
-        process_incarnation_id,
-    );
-    let dependency = ContextDependency::try_new(
-        person_id,
-        current_grant.id(),
-        current_grant.authority(),
-        source,
-        vec![ResourceHandle::try_new(ATTENTION_RESOURCE).map_err(|_| AgentFailure::InvalidInput)?],
-        vec![GrantDataCategory::Derived],
-        GrantOperation::Read,
-        GrantPurpose::Assistant,
-        consumer,
-        ProcessingRestriction::LocalOnly,
-        policy,
-        observation_id,
-        fingerprint,
-        lease_invocation_id,
-        process_incarnation_id,
-        observed_at,
-        expires_at,
-    )
-    .map_err(|_| AgentFailure::InvalidInput)?;
-    check_read_window(deadline, cancellation)?;
-    Ok((view, dependency))
 }
 
 pub(crate) struct PersonalDependencyResolver<'a, Keys: VaultKeyProvider> {
@@ -1255,7 +758,8 @@ async fn apply_feasibility<Keys: VaultKeyProvider>(
     request: PersonalAccessConfigurationDto,
     cancellation: floe_execution::Cancellation,
 ) -> Result<PersonalAccessOverviewDto, AgentFailure> {
-    let source = feasibility_source(person_id, &request.device_id)?;
+    let source =
+        floe_context::feasibility_source(person_id, &request.device_id, SourceAuthority::new())?;
     let grants = vault.list_data_access_grants(128).await?;
     let existing = grants
         .iter()
@@ -1388,7 +892,8 @@ async fn apply_wellbeing<Keys: VaultKeyProvider>(
     request: PersonalAccessConfigurationDto,
     cancellation: floe_execution::Cancellation,
 ) -> Result<PersonalAccessOverviewDto, AgentFailure> {
-    let source = wellbeing_source(person_id, &request.device_id)?;
+    let source =
+        floe_context::wellbeing_source(person_id, &request.device_id, SourceAuthority::new())?;
     let grants = vault.list_data_access_grants(128).await?;
     let mut existing_matches = grants.iter().filter(|grant| {
         wellbeing_source_matches(grant, &source) && grant.state() != GrantState::Revoked
@@ -1794,13 +1299,6 @@ async fn acquire_wellbeing(
         .await
 }
 
-fn feasibility_source(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    feasibility_source_with_authority(person_id, device_id, SourceAuthority::new())
-}
-
 fn feasibility_source_with_authority(
     person_id: PersonId,
     device_id: &str,
@@ -1815,13 +1313,6 @@ fn feasibility_source_with_authority(
         authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
-}
-
-fn wellbeing_source(
-    person_id: PersonId,
-    device_id: &str,
-) -> Result<GrantSourceBinding, AgentFailure> {
-    wellbeing_source_with_authority(person_id, device_id, SourceAuthority::new())
 }
 
 fn wellbeing_source_with_authority(
@@ -2106,35 +1597,6 @@ pub(crate) fn validate_request(
     Ok(())
 }
 
-fn attention_request(
-    person_id: PersonId,
-    device_id: &str,
-    host_epoch: String,
-    mode: LocalContextAttentionAcquisitionModeDto,
-    expected_native_subject_fingerprint: Option<String>,
-    caller_deadline: Option<tokio::time::Instant>,
-) -> Result<LocalContextAttentionAcquisitionRequestDto, AgentFailure> {
-    let remaining = caller_deadline
-        .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()))
-        .unwrap_or_else(|| std::time::Duration::from_secs(30))
-        .min(std::time::Duration::from_secs(30));
-    let deadline_unix_ms = chrono::Utc::now()
-        .timestamp_millis()
-        .checked_add(
-            i64::try_from(remaining.as_millis()).map_err(|_| AgentFailure::DeadlineExceeded)?,
-        )
-        .ok_or(AgentFailure::DeadlineExceeded)?;
-    Ok(LocalContextAttentionAcquisitionRequestDto {
-        request_id: Uuid::new_v4().to_string(),
-        host_epoch,
-        person_id: person_id.to_string(),
-        device_id: device_id.to_owned(),
-        mode,
-        deadline_unix_ms,
-        expected_native_subject_fingerprint,
-    })
-}
-
 pub(crate) fn matches_source(
     grant: &DataAccessGrant,
     person_id: PersonId,
@@ -2248,19 +1710,6 @@ fn execution_owner(device_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn attention() -> AttentionView {
-        AttentionView {
-            schema_version: 1,
-            view_id: "attention.coarse".into(),
-            source_handle: "attention.macos:session_idle".into(),
-            observed_at_unix_ms: 1_000,
-            expires_at_unix_ms: 2_000,
-            state: AttentionState::Available,
-            confidence_millis: 900,
-            evidence_handles: vec!["attention:aggregate".into()],
-        }
-    }
 
     #[test]
     fn review_consumers_are_finite_and_canonical() {
