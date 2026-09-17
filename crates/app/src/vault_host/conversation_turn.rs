@@ -2612,6 +2612,7 @@ mod tests {
                 description: "Reviews an authorized calendar view".into(),
                 domain_tags: vec!["schedule".into()],
                 skills: vec!["Review a calendar assignment".into()],
+                supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
             }],
             grants: Default::default(),
             task_runners: &[(
@@ -3462,7 +3463,9 @@ mod tests {
             calendar_connections: test_calendar_connections(),
         };
         let model = Model::new(Some(route.clone())).unwrap();
-        let source_client = ServerSourceClient::new(route.clone()).unwrap();
+        let source_client =
+            ServerSourceClient::new(route.route.clone(), route.calendar_connections.clone())
+                .unwrap();
         let person_id = PersonId::new();
         let remote_reader = match &model {
             Model::Server(_) => FixtureRemoteReader {
@@ -3654,7 +3657,9 @@ mod tests {
             calendar_connections: test_calendar_connections(),
         };
         let model = Model::new(Some(route.clone())).unwrap();
-        let source_client = ServerSourceClient::new(route.clone()).unwrap();
+        let source_client =
+            ServerSourceClient::new(route.route.clone(), route.calendar_connections.clone())
+                .unwrap();
         let policy = policy(&model, Some(&route));
         let remote_reader = match &model {
             Model::Server(_) => FixtureRemoteReader {
@@ -3885,7 +3890,9 @@ mod tests {
             calendar_connections: vec![],
         };
         let model = Model::new(Some(route.clone())).unwrap();
-        let source_client = ServerSourceClient::new(route.clone()).unwrap();
+        let source_client =
+            ServerSourceClient::new(route.route.clone(), route.calendar_connections.clone())
+                .unwrap();
         let person_id = PersonId::new();
         let policy = policy(&model, Some(&route));
         let remote_reader = match &model {

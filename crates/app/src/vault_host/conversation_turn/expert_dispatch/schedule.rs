@@ -1493,6 +1493,7 @@ impl floe_inference::ModelTransport for Model {
 mod tests {
     use super::*;
     use crate::FloeCore;
+    use crate::local_context::{CalendarObservationPublication, LocalContextCommand};
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use floe_agent_contract::TransferConsent;
     use floe_context_contract::CalendarScope;
@@ -1501,7 +1502,6 @@ mod tests {
         GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
     };
     use floe_day::{CalendarSelection, CalendarSyncStatus};
-    use crate::local_context::{CalendarObservationPublication, LocalContextCommand};
     use floe_provider_adapters::sources::native_acquisition::CalendarAcquisitionResult;
     use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
     use ring::signature::{Ed25519KeyPair, KeyPair};

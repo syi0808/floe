@@ -885,7 +885,11 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
         .into_endpoint_settlement()
         .unwrap();
     let settlement =
-        CalendarExpertSettlement::from_endpoint_settlement(&endpoint_settlement).unwrap();
+        CalendarExpertSettlement::from_endpoint_settlement(
+            &endpoint_settlement,
+            crate::vault_host::conversation_turn::expert_dispatch::schedule::CALENDAR_EXPERT_SETTLEMENT_OWNER,
+        )
+        .unwrap();
     let mut forged_snapshot = completed_snapshot.clone();
     forged_snapshot.result = Some("forged result".into());
     assert_eq!(
@@ -1246,7 +1250,11 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
         } else {
             fixture
                 .vault
-                .install_calendar_expert(request.clone(), Cancellation::default())
+                .install_calendar_expert(
+                    request.clone(),
+                    &crate::vault_host::schedule_packaging(),
+                    Cancellation::default(),
+                )
                 .await
                 .unwrap()
         };

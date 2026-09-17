@@ -101,12 +101,10 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         .failure,
         Some(AgentFailure::Conflict)
     );
-    let action = WorkerAction::CalendarExperts {
+    let action = || WorkerAction::CalendarExperts {
         setup: Some(Box::new(request.clone())),
     };
-    let installed = perform(&worker, person, action.clone())
-        .calendar_experts
-        .unwrap();
+    let installed = perform(&worker, person, action()).calendar_experts.unwrap();
     assert_eq!(installed.views[0].source_authority, Some(authority));
     assert_eq!(installed.setups[0].source_authority, Some(authority));
     let initial_connection = runtime
@@ -124,7 +122,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
             initial_connection.scope,
         ))
         .unwrap();
-    let drift_retry = perform(&worker, person, action.clone());
+    let drift_retry = perform(&worker, person, action());
     assert_eq!(drift_retry.failure, None);
     runtime
         .block_on(core.record_calendar_failure(
@@ -512,7 +510,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             person,
             request_id,
             WorkerOperation::Submit {
-                action: Box::new(action.clone()),
+                action: Box::new(action()),
             },
         )
         .unwrap();
@@ -540,7 +538,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             person,
             request_id,
             WorkerOperation::Submit {
-                action: Box::new(action.clone()),
+                action: Box::new(action()),
             },
         )
         .unwrap();
@@ -607,7 +605,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             person,
             first_id,
             WorkerOperation::Submit {
-                action: WorkerAction::ConversationTurn {
+                action: Box::new(WorkerAction::ConversationTurn {
                     request: Box::new(ConversationTurnRequest {
                         session_id: session.id,
                         expected_revision: session.revision,
@@ -618,7 +616,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         retry_of: None,
                         remote_route: Some(route.clone()),
                     }),
-                },
+                }),
             },
         )
         .unwrap();
@@ -632,7 +630,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             person,
             second_id,
             WorkerOperation::Submit {
-                action: WorkerAction::ConversationTurn {
+                action: Box::new(WorkerAction::ConversationTurn {
                     request: Box::new(ConversationTurnRequest {
                         session_id: session.id,
                         expected_revision: first_session.revision,
@@ -643,7 +641,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         retry_of: None,
                         remote_route: Some(route),
                     }),
-                },
+                }),
             },
         )
         .unwrap();
@@ -739,7 +737,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             conversation_id,
             WorkerOperation::Submit {
-                action: WorkerAction::ConversationTurn {
+                action: Box::new(WorkerAction::ConversationTurn {
                     request: Box::new(ConversationTurnRequest {
                         session_id: session.id,
                         expected_revision: session.revision,
@@ -750,7 +748,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         retry_of: None,
                         remote_route: Some(route),
                     }),
-                },
+                }),
             },
         )
         .unwrap();
@@ -774,7 +772,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             competing_id,
             WorkerOperation::Submit {
-                action: WorkerAction::ConversationTurn {
+                action: Box::new(WorkerAction::ConversationTurn {
                     request: Box::new(ConversationTurnRequest {
                         session_id: session.id,
                         expected_revision: session.revision,
@@ -785,7 +783,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         retry_of: None,
                         remote_route: Some(competing_route),
                     }),
-                },
+                }),
             },
         )
         .unwrap();
@@ -814,14 +812,14 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             person,
             revoke_id,
             WorkerOperation::Submit {
-                action: WorkerAction::CalendarAccess {
+                action: Box::new(WorkerAction::CalendarAccess {
                     change: Box::new(CalendarAccessConfiguration {
                         instance_id: current.registry.instance_id,
                         expected_revision: current.registry.revision,
                         setup_id,
                         change: CalendarAccessChange::SetEnabled { enabled: false },
                     }),
-                },
+                }),
             },
         )
         .unwrap();
@@ -911,7 +909,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         device_id: "mac-local".into(),
     });
     let request_id = Uuid::new_v4();
-    let request = floe_protocol::AgentConversationTurnRequestDto {
+    let request = || ConversationTurnRequest {
         session_id: session.id,
         expected_revision: session.revision,
         text: "Cancel this run".into(),
@@ -919,13 +917,13 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         profile: ProfileSelection::Auto,
         continuation: false,
         retry_of: None,
-        remote_route: Some(route),
+        remote_route: Some(route.clone()),
     };
     let admitted = worker
         .start_conversation(
             person,
             floe_kernel::CommandId::from_uuid(request_id).unwrap(),
-            request.clone(),
+            request(),
         )
         .unwrap();
     assert_eq!(admitted.state, floe_conversation::RunState::Working);
@@ -947,12 +945,12 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
             .start_conversation(
                 person,
                 floe_kernel::CommandId::from_uuid(request_id).unwrap(),
-                request.clone(),
+                request(),
             )
             .unwrap(),
         admitted
     );
-    let mut conflicting = request;
+    let mut conflicting = request();
     conflicting.text = "Different payload".into();
     assert_eq!(
         worker.start_conversation(
@@ -1217,7 +1215,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             person,
             request_id,
             WorkerOperation::Submit {
-                action: Box::new(action.clone()),
+                action: Box::new(action()),
             },
         )
         .unwrap();
@@ -1681,7 +1679,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         source_authority: None,
         reviewed_native_subject_fingerprint: None,
     };
-    let action = WorkerAction::CalendarExperts {
+    let action = || WorkerAction::CalendarExperts {
         setup: Some(Box::new(setup.clone())),
     };
     let id = Uuid::new_v4();
@@ -1690,20 +1688,14 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             person,
             id,
             WorkerOperation::Submit {
-                action: Box::new(action.clone()),
+                action: Box::new(action()),
             },
         )
         .unwrap();
     let completed = wait(&worker, person, id);
     assert_eq!(
         worker
-            .request(
-                person,
-                id,
-                WorkerOperation::Submit {
-                    action: action.clone()
-                }
-            )
+            .request(person, id, WorkerOperation::Submit { action: action() })
             .unwrap(),
         completed
     );
@@ -1732,9 +1724,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         .request(person, id, WorkerOperation::Release)
         .unwrap();
     assert_eq!(
-        perform(&worker, person, action.clone())
-            .calendar_experts
-            .as_ref(),
+        perform(&worker, person, action()).calendar_experts.as_ref(),
         Some(&installed)
     );
     let mut changed = setup;
@@ -1827,9 +1817,9 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             person,
             id,
             WorkerOperation::Submit {
-                action: WorkerAction::CalendarExperts {
+                action: Box::new(WorkerAction::CalendarExperts {
                     setup: Some(Box::new(request.clone())),
-                },
+                }),
             },
         )
         .unwrap();
