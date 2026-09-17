@@ -1,6 +1,6 @@
 use floe_agent_contract::AgentFailure;
 use floe_app::FloeCore;
-use floe_conversation::AgentFixturePrompt;
+use floe_app::AgentFixturePrompt;
 use floe_conversation::{AgentMessage, AgentOutcome};
 use floe_experts::{EXPERT_RESULT_MEDIA_TYPE, ExpertResult, PackageKind};
 use floe_kernel::PersonId;
@@ -108,5 +108,5 @@ async fn fixture_iteration_limit_and_retry_are_durable_without_external_actions(
         .unwrap()
         .session;
     assert_eq!(retry.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(core.calendar_actions(person).await.unwrap().len(), 0);
+    assert_eq!(core.actions().calendar_actions(person).await.unwrap().len(), 0);
 }
