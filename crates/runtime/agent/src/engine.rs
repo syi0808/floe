@@ -405,6 +405,7 @@ impl ActiveDrive<'_> {
                 self.config.max_attempt_cost_micros.max(1),
                 None,
             );
+            let before = model_scope.budget().snapshot();
             let response = model_scope
                 .run(self.ports.model.generate(model_request, &model_scope))
                 .await;
@@ -412,9 +413,14 @@ impl ActiveDrive<'_> {
                 Ok(response) => response,
                 Err(failure) => {
                     // Pair every intent with a result so recovery never sees a
-                    // dangling attempt from a failed call; no usage was reported.
-                    self.record_model_result(attempt_id, ModelUsage::default())
-                        .await?;
+                    // dangling attempt from a failed call. A dispatched failure
+                    // already charged the scope budget's unknown estimate
+                    // in-memory; journal that delta so the charge survives a
+                    // restart instead of resurrecting budget. An undispatched
+                    // failure leaves no charge, so the delta is zero.
+                    let after = model_scope.budget().snapshot();
+                    let usage = failed_attempt_usage(&before, &after);
+                    self.record_model_result(attempt_id, usage).await?;
                     if is_correctable(&failure) && correction.is_none() {
                         correction = Some(ModelCorrection {
                             text: MODEL_CORRECTION_TEXT.into(),
@@ -873,6 +879,32 @@ fn is_correctable(failure: &AgentFailure) -> bool {
             | AgentFailure::LocalModelInvalidOutput
             | AgentFailure::ServerModelInvalidOutput
     )
+}
+
+/// Durable usage for a failed model attempt from the scope budget delta.
+///
+/// The transitional bridge charges a dispatched failure to the in-memory
+/// ledger as an unknown estimate when its budget attempt drops; an
+/// undispatched failure releases without charge. Success never uses this:
+/// the response's actual usage stays authoritative so usage is not double
+/// counted. The canonical journal usage carries only tokens and cost, so the
+/// unknown estimate is folded conservatively into both.
+fn failed_attempt_usage(
+    before: &floe_execution::budget::BudgetSnapshot,
+    after: &floe_execution::budget::BudgetSnapshot,
+) -> ModelUsage {
+    let tokens = after.usage.tokens.saturating_sub(before.usage.tokens);
+    let settled_cost = after
+        .settled
+        .cost_micros
+        .saturating_sub(before.settled.cost_micros);
+    let unknown_cost = after
+        .unknown_cost_micros
+        .saturating_sub(before.unknown_cost_micros);
+    ModelUsage {
+        tokens,
+        cost_micros: settled_cost.saturating_add(unknown_cost),
+    }
 }
 
 /// Pin only references that matched the catalog at validation time. Steps that
@@ -3075,5 +3107,145 @@ mod tests {
             )),
             "soft step advances the cursor: {events:?}"
         );
+    }
+
+    struct DispatchedFailureModel;
+    impl ModelPort for DispatchedFailureModel {
+        fn generate<'a>(
+            &'a self,
+            _: ModelRequest,
+            scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            Box::pin(async move {
+                // Simulate the transitional bridge past its dispatch fence:
+                // reserve once, mark dispatched, then fail without settling so
+                // the ledger charges the unknown estimate in-memory.
+                let mut tokens = 40;
+                let mut cost_micros = 40;
+                let mut attempt = scope
+                    .budget()
+                    .begin(&mut tokens, &mut cost_micros)
+                    .expect("attempt budget");
+                attempt.mark_dispatched();
+                Err(AgentFailure::ModelUnavailable)
+            })
+        }
+    }
+
+    struct UndispatchedFailureModel;
+    impl ModelPort for UndispatchedFailureModel {
+        fn generate<'a>(
+            &'a self,
+            _: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            // Preflight failure before any provider handoff: never touches
+            // the scope budget, so no unknown charge may be journaled.
+            Box::pin(async { Err(AgentFailure::Cancelled) })
+        }
+    }
+
+    fn continuation_scope(
+        ledger: &BudgetLedger,
+    ) -> ExecutionScope {
+        ExecutionScope::root(
+            Cancellation::new(),
+            tokio::time::Instant::now() + Duration::from_secs(5),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+        )
+    }
+
+    #[tokio::test]
+    async fn failed_dispatched_model_usage_survives_continuation() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 100), Default::default());
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(continuation_scope(&ledger)),
+                ports(
+                    &projection,
+                    &DispatchedFailureModel,
+                    &tools,
+                    &journal,
+                    &Validator,
+                ),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::ModelUnavailable)));
+        let usage = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ModelResult { usage, .. } => Some(*usage),
+                _ => None,
+            })
+            .expect("failed attempt journals a result");
+        // The durable fallback carries the bridge's unknown estimate in both
+        // dimensions so a restart cannot resurrect tokens or cost.
+        assert_eq!(usage.tokens, 40);
+        assert_eq!(usage.cost_micros, 40);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.unknown_tokens, 40);
+        assert_eq!(snapshot.unknown_cost_micros, 40);
+        // Continuation seeds its root ledger from the journaled usage: the
+        // prior charge stays visible and the next run gets at most the rest.
+        let prior = floe_execution::budget::ModelUsage {
+            attempts: 1,
+            tokens: usage.tokens,
+            cost_micros: usage.cost_micros,
+            estimated_tokens: 0,
+        };
+        assert!(prior.tokens >= 40);
+        let next = BudgetLedger::new(BudgetConfig::new(100, 100), prior);
+        let mut tokens = 100;
+        let mut cost_micros = 100;
+        next.work_lease()
+            .begin(&mut tokens, &mut cost_micros)
+            .unwrap();
+        assert!(tokens <= 60);
+        assert!(cost_micros <= 60);
+    }
+
+    #[tokio::test]
+    async fn undispatched_model_failure_does_not_charge_unknown_usage() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 100), Default::default());
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(continuation_scope(&ledger)),
+                ports(
+                    &projection,
+                    &UndispatchedFailureModel,
+                    &tools,
+                    &journal,
+                    &Validator,
+                ),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::Cancelled)));
+        let usage = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ModelResult { usage, .. } => Some(*usage),
+                _ => None,
+            })
+            .expect("failed attempt journals a result");
+        assert_eq!(usage, ModelUsage::default());
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.unknown_tokens, 0);
+        assert_eq!(snapshot.unknown_cost_micros, 0);
+        assert_eq!(snapshot.usage.tokens, 0);
     }
 }

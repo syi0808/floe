@@ -10,7 +10,9 @@ mod session;
 mod source_history;
 mod usage;
 
-pub use model_recovery::{generate_once, generate_with_recovery};
+pub use model_recovery::{
+    dispatch_generate_once, generate_once, generate_with_recovery, validate_generate_once_request,
+};
 pub use runtime::AgentRuntime;
 pub use session::*;
 pub use source_history::{

@@ -13,7 +13,18 @@ pub async fn generate_once<Model: ModelRunner>(
     model: &Model,
     request: ModelRequest,
 ) -> Result<ModelResponse, AgentFailure> {
-    let validators = legacy_validators(&request)?;
+    let validators = validate_generate_once_request(&request)?;
+    dispatch_generate_once(model, request, &validators).await
+}
+
+/// Legacy request preflight before any budget dispatch fence: validator
+/// compilation, AgentCard validation, cancellation and deadline. A failure
+/// here never reached the provider, so the caller must not mark the budget
+/// attempt dispatched.
+pub fn validate_generate_once_request(
+    request: &ModelRequest,
+) -> Result<Vec<Option<jsonschema::Validator>>, AgentFailure> {
+    let validators = legacy_validators(request)?;
     for card in &request.active_agents {
         card.validate()?;
     }
@@ -23,6 +34,18 @@ pub async fn generate_once<Model: ModelRunner>(
     if request.deadline <= tokio::time::Instant::now() {
         return Err(AgentFailure::DeadlineExceeded);
     }
+    Ok(validators)
+}
+
+/// Provider handoff and structural validation for a preflighted request.
+/// Call only after the budget attempt is marked dispatched: every failure
+/// from here ran past the dispatch fence, including a provider error and a
+/// response that fails structural validation after a successful call.
+pub async fn dispatch_generate_once<Model: ModelRunner>(
+    model: &Model,
+    request: ModelRequest,
+    validators: &[Option<jsonschema::Validator>],
+) -> Result<ModelResponse, AgentFailure> {
     let result = tokio::select! {
         biased;
         _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
@@ -30,7 +53,7 @@ pub async fn generate_once<Model: ModelRunner>(
         result = model.generate(request.clone()) => result,
     };
     let response = result?;
-    validate_legacy_response(&request, &validators, &response)?;
+    validate_legacy_response(&request, validators, &response)?;
     Ok(response)
 }
 

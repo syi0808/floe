@@ -126,10 +126,13 @@ struct PendingBatch {
 }
 
 /// One model attempt's projection binding and terminal state. A validated
-/// batch must name the attempt and projection its own intent recorded.
+/// batch must name the attempt and projection its own intent recorded. One
+/// attempt binds at most one fresh batch; a second fresh batch on the same
+/// attempt is journal corruption.
 struct AttemptState {
     projection_ref: ProjectionRef,
     completed: bool,
+    batch_bound: bool,
 }
 
 fn project_entries(
@@ -174,6 +177,7 @@ fn project_entries(
                     AttemptState {
                         projection_ref: *projection_ref,
                         completed: false,
+                        batch_bound: false,
                     },
                 );
             }
@@ -256,7 +260,7 @@ fn project_entries(
                     || request.selected_definition_revision == 0
                     || request.message.trim().is_empty()
                     || request.message.len() > floe_agent_contract::MAX_OUTPUT_BYTES
-                    || request.context_refs.len() > 128
+                    || !floe_agent_contract::valid_context_refs(&request.context_refs)
                     || !seen_tasks.insert(request.task_id)
                     || delegations
                         .insert(request.task_id, request.clone())
@@ -342,10 +346,16 @@ fn project_entries(
                 // batch re-recorded at the journal's start with no local attempt.
                 let fresh = attempts.contains_key(&batch.attempt_id);
                 if fresh {
-                    let state = &attempts[&batch.attempt_id];
-                    if !state.completed || state.projection_ref != batch.projection_ref {
+                    let state = attempts
+                        .get_mut(&batch.attempt_id)
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                    if !state.completed
+                        || state.projection_ref != batch.projection_ref
+                        || state.batch_bound
+                    {
                         return Err(AgentFailure::StorageUnavailable);
                     }
+                    state.batch_bound = true;
                     // One drive validates every fresh batch against one
                     // catalog; only the leading resumed re-record may differ.
                     // Whether that catalog is still current is the Engine
@@ -426,8 +436,12 @@ fn project_entries(
         // crash landed before the iteration checkpoint: consume the iteration
         // so the next run cannot replay it for free. Nothing is re-executed,
         // and the next run derives its remaining budget from this count
-        // rather than re-journaling the missing checkpoint.
-        completed_iterations = completed_iterations.saturating_add(1).min(64);
+        // rather than re-journaling the missing checkpoint. A 65th durable
+        // completion is corruption, never clamped into range.
+        completed_iterations = completed_iterations
+            .checked_add(1)
+            .filter(|iterations| *iterations <= 64)
+            .ok_or(AgentFailure::StorageUnavailable)?;
     }
     let (pending_batch, cursor) = pending
         .map(|state| {
@@ -1756,6 +1770,334 @@ mod tests {
             },
         });
         events.push(JournalEvent::Checkpoint { iteration: 1 });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    fn answer_batch(
+        attempt_id: Uuid,
+        execution_id: Uuid,
+        projection_ref: ProjectionRef,
+    ) -> ValidatedModelBatch {
+        ValidatedModelBatch {
+            execution_id,
+            attempt_id,
+            projection_ref,
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Answer {
+                text: "done".into(),
+                artifacts: vec![],
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+        }
+    }
+
+    fn completed_answer_iteration(execution_id: Uuid, iteration: u32) -> Vec<JournalEvent> {
+        let attempt_id = Uuid::new_v4();
+        let batch = answer_batch(attempt_id, execution_id, ProjectionRef::new());
+        let batch_id = batch.batch_id;
+        vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch { batch },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 1,
+                },
+            },
+            JournalEvent::Checkpoint { iteration },
+        ]
+    }
+
+    #[test]
+    fn one_model_attempt_cannot_bind_two_fresh_batches() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let projection_ref = ProjectionRef::new();
+        let execution_id = Uuid::new_v4();
+        let first = answer_batch(attempt_id, execution_id, projection_ref);
+        let first_batch_id = first.batch_id;
+        let mut second = answer_batch(attempt_id, execution_id, projection_ref);
+        while second.batch_id == first_batch_id {
+            second.batch_id = Uuid::new_v4();
+        }
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        projection_ref,
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    },
+                    JournalEvent::ValidatedBatch { batch: first },
+                    JournalEvent::BatchProgress {
+                        cursor: BatchCursor {
+                            batch_id: first_batch_id,
+                            next_step_index: 0,
+                        },
+                    },
+                    JournalEvent::BatchProgress {
+                        cursor: BatchCursor {
+                            batch_id: first_batch_id,
+                            next_step_index: 1,
+                        },
+                    },
+                    JournalEvent::Checkpoint { iteration: 1 },
+                    JournalEvent::ValidatedBatch { batch: second },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn different_attempts_can_each_bind_one_batch() {
+        let admitted = admitted();
+        let execution_id = Uuid::new_v4();
+        let first_attempt = Uuid::new_v4();
+        let first = answer_batch(first_attempt, execution_id, ProjectionRef::new());
+        let first_batch_id = first.batch_id;
+        let second_attempt = Uuid::new_v4();
+        let second = answer_batch(second_attempt, execution_id, ProjectionRef::new());
+        let second_batch_id = second.batch_id;
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id: first_attempt,
+                    projection_ref: first.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id: first_attempt,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch { batch: first },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: first_batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: first_batch_id,
+                        next_step_index: 1,
+                    },
+                },
+                JournalEvent::Checkpoint { iteration: 1 },
+                JournalEvent::ModelIntent {
+                    attempt_id: second_attempt,
+                    projection_ref: second.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id: second_attempt,
+                    usage: ModelUsage {
+                        tokens: 2,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch { batch: second },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: second_batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: second_batch_id,
+                        next_step_index: 1,
+                    },
+                },
+                JournalEvent::Checkpoint { iteration: 2 },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(snapshot.completed_iterations, 2);
+        assert!(snapshot.pending_batch.is_none());
+        assert_eq!(snapshot.usage.attempts, 2);
+        assert_eq!(snapshot.usage.tokens, 3);
+    }
+
+    fn pending_answer_batch(
+        attempt_id: Uuid,
+    ) -> (ValidatedModelBatch, Vec<JournalEvent>) {
+        let batch = answer_batch(attempt_id, Uuid::new_v4(), ProjectionRef::new());
+        let batch_id = batch.batch_id;
+        let prefix = vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch { batch: batch.clone() },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ];
+        (batch, prefix)
+    }
+
+    fn delegation_request(
+        admitted: &AdmittedTurn,
+        context_refs: Vec<String>,
+    ) -> DelegationRequest {
+        DelegationRequest {
+            task_id: floe_agent_contract::TaskId::new(),
+            parent_run_id: Some(admitted.receipt.run_id.as_uuid()),
+            principal: admitted.receipt.principal.clone(),
+            invocation_key: InvocationKey::new(),
+            selected_agent_id: "expert-a".into(),
+            selected_definition_revision: 2,
+            message: "summarize".into(),
+            context_refs,
+        }
+    }
+
+    #[test]
+    fn oversized_context_ref_in_journal_is_storage_fault() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (_, mut events) = pending_answer_batch(attempt_id);
+        let oversized = "x".repeat(floe_agent_contract::MAX_OUTPUT_BYTES + 1);
+        events.push(JournalEvent::DelegationIntent {
+            request: delegation_request(&admitted, vec![oversized]),
+        });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn maximum_valid_context_ref_survives_recovery() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (batch, mut events) = pending_answer_batch(attempt_id);
+        let mut context_refs = vec!["x".repeat(floe_agent_contract::MAX_OUTPUT_BYTES)];
+        for index in 1..floe_agent_contract::MAX_CONTEXT_REFS {
+            context_refs.push(format!("turn:{index}"));
+        }
+        assert_eq!(context_refs.len(), floe_agent_contract::MAX_CONTEXT_REFS);
+        let request = delegation_request(&admitted, context_refs);
+        let receipt = TaskReceipt {
+            task_id: request.task_id,
+            snapshot: TaskSnapshot {
+                task_id: request.task_id,
+                parent_run_id: request.parent_run_id,
+                principal: request.principal.clone(),
+                agent_id: request.selected_agent_id.clone(),
+                definition_revision: request.selected_definition_revision,
+                state: TaskState::Completed,
+                result: Some("summary".into()),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            },
+            replay: None,
+        };
+        events.push(JournalEvent::DelegationIntent {
+            request: request.clone(),
+        });
+        events.push(JournalEvent::DelegationResult {
+            receipt: Box::new(receipt),
+        });
+        events.push(JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 1,
+            },
+        });
+        events.push(JournalEvent::Checkpoint { iteration: 1 });
+        let snapshot = project_continuation(&admitted, &entries(events)).unwrap();
+        assert_eq!(snapshot.completed_iterations, 1);
+        assert!(snapshot.pending_batch.is_none());
+        assert_eq!(snapshot.replay.len(), 1);
+        assert_eq!(
+            snapshot.replay[0].task_state,
+            Some(TaskState::Completed)
+        );
+    }
+
+    #[test]
+    fn sixty_fifth_completed_iteration_is_storage_fault() {
+        let admitted = admitted();
+        let execution_id = Uuid::new_v4();
+        let mut events = Vec::new();
+        for iteration in 1..=64 {
+            events.extend(completed_answer_iteration(execution_id, iteration));
+        }
+        // One more durable completion past the cap, crashed before its
+        // checkpoint: recovery must fail closed, never clamp to 64.
+        let attempt_id = Uuid::new_v4();
+        let batch = answer_batch(attempt_id, execution_id, ProjectionRef::new());
+        let batch_id = batch.batch_id;
+        events.extend(vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch { batch },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 1,
+                },
+            },
+        ]);
+        assert!(events.len() < 512);
         assert!(matches!(
             project_continuation(&admitted, &entries(events)),
             Err(AgentFailure::StorageUnavailable)

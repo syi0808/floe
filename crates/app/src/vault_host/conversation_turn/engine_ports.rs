@@ -289,13 +289,16 @@ where
 
 /// Transitional only; removed when InferenceService implements ModelPort.
 ///
-/// Binds one legacy model attempt to the scope budget: begin once, dispatch
-/// the legacy runner exactly once with no inner correction retry, and settle
-/// actual usage. The Engine owns correction above this call, so one logical
-/// Engine attempt costs exactly one underlying model call here.
+/// Binds one legacy model attempt to the scope budget: preflight once before
+/// any dispatch fence, then begin once, dispatch the legacy runner exactly
+/// once with no inner correction retry, and settle actual usage. The Engine
+/// owns correction above this call, so one logical Engine attempt costs
+/// exactly one underlying model call here.
 ///
-/// A failure past provider handoff drops the attempt without settling, which
-/// charges the budget's unknown estimate — usage is never treated as zero.
+/// A failure after the transitional dispatch fence drops the attempt without
+/// settling, which charges the budget's unknown estimate — usage is never
+/// treated as zero. A preflight failure returns before begin, so it never
+/// reaches the provider and never charges unknown usage.
 pub(super) async fn transitional_budgeted_generate<Runner>(
     model: &Runner,
     mut request: LegacyModelRequest,
@@ -304,6 +307,7 @@ pub(super) async fn transitional_budgeted_generate<Runner>(
 where
     Runner: LegacyModelRunner + Sync,
 {
+    let validators = floe_conversation::turn::validate_generate_once_request(&request)?;
     let mut remaining_tokens = request.remaining_tokens;
     let mut remaining_cost_micros = request.remaining_cost_micros;
     let mut attempt = scope
@@ -312,7 +316,7 @@ where
     request.remaining_tokens = remaining_tokens;
     request.remaining_cost_micros = remaining_cost_micros;
     attempt.mark_dispatched();
-    match floe_conversation::turn::generate_once(model, request).await {
+    match floe_conversation::turn::dispatch_generate_once(model, request, &validators).await {
         Ok(response) => {
             attempt.settle(response.used_tokens, response.cost_micros)?;
             Ok(response)
@@ -977,6 +981,37 @@ mod tests {
                 && message == "hi"
                 && context_refs == &["turn:1".to_string()]
         ));
+    }
+
+    #[tokio::test]
+    async fn preflight_failure_does_not_charge_unknown_attempt() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 1_000_000), Default::default());
+        let scope = work_scope(ledger.work_lease());
+        let runner = FixtureRunner::new(vec![legacy_answer(10)]);
+        let mut request = fixture_request(100, 1_000_000);
+        request.cancellation.cancel();
+        let result = transitional_budgeted_generate(&runner, request, &scope).await;
+        assert!(matches!(result, Err(AgentFailure::Cancelled)));
+        assert_eq!(runner.calls(), 0);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.unknown_tokens, 0);
+        assert_eq!(snapshot.unknown_cost_micros, 0);
+        assert_eq!(snapshot.usage.tokens, 0);
+    }
+
+    #[tokio::test]
+    async fn dispatched_failure_charges_unknown_attempt() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 1_000_000), Default::default());
+        let scope = work_scope(ledger.work_lease());
+        let runner = FixtureRunner::new(vec![Err(AgentFailure::ModelUnavailable)]);
+        let result =
+            transitional_budgeted_generate(&runner, fixture_request(100, 1_000_000), &scope)
+                .await;
+        assert!(matches!(result, Err(AgentFailure::ModelUnavailable)));
+        assert_eq!(runner.calls(), 1);
+        let snapshot = ledger.snapshot();
+        assert!(snapshot.unknown_tokens > 0);
+        assert!(snapshot.unknown_cost_micros > 0);
     }
 
     #[test]
