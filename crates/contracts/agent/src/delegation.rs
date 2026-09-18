@@ -69,6 +69,17 @@ pub struct DelegationRequest {
     pub context_refs: Vec<String>,
 }
 
+/// Context references carried on one delegation: bounded count, bounded bytes
+/// each. Every layer that accepts model-produced references — provider
+/// decode, legacy and canonical validation, the journal exchange — enforces
+/// this same bound and maps a violation to its own failure.
+pub fn valid_context_refs(references: &[String]) -> bool {
+    references.len() <= crate::MAX_CONTEXT_REFS
+        && references
+            .iter()
+            .all(|reference| reference.len() <= crate::MAX_OUTPUT_BYTES)
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskReceipt {

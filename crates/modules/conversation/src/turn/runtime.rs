@@ -863,7 +863,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         check_drive_running(deadline, cancellation)?;
                         continue;
                     }
-                    ModelStep::Delegate { agent_id, message } => {
+                    ModelStep::Delegate { agent_id, message, .. } => {
                         if usage.capability_calls >= budget.max_capability_calls {
                             return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
                         }

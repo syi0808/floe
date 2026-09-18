@@ -454,6 +454,7 @@ impl ActiveDrive<'_> {
         if encoded_steps.len() > self.request.max_output_bytes {
             return Err(AgentFailure::BudgetExceeded);
         }
+        validate_batch_shape(&response.steps)?;
         let corrections = validate_model_steps(&response.steps, &self.request.allowed_catalog)?;
         for step in &response.steps {
             if let ModelStep::Answer { text, artifacts } = step {
@@ -507,6 +508,9 @@ impl ActiveDrive<'_> {
                     })?;
                 }
                 ModelStep::Answer { text, artifacts } => {
+                    // Canonical validation is authoritative; this only guards
+                    // against a trailing step being silently ignored.
+                    debug_assert_eq!(ordinal as usize + 1, batch.steps.len());
                     self.ports.validator.validate(
                         &self.request.role_spec.role_id,
                         text,
@@ -580,52 +584,9 @@ impl ActiveDrive<'_> {
         if tool_id.trim().is_empty() || definition_revision == 0 {
             return Err(AgentFailure::InvalidModelOutput);
         }
-        if let Some(reason) = correction {
-            let mut result = unavailable_tool(Uuid::new_v4(), reason);
-            result.issue = Some(floe_agent_contract::OutcomeIssue {
-                failure: AgentFailure::InvalidModelOutput,
-                retryable: true,
-            });
-            self.push_current(soft_tool_exchange(
-                tool_id,
-                definition_revision,
-                input,
-                &result,
-            ))?;
-            self.steps.push(EngineStep::Tool(result));
-            return Ok(());
-        }
-        let known = self.request.allowed_catalog.tools.iter().any(|descriptor| {
-            descriptor.id == tool_id && descriptor.definition_revision == definition_revision
-        });
-        if !self
-            .request
-            .allowed_catalog
-            .tools
-            .iter()
-            .any(|descriptor| descriptor.id == tool_id)
-        {
-            let result = unavailable_tool(Uuid::new_v4(), "tool is not registered");
-            self.push_current(soft_tool_exchange(
-                tool_id,
-                definition_revision,
-                input,
-                &result,
-            ))?;
-            self.steps.push(EngineStep::Tool(result));
-            return Ok(());
-        }
-        if !known {
-            let result = unavailable_tool(Uuid::new_v4(), "tool descriptor is stale");
-            self.push_current(soft_tool_exchange(
-                tool_id,
-                definition_revision,
-                input,
-                &result,
-            ))?;
-            self.steps.push(EngineStep::Tool(result));
-            return Ok(());
-        }
+        // Stable identity first: a step that cannot dispatch still journals
+        // its intent and host-generated result under the identity a dispatch
+        // would use, so the observation survives a crash past a later step.
         let invocation_key =
             stable_invocation_key(self.execution_id, batch.batch_id, ordinal, InvocationKind::Tool);
         let call = ToolCall {
@@ -638,6 +599,23 @@ impl ActiveDrive<'_> {
         if !self.seen_invocations.insert(invocation_key) {
             return Err(AgentFailure::Conflict);
         }
+        let soft_failure = correction.cloned().or_else(|| {
+            if !self
+                .request
+                .allowed_catalog
+                .tools
+                .iter()
+                .any(|descriptor| descriptor.id == tool_id)
+            {
+                Some("tool is not registered".to_owned())
+            } else if !self.request.allowed_catalog.tools.iter().any(|descriptor| {
+                descriptor.id == tool_id && descriptor.definition_revision == definition_revision
+            }) {
+                Some("tool descriptor is stale".to_owned())
+            } else {
+                None
+            }
+        });
         let intent = self
             .request
             .scope
@@ -677,6 +655,12 @@ impl ActiveDrive<'_> {
                     }
                 }),
             }
+        } else if let Some(reason) = soft_failure {
+            // Host-generated observation without dispatch: the model erred,
+            // so the issue stays a retryable invalid-output signal rather
+            // than a capability barrier, and the host-authored status carries
+            // no source data.
+            soft_tool_result(call.call_id, &reason)
         } else {
             let child = self.request.scope.child_scope(
                 self.request.scope.deadline(),
@@ -753,26 +737,23 @@ impl ActiveDrive<'_> {
             return Err(AgentFailure::BudgetExceeded);
         }
         self.delegations += 1;
-        let Some(card) = self
+        // A delegation the catalog cannot serve still journals its intent and
+        // a host-generated terminal rejection, so the observation survives a
+        // crash past a later step. The model erred, so the issue stays
+        // invalid output rather than a capability barrier.
+        let soft_failure = match self
             .request
             .allowed_catalog
             .cards
             .iter()
             .find(|item| item.card.id == agent_id)
-        else {
-            self.push_current(ModelConversationEntry::Assistant {
-                message_id: Uuid::new_v4(),
-                text: "delegation agent is not registered".into(),
-            })?;
-            return Ok(());
+        {
+            None => Some(AgentFailure::InvalidModelOutput),
+            Some(card) if card.definition_revision != definition_revision => {
+                Some(AgentFailure::InvalidModelOutput)
+            }
+            Some(_) => None,
         };
-        if card.definition_revision != definition_revision {
-            self.push_current(ModelConversationEntry::Assistant {
-                message_id: Uuid::new_v4(),
-                text: "delegation descriptor is stale".into(),
-            })?;
-            return Ok(());
-        }
         let invocation_key = stable_invocation_key(
             self.execution_id,
             batch.batch_id,
@@ -822,6 +803,26 @@ impl ActiveDrive<'_> {
             receipt.snapshot.parent_run_id = delegation.parent_run_id;
             receipt.snapshot.validate(self.request.max_output_bytes)?;
             receipt
+        } else if let Some(failure) = soft_failure {
+            // Host-generated terminal rejection without dispatch: no
+            // DelegationPort call, but the intent/result pair is durable and
+            // carries the exact request linkage.
+            TaskReceipt {
+                task_id: delegation.task_id,
+                snapshot: floe_agent_contract::TaskSnapshot {
+                    task_id: delegation.task_id,
+                    parent_run_id: delegation.parent_run_id,
+                    principal: delegation.principal.clone(),
+                    agent_id: delegation.selected_agent_id.clone(),
+                    definition_revision: delegation.selected_definition_revision,
+                    state: floe_agent_contract::TaskState::Rejected,
+                    result: None,
+                    artifacts: vec![],
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
+                    issue: Some(failure),
+                },
+                replay: None,
+            }
         } else {
             let delegated = self
                 .ports
@@ -927,24 +928,19 @@ fn pin_revisions(
     (tools, agents)
 }
 
-/// Memory-only exchange for a step that never dispatches: the attempted call
-/// is preserved so the model sees what failed, but the identity is random and
-/// must never be journaled or replayed.
-fn soft_tool_exchange(
-    tool_id: &str,
-    definition_revision: u64,
-    input: &str,
-    result: &ToolResult,
-) -> ModelConversationEntry {
-    ModelConversationEntry::ToolExchange {
-        call: ToolCall {
-            call_id: result.call_id,
-            invocation_key: InvocationKey::new(),
-            tool_id: tool_id.to_owned(),
-            definition_revision,
-            input: input.to_owned(),
-        },
-        result: result.clone(),
+/// Host-generated result for a step that never dispatches: the model emitted
+/// an unexecutable call, so the issue is retryable invalid output rather than
+/// a capability barrier, and the host-authored status carries no source data.
+fn soft_tool_result(call_id: Uuid, text: &str) -> ToolResult {
+    ToolResult {
+        call_id,
+        text: text.to_owned(),
+        artifacts: vec![],
+        coverage: floe_agent_contract::DependencyCoverage::Independent,
+        issue: Some(floe_agent_contract::OutcomeIssue {
+            failure: AgentFailure::InvalidModelOutput,
+            retryable: true,
+        }),
     }
 }
 
@@ -1208,6 +1204,54 @@ fn verify_resumed_task_replay(
     .ok_or(AgentFailure::InvalidInput)
 }
 
+/// Maximum steps in one model batch, carried over from the legacy path.
+const MAX_BATCH_STEPS: usize = 16;
+
+/// Maximum tool calls in one tool batch, carried over from the legacy path.
+const MAX_BATCH_TOOL_CALLS: usize = 8;
+
+/// Whole-batch grammar, checked before any per-step validation or dispatch.
+/// An answer batch is exactly one final answer with no tool or delegation;
+/// a tool batch carries no answer or delegation; a delegation batch carries
+/// exactly one delegation and nothing else executable. Preambles may lead an
+/// answer or tool batch but never trail an answer.
+fn validate_batch_shape(steps: &[ModelStep]) -> Result<(), AgentFailure> {
+    if steps.is_empty() || steps.len() > MAX_BATCH_STEPS {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    let mut answers = 0;
+    let mut tools = 0;
+    let mut delegations = 0;
+    for step in steps {
+        match step {
+            ModelStep::Answer { .. } => answers += 1,
+            ModelStep::CallTool { .. } => tools += 1,
+            ModelStep::Delegate { .. } => delegations += 1,
+            ModelStep::Preamble { .. } => {}
+        }
+    }
+    if answers > 0 {
+        if answers != 1
+            || tools != 0
+            || delegations != 0
+            || !matches!(steps.last(), Some(ModelStep::Answer { .. }))
+        {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+    } else if tools > 0 {
+        if delegations != 0 || tools > MAX_BATCH_TOOL_CALLS {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+    } else if delegations > 0 {
+        if delegations != 1 {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+    } else {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    Ok(())
+}
+
 fn validate_model_steps(
     steps: &[ModelStep],
     catalog: &floe_agent_contract::AllowedCatalog,
@@ -1248,11 +1292,15 @@ fn validate_model_steps(
                 agent_id,
                 definition_revision,
                 message,
-                ..
+                context_refs,
             } => {
+                // Oversized delegations fail here, before any dispatch: the
+                // journal and the downstream coordinator share these bounds.
                 if agent_id.trim().is_empty()
                     || *definition_revision == 0
                     || message.trim().is_empty()
+                    || message.len() > floe_agent_contract::MAX_OUTPUT_BYTES
+                    || !floe_agent_contract::valid_context_refs(context_refs)
                 {
                     return Err(AgentFailure::InvalidModelOutput);
                 }
@@ -1272,13 +1320,12 @@ fn validate_model_steps(
 #[cfg(test)]
 mod tests {
     use floe_agent_contract::{
-        AllowedCatalog, AuthorizedModelProjection, ContextEnvelope, ContextManifest, ContextualData,
-        DataClass, DependencyCoverage, EngineRequest, EngineResumeState, ModelConversation,
-        ModelConversationEntry, ModelProjectionRequest, ModelResponse, ModelUsage, ProjectionRef,
-        RoleSpec, RuntimeContext, ScopedInstructions, ToolDescriptor,
-        prompts::{
-            PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
-        },
+        AgentCard, AgentDefinition, AllowedCatalog, AuthorizedModelProjection, ContextEnvelope,
+        ContextManifest, ContextualData, DataClass, DependencyCoverage, EngineRequest,
+        EngineResumeState, ModelConversation, ModelConversationEntry, ModelProjectionRequest,
+        ModelResponse, ModelUsage, ProjectionRef, RoleSpec, RuntimeContext, ScopedInstructions,
+        ToolDescriptor,
+        prompts::{PromptAssembly, PromptComponent, PromptComponentKind, PromptRole},
     };
     use floe_execution::budget::{BudgetConfig, BudgetLedger};
     use floe_execution::{Cancellation, ExecutionScope};
@@ -2346,5 +2393,687 @@ mod tests {
         assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
         assert_eq!(invalid.calls.load(Ordering::SeqCst), 2);
         assert_eq!(corrections.lock().unwrap().len(), 2);
+    }
+
+    struct ScriptedModel {
+        steps: Vec<ModelStep>,
+        calls: Arc<AtomicUsize>,
+    }
+    impl ModelPort for ScriptedModel {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let steps = self.steps.clone();
+            Box::pin(async move {
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                })
+            })
+        }
+    }
+
+    struct CountingDelegations {
+        calls: Arc<AtomicUsize>,
+    }
+    impl DelegationPort for CountingDelegations {
+        fn delegate<'a>(
+            &'a self,
+            _: DelegationRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+    }
+
+    fn answer(text: &str) -> ModelStep {
+        ModelStep::Answer {
+            text: text.into(),
+            artifacts: vec![],
+        }
+    }
+
+    fn tool_call() -> ModelStep {
+        ModelStep::CallTool {
+            tool_id: "lookup".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        }
+    }
+
+    fn delegation() -> ModelStep {
+        ModelStep::Delegate {
+            agent_id: "expert-a".into(),
+            definition_revision: 1,
+            message: "summarize".into(),
+            context_refs: vec![],
+        }
+    }
+
+    struct ShapeOutcome {
+        result: Result<EngineReport, AgentFailure>,
+        model_calls: usize,
+        tool_calls: usize,
+        delegation_calls: usize,
+        validated_batches: usize,
+        projections: usize,
+    }
+
+    async fn drive_shape(steps: Vec<ModelStep>) -> ShapeOutcome {
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let delegations = CountingDelegations {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let model = ScriptedModel {
+            steps,
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, corrections) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(scope()),
+                EnginePorts {
+                    projection: &projection,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &delegations,
+                    journal: &journal,
+                    validator: &Validator,
+                },
+            )
+            .await;
+        let validated_batches = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, JournalEvent::ValidatedBatch { .. }))
+            .count();
+        ShapeOutcome {
+            result,
+            model_calls: model.calls.load(Ordering::SeqCst),
+            tool_calls: tools.calls.load(Ordering::SeqCst),
+            delegation_calls: delegations.calls.load(Ordering::SeqCst),
+            validated_batches,
+            projections: corrections.lock().unwrap().len(),
+        }
+    }
+
+    fn assert_shape_rejected(outcome: ShapeOutcome) {
+        assert!(matches!(
+            outcome.result,
+            Err(AgentFailure::InvalidModelOutput)
+        ));
+        // Both the initial attempt and the single host correction run the
+        // shape check, and neither dispatches anything.
+        assert_eq!(outcome.model_calls, 2);
+        assert_eq!(outcome.projections, 2);
+        assert_eq!(outcome.tool_calls, 0);
+        assert_eq!(outcome.delegation_calls, 0);
+        assert_eq!(outcome.validated_batches, 0);
+    }
+
+    #[tokio::test]
+    async fn answer_then_tool_rejects_before_any_dispatch() {
+        assert_shape_rejected(drive_shape(vec![answer("done"), tool_call()]).await);
+    }
+
+    #[tokio::test]
+    async fn tool_then_answer_rejects_before_any_dispatch() {
+        assert_shape_rejected(drive_shape(vec![tool_call(), answer("done")]).await);
+    }
+
+    #[tokio::test]
+    async fn answer_then_delegation_rejects_before_any_dispatch() {
+        assert_shape_rejected(drive_shape(vec![answer("done"), delegation()]).await);
+    }
+
+    #[tokio::test]
+    async fn multiple_answers_are_invalid() {
+        assert_shape_rejected(drive_shape(vec![answer("one"), answer("two")]).await);
+    }
+
+    #[tokio::test]
+    async fn answer_must_be_final_step() {
+        assert_shape_rejected(
+            drive_shape(vec![
+                answer("done"),
+                ModelStep::Preamble {
+                    text: "trailing".into(),
+                },
+            ])
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_and_delegation_cannot_share_batch() {
+        assert_shape_rejected(drive_shape(vec![tool_call(), delegation()]).await);
+    }
+
+    #[tokio::test]
+    async fn too_many_tool_calls_are_rejected_before_dispatch() {
+        let steps = (0..9).map(|_| tool_call()).collect();
+        assert_shape_rejected(drive_shape(steps).await);
+    }
+
+    #[tokio::test]
+    async fn oversized_context_refs_fail_before_provider_dispatch() {
+        // 129 tiny references: under the output byte budget, over the count.
+        let refs = (0..129).map(|_| "r".to_string()).collect();
+        assert_shape_rejected(
+            drive_shape(vec![ModelStep::Delegate {
+                agent_id: "expert-a".into(),
+                definition_revision: 1,
+                message: "summarize".into(),
+                context_refs: refs,
+            }])
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn preamble_may_lead_an_answer_batch() {
+        let outcome = drive_shape(vec![
+            ModelStep::Preamble {
+                text: "thinking".into(),
+            },
+            answer("done"),
+        ])
+        .await;
+        let report = outcome.result.unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(outcome.tool_calls, 0);
+        assert_eq!(outcome.delegation_calls, 0);
+        assert_eq!(outcome.validated_batches, 1);
+    }
+
+    #[tokio::test]
+    async fn preamble_may_lead_a_tool_batch() {
+        struct AnswerAfterTools;
+        impl ModelPort for AnswerAfterTools {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                Box::pin(async move {
+                    let steps = if has_tool_exchange(&request) {
+                        vec![answer("done")]
+                    } else {
+                        vec![
+                            ModelStep::Preamble {
+                                text: "thinking".into(),
+                            },
+                            tool_call(),
+                        ]
+                    };
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (projection, _) = Projector::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                ports(
+                    &projection,
+                    &AnswerAfterTools,
+                    &tools,
+                    &Journal {
+                        reject_tool: false,
+                        model_tokens: Arc::new(AtomicUsize::new(0)),
+                    },
+                    &Validator,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn unknown_tool_call() -> ModelStep {
+        ModelStep::CallTool {
+            tool_id: "missing.tool".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_never_calls_tool_port() {
+        struct UnknownOnce;
+        impl ModelPort for UnknownOnce {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                Box::pin(async move {
+                    let steps = if has_tool_exchange(&request) {
+                        vec![answer("done")]
+                    } else {
+                        vec![unknown_tool_call()]
+                    };
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                ports(
+                    &projection,
+                    &UnknownOnce,
+                    &tools,
+                    &journal,
+                    &Validator,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+        // The soft observation is a durable intent/result pair under the
+        // step's stable identity, carrying a retryable invalid-output issue
+        // rather than a capability barrier.
+        let events = events.lock().unwrap();
+        let batch = events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+                _ => None,
+            })
+            .expect("soft step still validates its batch");
+        let (call, result) = events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ToolResult { result } => Some(result.clone()),
+                _ => None,
+            })
+            .and_then(|result| {
+                events
+                    .iter()
+                    .find_map(|event| match event {
+                        JournalEvent::ToolIntent { call }
+                            if call.call_id == result.call_id =>
+                        {
+                            Some((call.clone(), result.clone()))
+                        }
+                        _ => None,
+                    })
+            })
+            .expect("soft step journals an intent/result pair");
+        assert_eq!(call.tool_id, "missing.tool");
+        assert_eq!(
+            call.invocation_key,
+            stable_invocation_key(
+                batch.execution_id,
+                batch.batch_id,
+                0,
+                InvocationKind::Tool
+            )
+        );
+        assert_eq!(
+            call.call_id,
+            stable_call_id(batch.execution_id, batch.batch_id, 0)
+        );
+        assert_eq!(result.text, "tool is not registered");
+        assert!(matches!(
+            result.issue,
+            Some(floe_agent_contract::OutcomeIssue {
+                failure: AgentFailure::InvalidModelOutput,
+                retryable: true,
+            })
+        ));
+        assert_eq!(result.coverage, DependencyCoverage::Independent);
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                JournalEvent::BatchProgress { cursor }
+                    if cursor.batch_id == batch.batch_id && cursor.next_step_index == 1
+            )),
+            "soft step advances the cursor: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_observation_survives_crash_after_later_step() {
+        // Run 1 journals the soft pair and the later real pair, then loses
+        // the final cursor ack.
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (mut journal, run_events) = RecordingJournal::new();
+        journal.fail_cursor_from = Some(2);
+        let (projection, _) = Projector::new();
+        let model = ScriptedModel {
+            steps: vec![unknown_tool_call(), tool_call()],
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let result = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &model, &tools, &journal, &Validator),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::StorageUnavailable)));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        let run_events = run_events.lock().unwrap().clone();
+        let batch = run_events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+                _ => None,
+            })
+            .expect("batch is journaled before execution");
+        // Pair every journaled intent with its result, as recovery does, and
+        // carry both the soft and the real observation into the resume.
+        let mut exchanges = Vec::new();
+        let mut replay = Vec::new();
+        for event in &run_events {
+            if let JournalEvent::ToolResult { result } = event {
+                let call = run_events
+                    .iter()
+                    .find_map(|event| match event {
+                        JournalEvent::ToolIntent { call }
+                            if call.call_id == result.call_id =>
+                        {
+                            Some(call.clone())
+                        }
+                        _ => None,
+                    })
+                    .expect("every result pairs with its intent");
+                replay.push(ReplayReceipt {
+                    principal: "person:test".into(),
+                    run_id: None,
+                    task_id: None,
+                    agent_id: None,
+                    tool_id: Some(call.tool_id.clone()),
+                    definition_revision: call.definition_revision,
+                    input_digest: floe_agent_contract::input_digest(&call.input),
+                    invocation_key: call.invocation_key,
+                    call_id: call.call_id,
+                    result: result.text.clone(),
+                    task_result: None,
+                    task_state: None,
+                    task_artifacts: vec![],
+                    task_coverage: DependencyCoverage::Unknown,
+                    task_issue: None,
+                    tool_artifacts: result.artifacts.clone(),
+                    tool_coverage: result.coverage.clone(),
+                    tool_issue: result.issue.as_ref().map(|issue| issue.failure),
+                });
+                exchanges.push(ModelConversationEntry::ToolExchange {
+                    call,
+                    result: result.clone(),
+                });
+            }
+        }
+        assert_eq!(exchanges.len(), 2);
+        assert!(
+            run_events.iter().any(|event| matches!(
+                event,
+                JournalEvent::BatchProgress { cursor }
+                    if cursor.batch_id == batch.batch_id && cursor.next_step_index == 1
+            )),
+            "cursor past the soft step is durable: {run_events:?}"
+        );
+
+        // Run 2 resumes past the soft step: no redispatch, and the answering
+        // model still sees the soft observation.
+        struct ObservingAnswer {
+            saw_soft: Arc<AtomicUsize>,
+            saw_real: Arc<AtomicUsize>,
+        }
+        impl ModelPort for ObservingAnswer {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                let conversation = request.projection.envelope.conversation.clone();
+                let saw_soft = Arc::clone(&self.saw_soft);
+                let saw_real = Arc::clone(&self.saw_real);
+                Box::pin(async move {
+                    for entry in &conversation.current_turn {
+                        if let ModelConversationEntry::ToolExchange { result, .. } = entry {
+                            if result.text.contains("not registered") {
+                                saw_soft.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if result.text == "observed" {
+                                saw_real.fetch_add(1, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![answer("done")],
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let model = ObservingAnswer {
+            saw_soft: Arc::new(AtomicUsize::new(0)),
+            saw_real: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, resumed_events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let mut engine_request = request(scope());
+        engine_request.conversation.current_turn.extend(exchanges);
+        engine_request.replay = replay;
+        engine_request.resume = Some(EngineResumeState {
+            validated_batch: batch.clone(),
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 1,
+            },
+        });
+        let report = Engine::default()
+            .drive(
+                engine_request,
+                ports(&projection, &model, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+        // The soft observation arrives exactly once, carried past the crash;
+        // the re-executed real step re-pushes its own, as resumed steps do.
+        assert_eq!(model.saw_soft.load(Ordering::SeqCst), 1);
+        assert_eq!(model.saw_real.load(Ordering::SeqCst), 2);
+        let resumed_events = resumed_events.lock().unwrap();
+        let intents = resumed_events
+            .iter()
+            .filter_map(|event| match event {
+                JournalEvent::ToolIntent { call } => Some(call.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(
+            intents[0].call_id,
+            stable_call_id(batch.execution_id, batch.batch_id, 1)
+        );
+    }
+
+    fn agent_card(id: &str) -> AgentCard {
+        AgentCard {
+            schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+            id: id.into(),
+            version: "1".into(),
+            name: id.into(),
+            description: "fixture expert".into(),
+            supported_placements: vec![floe_agent_contract::ModelPlacement::DeviceLocal],
+            domain_tags: vec![],
+            skills: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_agent_never_calls_delegation_port() {
+        let delegations = CountingDelegations {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        // The catalog carries expert-a at revision 2; the batch pins 1.
+        let mut engine_request = request(scope());
+        engine_request.allowed_catalog.cards = vec![AgentDefinition {
+            card: agent_card("expert-a"),
+            definition_revision: 2,
+        }];
+        // A stale delegation still completes its iteration; the following
+        // answer ends the run.
+        struct AnswerNext;
+        impl ModelPort for AnswerNext {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                let delegate = request
+                    .projection
+                    .envelope
+                    .conversation
+                    .current_turn
+                    .iter()
+                    .any(|entry| {
+                        matches!(entry, ModelConversationEntry::DelegationExchange { .. })
+                    });
+                let steps = if delegate {
+                    vec![answer("done")]
+                } else {
+                    vec![delegation()]
+                };
+                Box::pin(async move {
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let report = Engine::default()
+            .drive(
+                engine_request,
+                EnginePorts {
+                    projection: &projection,
+                    model: &AnswerNext,
+                    tools: &tools,
+                    delegation: &delegations,
+                    journal: &journal,
+                    validator: &Validator,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(delegations.calls.load(Ordering::SeqCst), 0);
+        // The soft rejection is a durable intent/result pair under the
+        // step's stable identity, carrying the exact request linkage.
+        let events = events.lock().unwrap();
+        let batch = events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+                _ => None,
+            })
+            .expect("soft step still validates its batch");
+        let (delegated, receipt) = events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::DelegationResult { receipt } => Some(receipt.clone()),
+                _ => None,
+            })
+            .and_then(|receipt| {
+                events
+                    .iter()
+                    .find_map(|event| match event {
+                        JournalEvent::DelegationIntent { request }
+                            if request.task_id == receipt.task_id =>
+                        {
+                            Some((request.clone(), receipt.clone()))
+                        }
+                        _ => None,
+                    })
+            })
+            .expect("soft step journals an intent/result pair");
+        assert_eq!(delegated.selected_agent_id, "expert-a");
+        assert_eq!(delegated.selected_definition_revision, 1);
+        assert_eq!(
+            delegated.task_id,
+            stable_task_id(batch.execution_id, batch.batch_id, 0)
+        );
+        assert_eq!(receipt.snapshot.state, floe_agent_contract::TaskState::Rejected);
+        assert_eq!(receipt.snapshot.result, None);
+        assert_eq!(
+            receipt.snapshot.issue,
+            Some(AgentFailure::InvalidModelOutput)
+        );
+        assert_eq!(
+            receipt.snapshot.coverage,
+            DependencyCoverage::Independent
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                JournalEvent::BatchProgress { cursor }
+                    if cursor.batch_id == batch.batch_id && cursor.next_step_index == 1
+            )),
+            "soft step advances the cursor: {events:?}"
+        );
     }
 }

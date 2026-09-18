@@ -346,6 +346,7 @@ impl Default for Model<'_> {
                 ModelStep::Delegate {
                     agent_id: "schedule".into(),
                     message: "Find an available 60-minute window and return a typed proposal for the best option.".into(),
+                    context_refs: vec![],
                 },
                 ModelStep::Answer {
                     text: "A synthetic focus window is available; review the proposal.".into(),
@@ -1440,6 +1441,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
         *model.steps.lock().unwrap().front_mut().unwrap() = ModelStep::Delegate {
             agent_id: card.id,
             message: "Find an available 60-minute window and return a typed proposal.".into(),
+            context_refs: vec![],
         };
         let result = fixture
             .core
@@ -3379,6 +3381,7 @@ async fn model_cannot_delegate_an_empty_natural_language_assignment() {
     model.steps.lock().unwrap()[0] = ModelStep::Delegate {
         agent_id: "schedule".into(),
         message: " ".into(),
+        context_refs: vec![],
     };
     {
         let mut steps = model.steps.lock().unwrap();

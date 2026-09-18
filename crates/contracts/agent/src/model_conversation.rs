@@ -116,11 +116,7 @@ fn validate_delegation_exchange(
         || request.selected_agent_id.trim().is_empty()
         || request.selected_definition_revision == 0
         || !crate::message::bounded(&request.message, MAX_OUTPUT_BYTES)
-        || request.context_refs.len() > MAX_CONTEXT_REFS
-        || request
-            .context_refs
-            .iter()
-            .any(|reference| reference.len() > MAX_OUTPUT_BYTES)
+        || !crate::valid_context_refs(&request.context_refs)
         || receipt.task_id != request.task_id
     {
         return Err(AgentFailure::InvalidInput);

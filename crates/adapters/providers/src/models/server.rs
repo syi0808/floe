@@ -5,7 +5,10 @@ use std::{
 };
 
 use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
+use floe_agent_contract::{
+    AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, ModelPlacement, SessionProtection,
+    valid_context_refs,
+};
 use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation};
 use floe_execution::limits::{CallLimiter, CallLimits};
 use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute};
@@ -335,7 +338,12 @@ fn model_input(request: &ModelTransportRequest) -> Result<serde_json::Value, Age
                             "type": "string",
                             "enum": request.active_agents.iter().map(|card| card.id.clone()).collect::<Vec<_>>()
                         },
-                        "message": {"type": "string", "minLength": 1, "maxLength": 4096}
+                        "message": {"type": "string", "minLength": 1, "maxLength": 4096},
+                        "context_refs": {
+                            "type": "array",
+                            "items": {"type": "string", "maxLength": MAX_OUTPUT_BYTES},
+                            "maxItems": MAX_CONTEXT_REFS
+                        }
                     },
                     "required": ["agent_id", "message"],
                     "additionalProperties": false
@@ -477,8 +485,13 @@ fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
             } if !capability_id.is_empty()
                 && serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(input)
                     .is_ok() => {}
-            ModelStep::Delegate { agent_id, message }
-                if !agent_id.is_empty() && !message.trim().is_empty() => {}
+            ModelStep::Delegate {
+                agent_id,
+                message,
+                context_refs,
+            } if !agent_id.is_empty()
+                && !message.trim().is_empty()
+                && valid_context_refs(context_refs) => {}
             _ => return Err(AgentFailure::ServerModelInvalidOutput),
         }
     }
@@ -618,9 +631,14 @@ impl ModelTransport for ServerModelRunner {
                     struct DelegationInput {
                         agent_id: String,
                         message: String,
+                        #[serde(default)]
+                        context_refs: Vec<String>,
                     }
                     let delegation: DelegationInput = serde_json::from_str(&input)
                         .map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+                    if !valid_context_refs(&delegation.context_refs) {
+                        return Err(AgentFailure::ServerModelInvalidOutput);
+                    }
                     if !request
                         .active_agents
                         .iter()
@@ -632,6 +650,7 @@ impl ModelTransport for ServerModelRunner {
                     *step = ModelStep::Delegate {
                         agent_id: delegation.agent_id,
                         message: delegation.message,
+                        context_refs: delegation.context_refs,
                     };
                     call_count += 1;
                 }
@@ -1274,6 +1293,80 @@ mod tests {
             assistant["tool_calls"][0]["function"]["arguments"],
             r#"{"date":"today"}"#
         );
+    }
+
+    #[test]
+    fn delegation_decode_preserves_context_refs() {
+        let output = decode_output(
+            r#"{"output":[{"kind":"delegate","agent_id":"expert-a","message":"hi","context_refs":["turn:1","evidence:9"]}],"used_tokens":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            output.output.as_slice(),
+            [ModelStep::Delegate { context_refs, .. }]
+                if context_refs == &["turn:1".to_string(), "evidence:9".to_string()]
+        ));
+    }
+
+    #[test]
+    fn delegation_decode_defaults_missing_context_refs_to_empty() {
+        let output = decode_output(
+            r#"{"output":[{"kind":"delegate","agent_id":"expert-a","message":"hi"}],"used_tokens":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            output.output.as_slice(),
+            [ModelStep::Delegate { context_refs, .. }] if context_refs.is_empty()
+        ));
+    }
+
+    #[test]
+    fn delegation_decode_rejects_oversized_context_refs() {
+        let refs = std::iter::repeat_n("\"r\",", 129).collect::<String>();
+        let refs = refs.strip_suffix(',').unwrap();
+        let payload = format!(
+            "{{\"output\":[{{\"kind\":\"delegate\",\"agent_id\":\"expert-a\",\"message\":\"hi\",\"context_refs\":[{refs}]}}],\"used_tokens\":3}}"
+        );
+        assert!(matches!(
+            decode_output(&payload),
+            Err(AgentFailure::ServerModelInvalidOutput)
+        ));
+    }
+
+    #[test]
+    fn delegate_tool_schema_carries_optional_context_refs() {
+        use floe_agent_contract::AgentCard;
+        let mut request = transport_request();
+        request.active_agents = vec![AgentCard {
+            schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+            id: "expert-a".into(),
+            version: "1".into(),
+            name: "expert-a".into(),
+            description: "fixture expert".into(),
+            supported_placements: vec![floe_agent_contract::ModelPlacement::Remote],
+            domain_tags: vec![],
+            skills: vec![],
+        }];
+        let input = model_input(&request).unwrap();
+        let delegate = input["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["function"]["name"] == tool_name(DELEGATION_CAPABILITY_ID))
+            .expect("delegate tool is advertised")
+            .clone();
+        let parameters = &delegate["function"]["parameters"];
+        assert_eq!(parameters["properties"]["context_refs"]["type"], "array");
+        assert_eq!(
+            parameters["properties"]["context_refs"]["maxItems"],
+            json!(MAX_CONTEXT_REFS)
+        );
+        assert!(!parameters["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "context_refs"));
     }
 
     #[test]

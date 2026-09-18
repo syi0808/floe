@@ -234,13 +234,6 @@ where
                 .root_run_id()
                 .ok_or(AgentFailure::InvalidInput)?
                 .as_uuid();
-            let remaining_tokens = scope.budget().max_tokens().min(MAX_ATTEMPT_TOKENS);
-            let remaining_cost_micros = scope
-                .budget()
-                .max_cost_micros()
-                .min(MAX_ATTEMPT_COST_MICROS);
-            let usage =
-                UsageLedger::new(remaining_tokens, remaining_cost_micros, Default::default());
             let context = if finalization {
                 AgentContext {
                     projection_version: self.context.projection_version,
@@ -252,8 +245,12 @@ where
             } else {
                 self.context.clone()
             };
+            // Transitional only; removed when InferenceService implements
+            // ModelPort. The inner legacy request carries an accounting-free
+            // compatibility ledger; the scope budget is bound exactly once in
+            // transitional_budgeted_generate below, so no second owner exists.
             let legacy_request = LegacyModelRequest {
-                usage,
+                usage: UsageLedger::default(),
                 replay: vec![],
                 schema_version: floe_kernel::AGENT_VERSION,
                 prompt: envelope.stable_instructions.clone(),
@@ -265,8 +262,11 @@ where
                 messages: legacy_conversation_messages(&envelope.conversation, run_id)?,
                 capabilities: filter_capabilities(&self.capabilities, &request.catalog),
                 active_agents: filter_agents(&self.active_agents, &request.catalog),
-                remaining_tokens,
-                remaining_cost_micros,
+                remaining_tokens: scope.budget().max_tokens().min(MAX_ATTEMPT_TOKENS),
+                remaining_cost_micros: scope
+                    .budget()
+                    .max_cost_micros()
+                    .min(MAX_ATTEMPT_COST_MICROS),
                 max_output_bytes: if finalization {
                     self.max_output_bytes.min(4_096)
                 } else {
@@ -281,9 +281,43 @@ where
                 resolver: self.resolver,
             };
             let response =
-                floe_conversation::turn::generate_with_recovery(&governed, legacy_request).await?;
+                transitional_budgeted_generate(&governed, legacy_request, scope).await?;
             contract_response(request.attempt_id, response, &request.catalog)
         })
+    }
+}
+
+/// Transitional only; removed when InferenceService implements ModelPort.
+///
+/// Binds one legacy model attempt to the scope budget: begin once, dispatch
+/// the legacy runner exactly once with no inner correction retry, and settle
+/// actual usage. The Engine owns correction above this call, so one logical
+/// Engine attempt costs exactly one underlying model call here.
+///
+/// A failure past provider handoff drops the attempt without settling, which
+/// charges the budget's unknown estimate — usage is never treated as zero.
+pub(super) async fn transitional_budgeted_generate<Runner>(
+    model: &Runner,
+    mut request: LegacyModelRequest,
+    scope: &ExecutionScope,
+) -> Result<LegacyModelResponse, AgentFailure>
+where
+    Runner: LegacyModelRunner + Sync,
+{
+    let mut remaining_tokens = request.remaining_tokens;
+    let mut remaining_cost_micros = request.remaining_cost_micros;
+    let mut attempt = scope
+        .budget()
+        .begin(&mut remaining_tokens, &mut remaining_cost_micros)?;
+    request.remaining_tokens = remaining_tokens;
+    request.remaining_cost_micros = remaining_cost_micros;
+    attempt.mark_dispatched();
+    match floe_conversation::turn::generate_once(model, request).await {
+        Ok(response) => {
+            attempt.settle(response.used_tokens, response.cost_micros)?;
+            Ok(response)
+        }
+        Err(failure) => Err(failure),
     }
 }
 
@@ -584,7 +618,11 @@ fn contract_response(
                     input,
                 })
             }
-            LegacyModelStep::Delegate { agent_id, message } => {
+            LegacyModelStep::Delegate {
+                agent_id,
+                message,
+                context_refs,
+            } => {
                 let revision = catalog
                     .cards
                     .iter()
@@ -595,7 +633,7 @@ fn contract_response(
                     agent_id,
                     definition_revision: revision,
                     message,
-                    context_refs: vec![],
+                    context_refs,
                 })
             }
         })
@@ -612,8 +650,19 @@ fn contract_response(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
+
     use super::*;
-    use floe_agent_contract::{InvocationKey, ToolCall, ToolResult};
+    use floe_agent_contract::{
+        DataClass, InvocationKey, ModelPlacement, ToolCall, ToolResult, TransferConsent,
+    };
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::Cancellation;
 
     #[test]
     fn conversion_preserves_current_turn_and_catalog_revisions() {
@@ -704,6 +753,232 @@ mod tests {
         assert_eq!(converted.usage.tokens, 5);
     }
 
+    struct FixtureRunner {
+        calls: Arc<AtomicUsize>,
+        responses: Mutex<VecDeque<Result<LegacyModelResponse, AgentFailure>>>,
+        requests: Mutex<Vec<LegacyModelRequest>>,
+    }
+
+    impl FixtureRunner {
+        fn new(responses: Vec<Result<LegacyModelResponse, AgentFailure>>) -> Self {
+            Self {
+                calls: Arc::new(AtomicUsize::new(0)),
+                responses: Mutex::new(responses.into()),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl LegacyModelRunner for FixtureRunner {
+        fn placement(&self) -> ModelPlacement {
+            ModelPlacement::DeviceLocal
+        }
+
+        async fn generate(
+            &self,
+            request: LegacyModelRequest,
+        ) -> Result<LegacyModelResponse, AgentFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.requests.lock().unwrap().push(request);
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Err(AgentFailure::ModelUnavailable))
+        }
+    }
+
+    fn legacy_answer(tokens: u64) -> Result<LegacyModelResponse, AgentFailure> {
+        Ok(LegacyModelResponse {
+            replay: None,
+            schema_version: floe_kernel::AGENT_VERSION,
+            output: vec![LegacyModelStep::Answer {
+                text: "done".into(),
+            }],
+            used_tokens: tokens,
+            cost_micros: 0,
+        })
+    }
+
+    fn legacy_invalid(tokens: u64) -> Result<LegacyModelResponse, AgentFailure> {
+        Ok(LegacyModelResponse {
+            replay: None,
+            schema_version: floe_kernel::AGENT_VERSION,
+            output: vec![LegacyModelStep::Answer { text: String::new() }],
+            used_tokens: tokens,
+            cost_micros: 0,
+        })
+    }
+
+    fn fixture_request(remaining_tokens: u64, remaining_cost_micros: u64) -> LegacyModelRequest {
+        LegacyModelRequest {
+            usage: UsageLedger::default(),
+            replay: vec![],
+            schema_version: floe_kernel::AGENT_VERSION,
+            prompt: floe_conversation::prompts::manager_prompt(None).unwrap(),
+            person_id: PersonId::new(),
+            session_id: Uuid::new_v4(),
+            turn_id: Uuid::new_v4(),
+            policy: InferencePolicyDecision {
+                purpose: "test-briefing".into(),
+                data_classes: vec![DataClass::Personal],
+                allowed_placements: vec![ModelPlacement::DeviceLocal],
+                performance_class: "fast".into(),
+                projection_version: 1,
+                external_transfer_consent: TransferConsent::NotGranted,
+                bounded_sensitive_projection: false,
+            },
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            messages: vec![],
+            capabilities: vec![],
+            active_agents: vec![],
+            remaining_tokens,
+            remaining_cost_micros,
+            max_output_bytes: 4096,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::new(),
+        }
+    }
+
+    fn work_scope(lease: floe_execution::budget::BudgetLease) -> ExecutionScope {
+        ExecutionScope::root(
+            Cancellation::new(),
+            tokio::time::Instant::now() + Duration::from_secs(5),
+            lease,
+            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+        )
+    }
+
+    #[tokio::test]
+    async fn legacy_bridge_does_not_retry_invalid_output_internally() {
+        // The Engine performs the single host correction (proven by the
+        // Engine's own correction tests); each logical attempt through this
+        // bridge must cost exactly one underlying runner call, with no hidden
+        // inner retry and no correction message injected between attempts.
+        let ledger = BudgetLedger::new(BudgetConfig::new(10_000, 1_000_000), Default::default());
+        let scope = work_scope(ledger.work_lease());
+        let runner = FixtureRunner::new(vec![legacy_invalid(10), legacy_invalid(10)]);
+        for _ in 0..2 {
+            let result =
+                transitional_budgeted_generate(&runner, fixture_request(4096, 1_000_000), &scope)
+                    .await;
+            assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
+        }
+        assert_eq!(runner.calls(), 2);
+        let requests = runner.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| request.messages.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn legacy_bridge_model_usage_consumes_root_budget() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 1_000_000), Default::default());
+        let scope = work_scope(ledger.work_lease());
+        let runner = FixtureRunner::new(vec![legacy_answer(90), legacy_answer(90)]);
+        let first =
+            transitional_budgeted_generate(&runner, fixture_request(100, 1_000_000), &scope)
+                .await
+                .unwrap();
+        assert_eq!(first.used_tokens, 90);
+        // The second attempt cannot exceed what the root budget has left: its
+        // granted allowance reflects the 90 settled tokens, so a second
+        // 90-token response fails the cap instead of bypassing it.
+        let second =
+            transitional_budgeted_generate(&runner, fixture_request(100, 1_000_000), &scope)
+                .await;
+        assert!(matches!(second, Err(AgentFailure::BudgetExceeded)));
+        assert_eq!(runner.calls(), 2);
+        let requests = runner.requests.lock().unwrap();
+        assert!(requests[1].remaining_tokens <= 10);
+        assert_eq!(ledger.snapshot().settled.tokens, 90);
+    }
+
+    #[tokio::test]
+    async fn finalization_reserve_is_not_consumed_by_work_model() {
+        let ledger = BudgetLedger::new(
+            BudgetConfig::new(100, 1_000_000).with_finalization_reserve(40, 400_000),
+            Default::default(),
+        );
+        let scope = work_scope(ledger.work_lease());
+        let runner = FixtureRunner::new(vec![legacy_answer(60)]);
+        transitional_budgeted_generate(&runner, fixture_request(60, 1_000_000), &scope)
+            .await
+            .unwrap();
+        // The work partition is exhausted, and the budget gate trips before
+        // any second dispatch.
+        let exhausted =
+            transitional_budgeted_generate(&runner, fixture_request(60, 1_000_000), &scope).await;
+        assert!(matches!(exhausted, Err(AgentFailure::BudgetExceeded)));
+        assert_eq!(runner.calls(), 1);
+        // The finalization reserve is untouched.
+        let finalization = ledger.finalization_lease().unwrap();
+        let mut tokens = 40;
+        let mut cost_micros = 400_000;
+        finalization
+            .begin(&mut tokens, &mut cost_micros)
+            .unwrap();
+        assert_eq!(tokens, 40);
+    }
+
+    #[test]
+    fn delegation_conversion_preserves_context_refs() {
+        let catalog = AllowedCatalog {
+            cards: vec![AgentDefinition {
+                card: floe_agent_contract::AgentCard {
+                    schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+                    protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+                    id: "expert-a".into(),
+                    version: "1".into(),
+                    name: "expert-a".into(),
+                    description: "fixture expert".into(),
+                    supported_placements: vec![ModelPlacement::DeviceLocal],
+                    domain_tags: vec![],
+                    skills: vec![],
+                },
+                definition_revision: 7,
+            }],
+            tools: vec![],
+            revision: 1,
+        };
+        let converted = contract_response(
+            Uuid::new_v4(),
+            LegacyModelResponse {
+                replay: None,
+                schema_version: floe_kernel::AGENT_VERSION,
+                output: vec![LegacyModelStep::Delegate {
+                    agent_id: "expert-a".into(),
+                    message: "hi".into(),
+                    context_refs: vec!["turn:1".into()],
+                }],
+                used_tokens: 1,
+                cost_micros: 1,
+            },
+            &catalog,
+        )
+        .unwrap();
+        assert!(matches!(
+            converted.steps.as_slice(),
+            [ModelStep::Delegate {
+                agent_id,
+                definition_revision: 7,
+                message,
+                context_refs,
+            }] if agent_id == "expert-a"
+                && message == "hi"
+                && context_refs == &["turn:1".to_string()]
+        ));
+    }
+
     #[test]
     fn answer_only_catalog_rejects_tool_and_delegation_steps() {
         for output in [
@@ -714,6 +989,7 @@ mod tests {
             LegacyModelStep::Delegate {
                 agent_id: "expert".into(),
                 message: "finish".into(),
+                context_refs: vec![],
             },
         ] {
             assert_eq!(

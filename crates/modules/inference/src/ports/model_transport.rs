@@ -33,6 +33,11 @@ pub enum ModelStep {
     Delegate {
         agent_id: String,
         message: String,
+        /// Context references the model attached to this delegation. Older
+        /// provider payloads omit it and decode to empty; present values are
+        /// bound-checked at decode and carried through losslessly.
+        #[serde(default)]
+        context_refs: Vec<String>,
     },
 }
 

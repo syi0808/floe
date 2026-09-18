@@ -29,7 +29,9 @@ pub use capability::{
     CapabilityExecution, CapabilityExecutionState, CapabilityJournal, ModelReplay, ProviderReplay,
 };
 pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};
-pub use delegation::{DelegationRequest, TaskReceipt, TaskSnapshot, TaskState};
+pub use delegation::{
+    DelegationRequest, TaskReceipt, TaskSnapshot, TaskState, valid_context_refs,
+};
 pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
     MAX_ENDPOINT_SETTLEMENT_BYTES,

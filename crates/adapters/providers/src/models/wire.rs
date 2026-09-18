@@ -71,6 +71,7 @@ fn wire_entry(entry: &ModelConversationEntry) -> Vec<Value> {
                         "arguments": {
                             "agent_id": request.selected_agent_id,
                             "message": request.message,
+                            "context_refs": request.context_refs,
                         }
                     }
                 }]
@@ -206,6 +207,65 @@ mod tests {
         );
         assert_eq!(rendered[1]["status"], "success");
         assert_eq!(rendered[1]["content"]["agent_id"], "expert-a");
+    }
+
+    fn delegation_entry(context_refs: Vec<String>) -> ModelConversationEntry {
+        let task_id = TaskId::new();
+        ModelConversationEntry::DelegationExchange {
+            request: DelegationRequest {
+                task_id,
+                parent_run_id: None,
+                principal: "person:test".into(),
+                invocation_key: InvocationKey::new(),
+                selected_agent_id: "expert-a".into(),
+                selected_definition_revision: 2,
+                message: "summarize".into(),
+                context_refs,
+            },
+            receipt: TaskReceipt {
+                task_id,
+                snapshot: TaskSnapshot {
+                    task_id,
+                    parent_run_id: None,
+                    principal: "person:test".into(),
+                    agent_id: "expert-a".into(),
+                    definition_revision: 2,
+                    state: TaskState::Completed,
+                    result: Some("summary".into()),
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Independent,
+                    issue: None,
+                },
+                replay: None,
+            },
+        }
+    }
+
+    #[test]
+    fn delegation_wire_preserves_context_refs() {
+        let rendered = wire_messages(&[delegation_entry(vec![
+            "turn:1".into(),
+            "evidence:9".into(),
+        ])]);
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(
+            rendered[0]["tool_calls"][0]["function"]["arguments"]["context_refs"],
+            json!(["turn:1", "evidence:9"])
+        );
+        assert_eq!(
+            rendered[0]["tool_calls"][0]["id"],
+            rendered[1]["tool_call_id"]
+        );
+    }
+
+    #[test]
+    fn empty_context_refs_round_trip_as_empty() {
+        let rendered = wire_messages(&[delegation_entry(vec![])]);
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(
+            rendered[0]["tool_calls"][0]["function"]["arguments"]["context_refs"],
+            json!([])
+        );
     }
 
     #[test]

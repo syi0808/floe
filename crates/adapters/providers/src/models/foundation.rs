@@ -1,7 +1,9 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
+use floe_agent_contract::{
+    AgentFailure, ModelPlacement, SessionProtection, valid_context_refs,
+};
 use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -254,9 +256,14 @@ fn decode_step(step: WireStep, request: &ModelTransportRequest) -> Result<ModelS
                 struct DelegationInput {
                     agent_id: String,
                     message: String,
+                    #[serde(default)]
+                    context_refs: Vec<String>,
                 }
                 let delegation: DelegationInput =
                     serde_json::from_str(&input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+                if !valid_context_refs(&delegation.context_refs) {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
                 if request
                     .active_agents
                     .iter()
@@ -267,6 +274,7 @@ fn decode_step(step: WireStep, request: &ModelTransportRequest) -> Result<ModelS
                     return Ok(ModelStep::Delegate {
                         agent_id: delegation.agent_id,
                         message: delegation.message,
+                        context_refs: delegation.context_refs,
                     });
                 }
                 return Err(AgentFailure::CapabilityDenied);
@@ -738,6 +746,102 @@ mod tests {
         .unwrap();
         task.abort();
         assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+        assert!(transport.released());
+    }
+
+    fn agent_card() -> floe_agent_contract::AgentCard {
+        floe_agent_contract::AgentCard {
+            schema_version: 1,
+            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+            id: "expert-a".into(),
+            version: "1".into(),
+            name: "expert-a".into(),
+            description: "fixture expert".into(),
+            supported_placements: vec![ModelPlacement::DeviceLocal],
+            domain_tags: vec![],
+            skills: vec![],
+        }
+    }
+
+    fn delegation_request() -> ModelTransportRequest {
+        let mut request = request();
+        request.active_agents = vec![agent_card()];
+        request
+    }
+
+    fn delegate_reply(input: &str) -> Value {
+        json!({"schemaVersion": 1, "status": "done", "step": {
+            "kind": "call", "capabilityID": "floe.a2a.delegate", "input": input }})
+    }
+
+    #[tokio::test]
+    async fn delegation_decode_preserves_context_refs() {
+        let input = serde_json::to_string(&json!({
+            "agent_id": "expert-a",
+            "message": "hi",
+            "context_refs": ["turn:1", "evidence:9"],
+        }))
+        .unwrap();
+        let transport = Mock::new(delegate_reply(&input));
+        let response = generate(
+            &transport,
+            delegation_request(),
+            SessionProtection::SyntheticOnly,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.output.as_slice(),
+            [ModelStep::Delegate {
+                agent_id: "expert-a".into(),
+                message: "hi".into(),
+                context_refs: vec!["turn:1".into(), "evidence:9".into()],
+            }]
+        );
+        assert!(transport.released());
+    }
+
+    #[tokio::test]
+    async fn delegation_decode_defaults_missing_context_refs_to_empty() {
+        let input = serde_json::to_string(&json!({
+            "agent_id": "expert-a",
+            "message": "hi",
+        }))
+        .unwrap();
+        let transport = Mock::new(delegate_reply(&input));
+        let response = generate(
+            &transport,
+            delegation_request(),
+            SessionProtection::SyntheticOnly,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            response.output.as_slice(),
+            [ModelStep::Delegate { context_refs, .. }] if context_refs.is_empty()
+        ));
+        assert!(transport.released());
+    }
+
+    #[tokio::test]
+    async fn delegation_decode_rejects_oversized_context_refs() {
+        let refs: Vec<String> = (0..129).map(|_| "r".into()).collect();
+        let input = serde_json::to_string(&json!({
+            "agent_id": "expert-a",
+            "message": "hi",
+            "context_refs": refs,
+        }))
+        .unwrap();
+        let transport = Mock::new(delegate_reply(&input));
+        assert!(matches!(
+            generate(
+                &transport,
+                delegation_request(),
+                SessionProtection::SyntheticOnly,
+            )
+            .await,
+            Err(AgentFailure::InvalidModelOutput)
+        ));
         assert!(transport.released());
     }
 }

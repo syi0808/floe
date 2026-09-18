@@ -250,3 +250,79 @@ fn finalization_coverage(
     }
     Ok(coverage)
 }
+
+#[cfg(test)]
+mod tests {
+    use floe_agent_contract::{
+        DelegationRequest, InvocationKey, OutcomeIssue, TaskReceipt, TaskSnapshot, TaskState,
+        ToolCall, ToolResult,
+    };
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn soft_tool_exchange() -> ModelConversationEntry {
+        let call_id = Uuid::new_v4();
+        ModelConversationEntry::ToolExchange {
+            call: ToolCall {
+                call_id,
+                invocation_key: InvocationKey::new(),
+                tool_id: "missing.tool".into(),
+                definition_revision: 1,
+                input: "{}".into(),
+            },
+            result: ToolResult {
+                call_id,
+                text: "tool is not registered".into(),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: Some(OutcomeIssue {
+                    failure: AgentFailure::InvalidModelOutput,
+                    retryable: true,
+                }),
+            },
+        }
+    }
+
+    fn soft_delegation_exchange() -> ModelConversationEntry {
+        let task_id = floe_agent_contract::TaskId::new();
+        ModelConversationEntry::DelegationExchange {
+            request: DelegationRequest {
+                task_id,
+                parent_run_id: Some(Uuid::new_v4()),
+                principal: "person:test".into(),
+                invocation_key: InvocationKey::new(),
+                selected_agent_id: "missing-expert".into(),
+                selected_definition_revision: 1,
+                message: "summarize".into(),
+                context_refs: vec![],
+            },
+            receipt: TaskReceipt {
+                task_id,
+                snapshot: TaskSnapshot {
+                    task_id,
+                    parent_run_id: Some(Uuid::new_v4()),
+                    principal: "person:test".into(),
+                    agent_id: "missing-expert".into(),
+                    definition_revision: 1,
+                    state: TaskState::Rejected,
+                    result: None,
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Independent,
+                    issue: Some(AgentFailure::InvalidModelOutput),
+                },
+                replay: None,
+            },
+        }
+    }
+
+    #[test]
+    fn soft_observations_are_neither_usable_nor_barriers() {
+        // Host soft failures are never presented as observations, and a
+        // model-side error never vetoes a reply built from usable ones.
+        for entry in [soft_tool_exchange(), soft_delegation_exchange()] {
+            assert!(!usable_exchange(&entry));
+            assert_eq!(exchange_barrier(&entry), None);
+        }
+    }
+}

@@ -217,6 +217,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                 .package_id()
                 .into(),
             message: "Read my calendar".into(),
+            context_refs: vec![],
         },
         floe_conversation::ModelStep::Call {
             capability_id: "schedule.find_free_windows".into(),
@@ -396,6 +397,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
                 .package_id()
                 .into(),
             message: "Find an open hour".into(),
+            context_refs: vec![],
         },
         floe_conversation::ModelStep::Call {
             capability_id: "schedule.find_free_windows".into(),
@@ -1635,6 +1637,7 @@ fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHand
                     .package_id()
                     .into(),
                 message: "Review my commitments".into(),
+                context_refs: vec![],
             },
             floe_conversation::ModelStep::Answer {
                 text: "Mail access needs review before I can check commitments.".into(),

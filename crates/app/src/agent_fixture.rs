@@ -489,6 +489,7 @@ impl ModelRunner for FixtureModel {
             ModelStep::Delegate {
                 agent_id: "floe.schedule".into(),
                 message: "Review the synthetic sample day and identify relevant commitments and availability.".into(),
+                context_refs: vec![],
             }
         } else {
             let Some(AgentMessage::Delegation { task, .. }) = request.messages.last() else {

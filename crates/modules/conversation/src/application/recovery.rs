@@ -2,9 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, JournalEvent, MessageRole, ModelConversation,
-    ModelConversationEntry, ReplayReceipt, TaskState, ValidatedModelBatch, input_digest,
+    ModelConversationEntry, ProjectionRef, ReplayReceipt, TaskState, ValidatedModelBatch,
+    input_digest,
 };
 use floe_kernel::AgentFailure;
+use uuid::Uuid;
 
 use crate::{AdmittedTurn, ContinuationSnapshot, JournalEntry, RunReceipt, RunState};
 
@@ -123,15 +125,20 @@ struct PendingBatch {
     cursor: Option<u32>,
 }
 
+/// One model attempt's projection binding and terminal state. A validated
+/// batch must name the attempt and projection its own intent recorded.
+struct AttemptState {
+    projection_ref: ProjectionRef,
+    completed: bool,
+}
+
 fn project_entries(
     source: &RunReceipt,
     entries: &[JournalEntry],
 ) -> Result<JournalProjection, AgentFailure> {
     let mut exchanges = Vec::new();
     let mut replay = Vec::new();
-    let mut attempts = HashSet::new();
-    let mut seen_attempts = HashSet::new();
-    let mut completed_attempts = HashSet::new();
+    let mut attempts: HashMap<Uuid, AttemptState> = HashMap::new();
     let mut tools = HashMap::new();
     let mut seen_calls = HashSet::new();
     let mut delegations = HashMap::new();
@@ -139,6 +146,8 @@ fn project_entries(
     let mut seen_invocations = HashSet::new();
     let mut seen_batches = HashSet::new();
     let mut batches_seen: u32 = 0;
+    let mut execution_id: Option<Uuid> = None;
+    let mut fresh_catalog_revision: Option<u64> = None;
     let mut pending: Option<PendingBatch> = None;
     let mut uncheckpointed_completion = false;
     let mut completed_iterations = 0;
@@ -154,22 +163,31 @@ fn project_entries(
             } => {
                 if attempt_id.is_nil()
                     || projection_ref.as_uuid().is_nil()
-                    || !seen_attempts.insert(*attempt_id)
-                    || !attempts.insert(*attempt_id)
+                    || attempts.contains_key(attempt_id)
                     || pending.is_some()
                     || uncheckpointed_completion
                 {
                     return Err(AgentFailure::StorageUnavailable);
                 }
+                attempts.insert(
+                    *attempt_id,
+                    AttemptState {
+                        projection_ref: *projection_ref,
+                        completed: false,
+                    },
+                );
             }
             JournalEvent::ModelResult {
                 attempt_id,
                 usage: result_usage,
             } => {
-                if !attempts.remove(attempt_id) {
+                let state = attempts
+                    .get_mut(attempt_id)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if state.completed {
                     return Err(AgentFailure::StorageUnavailable);
                 }
-                completed_attempts.insert(*attempt_id);
+                state.completed = true;
                 usage.attempts = usage
                     .attempts
                     .checked_add(1)
@@ -322,13 +340,34 @@ fn project_entries(
                 }
                 // A batch follows its attempt's result, unless it is a resumed
                 // batch re-recorded at the journal's start with no local attempt.
-                let fresh = seen_attempts.contains(&batch.attempt_id);
+                let fresh = attempts.contains_key(&batch.attempt_id);
                 if fresh {
-                    if !completed_attempts.contains(&batch.attempt_id) {
+                    let state = &attempts[&batch.attempt_id];
+                    if !state.completed || state.projection_ref != batch.projection_ref {
                         return Err(AgentFailure::StorageUnavailable);
+                    }
+                    // One drive validates every fresh batch against one
+                    // catalog; only the leading resumed re-record may differ.
+                    // Whether that catalog is still current is the Engine
+                    // resume's pinned-revision check, not this projection's.
+                    match fresh_catalog_revision {
+                        Some(expected) if batch.catalog_revision != expected => {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
+                        Some(_) => {}
+                        None => fresh_catalog_revision = Some(batch.catalog_revision),
                     }
                 } else if batches_seen != 0 {
                     return Err(AgentFailure::StorageUnavailable);
+                }
+                // Every batch in one journal — resumed re-record included —
+                // runs under the execution that wrote the journal.
+                match execution_id {
+                    Some(expected) if batch.execution_id != expected => {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    Some(_) => {}
+                    None => execution_id = Some(batch.execution_id),
                 }
                 batches_seen += 1;
                 pending = Some(PendingBatch {
@@ -373,7 +412,7 @@ fn project_entries(
             JournalEvent::Output { .. } => return Err(AgentFailure::Conflict),
         }
     }
-    if !attempts.is_empty() {
+    if attempts.values().any(|state| !state.completed) {
         // A model attempt that never produced a result leaves nothing to resume.
         return Err(AgentFailure::Interrupted);
     }
@@ -381,6 +420,14 @@ fn project_entries(
         if pending.is_none() {
             return Err(AgentFailure::StorageUnavailable);
         }
+    }
+    if pending.is_none() && uncheckpointed_completion {
+        // A durable final cursor proves its batch completed even when the
+        // crash landed before the iteration checkpoint: consume the iteration
+        // so the next run cannot replay it for free. Nothing is re-executed,
+        // and the next run derives its remaining budget from this count
+        // rather than re-journaling the missing checkpoint.
+        completed_iterations = completed_iterations.saturating_add(1).min(64);
     }
     let (pending_batch, cursor) = pending
         .map(|state| {
@@ -865,7 +912,680 @@ mod tests {
     }
 
     #[test]
-    fn resumed_batch_re_recorded_first_needs_no_local_attempt() {
+    fn validated_batch_projection_ref_must_match_model_intent() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let model_batch = batch(
+            attempt_id,
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: "{}".into(),
+            }],
+        );
+        let mut intent_ref = ProjectionRef::new();
+        while intent_ref == model_batch.projection_ref {
+            intent_ref = ProjectionRef::new();
+        }
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        projection_ref: intent_ref,
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    },
+                    JournalEvent::ValidatedBatch {
+                        batch: model_batch,
+                    },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn validated_batch_attempt_must_have_completed_result() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let model_batch = batch(
+            attempt_id,
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: "{}".into(),
+            }],
+        );
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        projection_ref: model_batch.projection_ref,
+                    },
+                    JournalEvent::ValidatedBatch {
+                        batch: model_batch,
+                    },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn validated_batches_must_share_execution_id() {
+        let admitted = admitted();
+        let execution_id = Uuid::new_v4();
+        let first_attempt = Uuid::new_v4();
+        let call = tool_call();
+        let result = tool_result(call.call_id);
+        let mut first = batch(
+            first_attempt,
+            vec![ModelStep::CallTool {
+                tool_id: call.tool_id.clone(),
+                definition_revision: call.definition_revision,
+                input: call.input.clone(),
+            }],
+        );
+        first.execution_id = execution_id;
+        let first_batch_id = first.batch_id;
+        let second_attempt = Uuid::new_v4();
+        let mut second = batch(second_attempt, first.steps.clone());
+        while second.execution_id == execution_id {
+            second.execution_id = Uuid::new_v4();
+        }
+        // A complete first iteration, then a second batch from a different
+        // execution: the journal mixes two executions and must fail closed.
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ModelIntent {
+                        attempt_id: first_attempt,
+                        projection_ref: first.projection_ref,
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id: first_attempt,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    },
+                    JournalEvent::ValidatedBatch { batch: first },
+                    JournalEvent::BatchProgress {
+                        cursor: BatchCursor {
+                            batch_id: first_batch_id,
+                            next_step_index: 0,
+                        },
+                    },
+                    JournalEvent::ToolIntent { call: call.clone() },
+                    JournalEvent::ToolResult {
+                        result: result.clone(),
+                    },
+                    JournalEvent::BatchProgress {
+                        cursor: BatchCursor {
+                            batch_id: first_batch_id,
+                            next_step_index: 1,
+                        },
+                    },
+                    JournalEvent::Checkpoint { iteration: 1 },
+                    JournalEvent::ModelIntent {
+                        attempt_id: second_attempt,
+                        projection_ref: second.projection_ref,
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id: second_attempt,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    },
+                    JournalEvent::ValidatedBatch { batch: second },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn two_fresh_batches_sharing_execution_id_project() {
+        let admitted = admitted();
+        let execution_id = Uuid::new_v4();
+        let first_attempt = Uuid::new_v4();
+        let call = tool_call();
+        let result = tool_result(call.call_id);
+        let mut first = batch(
+            first_attempt,
+            vec![ModelStep::CallTool {
+                tool_id: call.tool_id.clone(),
+                definition_revision: call.definition_revision,
+                input: call.input.clone(),
+            }],
+        );
+        first.execution_id = execution_id;
+        let first_batch_id = first.batch_id;
+        let second_attempt = Uuid::new_v4();
+        let second_call = tool_call();
+        let second_result = tool_result(second_call.call_id);
+        let mut second = batch(
+            second_attempt,
+            vec![ModelStep::CallTool {
+                tool_id: second_call.tool_id.clone(),
+                definition_revision: second_call.definition_revision,
+                input: second_call.input.clone(),
+            }],
+        );
+        second.execution_id = execution_id;
+        let second_batch_id = second.batch_id;
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id: first_attempt,
+                    projection_ref: first.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id: first_attempt,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch { batch: first },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: first_batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::ToolIntent { call: call.clone() },
+                JournalEvent::ToolResult {
+                    result: result.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: first_batch_id,
+                        next_step_index: 1,
+                    },
+                },
+                JournalEvent::Checkpoint { iteration: 1 },
+                JournalEvent::ModelIntent {
+                    attempt_id: second_attempt,
+                    projection_ref: second.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id: second_attempt,
+                    usage: ModelUsage {
+                        tokens: 2,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch { batch: second },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: second_batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::ToolIntent {
+                    call: second_call.clone(),
+                },
+                JournalEvent::ToolResult {
+                    result: second_result.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: second_batch_id,
+                        next_step_index: 1,
+                    },
+                },
+                JournalEvent::Checkpoint { iteration: 2 },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(snapshot.completed_iterations, 2);
+        assert!(snapshot.pending_batch.is_none());
+        assert_eq!(snapshot.usage.attempts, 2);
+        assert_eq!(snapshot.usage.tokens, 3);
+    }
+
+    fn completed_iteration(execution_id: Uuid, iteration: u32) -> Vec<JournalEvent> {
+        let attempt_id = Uuid::new_v4();
+        let call = tool_call();
+        let result = tool_result(call.call_id);
+        let mut completed = batch(
+            attempt_id,
+            vec![ModelStep::CallTool {
+                tool_id: call.tool_id.clone(),
+                definition_revision: call.definition_revision,
+                input: call.input.clone(),
+            }],
+        );
+        completed.execution_id = execution_id;
+        let batch_id = completed.batch_id;
+        vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: completed.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch { batch: completed },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+            JournalEvent::ToolIntent { call },
+            JournalEvent::ToolResult { result },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 1,
+                },
+            },
+            JournalEvent::Checkpoint { iteration },
+        ]
+    }
+
+    fn uncheckpointed_completion(execution_id: Uuid) -> Vec<JournalEvent> {
+        let mut events = completed_iteration(execution_id, 0);
+        assert!(matches!(
+            events.pop(),
+            Some(JournalEvent::Checkpoint { iteration: 0 })
+        ));
+        events
+    }
+
+    #[test]
+    fn final_cursor_without_iteration_checkpoint_consumes_iteration() {
+        let admitted = admitted();
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(uncheckpointed_completion(Uuid::new_v4())),
+        )
+        .unwrap();
+        assert!(snapshot.pending_batch.is_none());
+        assert!(snapshot.batch_cursor.is_none());
+        assert_eq!(snapshot.completed_iterations, 1);
+        assert_eq!(snapshot.model_conversation.current_turn.len(), 1);
+        assert_eq!(snapshot.replay.len(), 1);
+    }
+
+    #[test]
+    fn max_iteration_cannot_be_bypassed_by_crash_after_final_cursor() {
+        let admitted = admitted();
+        let execution_id = Uuid::new_v4();
+        let mut events = Vec::new();
+        for iteration in 1..=63 {
+            events.extend(completed_iteration(execution_id, iteration));
+        }
+        events.extend(uncheckpointed_completion(execution_id));
+        assert_eq!(events.len(), 63 * 8 + 7);
+        let snapshot = project_continuation(&admitted, &entries(events)).unwrap();
+        assert!(snapshot.pending_batch.is_none());
+        // The crashed iteration is consumed at the representable bound
+        // instead of granting a free replay past the cap.
+        assert_eq!(snapshot.completed_iterations, 64);
+    }
+
+    #[test]
+    fn stale_tool_observation_survives_recovery() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        // A stale call keeps its exact attempted input and revision; the
+        // host-generated result carries the retryable invalid-output issue.
+        let stale_call = ToolCall {
+            call_id: Uuid::new_v4(),
+            invocation_key: InvocationKey::new(),
+            tool_id: "read.context".into(),
+            definition_revision: 99,
+            input: r#"{"path":"a"}"#.into(),
+        };
+        let stale_result = ToolResult {
+            call_id: stale_call.call_id,
+            text: "tool descriptor is stale".into(),
+            artifacts: vec![],
+            coverage: DependencyCoverage::Independent,
+            issue: Some(floe_agent_contract::OutcomeIssue {
+                failure: AgentFailure::InvalidModelOutput,
+                retryable: true,
+            }),
+        };
+        let call = tool_call();
+        let result = tool_result(call.call_id);
+        let model_batch = batch(
+            attempt_id,
+            vec![
+                ModelStep::CallTool {
+                    tool_id: stale_call.tool_id.clone(),
+                    definition_revision: stale_call.definition_revision,
+                    input: stale_call.input.clone(),
+                },
+                ModelStep::CallTool {
+                    tool_id: call.tool_id.clone(),
+                    definition_revision: call.definition_revision,
+                    input: call.input.clone(),
+                },
+            ],
+        );
+        // Crash after the later real result, before its cursor ack: the soft
+        // observation must still project alongside the real one.
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: model_batch.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::ToolIntent {
+                    call: stale_call.clone(),
+                },
+                JournalEvent::ToolResult {
+                    result: stale_result.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 1,
+                    },
+                },
+                JournalEvent::ToolIntent { call: call.clone() },
+                JournalEvent::ToolResult {
+                    result: result.clone(),
+                },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(snapshot.pending_batch.as_ref(), Some(&model_batch));
+        assert_eq!(snapshot.model_conversation.current_turn.len(), 2);
+        assert!(
+            matches!(
+                snapshot.model_conversation.current_turn.as_slice(),
+                [ModelConversationEntry::ToolExchange {
+                    call: recovered_call,
+                    result: recovered_result,
+                }, ModelConversationEntry::ToolExchange { .. }]
+                if recovered_call == &stale_call && recovered_result == &stale_result
+            ),
+            "stale observation must survive with its exact call and result: {:?}",
+            snapshot.model_conversation.current_turn
+        );
+        assert_eq!(snapshot.replay.len(), 2);
+    }
+
+    #[test]
+    fn unknown_agent_rejection_survives_recovery() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let task_id = floe_agent_contract::TaskId::new();
+        // The host never dispatched: the intent carries the exact attempted
+        // request and the terminal rejection carries no result.
+        let request = DelegationRequest {
+            task_id,
+            parent_run_id: Some(admitted.receipt.run_id.as_uuid()),
+            principal: admitted.receipt.principal.clone(),
+            invocation_key: InvocationKey::new(),
+            selected_agent_id: "missing-expert".into(),
+            selected_definition_revision: 1,
+            message: "summarize".into(),
+            context_refs: vec!["turn:1".into()],
+        };
+        let receipt = TaskReceipt {
+            task_id,
+            snapshot: TaskSnapshot {
+                task_id,
+                parent_run_id: request.parent_run_id,
+                principal: request.principal.clone(),
+                agent_id: request.selected_agent_id.clone(),
+                definition_revision: request.selected_definition_revision,
+                state: TaskState::Rejected,
+                result: None,
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: Some(AgentFailure::InvalidModelOutput),
+            },
+            replay: None,
+        };
+        let model_batch = ValidatedModelBatch {
+            execution_id: Uuid::new_v4(),
+            attempt_id,
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Delegate {
+                agent_id: request.selected_agent_id.clone(),
+                definition_revision: request.selected_definition_revision,
+                message: request.message.clone(),
+                context_refs: request.context_refs.clone(),
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+        };
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: model_batch.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::DelegationIntent {
+                    request: request.clone(),
+                },
+                JournalEvent::DelegationResult {
+                    receipt: Box::new(receipt.clone()),
+                },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(snapshot.pending_batch.as_ref(), Some(&model_batch));
+        assert!(
+            matches!(
+                snapshot.model_conversation.current_turn.as_slice(),
+                [ModelConversationEntry::DelegationExchange {
+                    request: recovered_request,
+                    receipt: recovered_receipt,
+                }] if recovered_request == &request && recovered_receipt == &receipt
+            ),
+            "rejection must survive with its exact request and receipt: {:?}",
+            snapshot.model_conversation.current_turn
+        );
+        assert_eq!(snapshot.replay.len(), 1);
+        assert_eq!(
+            snapshot.replay[0].task_state,
+            Some(TaskState::Rejected)
+        );
+    }
+
+    #[test]
+    fn soft_result_and_following_real_result_keep_original_batch_order() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let soft_call = ToolCall {
+            call_id: Uuid::new_v4(),
+            invocation_key: InvocationKey::new(),
+            tool_id: "missing.tool".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        };
+        let soft_result = ToolResult {
+            call_id: soft_call.call_id,
+            text: "tool is not registered".into(),
+            artifacts: vec![],
+            coverage: DependencyCoverage::Independent,
+            issue: Some(floe_agent_contract::OutcomeIssue {
+                failure: AgentFailure::InvalidModelOutput,
+                retryable: true,
+            }),
+        };
+        let call = tool_call();
+        let result = tool_result(call.call_id);
+        let model_batch = batch(
+            attempt_id,
+            vec![
+                ModelStep::CallTool {
+                    tool_id: soft_call.tool_id.clone(),
+                    definition_revision: soft_call.definition_revision,
+                    input: soft_call.input.clone(),
+                },
+                ModelStep::CallTool {
+                    tool_id: call.tool_id.clone(),
+                    definition_revision: call.definition_revision,
+                    input: call.input.clone(),
+                },
+            ],
+        );
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: model_batch.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::ToolIntent {
+                    call: soft_call.clone(),
+                },
+                JournalEvent::ToolResult {
+                    result: soft_result.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 1,
+                    },
+                },
+                JournalEvent::ToolIntent { call: call.clone() },
+                JournalEvent::ToolResult {
+                    result: result.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 2,
+                    },
+                },
+                JournalEvent::Checkpoint { iteration: 1 },
+            ]),
+        )
+        .unwrap();
+        assert!(snapshot.pending_batch.is_none());
+        assert_eq!(snapshot.completed_iterations, 1);
+        assert!(
+            matches!(
+                snapshot.model_conversation.current_turn.as_slice(),
+                [
+                    ModelConversationEntry::ToolExchange {
+                        call: first_call,
+                        result: first_result,
+                    },
+                    ModelConversationEntry::ToolExchange {
+                        call: second_call,
+                        result: second_result,
+                    },
+                ] if first_call == &soft_call
+                    && first_result == &soft_result
+                    && second_call == &call
+                    && second_result == &result
+            ),
+            "batch order must be preserved: {:?}",
+            snapshot.model_conversation.current_turn
+        );
+    }
+
+    #[test]
+    fn duplicate_model_result_is_storage_fault() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let usage = ModelUsage {
+            tokens: 1,
+            cost_micros: 1,
+        };
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        projection_ref: ProjectionRef::new(),
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id,
+                        usage,
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id,
+                        usage,
+                    },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn resumed_first_batch_without_local_attempt_is_still_allowed() {
         let admitted = admitted();
         let call = tool_call();
         let result = tool_result(call.call_id);

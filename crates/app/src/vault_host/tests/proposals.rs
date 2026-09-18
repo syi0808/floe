@@ -123,6 +123,7 @@ impl ModelTransport for Model {
             ModelStep::Delegate {
                 agent_id: request.active_agents[0].id.clone(),
                 message: "Find a suitable time for this calendar request.".into(),
+                context_refs: vec![],
             }
         };
         Ok(ModelTransportResponse {

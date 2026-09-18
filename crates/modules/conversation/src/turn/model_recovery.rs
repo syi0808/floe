@@ -1,24 +1,46 @@
 use crate::{AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_agent_contract::AgentFailure;
 
+/// One legacy model attempt with no correction retry.
+///
+/// Calls `ModelRunner::generate` exactly once, enforces deadline/cancellation,
+/// and applies the legacy structural validation. It performs no second model
+/// call, no usage-ledger accounting, and no attempt journaling: the caller owns
+/// the budget attempt. The transitional General Conversation bridge
+/// (`LegacyModelPort`) binds that attempt to the scope budget; removed when
+/// InferenceService implements ModelPort.
+pub async fn generate_once<Model: ModelRunner>(
+    model: &Model,
+    request: ModelRequest,
+) -> Result<ModelResponse, AgentFailure> {
+    let validators = legacy_validators(&request)?;
+    for card in &request.active_agents {
+        card.validate()?;
+    }
+    if request.cancellation.is_cancelled() {
+        return Err(AgentFailure::Cancelled);
+    }
+    if request.deadline <= tokio::time::Instant::now() {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    let result = tokio::select! {
+        biased;
+        _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
+        _ = tokio::time::sleep_until(request.deadline) => Err(AgentFailure::DeadlineExceeded),
+        result = model.generate(request.clone()) => result,
+    };
+    let response = result?;
+    validate_legacy_response(&request, &validators, &response)?;
+    Ok(response)
+}
+
 pub async fn generate_with_recovery<Model: ModelRunner>(
     model: &Model,
     mut request: ModelRequest,
 ) -> Result<ModelResponse, AgentFailure> {
     let mut reserved_tokens = 0;
     let mut reserved_cost = 0;
-    let validators = request
-        .capabilities
-        .iter()
-        .map(|capability| {
-            capability
-                .input_schema
-                .as_ref()
-                .map(jsonschema::validator_for)
-                .transpose()
-                .map_err(|_| AgentFailure::InvalidInput)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let validators = legacy_validators(&request)?;
     for card in &request.active_agents {
         card.validate()?;
     }
@@ -66,92 +88,7 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             recorded_usage.cost_micros = consumed_cost;
             recorded_usage.estimated_tokens = 0;
             accounting.settle(consumed_tokens, consumed_cost)?;
-            if response.used_tokens > request.remaining_tokens
-                || response.cost_micros > request.remaining_cost_micros
-                || serde_json::to_vec(&response.output)
-                    .map_err(|_| AgentFailure::InvalidModelOutput)?
-                    .len()
-                    > request.max_output_bytes
-            {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            if response.schema_version != crate::AGENT_VERSION
-                || response.output.is_empty()
-                || response.output.len() > 16
-                || response.call_count() > 8
-                || response.delegation_count() > 1
-                || (response.delegation_count() > 0 && response.capability_call_count() > 0)
-            {
-                return Err(AgentFailure::InvalidModelOutput);
-            }
-            let answers = response
-                .output
-                .iter()
-                .filter(|step| matches!(step, ModelStep::Answer { .. }))
-                .count();
-            if (response.call_count() > 0 && answers != 0)
-                || (response.call_count() == 0
-                    && (answers != 1
-                        || !matches!(response.output.last(), Some(ModelStep::Answer { .. }))))
-            {
-                return Err(AgentFailure::InvalidModelOutput);
-            }
-            if let Some(replay) = &response.replay {
-                let unique: std::collections::HashSet<_> = replay.call_ids.iter().collect();
-                if replay.call_ids.len() != response.call_count()
-                    || replay.call_ids.is_empty()
-                    || replay.call_ids.first() != Some(&replay.provider_call_id)
-                    || unique.len() != replay.call_ids.len()
-                    || replay
-                        .call_ids
-                        .iter()
-                        .any(|id| id.is_empty() || id.len() > 128)
-                {
-                    return Err(AgentFailure::InvalidModelOutput);
-                }
-            }
-            for step in &response.output {
-                match step {
-                    ModelStep::Answer { text } | ModelStep::Preamble { text } => {
-                        if text.trim().is_empty() {
-                            return Err(AgentFailure::InvalidModelOutput);
-                        }
-                    }
-                    ModelStep::Call {
-                        capability_id,
-                        input,
-                    } => {
-                        let index = request
-                            .capabilities
-                            .iter()
-                            .position(|capability| capability.id == *capability_id)
-                            .ok_or(AgentFailure::CapabilityDenied)?;
-                        if !request.capabilities[index].read_only {
-                            return Err(AgentFailure::CapabilityDenied);
-                        }
-                        let value: serde_json::Value = serde_json::from_str(input)
-                            .map_err(|_| AgentFailure::InvalidModelOutput)?;
-                        if !value.is_object()
-                            || validators[index]
-                                .as_ref()
-                                .is_some_and(|validator| !validator.is_valid(&value))
-                        {
-                            return Err(AgentFailure::InvalidModelOutput);
-                        }
-                    }
-                    ModelStep::Delegate { agent_id, message } => {
-                        if !request
-                            .active_agents
-                            .iter()
-                            .any(|card| card.id == *agent_id)
-                            || message.trim().is_empty()
-                            || message.len() > 4096
-                        {
-                            return Err(AgentFailure::InvalidModelOutput);
-                        }
-                    }
-                }
-            }
+            validate_legacy_response(&request, &validators, &response)?;
             Ok(response)
         });
         lifecycle
@@ -196,4 +133,125 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         }
     }
     Err(AgentFailure::InvalidModelOutput)
+}
+
+fn legacy_validators(
+    request: &ModelRequest,
+) -> Result<Vec<Option<jsonschema::Validator>>, AgentFailure> {
+    request
+        .capabilities
+        .iter()
+        .map(|capability| {
+            capability
+                .input_schema
+                .as_ref()
+                .map(jsonschema::validator_for)
+                .transpose()
+                .map_err(|_| AgentFailure::InvalidInput)
+        })
+        .collect()
+}
+
+/// Structural validation shared by the retrying legacy path and the
+/// single-attempt transitional bridge: budget caps, batch shape, replay
+/// linkage, and per-step checks. The caller's accounting (if any) settles
+/// before this runs, so a response that fails here still consumed its attempt.
+fn validate_legacy_response(
+    request: &ModelRequest,
+    validators: &[Option<jsonschema::Validator>],
+    response: &ModelResponse,
+) -> Result<(), AgentFailure> {
+    if response.used_tokens > request.remaining_tokens
+        || response.cost_micros > request.remaining_cost_micros
+        || serde_json::to_vec(&response.output)
+            .map_err(|_| AgentFailure::InvalidModelOutput)?
+            .len()
+            > request.max_output_bytes
+    {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    if response.schema_version != crate::AGENT_VERSION
+        || response.output.is_empty()
+        || response.output.len() > 16
+        || response.call_count() > 8
+        || response.delegation_count() > 1
+        || (response.delegation_count() > 0 && response.capability_call_count() > 0)
+    {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    let answers = response
+        .output
+        .iter()
+        .filter(|step| matches!(step, ModelStep::Answer { .. }))
+        .count();
+    if (response.call_count() > 0 && answers != 0)
+        || (response.call_count() == 0
+            && (answers != 1
+                || !matches!(response.output.last(), Some(ModelStep::Answer { .. }))))
+    {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    if let Some(replay) = &response.replay {
+        let unique: std::collections::HashSet<_> = replay.call_ids.iter().collect();
+        if replay.call_ids.len() != response.call_count()
+            || replay.call_ids.is_empty()
+            || replay.call_ids.first() != Some(&replay.provider_call_id)
+            || unique.len() != replay.call_ids.len()
+            || replay
+                .call_ids
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 128)
+        {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+    }
+    for step in &response.output {
+        match step {
+            ModelStep::Answer { text } | ModelStep::Preamble { text } => {
+                if text.trim().is_empty() {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
+            }
+            ModelStep::Call {
+                capability_id,
+                input,
+            } => {
+                let index = request
+                    .capabilities
+                    .iter()
+                    .position(|capability| capability.id == *capability_id)
+                    .ok_or(AgentFailure::CapabilityDenied)?;
+                if !request.capabilities[index].read_only {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                let value: serde_json::Value =
+                    serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+                if !value.is_object()
+                    || validators
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|validator| !validator.is_valid(&value))
+                {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
+            }
+            ModelStep::Delegate {
+                agent_id,
+                message,
+                context_refs,
+            } => {
+                if !request
+                    .active_agents
+                    .iter()
+                    .any(|card| card.id == *agent_id)
+                    || message.trim().is_empty()
+                    || message.len() > 4096
+                    || !floe_agent_contract::valid_context_refs(context_refs)
+                {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
+            }
+        }
+    }
+    Ok(())
 }
