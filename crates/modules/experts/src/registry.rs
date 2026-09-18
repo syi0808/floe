@@ -1315,3 +1315,32 @@ impl AgentRegistry {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settlement_names_the_invoked_assignment_and_stages_the_current_snapshot() {
+        let registry = AgentRegistry::new(Uuid::new_v4());
+        let assignment_id = Uuid::new_v4();
+        let invocation_id = Uuid::new_v4();
+        let settlement = registry.settle_registered_expert_invocation(
+            "test-owner",
+            registry.revision(),
+            assignment_id,
+            invocation_id,
+            vec![],
+            "task result".into(),
+        );
+        assert_eq!(settlement.assignment_id, assignment_id);
+        assert_eq!(settlement.invocation_id, invocation_id);
+        assert_eq!(
+            settlement.expected_registry_revision,
+            registry.revision()
+        );
+        assert_eq!(settlement.staged_registry, registry.snapshot());
+        assert_eq!(settlement.task_result, "task result");
+        assert!(settlement.dependencies.is_empty());
+    }
+}

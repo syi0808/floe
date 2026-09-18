@@ -57,6 +57,12 @@ impl crate::ConversationCommands for AppComposition {
             .runtime
             .block_on(self.inference_routes.resolve(caller))
             .map_err(service_failure)?;
+        let retry_of = request
+            .retry_of
+            .map(|run_id| {
+                floe_kernel::RunId::from_uuid(run_id).ok_or(crate::ServiceError::InvalidInput)
+            })
+            .transpose()?;
         let receipt = self
             .agent_vault
             .start_conversation(
@@ -69,7 +75,7 @@ impl crate::ConversationCommands for AppComposition {
                     device_id: caller.device_id().to_owned(),
                     profile: request.profile,
                     continuation: precheck.continuation,
-                    retry_of: request.retry_of,
+                    retry_of,
                     remote_route,
                 },
             )

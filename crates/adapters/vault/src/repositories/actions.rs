@@ -169,7 +169,7 @@ impl ActionRepository for TursoStore {
             .map_err(|failure| match failure {
                 AgentFailure::Conflict => ActionError::conflict("calendar action changed"),
                 AgentFailure::BudgetExceeded => {
-                    ActionError::validation("calendar action exceeds the bounded read")
+                    ActionError::budget("calendar action exceeds the bounded read")
                 }
                 _ => ActionError::storage("calendar action is unavailable"),
             })

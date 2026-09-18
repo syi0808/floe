@@ -582,27 +582,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn save_expert_completion_checked(
-        &self,
-        expected_revision: u64,
-        snapshot: &RegistrySnapshot,
-        assignment_id: Uuid,
-        check: impl Fn() -> Result<(), AgentFailure> + Sync,
-    ) -> Result<(), AgentFailure> {
-        self.save_expert_registry_change_checked(
-            expected_revision,
-            snapshot,
-            None,
-            None,
-            Some(assignment_id),
-            None,
-            check,
-        )
-        .await?;
-        Ok(())
-    }
-
     pub async fn settle_calendar_expert_task_checked(
         &self,
         completion: floe_experts::ExpertTaskCompletion,

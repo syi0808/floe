@@ -643,9 +643,10 @@ fn action_authority_defaults_to_ask_and_rejects_legacy_mutation() {
         json!({"kind": "set_authority", "calendar_create": "allow"}),
     );
     assert_eq!(denied["status"], "error");
+    assert_eq!(denied["error"]["code"], "validation");
     assert_eq!(
-        denied["error"]["metadata"]["agent_failure"],
-        "policy_denied"
+        data(&core.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
+        "ask"
     );
     drop(core);
 

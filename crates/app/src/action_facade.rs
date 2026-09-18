@@ -66,6 +66,9 @@ pub fn action_error(value: ActionError) -> CoreError {
             ActionErrorCode::NotFound => ErrorCode::NotFound,
             ActionErrorCode::Conflict => ErrorCode::Conflict,
             ActionErrorCode::Storage => ErrorCode::Storage,
+            // The facade never performs a bounded read; a budget refusal
+            // reaches callers through inspection, not through this mapping.
+            ActionErrorCode::Budget => ErrorCode::Validation,
         },
         message: value.message,
         metadata: value.metadata,

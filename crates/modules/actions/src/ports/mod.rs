@@ -20,6 +20,7 @@ pub enum ActionErrorCode {
     NotFound,
     Conflict,
     Storage,
+    Budget,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -54,6 +55,10 @@ impl ActionError {
     pub fn storage(message: impl Into<String>) -> Self {
         Self::new(ActionErrorCode::Storage, message)
     }
+
+    pub fn budget(message: impl Into<String>) -> Self {
+        Self::new(ActionErrorCode::Budget, message)
+    }
 }
 
 impl From<ActionError> for AgentFailure {
@@ -63,6 +68,7 @@ impl From<ActionError> for AgentFailure {
             ActionErrorCode::Conflict => AgentFailure::Conflict,
             ActionErrorCode::Validation => AgentFailure::InvalidInput,
             ActionErrorCode::Storage => AgentFailure::StorageUnavailable,
+            ActionErrorCode::Budget => AgentFailure::BudgetExceeded,
         }
     }
 }

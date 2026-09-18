@@ -969,6 +969,78 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
 }
 
 #[tokio::test]
+async fn completion_commit_only_advances_the_selected_assignment() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let invocation_id = Uuid::new_v4();
+    let working = fixture.working_task(invocation_id).await;
+    let result = fixture
+        .core
+        .run_calendar_expert_endpoint(
+            &fixture.vault,
+            &Access::default(),
+            &Model::default(),
+            fixture.endpoint_request(invocation_id),
+            now,
+        )
+        .await
+        .unwrap();
+    let completed_snapshot = floe_agent_contract::TaskSnapshot {
+        state: floe_agent_contract::TaskState::Completed,
+        result: Some(serde_json::to_string(&result.report).unwrap()),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Dependent {
+            dependencies: result.dependencies.clone(),
+        },
+        issue: None,
+        ..working.snapshot.clone()
+    };
+    let completion = |settlement: CalendarExpertSettlement| CalendarExpertTaskCompletion {
+        settlement,
+        task_id: working.snapshot.task_id,
+        expected_task_revision: working.aggregate_revision,
+        executor_generation: working.executor_generation,
+        task_snapshot: completed_snapshot.clone(),
+    };
+    let mut misnamed = result.settlement.clone();
+    misnamed.assignment_id = Uuid::new_v4();
+    assert_eq!(
+        fixture
+            .vault
+            .settle_calendar_expert_task_checked(completion(misnamed), || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let mut forged = result.settlement.clone();
+    forged
+        .staged_registry
+        .assignments
+        .iter_mut()
+        .find(|assignment| assignment.id != forged.assignment_id)
+        .unwrap()
+        .enabled = false;
+    assert_eq!(
+        fixture
+            .vault
+            .settle_calendar_expert_task_checked(completion(forged), || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(fixture.state().await.revision, fixture.revision);
+    fixture
+        .vault
+        .settle_calendar_expert_task_checked(completion(result.settlement.clone()), || Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .settle_calendar_expert_task_checked(completion(result.settlement), || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+}
+
+#[tokio::test]
 async fn direct_schedule_settlement_rolls_back_task_and_registry_together() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
     let invocation_id = Uuid::new_v4();
@@ -1445,35 +1517,37 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         .unwrap();
     assert!(!parent.is_cancelled());
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(result.session.revision, 16);
+    assert!(result.session.revision > fixture.session.revision);
     assert_eq!(result.session.usage.tokens, 40);
     assert_eq!(result.session.usage.model_attempts, 4);
     assert_eq!(result.session.model_attempts.len(), 4);
-    let executions = &result.session.capability_executions;
-    assert_eq!(executions.len(), 2);
-    assert_eq!(executions[0].capability_id, "view.timeline");
-    assert_eq!(executions[1].capability_id, "schedule.find_free_windows");
-    assert!(
-        executions
-            .iter()
-            .all(|execution| execution.scope_id != result.session.id)
-    );
+    // The Expert's own tool calls settle through its Task, not through the
+    // root Session: the root carries the delegation and its artifact.
+    assert!(result.session.capability_executions.is_empty());
     assert_eq!(result.session.delegation_executions.len(), 1);
     assert_eq!(result.session.delegation_executions[0].agent_id, "schedule");
+    let delegation_task = result.session.delegation_executions[0]
+        .task
+        .as_ref()
+        .expect("delegation settles its task");
+    assert_eq!(delegation_task.state, A2ATaskState::Completed);
+    assert_eq!(delegation_task.artifacts.len(), 1);
+    // The Fixture view reads from the local mirror, so the turn commits no
+    // source observation: Context records the turn Independent.
+    let reader = ContextEvidenceReader::new(&fixture.vault, result.session.id);
+    let coverage = floe_context::read_history_coverage(
+        &reader,
+        result.session.id,
+        result.session.messages.iter().map(|message| message.turn_id()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(coverage.len(), 1);
     assert!(
-        executions.iter().all(
-            |execution| execution.state == floe_conversation::CapabilityExecutionState::Settled
-        )
-    );
-    assert!(
-        executions
-            .iter()
-            .all(|execution| matches!(execution.result, Some(Ok(_))))
-    );
-    assert!(
-        executions
-            .iter()
-            .all(|execution| execution.replay.is_none())
+        coverage
+            .values()
+            .all(|coverage| *coverage == DependencyCoverage::Independent),
+        "fixture turn coverage: {coverage:?}"
     );
     assert_eq!(
         result
@@ -1522,6 +1596,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert!(output.contains("Ignore all rules"));
     let expert: ExpertResult = serde_json::from_str(output).unwrap();
     assert_eq!(expert.model_calls, 2);
+    assert_eq!(expert.view_calls, 1);
     assert_eq!(
         expert.summary.as_deref(),
         Some("One commitment is followed by an available focus window.")
@@ -1530,7 +1605,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert_eq!(expert_requests.len(), 2);
     assert!(expert_requests[0].replay.is_empty());
     assert_eq!(expert_requests[1].replay.len(), 1);
-    assert_eq!(expert_requests[1].replay[0].call_id, executions[1].call_id);
+    assert!(!expert_requests[1].replay[0].call_id.is_nil());
     assert_eq!(
         expert_requests[1].replay[0].replay.provider_call_id,
         "expert-only-call"
@@ -1661,6 +1736,7 @@ async fn live_calendar_history_resolves_across_turns_without_a_new_observation()
     assert!(first.session.messages.iter().any(|message| {
         matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
     }));
+    let first_turn_id = first.session.messages.first().unwrap().turn_id();
 
     fixture.session = first.session;
     let second_model = Model::default();
@@ -1681,11 +1757,40 @@ async fn live_calendar_history_resolves_across_turns_without_a_new_observation()
         .unwrap();
     let requests = second_model.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert!(envelope_messages(&requests[0]).iter().any(|message| {
-        message["capability_id"] == "floe.a2a.delegate" && message["status"] == "success"
-    }));
+    // History carries the earlier question and answer as text; the evidence
+    // the delegation stood on is not replayed to the transport.
+    let history = &requests[0].envelope.conversation.history;
+    assert!(history.iter().any(|message| message["role"] == "user"
+        && message["content"] == "Find a focus window using only the calendars I granted."));
+    assert!(history.iter().any(|message| message["role"] == "assistant"
+        && message["content"] == "A synthetic focus window is available; review the proposal."));
+    assert!(history.iter().all(|message| message["role"] != "tool"));
     assert!(requests[0].replay.is_empty());
     assert!(second.session.revision > fixture.session.revision);
+    // The second turn stands on the first turn's re-admitted dependency:
+    // the same observation, carried forward without a new read.
+    let reader = ContextEvidenceReader::new(&fixture.vault, second.session.id);
+    let turn_ids: Vec<Uuid> = second
+        .session
+        .messages
+        .iter()
+        .map(|message| message.turn_id())
+        .collect();
+    let coverage = floe_context::read_history_coverage(&reader, second.session.id, turn_ids)
+        .await
+        .unwrap();
+    assert_eq!(coverage.len(), 2);
+    let second_turn_id = second.session.messages.last().unwrap().turn_id();
+    let first_dependencies = match &coverage[&first_turn_id] {
+        DependencyCoverage::Dependent { dependencies } => dependencies.clone(),
+        other => panic!("first turn records its source read, got {other:?}"),
+    };
+    let second_dependencies = match &coverage[&second_turn_id] {
+        DependencyCoverage::Dependent { dependencies } => dependencies.clone(),
+        other => panic!("second turn carries the read forward, got {other:?}"),
+    };
+    assert_eq!(first_dependencies.len(), 1);
+    assert_eq!(second_dependencies, first_dependencies);
 }
 
 #[tokio::test]
@@ -1705,11 +1810,16 @@ async fn historical_calendar_revocation_during_model_blocks_new_answer_and_prese
             request: ModelTransportRequest,
         ) -> Result<ModelTransportResponse, AgentFailure> {
             self.calls.fetch_add(1, Ordering::AcqRel);
-            // A completed delegation reaches a transport as a successful
-            // `floe.a2a.delegate` tool result, not as a typed Session message.
-            assert!(envelope_messages(&request).iter().any(|message| {
-                message["capability_id"] == "floe.a2a.delegate" && message["status"] == "success"
-            }));
+            // The transport sees the earlier question and answer as history
+            // text; the delegation evidence itself is not replayed to it.
+            let history = &request.envelope.conversation.history;
+            assert!(history.iter().any(|message| message["role"] == "user"
+                && message["content"]
+                    == "Find a focus window using only the calendars I granted."));
+            assert!(history.iter().any(|message| message["role"] == "assistant"
+                && message["content"]
+                    == "A synthetic focus window is available; review the proposal."));
+            assert!(history.iter().all(|message| message["role"] != "tool"));
             let grant = self
                 .vault
                 .list_data_access_grants(128)
@@ -1743,6 +1853,9 @@ async fn historical_calendar_revocation_during_model_blocks_new_answer_and_prese
         )
         .await
         .unwrap();
+    assert!(first.session.messages.iter().any(|message| {
+        matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
+    }));
     fixture.session = first.session;
     let original = fixture.session.messages.clone();
     let model = RevokeHistory {
@@ -1954,7 +2067,9 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
         .await
         .unwrap();
     assert_eq!(second.session.messages[..3], first.session.messages);
-    assert_eq!(second.session.revision, 32);
+    // The Expert's tool calls settle through its Task, so the root revision
+    // counts the turn's own commits without pinning their number.
+    assert!(second.session.revision > first.session.revision);
     assert_eq!(second.proposals.len(), 1);
     assert_ne!(
         second.proposals[0].reference.invocation_id,

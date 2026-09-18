@@ -307,12 +307,68 @@ struct Job {
     person: PersonId,
     id: Uuid,
     action: Box<WorkerAction>,
+    command_identity: Option<CommandIdentity>,
     cancellation: Cancellation,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
     admission_ready: Condvar,
     progress: Mutex<Progress>,
     app_events: Arc<crate::events::AppEventBuffer>,
+}
+
+/// The semantic identity of one submitted command, for same-id duplicate
+/// checks. A repeated id rejoins its job only when it names the same command;
+/// a different command under the same id is a conflict, never a replay.
+#[derive(Eq, PartialEq)]
+enum CommandIdentity {
+    /// A new conversation turn, as Conversation's canonical digest names it.
+    TurnDigest([u8; 32]),
+    /// A continuation turn. The reference itself resolves at prepare time from
+    /// the command's durable lineage, so same-id duplicates agree on it; the
+    /// claim compares the canonical fields around it.
+    TurnContinuation {
+        session_id: Uuid,
+        expected_revision: u64,
+        text: String,
+        profile: floe_conversation::ProfileSelection,
+        retry_of: Option<floe_kernel::RunId>,
+    },
+}
+
+/// Name one conversation turn command in Conversation's own terms.
+///
+/// New turns use the owner's canonical digest; continuation turns compare the
+/// canonical fields whose reference resolves later from shared lineage. The
+/// asking device and the resolved route are runtime observations, never
+/// identity. An unnameable request keeps the old submit behavior and fails at
+/// execution, where the owner reports it.
+fn conversation_command_identity(
+    id: Uuid,
+    person: PersonId,
+    request: &ConversationTurnRequest,
+) -> Option<CommandIdentity> {
+    if request.continuation {
+        return Some(CommandIdentity::TurnContinuation {
+            session_id: request.session_id,
+            expected_revision: request.expected_revision,
+            text: floe_conversation::normalize_turn_text(&request.text).ok()?,
+            profile: request.profile.clone(),
+            retry_of: request.retry_of,
+        });
+    }
+    let mut turn = floe_conversation::StartTurn {
+        command_id: floe_kernel::CommandId::from_uuid(id)?,
+        session_id: request.session_id,
+        expected_revision: request.expected_revision,
+        text: request.text.clone(),
+        mode: floe_conversation::TurnMode::New,
+        retry_of: request.retry_of,
+        profile: request.profile.clone(),
+    };
+    let intent = floe_conversation::CanonicalTurnIntent::from_start_turn(&mut turn).ok()?;
+    Some(CommandIdentity::TurnDigest(
+        intent.digest(&person.to_string()).ok()?,
+    ))
 }
 
 impl Job {
@@ -874,6 +930,15 @@ impl Worker {
             if job.action.name() != action.name() {
                 return Err(AgentFailure::Conflict);
             }
+            if let WorkerAction::ConversationTurn { request } = &*action
+                && let (Some(stored), Some(candidate)) = (
+                    job.command_identity.as_ref(),
+                    conversation_command_identity(id, person, request).as_ref(),
+                )
+                && stored != candidate
+            {
+                return Err(AgentFailure::Conflict);
+            }
             return Ok(Arc::clone(job));
         }
         let mut in_flight = 0_usize;
@@ -913,10 +978,17 @@ impl Worker {
         if jobs.len() >= MAX_VAULT_JOBS {
             return Err(AgentFailure::BudgetExceeded);
         }
+        let command_identity = match &*action {
+            WorkerAction::ConversationTurn { request } => {
+                conversation_command_identity(id, person, request)
+            }
+            _ => None,
+        };
         let job = Arc::new(Job {
             person,
             id,
             action,
+            command_identity,
             cancellation: Cancellation::default(),
             run_cancellations: Arc::clone(&self.run_cancellations),
             admission: Mutex::new(None),
@@ -1782,6 +1854,12 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
+            // Another Person's pairing is denied before anything else can
+            // fail: enrollment is theirs to attempt or not at all.
+            floe_access::admit_enrollment_pairing(
+                job.person,
+                access_pairing_identity(pairing),
+            )?;
             let vault = vault.vault.as_ref();
             let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
             let enrolled = Box::pin(floe_access::review_and_enroll_remote_authority(

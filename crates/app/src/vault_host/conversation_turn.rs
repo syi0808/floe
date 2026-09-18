@@ -399,12 +399,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         };
         let execution_profile =
             floe_vault::execution_profile(floe_inference::ModelTransport::placement(&model));
-        let retry_of = request
-            .retry_of
-            .map(|run_id| {
-                floe_agent_contract::RunId::from_uuid(run_id).ok_or(AgentFailure::InvalidInput)
-            })
-            .transpose()?;
+        let retry_of = request.retry_of;
         let profile = request.profile.clone();
         let receipt = service
             .run_turn_observed(
@@ -588,6 +583,16 @@ impl Model {
         match route {
             Some(route) => ServerModelRunner::new_model_only(route.route).map(Self::Server),
             None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
+        }
+    }
+
+    /// The placement Experts are offered at. A server model runs
+    /// server-class judgment wherever it listens; transport placement
+    /// still names the data destination, which is what consent checks.
+    fn expert_eligibility(&self) -> ModelPlacement {
+        match self {
+            Self::Foundation(model) => floe_inference::ModelTransport::placement(model),
+            Self::Server(_) => ModelPlacement::Remote,
         }
     }
 }
@@ -2653,7 +2658,7 @@ mod tests {
 
     fn test_builtin_setup(
         person_id: PersonId,
-        source: BuiltinContextSource,
+        sources: &[BuiltinContextSource],
     ) -> BuiltinExpertSetupReceipt {
         let instance_id = uuid::Uuid::new_v4();
         let mut registry = floe_experts::AgentRegistry::new(instance_id);
@@ -2664,12 +2669,15 @@ mod tests {
                     instance_id,
                     expected_revision: 0,
                     setup_id: uuid::Uuid::new_v4(),
-                    sources: vec![floe_experts::BuiltinSourceBinding {
-                        source: floe_experts::AgentId::try_new(source.source_id())
-                            .expect("builtin source ids are valid"),
-                        view_handle: uuid::Uuid::new_v4(),
-                        state: floe_experts::BuiltinSourceState::Available,
-                    }],
+                    sources: sources
+                        .iter()
+                        .map(|source| floe_experts::BuiltinSourceBinding {
+                            source: floe_experts::AgentId::try_new(source.source_id())
+                                .expect("builtin source ids are valid"),
+                            view_handle: uuid::Uuid::new_v4(),
+                            state: floe_experts::BuiltinSourceState::Available,
+                        })
+                        .collect(),
                 },
                 &crate::vault_host::builtin_setup_specs(),
             )
@@ -3094,7 +3102,7 @@ mod tests {
             cards: test_expert_cards(),
             grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
                 person_id,
-                BuiltinContextSource::Mail,
+                &[BuiltinContextSource::Mail],
             ))),
             task_runners: &[],
         };
@@ -3505,7 +3513,13 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: Default::default(),
+            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
+                person_id,
+                &[
+                    BuiltinContextSource::Mail,
+                    BuiltinContextSource::Calendar,
+                ],
+            ))),
             task_runners: &[],
         };
         let task_id = uuid::Uuid::new_v4();
@@ -3731,7 +3745,15 @@ mod tests {
             context_reader: None,
             task_views: &tasks,
             cards: test_expert_cards(),
-            grants: Default::default(),
+            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
+                person_id,
+                &[
+                    BuiltinContextSource::Mail,
+                    BuiltinContextSource::Calendar,
+                    BuiltinContextSource::Tasks,
+                    BuiltinContextSource::ConfirmedMemory,
+                ],
+            ))),
             task_runners: &[],
         };
         let task = experts
@@ -3932,7 +3954,13 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: Default::default(),
+            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
+                person_id,
+                &[
+                    BuiltinContextSource::WorkContext,
+                    BuiltinContextSource::Logistics,
+                ],
+            ))),
             task_runners: &[],
         };
         let mut results = Vec::new();
@@ -4203,7 +4231,10 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: Default::default(),
+            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
+                PersonId::new(),
+                &[BuiltinContextSource::Contacts],
+            ))),
             task_runners: &[],
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
@@ -4275,7 +4306,10 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: Default::default(),
+            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
+                PersonId::new(),
+                &[BuiltinContextSource::Attention],
+            ))),
             task_runners: &[],
         };
         let result = experts

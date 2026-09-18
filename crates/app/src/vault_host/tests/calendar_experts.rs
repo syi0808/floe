@@ -1036,6 +1036,226 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
 }
 
 #[test]
+fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+        text: "One durable answer".into(),
+    }]);
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "conversation-identity-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
+    let request = || ConversationTurnRequest {
+        session_id: session.id,
+        expected_revision: session.revision,
+        text: "Answer once".into(),
+        device_id: "mac-local".into(),
+        profile: ProfileSelection::Auto,
+        continuation: false,
+        retry_of: None,
+        remote_route: Some(route.clone()),
+    };
+    let admitted = worker
+        .start_conversation(person, command_id, request())
+        .unwrap();
+    let mut equivalent = request();
+    equivalent.text = "  Answer once\n".into();
+    assert_eq!(
+        worker
+            .start_conversation(person, command_id, equivalent)
+            .unwrap(),
+        admitted
+    );
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "first: {finished:?}");
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
+fn same_request_id_with_different_profile_conflicts() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+        text: "One durable answer".into(),
+    }]);
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "conversation-identity-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
+    let request = || ConversationTurnRequest {
+        session_id: session.id,
+        expected_revision: session.revision,
+        text: "Answer once".into(),
+        device_id: "mac-local".into(),
+        profile: ProfileSelection::Auto,
+        continuation: false,
+        retry_of: None,
+        remote_route: Some(route.clone()),
+    };
+    worker
+        .start_conversation(person, command_id, request())
+        .unwrap();
+    let mut other = request();
+    other.profile = ProfileSelection::Explicit("local-fast".into());
+    assert_eq!(
+        worker.start_conversation(person, command_id, other),
+        Err(AgentFailure::Conflict)
+    );
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "first: {finished:?}");
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
+fn same_request_id_with_different_continuation_claim_conflicts() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+        text: "One durable answer".into(),
+    }]);
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "conversation-identity-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
+    let request = || ConversationTurnRequest {
+        session_id: session.id,
+        expected_revision: session.revision,
+        text: "Answer once".into(),
+        device_id: "mac-local".into(),
+        profile: ProfileSelection::Auto,
+        continuation: false,
+        retry_of: None,
+        remote_route: Some(route.clone()),
+    };
+    worker
+        .start_conversation(person, command_id, request())
+        .unwrap();
+    let mut continued = request();
+    continued.continuation = true;
+    assert_eq!(
+        worker.start_conversation(person, command_id, continued),
+        Err(AgentFailure::Conflict)
+    );
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "first: {finished:?}");
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
+fn same_request_id_with_route_refresh_only_replays_without_redispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+        text: "One durable answer".into(),
+    }]);
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "conversation-identity-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let (mut refreshed, idle) = answer_server(vec![]);
+    refreshed.route.bearer_token = "b".repeat(32);
+    refreshed.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "conversation-identity-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
+    let request = || ConversationTurnRequest {
+        session_id: session.id,
+        expected_revision: session.revision,
+        text: "Answer once".into(),
+        device_id: "mac-local".into(),
+        profile: ProfileSelection::Auto,
+        continuation: false,
+        retry_of: None,
+        remote_route: Some(route.clone()),
+    };
+    let admitted = worker
+        .start_conversation(person, command_id, request())
+        .unwrap();
+    let mut refreshed_request = request();
+    refreshed_request.remote_route = Some(refreshed);
+    assert_eq!(
+        worker
+            .start_conversation(person, command_id, refreshed_request)
+            .unwrap(),
+        admitted
+    );
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "first: {finished:?}");
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(server.join().unwrap().len(), 1);
+    assert!(idle.join().unwrap().is_empty());
+}
+
+#[test]
 fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
@@ -1265,6 +1485,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     let person = PersonId::new();
     let worker = Worker::new(root.clone(), keys.clone()).unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
+    install_builtin_mail_setup(&worker, &root, person, &keys);
     let session = perform(
         &worker,
         person,
@@ -1330,6 +1551,75 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     assert_eq!(
         task.snapshot.issue,
         Some(AgentFailure::AccessReviewRequired)
+    );
+}
+
+fn install_builtin_mail_setup(
+    worker: &Worker,
+    root: &std::path::Path,
+    person: PersonId,
+    keys: &Keys,
+) {
+    assert_eq!(perform(worker, person, WorkerAction::Lock).failure, None);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let vault = runtime
+        .block_on(EncryptedAgentVault::open(root, person, keys.clone()))
+        .unwrap();
+    let setup = floe_experts::BuiltinExpertSetup {
+        instance_id: vault.registry_instance_id(),
+        expected_revision: 0,
+        setup_id: Uuid::new_v4(),
+        sources: vec![floe_experts::BuiltinSourceBinding {
+            source: floe_experts::AgentId::try_new(
+                floe_experts_builtin::BuiltinContextSource::Mail.source_id(),
+            )
+            .unwrap(),
+            view_handle: Uuid::new_v4(),
+            state: floe_experts::BuiltinSourceState::Available,
+        }],
+    };
+    runtime
+        .block_on(vault.install_builtin_experts_enabled(
+            setup,
+            &crate::vault_host::builtin_setup_specs(),
+            floe_execution::Cancellation::default(),
+        ))
+        .unwrap();
+    drop(vault);
+    assert_eq!(perform(worker, person, WorkerAction::Unlock).failure, None);
+}
+
+#[test]
+fn production_builtin_setup_installs_through_vault_and_grants_sources() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
+    install_builtin_mail_setup(&worker, &root, person, &keys);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+    let vault = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let overview = runtime
+        .block_on(vault.builtin_expert_overview())
+        .unwrap()
+        .unwrap();
+    let grants = floe_experts::SourceGrants::new(Some(overview.setup));
+    assert_eq!(
+        grants.grant(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+            floe_experts_builtin::BuiltinContextSource::Mail.source_id(),
+        ),
+        floe_experts::SourceGrant::Granted
     );
 }
 

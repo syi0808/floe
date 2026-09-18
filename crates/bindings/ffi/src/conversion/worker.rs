@@ -627,7 +627,13 @@ fn conversation_turn_request(
             }
         },
         continuation: request.continuation,
-        retry_of: request.retry_of,
+        retry_of: request
+            .retry_of
+            .map(|run_id| {
+                floe_app::RunId::from_uuid(run_id)
+                    .ok_or_else(|| invalid("request.retry_of", "must be a Run id"))
+            })
+            .transpose()?,
         remote_route: request.remote_route.as_ref().map(remote_route),
     })
 }

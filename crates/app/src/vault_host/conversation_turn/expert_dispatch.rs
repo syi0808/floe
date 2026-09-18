@@ -571,10 +571,7 @@ impl InProcessAgent for ConversationExperts<'_> {
     ///
     /// Each card states where its Expert runs; nothing here reads the agent id.
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        floe_experts::eligible_cards(
-            &self.cards,
-            floe_inference::ModelTransport::placement(self.model),
-        )
+        floe_experts::eligible_cards(&self.cards, self.model.expert_eligibility())
     }
 
     async fn handle_message(
