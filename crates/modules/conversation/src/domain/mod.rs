@@ -1,5 +1,6 @@
 use floe_agent_contract::{
-    AgentMessage, DependencyCoverage, EngineStep, JournalEvent, ReplayReceipt,
+    AgentMessage, BatchCursor, DependencyCoverage, EngineStep, JournalEvent,
+    ModelConversation, ReplayReceipt, ValidatedModelBatch,
 };
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
@@ -373,8 +374,16 @@ pub struct ContinuationSnapshot {
     pub session_id: Uuid,
     pub session_revision: u64,
     pub execution_profile: String,
-    pub messages: Vec<AgentMessage>,
+    /// History from the durable transcript plus the settled exchanges of the
+    /// continued execution. The continuing turn prepends its own user message;
+    /// until then the current turn carries exchanges only.
+    pub model_conversation: ModelConversation,
     pub replay: Vec<ReplayReceipt>,
+    /// A validated batch that never completed, with its cursor. The batch keeps
+    /// its original execution id; step identity is never re-rooted at the
+    /// resuming run.
+    pub pending_batch: Option<ValidatedModelBatch>,
+    pub batch_cursor: Option<BatchCursor>,
     pub completed_iterations: u32,
     pub usage: floe_execution::budget::ModelUsage,
 }

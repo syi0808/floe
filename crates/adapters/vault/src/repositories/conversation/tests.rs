@@ -8,8 +8,15 @@ use std::{
 use crate::{VaultConversationAdmissionRequest, VaultKey};
 use floe_agent_contract::ModelPlacement;
 use floe_agent_contract::{
-    AllowedCatalog, BoundedContext, DelegationPort, DelegationRequest, ModelPort, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, ToolPort, ToolResult,
+    AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture, ContextEnvelope,
+    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
+    DependencyCoverage, ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
+    ModelResponse, ModelStep, ModelUsage, PinnedToolRevision, ProjectionRef, RoleSpec,
+    RuntimeContext, ScopedInstructions, ToolCall, ToolDescriptor, ToolPort, ToolResult,
+    ValidatedModelBatch,
+};
+use floe_agent_contract::prompts::{
+    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_conversation::SessionStore;
 use floe_conversation::{
@@ -45,6 +52,79 @@ impl VaultKeyProvider for Keys {
             .unwrap()
             .insert((person_id, vault_id), *key.as_bytes());
         Ok(())
+    }
+}
+
+struct TestProjector;
+
+static PROJECTOR: TestProjector = TestProjector;
+
+impl ModelProjectionPort for TestProjector {
+    fn project<'a>(
+        &'a self,
+        request: ModelProjectionRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
+        request.validate().unwrap();
+        let envelope = ContextEnvelope {
+            schema_version: floe_agent_contract::AGENT_VERSION,
+            stable_instructions: PromptAssembly {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                role: PromptRole::Manager,
+                components: vec![
+                    PromptComponent {
+                        kind: PromptComponentKind::BehaviorKernel,
+                        source: "test-kernel".into(),
+                        revision: 1,
+                        content: "kernel".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::Role,
+                        source: "test-role".into(),
+                        revision: 1,
+                        content: "role".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::CapabilityProtocol,
+                        source: "test-protocol".into(),
+                        revision: 1,
+                        content: "protocol".into(),
+                    },
+                ],
+            },
+            scoped_instructions: ScopedInstructions {
+                purpose: "test-purpose".into(),
+                response_contract: request.role.output_contract.clone(),
+                available_capabilities: vec![],
+                active_experts: vec![],
+                correction: request.correction.clone(),
+            },
+            contextual_data: ContextualData {
+                projection_version: 1,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            conversation: request.conversation.clone(),
+            runtime: RuntimeContext {
+                max_output_bytes: request.max_output_bytes,
+            },
+            manifest: ContextManifest {
+                prompt_components: vec![],
+                evidence: vec![],
+                memories: vec![],
+                agent_cards: vec![],
+            },
+        };
+        Box::pin(async move {
+            Ok(AuthorizedModelProjection {
+                projection_ref: ProjectionRef::new(),
+                projection_revision: 1,
+                envelope,
+                coverage: DependencyCoverage::Independent,
+                input_data_classes: vec![DataClass::Synthetic],
+            })
+        })
     }
 }
 
@@ -231,7 +311,9 @@ impl DelegationPort for NoDelegation {
 struct Validator;
 impl FinalPayloadValidator for Validator {
     fn validate(&self, role: &str, text: &str, _: &[ContractArtifact]) -> Result<(), AgentFailure> {
-        if role == "manager" && !text.trim().is_empty() {
+        if (role == "manager" || role == floe_conversation::FINALIZATION_ROLE_ID)
+            && !text.trim().is_empty()
+        {
             Ok(())
         } else {
             Err(AgentFailure::InvalidModelOutput)
@@ -247,9 +329,10 @@ fn build_service(
         ManagerConfig {
             role_spec: RoleSpec {
                 role_id: "manager".into(),
-                prompt: "Answer safely.".into(),
+                instructions: "Answer safely.".into(),
                 output_contract: "User-facing text.".into(),
             },
+            purpose: "test-purpose".into(),
             max_iterations: 4,
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
@@ -267,9 +350,10 @@ fn build_finalization_service(
         ManagerConfig {
             role_spec: RoleSpec {
                 role_id: "manager".into(),
-                prompt: "Answer safely.".into(),
+                instructions: "Answer safely.".into(),
                 output_contract: "User-facing text.".into(),
             },
+            purpose: "test-purpose".into(),
             max_iterations: 1,
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
@@ -295,10 +379,6 @@ fn request(
         retry_of: None,
         profile: floe_conversation::ProfileSelection::Auto,
         execution_profile: "device_local".into(),
-        bounded_context: BoundedContext {
-            text: String::new(),
-            coverage: DependencyCoverage::Independent,
-        },
         allowed_catalog: AllowedCatalog::default(),
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
@@ -439,6 +519,7 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .run_turn(
             turn.clone(),
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -489,12 +570,20 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(stored.journal_revision, 3);
+    assert_eq!(stored.journal_revision, 5);
     let journal = repository.load_journal(receipt.run_id).await.unwrap();
-    assert_eq!(journal.len(), 3);
+    assert_eq!(journal.len(), 5);
     assert!(matches!(journal[0].event, JournalEvent::ModelIntent { .. }));
     assert!(matches!(journal[1].event, JournalEvent::ModelResult { .. }));
-    assert!(matches!(journal[2].event, JournalEvent::Output { .. }));
+    assert!(matches!(
+        journal[2].event,
+        JournalEvent::ValidatedBatch { .. }
+    ));
+    assert!(matches!(
+        journal[3].event,
+        JournalEvent::BatchProgress { .. }
+    ));
+    assert!(matches!(journal[4].event, JournalEvent::Output { .. }));
     let legacy = vault.load(person_id, session.id).await.unwrap();
     assert_eq!(legacy.active_turn, None);
     assert!(matches!(
@@ -519,6 +608,7 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .run_turn(
             turn,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -572,6 +662,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
         .run_turn(
             first_request,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &ToolThenAnswerModel::default(),
                 tools: &tools,
                 delegation: &NoDelegation,
@@ -605,6 +696,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
         .run_turn(
             second_request,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &Model::default(),
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -727,6 +819,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
         .run_turn(
             third_request,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &Model::default(),
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -777,6 +870,7 @@ async fn finalization_commits_reply_while_encrypted_run_remains_failed() {
         .run_turn(
             turn,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &model,
                 tools: &tools,
                 delegation: &NoDelegation,
@@ -808,9 +902,11 @@ async fn finalization_commits_reply_while_encrypted_run_remains_failed() {
         [AgentMessage::User { .. }, AgentMessage::Assistant { text, .. }]
             if text == "The lookup finished, but the full request did not complete."
     ));
+    // Work: intent, result, batch, cursor, tool intent/result, cursor,
+    // checkpoint. Finalization: intent, result, batch, cursor, output.
     assert_eq!(
         repository.load_journal(receipt.run_id).await.unwrap().len(),
-        8
+        13
     );
 }
 
@@ -857,8 +953,31 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         coverage: DependencyCoverage::Independent,
         issue: None,
     };
+    let batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id,
+        projection_ref: ProjectionRef::new(),
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::CallTool {
+            tool_id: call.tool_id.clone(),
+            definition_revision: call.definition_revision,
+            input: call.input.clone(),
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![PinnedToolRevision {
+            tool_id: call.tool_id.clone(),
+            definition_revision: call.definition_revision,
+        }],
+        agent_revisions: vec![],
+    };
     for (kind, event) in [
-        ("intent", JournalEvent::ModelIntent { attempt_id }),
+        (
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: batch.projection_ref,
+            },
+        ),
         (
             "result",
             JournalEvent::ModelResult {
@@ -869,11 +988,35 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
                 },
             },
         ),
+        (
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ),
         ("intent", JournalEvent::ToolIntent { call: call.clone() }),
         (
             "result",
             JournalEvent::ToolResult {
                 result: result.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 1,
+                },
             },
         ),
         ("checkpoint", JournalEvent::Checkpoint { iteration: 1 }),
@@ -903,7 +1046,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             .await
             .unwrap();
     assert_eq!(continuation.completed_iterations, 1);
-    assert_eq!(continuation.messages.len(), 2);
+    assert_eq!(continuation.model_conversation.len(), 2);
     assert_eq!(continuation.replay.len(), 1);
     assert_eq!(continuation.replay[0].call_id, call.call_id);
     assert_eq!(continuation.replay[0].result, result.text);
@@ -943,11 +1086,29 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         coverage: DependencyCoverage::Independent,
         issue: None,
     };
+    let second_batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id: second_attempt_id,
+        projection_ref: ProjectionRef::new(),
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::CallTool {
+            tool_id: second_call.tool_id.clone(),
+            definition_revision: second_call.definition_revision,
+            input: second_call.input.clone(),
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![PinnedToolRevision {
+            tool_id: second_call.tool_id.clone(),
+            definition_revision: second_call.definition_revision,
+        }],
+        agent_revisions: vec![],
+    };
     for (kind, event) in [
         (
             "intent",
             JournalEvent::ModelIntent {
                 attempt_id: second_attempt_id,
+                projection_ref: second_batch.projection_ref,
             },
         ),
         (
@@ -961,6 +1122,21 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             },
         ),
         (
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: second_batch.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: second_batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ),
+        (
             "intent",
             JournalEvent::ToolIntent {
                 call: second_call.clone(),
@@ -970,6 +1146,15 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             "result",
             JournalEvent::ToolResult {
                 result: second_result.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: second_batch.batch_id,
+                    next_step_index: 1,
+                },
             },
         ),
         ("checkpoint", JournalEvent::Checkpoint { iteration: 1 }),
@@ -1004,7 +1189,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
     assert_eq!(continuation.completed_iterations, 2);
     assert_eq!(continuation.usage.attempts, 2);
     assert_eq!(continuation.usage.tokens, 3);
-    assert_eq!(continuation.messages.len(), 3);
+    assert_eq!(continuation.model_conversation.len(), 3);
     assert_eq!(continuation.replay.len(), 2);
     assert_eq!(continuation.replay[0].call_id, call.call_id);
     assert_eq!(continuation.replay[1].call_id, second_call.call_id);
@@ -1024,6 +1209,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         .run_turn(
             turn,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,

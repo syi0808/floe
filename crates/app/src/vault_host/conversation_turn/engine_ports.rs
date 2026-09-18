@@ -1,7 +1,9 @@
 use floe_agent_contract::{
-    AgentDefinition, AllowedCatalog, Artifact, BoxFuture, DelegationPort, DelegationRequest,
-    DependencyCoverage, MessageRole, ModelPort, ModelRequest, ModelResponse, ModelStep,
-    TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
+    AgentDefinition, AllowedCatalog, Artifact, AuthorizedModelProjection, BoxFuture,
+    ContextEnvelope, ContextualData, DelegationPort, DelegationRequest, DependencyCoverage,
+    ModelConversation, ModelConversationEntry, ModelPort, ModelProjectionPort,
+    ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ProjectionRef, RuntimeContext,
+    ScopedInstructions, TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
 use floe_conversation::GovernedSessionStore;
 use floe_conversation::turn::UsageLedger;
@@ -24,6 +26,178 @@ use super::GovernedModel;
 const DEFINITION_REVISION: u64 = 1;
 const MAX_ATTEMPT_TOKENS: u64 = 4_096;
 const MAX_ATTEMPT_COST_MICROS: u64 = 1_000_000;
+
+/// Transitional model projection: assembles the authorized envelope from the
+/// typed conversation while the legacy model/tool bridges still own execution.
+/// History authorization still runs exactly once, inside GovernedModel behind
+/// LegacyModelPort; this adapter never filters history and never calls the
+/// model. Deleted with the legacy bridges at B9.
+pub(super) struct TransitionalModelProjection<'a, Keys> {
+    pub store: &'a GovernedSessionStore<'a, EncryptedAgentVault<Keys>>,
+    pub policy: &'a InferencePolicyDecision,
+    pub context: &'a AgentContext,
+    pub capabilities: Vec<CapabilityDescriptor>,
+    pub active_agents: Vec<floe_experts::AgentCard>,
+}
+
+impl<Keys> ModelProjectionPort for TransitionalModelProjection<'_, Keys>
+where
+    Keys: VaultKeyProvider,
+{
+    fn project<'a>(
+        &'a self,
+        request: ModelProjectionRequest,
+        _scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            let finalization = match request.role.role_id.as_str() {
+                "manager" => false,
+                role if role == floe_conversation::FINALIZATION_ROLE_ID => true,
+                _ => return Err(AgentFailure::InvalidInput),
+            };
+            let mut prompt =
+                floe_conversation::prompts::manager_prompt(self.context.persona.as_ref())?;
+            if finalization {
+                let role = prompt
+                    .components
+                    .iter_mut()
+                    .find(|component| {
+                        component.kind == floe_knowledge::prompts::PromptComponentKind::Role
+                    })
+                    .ok_or(AgentFailure::InvalidInput)?;
+                role.content = format!(
+                    "{}\n{}",
+                    floe_conversation::FINALIZATION_ROLE_PROMPT,
+                    floe_conversation::FINALIZATION_OUTPUT_CONTRACT
+                );
+            }
+            prompt.validate()?;
+            let empty_context = AgentContext {
+                projection_version: self.context.projection_version,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            };
+            let context = if finalization {
+                &empty_context
+            } else {
+                self.context
+            };
+            let capabilities = filter_capabilities(&self.capabilities, &request.catalog);
+            let active_agents = filter_agents(&self.active_agents, &request.catalog);
+            let envelope = ContextEnvelope {
+                schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+                stable_instructions: prompt.clone(),
+                scoped_instructions: ScopedInstructions {
+                    purpose: self.policy.purpose.clone(),
+                    response_contract: request.role.output_contract.clone(),
+                    available_capabilities: capabilities,
+                    active_experts: active_agents.clone(),
+                    correction: request.correction.clone(),
+                },
+                contextual_data: ContextualData {
+                    projection_version: context.projection_version,
+                    memories: context.memories.clone(),
+                    optional_context_issues: context.optional_context_issues.clone(),
+                    evidence: context.evidence.clone(),
+                },
+                conversation: request.conversation,
+                runtime: RuntimeContext {
+                    max_output_bytes: request.max_output_bytes.min(16384),
+                },
+                manifest: floe_conversation::turn::context_manifest(
+                    &prompt,
+                    context,
+                    &active_agents,
+                ),
+            };
+            // Quoted history stands on its committed turn coverages; the live
+            // exchanges carry their own. Turns GovernedModel later filters out
+            // only overstate this input coverage, never understate it.
+            let mut coverage = DependencyCoverage::Independent;
+            for entry in &envelope.conversation.history {
+                let message_id = match entry {
+                    ModelConversationEntry::User { message_id, .. }
+                    | ModelConversationEntry::Preamble { message_id, .. }
+                    | ModelConversationEntry::Assistant { message_id, .. } => *message_id,
+                    ModelConversationEntry::ToolExchange { .. }
+                    | ModelConversationEntry::DelegationExchange { .. } => {
+                        return Err(AgentFailure::InvalidInput);
+                    }
+                };
+                let turn_coverage = self.store.committed_turn_coverage(message_id).await?;
+                coverage = coverage
+                    .merge(&turn_coverage)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+            }
+            for entry in &envelope.conversation.current_turn {
+                let (exchange_coverage, artifacts) = match entry {
+                    ModelConversationEntry::ToolExchange { result, .. } => {
+                        (&result.coverage, result.artifacts.as_slice())
+                    }
+                    ModelConversationEntry::DelegationExchange { receipt, .. } => (
+                        &receipt.snapshot.coverage,
+                        receipt.snapshot.artifacts.as_slice(),
+                    ),
+                    ModelConversationEntry::User { .. }
+                    | ModelConversationEntry::Preamble { .. }
+                    | ModelConversationEntry::Assistant { .. } => continue,
+                };
+                coverage = coverage
+                    .merge(exchange_coverage)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                for artifact in artifacts {
+                    coverage = coverage
+                        .merge(&artifact.coverage)
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                }
+            }
+            let projection = AuthorizedModelProjection {
+                projection_ref: ProjectionRef::new(),
+                projection_revision: 1,
+                envelope,
+                coverage,
+                input_data_classes: self.policy.data_classes.clone(),
+            };
+            projection.validate()?;
+            Ok(projection)
+        })
+    }
+}
+
+fn filter_capabilities(
+    capabilities: &[CapabilityDescriptor],
+    catalog: &AllowedCatalog,
+) -> Vec<CapabilityDescriptor> {
+    capabilities
+        .iter()
+        .filter(|capability| {
+            catalog
+                .tools
+                .iter()
+                .any(|tool| tool.id == capability.id)
+        })
+        .cloned()
+        .collect()
+}
+
+fn filter_agents(
+    agents: &[floe_experts::AgentCard],
+    catalog: &AllowedCatalog,
+) -> Vec<floe_experts::AgentCard> {
+    agents
+        .iter()
+        .filter(|card| {
+            catalog
+                .cards
+                .iter()
+                .any(|definition| definition.card.id == card.id)
+        })
+        .cloned()
+        .collect()
+}
 
 pub(super) struct LegacyModelPort<'a, Keys, Runner: LegacyModelRunner> {
     pub model: &'a Runner,
@@ -49,11 +223,13 @@ where
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
         Box::pin(async move {
-            if request.role.role_id != "manager" || request.attempt_id.is_nil() {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let finalization = request.role.prompt == floe_conversation::FINALIZATION_ROLE_PROMPT
-                && request.role.output_contract == floe_conversation::FINALIZATION_OUTPUT_CONTRACT;
+            request.validate()?;
+            // Purpose, consumer, and preferred profile ride along for the
+            // canonical path; this legacy bridge keeps serving the route the
+            // App already resolved. Deleted at B9.
+            let envelope = &request.projection.envelope;
+            let finalization = envelope.scoped_instructions.response_contract
+                == floe_conversation::FINALIZATION_OUTPUT_CONTRACT;
             let run_id = scope
                 .root_run_id()
                 .ok_or(AgentFailure::InvalidInput)?
@@ -65,18 +241,6 @@ where
                 .min(MAX_ATTEMPT_COST_MICROS);
             let usage =
                 UsageLedger::new(remaining_tokens, remaining_cost_micros, Default::default());
-            let mut prompt =
-                floe_conversation::prompts::manager_prompt(self.context.persona.as_ref())?;
-            if finalization {
-                let role = prompt
-                    .components
-                    .iter_mut()
-                    .find(|component| {
-                        component.kind == floe_knowledge::prompts::PromptComponentKind::Role
-                    })
-                    .ok_or(AgentFailure::InvalidInput)?;
-                role.content = format!("{}\n{}", request.role.prompt, request.role.output_contract);
-            }
             let context = if finalization {
                 AgentContext {
                     projection_version: self.context.projection_version,
@@ -88,43 +252,19 @@ where
             } else {
                 self.context.clone()
             };
-            let capabilities = self
-                .capabilities
-                .iter()
-                .filter(|capability| {
-                    request
-                        .catalog
-                        .tools
-                        .iter()
-                        .any(|tool| tool.id == capability.id)
-                })
-                .cloned()
-                .collect();
-            let active_agents = self
-                .active_agents
-                .iter()
-                .filter(|card| {
-                    request
-                        .catalog
-                        .cards
-                        .iter()
-                        .any(|definition| definition.card.id == card.id)
-                })
-                .cloned()
-                .collect();
             let legacy_request = LegacyModelRequest {
                 usage,
                 replay: vec![],
                 schema_version: floe_kernel::AGENT_VERSION,
-                prompt,
+                prompt: envelope.stable_instructions.clone(),
                 person_id: self.person_id,
                 session_id: self.session_id,
                 turn_id: run_id,
                 policy: self.policy.clone(),
                 context,
-                messages: legacy_messages(&request, run_id)?,
-                capabilities,
-                active_agents,
+                messages: legacy_conversation_messages(&envelope.conversation, run_id)?,
+                capabilities: filter_capabilities(&self.capabilities, &request.catalog),
+                active_agents: filter_agents(&self.active_agents, &request.catalog),
                 remaining_tokens,
                 remaining_cost_micros,
                 max_output_bytes: if finalization {
@@ -275,7 +415,7 @@ pub(super) struct ManagerPayloadValidator;
 
 impl floe_conversation::FinalPayloadValidator for ManagerPayloadValidator {
     fn validate(&self, role: &str, text: &str, artifacts: &[Artifact]) -> Result<(), AgentFailure> {
-        if role != "manager"
+        if (role != "manager" && role != floe_conversation::FINALIZATION_ROLE_ID)
             || text.trim().is_empty()
             || text.len() > floe_agent_contract::MAX_OUTPUT_BYTES
             || artifacts.iter().any(|artifact| {
@@ -325,58 +465,91 @@ pub(crate) fn contract_definition(card: &floe_experts::AgentCard) -> AgentDefini
     }
 }
 
-fn legacy_messages(
-    request: &ModelRequest,
+/// Typed conversation back to legacy messages for the bridge's inner legacy
+/// call. History keeps its turn association; the live turn groups under the
+/// running run. Tool exchanges keep their exact call id, tool id, and input;
+/// delegation exchanges stay lossy assistant text exactly as before.
+fn legacy_conversation_messages(
+    conversation: &ModelConversation,
     current_turn_id: Uuid,
 ) -> Result<Vec<LegacyMessage>, AgentFailure> {
-    let current_start = request
-        .messages
-        .iter()
-        .rposition(|message| message.role == MessageRole::User && message.text == request.prompt)
-        .ok_or(AgentFailure::InvalidInput)?;
-    request
-        .messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let turn_id = if index >= current_start {
-                current_turn_id
-            } else {
-                message.message_id
-            };
-            let legacy = match message.role {
-                MessageRole::User => LegacyMessage::User {
-                    turn_id,
-                    text: message.text.clone(),
-                },
-                MessageRole::Preamble => LegacyMessage::Preamble {
-                    turn_id,
-                    text: message.text.clone(),
-                },
-                MessageRole::Assistant | MessageRole::Delegation => LegacyMessage::Assistant {
-                    turn_id,
-                    text: message.text.clone(),
-                },
-                MessageRole::Tool => {
-                    let call_id = message.call_id.unwrap_or(message.message_id);
-                    let capability_id = request
-                        .replay
-                        .iter()
-                        .find(|receipt| receipt.call_id == call_id)
-                        .and_then(|receipt| receipt.tool_id.clone())
-                        .unwrap_or_else(|| "floe.observation".into());
-                    LegacyMessage::Capability {
-                        turn_id,
-                        call_id,
-                        capability_id,
-                        input: "{}".into(),
-                        result: Ok(message.text.clone()),
-                    }
-                }
-            };
-            Ok(legacy)
-        })
-        .collect()
+    let mut messages = Vec::with_capacity(
+        conversation
+            .history
+            .len()
+            .saturating_add(conversation.current_turn.len()),
+    );
+    for entry in &conversation.history {
+        match entry {
+            ModelConversationEntry::User { message_id, text } => {
+                messages.push(LegacyMessage::User {
+                    turn_id: *message_id,
+                    text: text.clone(),
+                });
+            }
+            ModelConversationEntry::Preamble { message_id, text } => {
+                messages.push(LegacyMessage::Preamble {
+                    turn_id: *message_id,
+                    text: text.clone(),
+                });
+            }
+            ModelConversationEntry::Assistant { message_id, text } => {
+                messages.push(LegacyMessage::Assistant {
+                    turn_id: *message_id,
+                    text: text.clone(),
+                });
+            }
+            ModelConversationEntry::ToolExchange { .. }
+            | ModelConversationEntry::DelegationExchange { .. } => {
+                return Err(AgentFailure::InvalidInput);
+            }
+        }
+    }
+    for entry in &conversation.current_turn {
+        match entry {
+            ModelConversationEntry::User { text, .. } => {
+                messages.push(LegacyMessage::User {
+                    turn_id: current_turn_id,
+                    text: text.clone(),
+                });
+            }
+            ModelConversationEntry::Preamble { text, .. } => {
+                messages.push(LegacyMessage::Preamble {
+                    turn_id: current_turn_id,
+                    text: text.clone(),
+                });
+            }
+            ModelConversationEntry::Assistant { text, .. } => {
+                messages.push(LegacyMessage::Assistant {
+                    turn_id: current_turn_id,
+                    text: text.clone(),
+                });
+            }
+            ModelConversationEntry::ToolExchange { call, result } => {
+                messages.push(LegacyMessage::Capability {
+                    turn_id: current_turn_id,
+                    call_id: call.call_id,
+                    capability_id: call.tool_id.clone(),
+                    input: call.input.clone(),
+                    result: match &result.issue {
+                        None => Ok(result.text.clone()),
+                        Some(issue) => Err(issue.failure),
+                    },
+                });
+            }
+            ModelConversationEntry::DelegationExchange { receipt, .. } => {
+                messages.push(LegacyMessage::Assistant {
+                    turn_id: current_turn_id,
+                    text: receipt
+                        .snapshot
+                        .result
+                        .clone()
+                        .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state)),
+                });
+            }
+        }
+    }
+    Ok(messages)
 }
 
 fn contract_response(
@@ -440,81 +613,53 @@ fn contract_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use floe_agent_contract::AgentMessage;
+    use floe_agent_contract::{InvocationKey, ToolCall, ToolResult};
 
     #[test]
     fn conversion_preserves_current_turn_and_catalog_revisions() {
         let run_id = Uuid::new_v4();
         let old_id = Uuid::new_v4();
         let call_id = Uuid::new_v4();
-        let request = ModelRequest {
-            attempt_id: Uuid::new_v4(),
-            role: floe_agent_contract::RoleSpec {
-                role_id: "manager".into(),
-                prompt: "manager".into(),
-                output_contract: "text".into(),
-            },
-            prompt: "current".into(),
-            bounded_context: floe_agent_contract::BoundedContext {
-                text: String::new(),
-                coverage: DependencyCoverage::Independent,
-            },
-            messages: vec![
-                AgentMessage {
-                    message_id: old_id,
-                    role: MessageRole::Assistant,
-                    text: "old".into(),
-                    call_id: None,
-                    coverage: DependencyCoverage::Independent,
-                },
-                AgentMessage {
+        let conversation = ModelConversation {
+            history: vec![ModelConversationEntry::Assistant {
+                message_id: old_id,
+                text: "old".into(),
+            }],
+            current_turn: vec![
+                ModelConversationEntry::User {
                     message_id: Uuid::new_v4(),
-                    role: MessageRole::User,
                     text: "current".into(),
-                    call_id: None,
-                    coverage: DependencyCoverage::Independent,
                 },
-                AgentMessage {
-                    message_id: Uuid::new_v4(),
-                    role: MessageRole::Tool,
-                    text: "result".into(),
-                    call_id: Some(call_id),
-                    coverage: DependencyCoverage::Independent,
+                ModelConversationEntry::ToolExchange {
+                    call: ToolCall {
+                        call_id,
+                        invocation_key: InvocationKey::new(),
+                        tool_id: "lookup".into(),
+                        definition_revision: 7,
+                        input: r#"{"day":"today"}"#.into(),
+                    },
+                    result: ToolResult {
+                        call_id,
+                        text: "result".into(),
+                        artifacts: vec![],
+                        coverage: DependencyCoverage::Independent,
+                        issue: None,
+                    },
                 },
             ],
-            catalog: AllowedCatalog {
-                cards: vec![],
-                tools: vec![ToolDescriptor {
-                    id: "lookup".into(),
-                    definition_revision: 7,
-                    description: "lookup".into(),
-                    input_schema: "{\"type\":\"object\"}".into(),
-                    output_data_class: "personal".into(),
-                }],
-                revision: 1,
-            },
-            replay: vec![floe_agent_contract::ReplayReceipt {
-                principal: "person".into(),
-                run_id: None,
-                task_id: None,
-                agent_id: None,
-                tool_id: Some("lookup".into()),
-                definition_revision: 7,
-                input_digest: [1; 32],
-                invocation_key: floe_agent_contract::InvocationKey::new(),
-                call_id,
-                result: "result".into(),
-                task_result: None,
-                task_state: None,
-                task_artifacts: vec![],
-                task_coverage: DependencyCoverage::Unknown,
-                task_issue: None,
-                tool_artifacts: vec![],
-                tool_coverage: DependencyCoverage::Independent,
-                tool_issue: None,
-            }],
         };
-        let messages = legacy_messages(&request, run_id).unwrap();
+        let catalog = AllowedCatalog {
+            cards: vec![],
+            tools: vec![ToolDescriptor {
+                id: "lookup".into(),
+                definition_revision: 7,
+                description: "lookup".into(),
+                input_schema: "{\"type\":\"object\"}".into(),
+                output_data_class: "personal".into(),
+            }],
+            revision: 1,
+        };
+        let messages = legacy_conversation_messages(&conversation, run_id).unwrap();
         assert!(matches!(
             &messages[0],
             LegacyMessage::Assistant { turn_id, .. } if *turn_id == old_id
@@ -525,12 +670,16 @@ mod tests {
         ));
         assert!(matches!(
             &messages[2],
-            LegacyMessage::Capability { turn_id, capability_id, .. }
-                if *turn_id == run_id && capability_id == "lookup"
+            LegacyMessage::Capability {
+                turn_id,
+                capability_id,
+                input,
+                ..
+            } if *turn_id == run_id && capability_id == "lookup" && input.contains("today")
         ));
 
         let converted = contract_response(
-            request.attempt_id,
+            Uuid::new_v4(),
             LegacyModelResponse {
                 replay: None,
                 schema_version: floe_kernel::AGENT_VERSION,
@@ -541,7 +690,7 @@ mod tests {
                 used_tokens: 5,
                 cost_micros: 2,
             },
-            &request.catalog,
+            &catalog,
         )
         .unwrap();
         assert!(matches!(

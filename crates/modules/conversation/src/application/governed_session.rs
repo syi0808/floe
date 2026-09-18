@@ -169,6 +169,20 @@ impl<'a, Repository: GovernedSessionRepository> GovernedSessionStore<'a, Reposit
         self.coverage.result_coverage(turn_id, result_id)
     }
 
+    /// The committed coverage of one recorded turn, for projection inputs that
+    /// quote history. This reads what was committed, never the live registry.
+    pub async fn committed_turn_coverage(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<DependencyCoverage, AgentFailure> {
+        if turn_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.repository
+            .read_turn_coverage(self.session_id, turn_id)
+            .await
+    }
+
     pub async fn project_model_request(
         &self,
         request: &mut ModelRequest,

@@ -10,9 +10,14 @@ pub use floe_inference::ModelStep;
 
 pub use floe_agent_contract::{
     AgentCardManifestEntry, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState,
-    ContextEnvelope, ContextManifest, ContextualData, ConversationContext, EvidenceManifestEntry,
-    MemoryManifestEntry, ModelReplay, PromptManifestEntry, ProviderReplay, RuntimeContext,
-    ScopedInstructions,
+    ContextEnvelope, ContextManifest, ContextualData, EvidenceManifestEntry, MemoryManifestEntry,
+    ModelReplay, PromptManifestEntry, ProviderReplay, RuntimeContext, ScopedInstructions,
+};
+
+use floe_agent_contract::{
+    Artifact as ContractArtifact, ArtifactPart as ContractArtifactPart, DelegationRequest,
+    DependencyCoverage, InvocationKey, ModelConversation, ModelConversationEntry, OutcomeIssue,
+    TaskId, TaskReceipt, TaskSnapshot, TaskState, ToolCall, ToolResult,
 };
 
 use floe_context::InferencePolicyDecision;
@@ -368,15 +373,16 @@ impl ModelRequest {
             .partition(|message| message.turn_id() != self.turn_id)
     }
 
-    pub fn model_conversation(&self) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    pub fn model_conversation(&self) -> (Vec<ModelConversationEntry>, Vec<ModelConversationEntry>) {
         let (history, current_turn) = self.conversation_messages();
+        let principal = self.person_id.to_string();
         let history = history
             .into_iter()
-            .flat_map(|message| model_messages(message, false))
+            .flat_map(|message| model_entries(message, false, &principal))
             .collect();
         let current_turn = current_turn
             .into_iter()
-            .flat_map(|message| model_messages(message, true))
+            .flat_map(|message| model_entries(message, true, &principal))
             .collect();
         (history, current_turn)
     }
@@ -385,7 +391,10 @@ impl ModelRequest {
         self.context.validate()?;
         self.prompt.validate()?;
         let (history, current_turn) = self.model_conversation();
-        if !current_turn.iter().any(|message| message["role"] == "user") {
+        if !current_turn
+            .iter()
+            .any(|entry| matches!(entry, ModelConversationEntry::User { .. }))
+        {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(ContextEnvelope {
@@ -393,8 +402,10 @@ impl ModelRequest {
             stable_instructions: self.prompt.clone(),
             scoped_instructions: ScopedInstructions {
                 purpose: self.policy.purpose.clone(),
+                response_contract: String::new(),
                 available_capabilities: self.capabilities.clone(),
                 active_experts: self.active_agents.clone(),
+                correction: None,
             },
             contextual_data: ContextualData {
                 projection_version: self.context.projection_version,
@@ -402,137 +413,201 @@ impl ModelRequest {
                 optional_context_issues: self.context.optional_context_issues.clone(),
                 evidence: self.context.evidence.clone(),
             },
-            conversation: ConversationContext {
+            conversation: ModelConversation {
                 history,
                 current_turn,
             },
             runtime: RuntimeContext {
                 max_output_bytes: self.max_output_bytes.min(16384),
             },
-            manifest: ContextManifest {
-                prompt_components: self
-                    .prompt
-                    .components
-                    .iter()
-                    .map(|component| PromptManifestEntry {
-                        kind: component.kind,
-                        source: component.source.clone(),
-                        revision: component.revision,
-                    })
-                    .collect(),
-                evidence: self
-                    .context
-                    .evidence
-                    .iter()
-                    .map(|evidence| EvidenceManifestEntry {
-                        source_handle: evidence.source_handle.clone(),
-                        data_class: evidence.data_class,
-                        expires_at_unix_ms: evidence.expires_at_unix_ms,
-                    })
-                    .collect(),
-                memories: self
-                    .context
-                    .memories
-                    .iter()
-                    .map(|memory| MemoryManifestEntry {
-                        target_id: memory.target_id,
-                        revision: memory.revision,
-                        source_refs: memory.source_refs.clone(),
-                    })
-                    .collect(),
-                agent_cards: self
-                    .active_agents
-                    .iter()
-                    .map(|card| AgentCardManifestEntry {
-                        id: card.id.clone(),
-                        version: card.version.clone(),
-                    })
-                    .collect(),
-            },
+            manifest: context_manifest(&self.prompt, &self.context, &self.active_agents),
         })
     }
 }
 
-fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde_json::Value> {
+/// The manifest half of an envelope: what prompt, evidence, memories, and
+/// agent cards went into it. Shared by the legacy envelope builder and the
+/// transitional model projection so both describe the same inputs.
+pub fn context_manifest(
+    prompt: &floe_agent_contract::prompts::PromptAssembly,
+    context: &floe_agent_contract::AgentContext,
+    active_agents: &[floe_agent_contract::AgentCard],
+) -> ContextManifest {
+    ContextManifest {
+        prompt_components: prompt
+            .components
+            .iter()
+            .map(|component| PromptManifestEntry {
+                kind: component.kind,
+                source: component.source.clone(),
+                revision: component.revision,
+            })
+            .collect(),
+        evidence: context
+            .evidence
+            .iter()
+            .map(|evidence| EvidenceManifestEntry {
+                source_handle: evidence.source_handle.clone(),
+                data_class: evidence.data_class,
+                expires_at_unix_ms: evidence.expires_at_unix_ms,
+            })
+            .collect(),
+        memories: context
+            .memories
+            .iter()
+            .map(|memory| MemoryManifestEntry {
+                target_id: memory.target_id,
+                revision: memory.revision,
+                source_refs: memory.source_refs.clone(),
+            })
+            .collect(),
+        agent_cards: active_agents
+            .iter()
+            .map(|card| AgentCardManifestEntry {
+                id: card.id.clone(),
+                version: card.version.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Legacy session messages as typed model input. Text carries over exactly;
+/// history keeps its old shape (capability and delegation evidence stays in
+/// the current turn only, preambles never cross). Identity fields the old path
+/// never recorded are derived deterministically from the call or task id, and
+/// coverage the old message never carried reads as unknown: these entries are
+/// model input only, never journaled or replayed.
+fn model_entries(
+    message: &AgentMessage,
+    include_capability: bool,
+    principal: &str,
+) -> Vec<ModelConversationEntry> {
     match message {
-        AgentMessage::Compaction { summary, .. } => vec![serde_json::json!({
-            "role": "assistant",
-            "content": summary,
-        })],
-        AgentMessage::User { text, .. } => vec![serde_json::json!({
-            "role": "user",
-            "content": text,
-        })],
-        AgentMessage::Assistant { text, .. } => vec![serde_json::json!({
-            "role": "assistant",
-            "content": text,
-        })],
+        AgentMessage::Compaction { summary, .. } => vec![ModelConversationEntry::Assistant {
+            message_id: message.turn_id(),
+            text: summary.clone(),
+        }],
+        AgentMessage::User { text, .. } => vec![ModelConversationEntry::User {
+            message_id: message.turn_id(),
+            text: text.clone(),
+        }],
+        AgentMessage::Assistant { text, .. } => vec![ModelConversationEntry::Assistant {
+            message_id: message.turn_id(),
+            text: text.clone(),
+        }],
         AgentMessage::Capability {
             call_id,
             capability_id,
             input,
             result,
             ..
-        } if include_capability => {
-            let call = serde_json::json!({
-                "role": "assistant",
-                "tool_calls": [{
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": capability_id,
-                        "arguments": embedded_json(input),
-                    }
-                }]
-            });
-            let output = match result {
-                Ok(output) => serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "capability_id": capability_id,
-                    "status": "success",
-                    "content": embedded_json(output),
-                }),
-                Err(failure) => serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "capability_id": capability_id,
-                    "status": "error",
-                    "failure": failure,
-                }),
-            };
-            vec![call, output]
-        }
+        } if include_capability => vec![ModelConversationEntry::ToolExchange {
+            call: ToolCall {
+                call_id: *call_id,
+                invocation_key: InvocationKey::from_uuid(*call_id)
+                    .unwrap_or_else(InvocationKey::new),
+                tool_id: capability_id.clone(),
+                definition_revision: 1,
+                input: input.clone(),
+            },
+            result: match result {
+                Ok(output) => ToolResult {
+                    call_id: *call_id,
+                    text: output.clone(),
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Unknown,
+                    issue: None,
+                },
+                Err(failure) => ToolResult {
+                    call_id: *call_id,
+                    text: format!("unavailable: {failure:?}"),
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Unknown,
+                    issue: Some(OutcomeIssue {
+                        failure: *failure,
+                        retryable: false,
+                    }),
+                },
+            },
+        }],
         AgentMessage::Capability { .. } | AgentMessage::Preamble { .. } => vec![],
-        AgentMessage::Delegation { task, .. } if include_capability => vec![
-            serde_json::json!({
-                "role": "assistant",
-                "tool_calls": [{
-                    "id": task.id,
-                    "type": "function",
-                    "function": {
-                        "name": "floe.a2a.delegate",
-                        "arguments": {
-                            "agent_id": task.agent_id,
-                            "message": task.history.first().and_then(|message| message.text().ok()).unwrap_or_default(),
-                        }
-                    }
-                }]
-            }),
-            serde_json::json!({
-                "role": "tool",
-                "tool_call_id": task.id,
-                "capability_id": "floe.a2a.delegate",
-                "status": if task.state == floe_experts::A2ATaskState::Completed { "success" } else { "error" },
-                "content": task,
-            }),
-        ],
+        AgentMessage::Delegation { task, .. } if include_capability => {
+            vec![legacy_delegation_exchange(task, principal)]
+        }
         AgentMessage::Delegation { .. } => vec![],
     }
 }
 
-fn embedded_json(value: &str) -> serde_json::Value {
-    serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.into()))
+fn legacy_delegation_exchange(
+    task: &floe_experts::A2ATask,
+    principal: &str,
+) -> ModelConversationEntry {
+    let task_id = TaskId::from_uuid(task.id).unwrap_or_else(TaskId::new);
+    let message = task
+        .history
+        .first()
+        .and_then(|message| message.text().ok())
+        .unwrap_or_default()
+        .to_owned();
+    ModelConversationEntry::DelegationExchange {
+        request: DelegationRequest {
+            task_id,
+            parent_run_id: None,
+            principal: principal.to_owned(),
+            invocation_key: InvocationKey::from_uuid(task.id)
+                .unwrap_or_else(InvocationKey::new),
+            selected_agent_id: task.agent_id.clone(),
+            selected_definition_revision: 1,
+            message,
+            context_refs: vec![],
+        },
+        receipt: TaskReceipt {
+            task_id,
+            snapshot: TaskSnapshot {
+                task_id,
+                parent_run_id: None,
+                principal: principal.to_owned(),
+                agent_id: task.agent_id.clone(),
+                definition_revision: 1,
+                state: match task.state {
+                    floe_experts::A2ATaskState::Submitted => TaskState::Submitted,
+                    floe_experts::A2ATaskState::Working => TaskState::Working,
+                    floe_experts::A2ATaskState::Completed => TaskState::Completed,
+                    floe_experts::A2ATaskState::Failed => TaskState::Failed,
+                    floe_experts::A2ATaskState::Cancelled => TaskState::Cancelled,
+                    floe_experts::A2ATaskState::Rejected => TaskState::Rejected,
+                },
+                result: task.result_text().ok().map(str::to_owned),
+                artifacts: task
+                    .artifacts
+                    .iter()
+                    .map(|artifact| ContractArtifact {
+                        artifact_id: artifact.artifact_id,
+                        name: artifact.name.clone(),
+                        parts: artifact
+                            .parts
+                            .iter()
+                            .map(|part| match part {
+                                floe_experts::A2APart::Text { text } => {
+                                    ContractArtifactPart::Text { text: text.clone() }
+                                }
+                                floe_experts::A2APart::Data { media_type, data } => {
+                                    ContractArtifactPart::Data {
+                                        media_type: media_type.clone(),
+                                        data: data.clone(),
+                                    }
+                                }
+                            })
+                            .collect(),
+                        coverage: DependencyCoverage::Unknown,
+                    })
+                    .collect(),
+                coverage: DependencyCoverage::Unknown,
+                issue: task.failure,
+            },
+            replay: None,
+        },
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -618,11 +693,11 @@ mod tests {
         };
 
         assert_eq!(
-            model_messages(&message, false),
-            vec![serde_json::json!({
-                "role": "assistant",
-                "content": "Earlier conversation summary",
-            })]
+            model_entries(&message, false, "person:test"),
+            vec![ModelConversationEntry::Assistant {
+                message_id: message.turn_id(),
+                text: "Earlier conversation summary".into(),
+            }]
         );
     }
 
@@ -637,23 +712,18 @@ mod tests {
             result: Ok(r#"{"summary":"One meeting at 10:00"}"#.into()),
         };
 
-        let projected = model_messages(&message, true);
+        let projected = model_entries(&message, true, "person:test");
 
-        let call = &projected[0];
-        let result = &projected[1];
-        assert_eq!(call["role"], "assistant");
-        assert_eq!(call["tool_calls"][0]["id"], result["tool_call_id"]);
-        assert_eq!(call["tool_calls"][0]["function"]["name"], "fixture.read");
-        assert_eq!(
-            call["tool_calls"][0]["function"]["arguments"]["day"],
-            "today"
-        );
-        assert_eq!(result["role"], "tool");
-        assert_eq!(result["status"], "success");
-        assert_eq!(result["content"]["summary"], "One meeting at 10:00");
-        // The storage record's own identifiers never cross into the model input.
-        assert!(result.get("turn_id").is_none());
-        assert!(call.get("turn_id").is_none());
+        assert!(matches!(
+            projected.as_slice(),
+            [ModelConversationEntry::ToolExchange { call, result }]
+                if call.call_id == call_id
+                    && call.tool_id == "fixture.read"
+                    && call.input.contains("today")
+                    && result.call_id == call_id
+                    && result.text.contains("One meeting at 10:00")
+                    && result.issue.is_none()
+        ));
     }
 
     #[test]
@@ -687,25 +757,32 @@ mod tests {
             .partition(|message| message.turn_id() != current_turn);
         let history: Vec<_> = history
             .into_iter()
-            .flat_map(|message| model_messages(message, false))
+            .flat_map(|message| model_entries(message, false, "person:test"))
             .collect();
         let current: Vec<_> = current
             .into_iter()
-            .flat_map(|message| model_messages(message, true))
+            .flat_map(|message| model_entries(message, true, "person:test"))
             .collect();
 
         // The earlier turn's question and answer are history; the evidence its
         // capability call stood on is not carried forward with them.
-        assert_eq!(history.len(), 2);
-        assert_eq!(history[0]["content"], "The earlier question");
-        assert_eq!(history[1]["content"], "The earlier answer");
+        assert!(matches!(
+            history.as_slice(),
+            [
+                ModelConversationEntry::User { text, .. },
+                ModelConversationEntry::Assistant { text: answer, .. }
+            ] if text == "The earlier question" && answer == "The earlier answer"
+        ));
         assert!(
             !serde_json::to_string(&history)
                 .unwrap()
                 .contains("stale private evidence")
         );
-        assert_eq!(current.len(), 1);
-        assert_eq!(current[0]["content"], "Summarize this fixture");
+        assert!(matches!(
+            current.as_slice(),
+            [ModelConversationEntry::User { text, .. }]
+                if text == "Summarize this fixture"
+        ));
     }
 
     #[test]
@@ -718,6 +795,6 @@ mod tests {
             result: Ok(r#"{"summary":"One meeting at 10:00"}"#.into()),
         };
 
-        assert!(model_messages(&message, false).is_empty());
+        assert!(model_entries(&message, false, "person:test").is_empty());
     }
 }

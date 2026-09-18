@@ -294,10 +294,11 @@ async fn structured_learner_uses_a_local_restricted_request() {
     assert!(requests[0].capabilities.is_empty());
     assert!(requests[0].active_agents.is_empty());
     assert!(requests[0].envelope.conversation.history.is_empty());
-    assert_eq!(
-        requests[0].envelope.conversation.current_turn,
-        vec![serde_json::json!({"role": "user", "content": input.digest})]
-    );
+    assert!(matches!(
+        requests[0].envelope.conversation.current_turn.as_slice(),
+        [floe_agent_contract::ModelConversationEntry::User { text, .. }]
+            if text == &input.digest
+    ));
 }
 
 #[tokio::test]

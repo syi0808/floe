@@ -8,10 +8,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AgentCard, CapabilityDescriptor, ContextEvidence, ContextIssue, ContextMemory, DataClass,
-    LearningEvidenceRef,
+    AgentCard, AgentFailure, CapabilityDescriptor, ContextEvidence, ContextIssue, ContextMemory,
+    DataClass, LearningEvidenceRef, ModelConversation, ModelCorrection,
     prompts::{PromptAssembly, PromptComponentKind},
 };
+
+pub const MAX_SCOPED_PURPOSE_BYTES: usize = 512;
+pub const MAX_RESPONSE_CONTRACT_BYTES: usize = 8192;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -20,9 +23,26 @@ pub struct ContextEnvelope {
     pub stable_instructions: PromptAssembly,
     pub scoped_instructions: ScopedInstructions,
     pub contextual_data: ContextualData,
-    pub conversation: ConversationContext,
+    pub conversation: ModelConversation,
     pub runtime: RuntimeContext,
     pub manifest: ContextManifest,
+}
+
+impl ContextEnvelope {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.schema_version != crate::AGENT_SCHEMA_VERSION {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.stable_instructions.validate()?;
+        self.scoped_instructions.validate()?;
+        self.conversation.validate()?;
+        if self.runtime.max_output_bytes == 0
+            || self.runtime.max_output_bytes > crate::MAX_OUTPUT_BYTES
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,15 +59,32 @@ pub struct ContextualData {
 #[serde(deny_unknown_fields)]
 pub struct ScopedInstructions {
     pub purpose: String,
+    pub response_contract: String,
     pub available_capabilities: Vec<CapabilityDescriptor>,
     pub active_experts: Vec<AgentCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<ModelCorrection>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConversationContext {
-    pub history: Vec<serde_json::Value>,
-    pub current_turn: Vec<serde_json::Value>,
+impl ScopedInstructions {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.purpose.trim().is_empty()
+            || self.purpose.len() > MAX_SCOPED_PURPOSE_BYTES
+            || self.response_contract.len() > MAX_RESPONSE_CONTRACT_BYTES
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        // An empty response contract means the legacy envelope path, which has no
+        // separate role output contract; canonical projections always set it from
+        // the role spec.
+        self.active_experts
+            .iter()
+            .try_for_each(AgentCard::validate)?;
+        if let Some(correction) = &self.correction {
+            correction.validate()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

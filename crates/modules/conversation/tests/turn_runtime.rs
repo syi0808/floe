@@ -7,7 +7,7 @@ use std::{
 };
 
 use floe_agent_contract::{
-    AgentContext, InferencePolicyDecision, SessionProtection,
+    AgentContext, InferencePolicyDecision, ModelConversationEntry, SessionProtection,
     prompts::{PersonaProfile, PromptComponentKind, PromptRole},
 };
 use floe_context_contract::{
@@ -2119,11 +2119,15 @@ async fn source_read_failure_enters_manager_degraded_mode_without_source_payload
     let (_, current_turn) = requests[1].model_conversation();
     let failure = current_turn
         .iter()
-        .find(|message| message["role"] == "tool")
+        .find_map(|entry| match entry {
+            ModelConversationEntry::ToolExchange { result, .. } => Some(result),
+            _ => None,
+        })
         .expect("paired machine-generated capability failure");
-    assert_eq!(failure["status"], "error");
-    assert_eq!(failure["failure"], "access_review_required");
-    assert!(failure.get("content").is_none());
+    assert_eq!(
+        failure.issue.as_ref().map(|issue| issue.failure),
+        Some(AgentFailure::AccessReviewRequired)
+    );
     assert!(
         requests[1]
             .prompt

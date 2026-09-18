@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use floe_agent_contract::{
-    AgentMessage, AllowedCatalog, BoundedContext, DependencyCoverage, EngineRequest, EngineStep,
-    MessageRole, ReplayReceipt, RoleSpec,
+    AllowedCatalog, DependencyCoverage, EngineRequest, EngineStep, ModelConversation,
+    ModelConversationEntry, RoleSpec,
 };
 use floe_agent_runtime::{Engine, EnginePorts};
 use floe_execution::ExecutionScope;
@@ -10,7 +10,7 @@ use floe_kernel::{AgentFailure, RunId};
 
 use crate::{
     ConversationPorts, ConversationRepository, FINALIZATION_OUTPUT_CONTRACT,
-    FINALIZATION_ROLE_PROMPT, RunState, RunTerminal,
+    FINALIZATION_ROLE_ID, FINALIZATION_ROLE_PROMPT, RunState, RunTerminal,
 };
 
 use super::recovery::project_active_journal;
@@ -45,26 +45,22 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
         Err(AgentFailure::Interrupted) => return Ok(FinalizationOutcome::NotAttempted(issue)),
         Err(failure) => return Err(failure),
     };
-    if projected.messages.len() != projected.replay.len() {
-        return Err(AgentFailure::StorageUnavailable);
-    }
     let Some(user_message) = work_request
-        .messages
+        .conversation
+        .current_turn
         .iter()
-        .rev()
-        .find(|message| message.role == MessageRole::User && message.text == work_request.prompt)
+        .find(|entry| matches!(entry, ModelConversationEntry::User { .. }))
         .cloned()
     else {
         return Ok(FinalizationOutcome::NotAttempted(issue));
     };
-    if let Some(barrier) = projected.replay.iter().find_map(finalization_barrier) {
+    let exchanges = projected.model_conversation.current_turn;
+    if let Some(barrier) = exchanges.iter().find_map(exchange_barrier) {
         return Ok(FinalizationOutcome::NotAttempted(barrier));
     }
-    let usable = projected
-        .messages
+    let usable = exchanges
         .into_iter()
-        .zip(projected.replay)
-        .filter(|(message, receipt)| usable_observation(message, receipt))
+        .filter(usable_exchange)
         .collect::<Vec<_>>();
     if usable.is_empty() {
         return Ok(FinalizationOutcome::NotAttempted(issue));
@@ -72,12 +68,16 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
     let retained_start = usable
         .len()
         .saturating_sub(floe_agent_contract::MAX_AGENT_MESSAGES - 1);
-    let mut messages = vec![user_message];
-    let mut replay = Vec::with_capacity(usable.len() - retained_start);
-    for (message, receipt) in usable.into_iter().skip(retained_start) {
-        messages.push(message);
-        replay.push(receipt);
-    }
+    let usable = usable.into_iter().skip(retained_start).collect::<Vec<_>>();
+    let usable_ids = usable
+        .iter()
+        .filter_map(exchange_call_id)
+        .collect::<std::collections::HashSet<_>>();
+    let replay = projected
+        .replay
+        .into_iter()
+        .filter(|receipt| usable_ids.contains(&receipt.call_id))
+        .collect::<Vec<_>>();
     let scope = match root_scope.finalization_scope(MAX_FINALIZATION_DURATION) {
         Ok(scope) => scope,
         Err(AgentFailure::BudgetExceeded) => {
@@ -92,33 +92,39 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
         }
         Err(failure) => return Err(failure),
     };
+    let mut current_turn = Vec::with_capacity(usable.len() + 1);
+    current_turn.push(user_message);
+    current_turn.extend(usable.clone());
     let request = EngineRequest {
         principal: work_request.principal.clone(),
         role_spec: RoleSpec {
-            role_id: "manager".into(),
-            prompt: FINALIZATION_ROLE_PROMPT.into(),
+            role_id: FINALIZATION_ROLE_ID.into(),
+            instructions: FINALIZATION_ROLE_PROMPT.into(),
             output_contract: FINALIZATION_OUTPUT_CONTRACT.into(),
         },
-        prompt: work_request.prompt.clone(),
         scope,
-        bounded_context: BoundedContext {
-            text: String::new(),
-            coverage: DependencyCoverage::Independent,
+        conversation: ModelConversation {
+            history: Vec::new(),
+            current_turn,
         },
-        messages,
         allowed_catalog: AllowedCatalog {
             cards: vec![],
             tools: vec![],
             revision: work_request.allowed_catalog.revision.max(1),
         },
+        purpose: work_request.purpose.clone(),
+        consumer: work_request.consumer.clone(),
+        preferred_profile_id: work_request.preferred_profile_id.clone(),
         max_iterations: 1,
         max_output_bytes: work_request.max_output_bytes,
-        replay: replay.clone(),
+        replay,
+        resume: None,
     };
     let report = engine
         .drive(
             request,
             EnginePorts {
+                projection: ports.projection,
                 model: ports.model,
                 tools: ports.tools,
                 delegation: ports.delegation,
@@ -133,7 +139,7 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
     let Some(output) = report.output else {
         return Ok(FinalizationOutcome::AttemptedWithoutReply);
     };
-    let coverage = finalization_coverage(&replay, &report.steps)?;
+    let coverage = finalization_coverage(&usable, &report.steps)?;
     Ok(FinalizationOutcome::Replied(RunTerminal {
         state: RunState::Failed,
         output: Some(output),
@@ -143,21 +149,54 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
     }))
 }
 
-fn usable_observation(message: &AgentMessage, receipt: &ReplayReceipt) -> bool {
-    message.coverage == DependencyCoverage::Independent
-        && receipt.tool_issue.is_none()
-        && receipt.task_issue.is_none()
-        && receipt
-            .tool_artifacts
-            .iter()
-            .chain(&receipt.task_artifacts)
-            .all(|artifact| artifact.coverage == DependencyCoverage::Independent)
-        && (receipt.tool_coverage == DependencyCoverage::Independent
-            || receipt.task_coverage == DependencyCoverage::Independent)
+fn exchange_call_id(entry: &ModelConversationEntry) -> Option<uuid::Uuid> {
+    match entry {
+        ModelConversationEntry::ToolExchange { call, .. } => Some(call.call_id),
+        ModelConversationEntry::DelegationExchange { request, .. } => {
+            Some(request.task_id.as_uuid())
+        }
+        ModelConversationEntry::User { .. }
+        | ModelConversationEntry::Preamble { .. }
+        | ModelConversationEntry::Assistant { .. } => None,
+    }
 }
 
-fn finalization_barrier(receipt: &ReplayReceipt) -> Option<AgentFailure> {
-    receipt.tool_issue.or(receipt.task_issue).filter(|failure| {
+fn usable_exchange(entry: &ModelConversationEntry) -> bool {
+    match entry {
+        ModelConversationEntry::ToolExchange { result, .. } => {
+            result.coverage == DependencyCoverage::Independent
+                && result.issue.is_none()
+                && result
+                    .artifacts
+                    .iter()
+                    .all(|artifact| artifact.coverage == DependencyCoverage::Independent)
+        }
+        ModelConversationEntry::DelegationExchange { receipt, .. } => {
+            receipt.snapshot.coverage == DependencyCoverage::Independent
+                && receipt.snapshot.issue.is_none()
+                && receipt
+                    .snapshot
+                    .artifacts
+                    .iter()
+                    .all(|artifact| artifact.coverage == DependencyCoverage::Independent)
+        }
+        ModelConversationEntry::User { .. }
+        | ModelConversationEntry::Preamble { .. }
+        | ModelConversationEntry::Assistant { .. } => false,
+    }
+}
+
+fn exchange_barrier(entry: &ModelConversationEntry) -> Option<AgentFailure> {
+    let failure = match entry {
+        ModelConversationEntry::ToolExchange { result, .. } => {
+            result.issue.as_ref().map(|issue| issue.failure)
+        }
+        ModelConversationEntry::DelegationExchange { receipt, .. } => receipt.snapshot.issue,
+        ModelConversationEntry::User { .. }
+        | ModelConversationEntry::Preamble { .. }
+        | ModelConversationEntry::Assistant { .. } => None,
+    }?;
+    Some(failure).filter(|failure| {
         matches!(
             failure,
             AgentFailure::ConsentRequired
@@ -174,19 +213,27 @@ fn finalization_barrier(receipt: &ReplayReceipt) -> Option<AgentFailure> {
 }
 
 fn finalization_coverage(
-    replay: &[ReplayReceipt],
+    exchanges: &[ModelConversationEntry],
     steps: &[EngineStep],
 ) -> Result<DependencyCoverage, AgentFailure> {
     let mut coverage = DependencyCoverage::Independent;
-    for receipt in replay {
+    for entry in exchanges {
+        let (exchange_coverage, artifacts) = match entry {
+            ModelConversationEntry::ToolExchange { result, .. } => {
+                (&result.coverage, result.artifacts.as_slice())
+            }
+            ModelConversationEntry::DelegationExchange { receipt, .. } => (
+                &receipt.snapshot.coverage,
+                receipt.snapshot.artifacts.as_slice(),
+            ),
+            ModelConversationEntry::User { .. }
+            | ModelConversationEntry::Preamble { .. }
+            | ModelConversationEntry::Assistant { .. } => continue,
+        };
         coverage = coverage
-            .merge(if receipt.tool_id.is_some() {
-                &receipt.tool_coverage
-            } else {
-                &receipt.task_coverage
-            })
+            .merge(exchange_coverage)
             .map_err(|_| AgentFailure::InvalidModelOutput)?;
-        for artifact in receipt.tool_artifacts.iter().chain(&receipt.task_artifacts) {
+        for artifact in artifacts {
             coverage = coverage
                 .merge(&artifact.coverage)
                 .map_err(|_| AgentFailure::InvalidModelOutput)?;

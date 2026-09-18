@@ -405,7 +405,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                         | JournalEvent::ToolResult { .. }
                         | JournalEvent::DelegationResult { .. } => "result",
                         JournalEvent::Output { .. } => "output",
-                        JournalEvent::Checkpoint { .. } => "checkpoint",
+                        JournalEvent::Checkpoint { .. }
+                        | JournalEvent::ValidatedBatch { .. }
+                        | JournalEvent::BatchProgress { .. } => "checkpoint",
                     };
                     if entry.kind != expected_kind {
                         return Err(AgentFailure::StorageUnavailable);

@@ -4,10 +4,15 @@ use std::{
 };
 
 use floe_agent_contract::{
-    AgentMessage, AllowedCatalog, BoundedContext, BoxFuture, DelegationPort, DelegationRequest,
-    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelPort, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, TaskReceipt, ToolCall, ToolDescriptor,
-    ToolPort, ToolResult,
+    AgentMessage, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
+    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
+    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelConversationEntry,
+    ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep,
+    ModelUsage, ProjectionRef, RoleSpec, RuntimeContext, ScopedInstructions, TaskReceipt, ToolCall,
+    ToolDescriptor, ToolPort, ToolResult,
+};
+use floe_agent_contract::prompts::{
+    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_agent_runtime::FinalPayloadValidator;
 use floe_execution::{ExecutionScope, budget::BudgetConfig};
@@ -383,6 +388,93 @@ impl ExecutionJournal for Journal {
     }
 }
 
+struct TestProjector;
+
+static PROJECTOR: TestProjector = TestProjector;
+
+impl ModelProjectionPort for TestProjector {
+    fn project<'a>(
+        &'a self,
+        request: ModelProjectionRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
+        request.validate().unwrap();
+        let envelope = ContextEnvelope {
+            schema_version: floe_agent_contract::AGENT_VERSION,
+            stable_instructions: PromptAssembly {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                role: PromptRole::Manager,
+                components: vec![
+                    PromptComponent {
+                        kind: PromptComponentKind::BehaviorKernel,
+                        source: "test-kernel".into(),
+                        revision: 1,
+                        content: "kernel".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::Role,
+                        source: "test-role".into(),
+                        revision: 1,
+                        content: "role".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::CapabilityProtocol,
+                        source: "test-protocol".into(),
+                        revision: 1,
+                        content: "protocol".into(),
+                    },
+                ],
+            },
+            scoped_instructions: ScopedInstructions {
+                purpose: "test-purpose".into(),
+                response_contract: request.role.output_contract.clone(),
+                available_capabilities: vec![],
+                active_experts: vec![],
+                correction: request.correction.clone(),
+            },
+            contextual_data: ContextualData {
+                projection_version: 1,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            conversation: request.conversation.clone(),
+            runtime: RuntimeContext {
+                max_output_bytes: request.max_output_bytes,
+            },
+            manifest: ContextManifest {
+                prompt_components: vec![],
+                evidence: vec![],
+                memories: vec![],
+                agent_cards: vec![],
+            },
+        };
+        Box::pin(async move {
+            Ok(AuthorizedModelProjection {
+                projection_ref: ProjectionRef::new(),
+                projection_revision: 1,
+                envelope,
+                coverage: DependencyCoverage::Independent,
+                input_data_classes: vec![DataClass::Synthetic],
+            })
+        })
+    }
+}
+
+fn current_user_text(request: &ModelRequest) -> String {
+    request
+        .projection
+        .envelope
+        .conversation
+        .current_turn
+        .iter()
+        .find_map(|entry| match entry {
+            ModelConversationEntry::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
 #[derive(Default)]
 struct AnswerModel {
     calls: std::sync::atomic::AtomicUsize,
@@ -399,7 +491,7 @@ impl ModelPort for AnswerModel {
             Ok(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: vec![ModelStep::Answer {
-                    text: format!("answered: {}", request.prompt),
+                    text: format!("answered: {}", current_user_text(&request)),
                     artifacts: vec![],
                 }],
                 usage: ModelUsage {
@@ -445,16 +537,17 @@ impl ModelPort for FinalizationModel {
                 *self.finalization_scope.lock().unwrap() = Some(scope.clone());
                 assert!(request.catalog.tools.is_empty());
                 assert!(request.catalog.cards.is_empty());
-                assert_eq!(request.role.prompt, crate::FINALIZATION_ROLE_PROMPT);
                 assert_eq!(
-                    request.role.output_contract,
+                    request
+                        .projection
+                        .envelope
+                        .scoped_instructions
+                        .response_contract,
                     crate::FINALIZATION_OUTPUT_CONTRACT
                 );
-                assert_eq!(request.bounded_context.text, "");
-                assert_eq!(
-                    request.bounded_context.coverage,
-                    DependencyCoverage::Independent
-                );
+                assert_eq!(request.purpose, "test-purpose");
+                assert_eq!(request.consumer, crate::CONVERSATION_MODEL_CONSUMER);
+                assert_eq!(request.preferred_profile_id, None);
                 assert_eq!(request.replay.len(), 1);
                 assert_eq!(scope.budget().max_tokens(), 1_024);
                 Ok(ModelResponse {
@@ -578,7 +671,8 @@ impl FinalPayloadValidator for Validator {
         text: &str,
         _: &[floe_agent_contract::Artifact],
     ) -> Result<(), AgentFailure> {
-        if role == "manager" && !text.trim().is_empty() {
+        if (role == "manager" || role == crate::FINALIZATION_ROLE_ID) && !text.trim().is_empty()
+        {
             Ok(())
         } else {
             Err(AgentFailure::InvalidModelOutput)
@@ -592,9 +686,10 @@ fn service(repository: Arc<MemoryRepository>) -> ConversationService<MemoryRepos
         ManagerConfig {
             role_spec: RoleSpec {
                 role_id: "manager".into(),
-                prompt: "Answer or delegate.".into(),
+                instructions: "Answer or delegate.".into(),
                 output_contract: "User-facing text.".into(),
             },
+            purpose: "test-purpose".into(),
             max_iterations: 4,
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
@@ -612,9 +707,10 @@ fn finalization_service(
         ManagerConfig {
             role_spec: RoleSpec {
                 role_id: "manager".into(),
-                prompt: "Answer or delegate.".into(),
+                instructions: "Answer or delegate.".into(),
                 output_contract: "User-facing text.".into(),
             },
+            purpose: "test-purpose".into(),
             max_iterations: 1,
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
@@ -640,10 +736,6 @@ fn request(
         retry_of: None,
         profile: crate::ProfileSelection::Auto,
         execution_profile: "test-local".into(),
-        bounded_context: BoundedContext {
-            text: String::new(),
-            coverage: DependencyCoverage::Independent,
-        },
         allowed_catalog: AllowedCatalog::default(),
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
@@ -653,6 +745,7 @@ fn request(
 
 fn ports(model: &dyn ModelPort) -> ConversationPorts<'_> {
     ConversationPorts {
+        projection: &PROJECTOR,
         model,
         tools: &NoTools,
         delegation: &NoDelegation,
@@ -852,9 +945,10 @@ async fn admitted_root_is_cancelled_by_owner_identity_and_then_becomes_inactive(
             ManagerConfig {
                 role_spec: RoleSpec {
                     role_id: "manager".into(),
-                    prompt: "Answer or delegate.".into(),
+                    instructions: "Answer or delegate.".into(),
                     output_contract: "User-facing text.".into(),
                 },
+                purpose: "test-purpose".into(),
                 max_iterations: 4,
                 max_output_bytes: 16 * 1024,
                 max_run_duration: std::time::Duration::from_secs(10),
@@ -1156,6 +1250,7 @@ async fn t29_finalization_is_bounded_and_accounted() {
         .run_turn(
             turn,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &model,
                 tools: &tools,
                 delegation: &delegation,
@@ -1187,9 +1282,12 @@ async fn t29_finalization_is_bounded_and_accounted() {
         .unwrap()
         .budget()
         .snapshot();
-    assert_eq!(budget.settled.attempts, 2);
-    assert_eq!(budget.settled.tokens, 18);
-    assert_eq!(budget.settled.cost_micros, 3);
+    // The Engine no longer settles model usage into the ledger; the journal
+    // below still records every attempt's usage, and settlement ownership
+    // moves to InferenceService with the 2-B.4 accounting tests.
+    assert_eq!(budget.settled.attempts, 0);
+    assert_eq!(budget.settled.tokens, 0);
+    assert_eq!(budget.settled.cost_micros, 0);
     assert_eq!(budget.unknown_tokens, 0);
     assert_eq!(budget.reserved_tokens, 0);
 
@@ -1244,6 +1342,7 @@ async fn consent_exhaustion_does_not_start_finalization() {
         .run_turn(
             turn,
             ConversationPorts {
+                projection: &PROJECTOR,
                 model: &model,
                 tools: &tools,
                 delegation: &NoDelegation,

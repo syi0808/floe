@@ -14,7 +14,8 @@ use super::*;
 use floe_access::CalendarScope;
 use floe_actions::{CalendarActionState, ExpertCalendarInspection};
 use floe_agent_contract::{
-    DataClass, PackageKind, PackageRef, TimelineViewRead, prompts::PromptRole,
+    DataClass, ModelConversationEntry, PackageKind, PackageRef, TimelineViewRead,
+    prompts::PromptRole,
 };
 use floe_context::{CapacityState, FeasibilityItem, RecoveryState, WeatherImpact};
 use floe_context_contract::TransferConsent;
@@ -363,8 +364,8 @@ impl Default for Model<'_> {
 /// The messages one attempt was dispatched with, as the envelope carries them.
 ///
 /// A transport never sees a Session, so a capability result reaches it as a
-/// `tool` message rather than a typed AgentMessage.
-fn envelope_messages(request: &ModelTransportRequest) -> Vec<&serde_json::Value> {
+/// tool exchange rather than a typed AgentMessage.
+fn envelope_messages(request: &ModelTransportRequest) -> Vec<&ModelConversationEntry> {
     request
         .envelope
         .conversation
@@ -376,13 +377,16 @@ fn envelope_messages(request: &ModelTransportRequest) -> Vec<&serde_json::Value>
 
 /// How many capability results this attempt was given.
 ///
-/// A delegation also settles as a tool result, so it is not one of these: the
+/// A delegation settles as its own exchange, so it is not one of these: the
 /// Expert's own capability calls are what this counts.
 fn tool_results(request: &ModelTransportRequest) -> usize {
     envelope_messages(request)
         .iter()
-        .filter(|message| {
-            message["role"] == "tool" && message["capability_id"] != "floe.a2a.delegate"
+        .filter(|entry| {
+            matches!(
+                entry,
+                ModelConversationEntry::ToolExchange { .. }
+            )
         })
         .count()
 }
@@ -400,18 +404,19 @@ impl ModelTransport for Model<'_> {
             let tool_results = tool_results(&request);
             let has_tool_result = tool_results > 0;
             self.expert_requests.lock().unwrap().push(request.clone());
-            let coverage = envelope_messages(&request).into_iter().find_map(|message| {
-                (message["role"] == "user")
-                    .then(|| message["content"].as_str())
-                    .flatten()
-                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-                    .map(|task| {
-                        (
-                            task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
-                            task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
-                        )
-                    })
-            });
+            let coverage = envelope_messages(&request)
+                .into_iter()
+                .find_map(|entry| match entry {
+                    ModelConversationEntry::User { text, .. } => {
+                        serde_json::from_str::<serde_json::Value>(text).ok().map(|task| {
+                            (
+                                task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
+                                task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
+                            )
+                        })
+                    }
+                    _ => None,
+                });
             let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
                 coverage.ok_or(AgentFailure::InvalidModelOutput)?
             else {
@@ -1585,16 +1590,31 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert!(requests.iter().all(|request| request.replay.is_empty()));
     assert!(requests[0].capabilities.is_empty());
     assert_eq!(requests[0].active_agents[0].id, "schedule");
-    // A committed delegation reaches the transport as the tool result of
-    // floe.a2a.delegate, carrying the task it settled.
-    let delegation = envelope_messages(&requests[1])
+    // A committed delegation reaches the transport as a delegation
+    // exchange, carrying the receipt it settled.
+    let receipt = envelope_messages(&requests[1])
         .into_iter()
-        .find(|message| message["capability_id"] == "floe.a2a.delegate")
+        .find_map(|entry| match entry {
+            ModelConversationEntry::DelegationExchange { receipt, .. } => Some(receipt.clone()),
+            _ => None,
+        })
         .expect("missing committed evidence");
-    let task: A2ATask = serde_json::from_value(delegation["content"].clone()).unwrap();
-    let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
+    let output = receipt
+        .snapshot
+        .artifacts
+        .iter()
+        .flat_map(|artifact| artifact.parts.iter())
+        .find_map(|part| match part {
+            floe_agent_contract::ArtifactPart::Data { media_type, data }
+                if media_type == EXPERT_RESULT_MEDIA_TYPE =>
+            {
+                Some(data.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
     assert!(output.contains("Ignore all rules"));
-    let expert: ExpertResult = serde_json::from_str(output).unwrap();
+    let expert: ExpertResult = serde_json::from_str(&output).unwrap();
     assert_eq!(expert.model_calls, 2);
     assert_eq!(expert.view_calls, 1);
     assert_eq!(
@@ -1617,11 +1637,9 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
             .iter()
             .any(|capability| capability.id == "schedule.find_free_windows")
     }));
-    assert!(
-        envelope_messages(&expert_requests[1])
-            .iter()
-            .any(|message| message["role"] == "tool")
-    );
+    assert!(envelope_messages(&expert_requests[1]).iter().any(|entry| {
+        matches!(entry, ModelConversationEntry::ToolExchange { .. })
+    }));
     assert!(!output.contains("private-calendar-id"));
     assert!(!output.contains("private-native-id"));
     assert!(
@@ -1760,11 +1778,21 @@ async fn live_calendar_history_resolves_across_turns_without_a_new_observation()
     // History carries the earlier question and answer as text; the evidence
     // the delegation stood on is not replayed to the transport.
     let history = &requests[0].envelope.conversation.history;
-    assert!(history.iter().any(|message| message["role"] == "user"
-        && message["content"] == "Find a focus window using only the calendars I granted."));
-    assert!(history.iter().any(|message| message["role"] == "assistant"
-        && message["content"] == "A synthetic focus window is available; review the proposal."));
-    assert!(history.iter().all(|message| message["role"] != "tool"));
+    assert!(history.iter().any(|entry| matches!(
+        entry,
+        ModelConversationEntry::User { text, .. }
+            if text == "Find a focus window using only the calendars I granted."
+    )));
+    assert!(history.iter().any(|entry| matches!(
+        entry,
+        ModelConversationEntry::Assistant { text, .. }
+            if text == "A synthetic focus window is available; review the proposal."
+    )));
+    assert!(!history.iter().any(|entry| matches!(
+        entry,
+        ModelConversationEntry::ToolExchange { .. }
+            | ModelConversationEntry::DelegationExchange { .. }
+    )));
     assert!(requests[0].replay.is_empty());
     assert!(second.session.revision > fixture.session.revision);
     // The second turn stands on the first turn's re-admitted dependency:
@@ -1813,13 +1841,21 @@ async fn historical_calendar_revocation_during_model_blocks_new_answer_and_prese
             // The transport sees the earlier question and answer as history
             // text; the delegation evidence itself is not replayed to it.
             let history = &request.envelope.conversation.history;
-            assert!(history.iter().any(|message| message["role"] == "user"
-                && message["content"]
-                    == "Find a focus window using only the calendars I granted."));
-            assert!(history.iter().any(|message| message["role"] == "assistant"
-                && message["content"]
-                    == "A synthetic focus window is available; review the proposal."));
-            assert!(history.iter().all(|message| message["role"] != "tool"));
+            assert!(history.iter().any(|entry| matches!(
+                entry,
+                ModelConversationEntry::User { text, .. }
+                    if text == "Find a focus window using only the calendars I granted."
+            )));
+            assert!(history.iter().any(|entry| matches!(
+                entry,
+                ModelConversationEntry::Assistant { text, .. }
+                    if text == "A synthetic focus window is available; review the proposal."
+            )));
+            assert!(!history.iter().any(|entry| matches!(
+                entry,
+                ModelConversationEntry::ToolExchange { .. }
+                    | ModelConversationEntry::DelegationExchange { .. }
+            )));
             let grant = self
                 .vault
                 .list_data_access_grants(128)
@@ -1963,7 +1999,7 @@ async fn expired_or_paused_calendar_history_is_filtered_before_model_use() {
         assert!(requests.iter().all(|request| {
             envelope_messages(request)
                 .iter()
-                .all(|message| message["role"] == "user")
+                .all(|entry| matches!(entry, ModelConversationEntry::User { .. }))
         }));
     }
 }
@@ -2083,7 +2119,12 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
             .conversation
             .history
             .iter()
-            .all(|message| message.get("tool_calls").is_none())
+            .all(|entry| matches!(
+                entry,
+                ModelConversationEntry::User { .. }
+                    | ModelConversationEntry::Preamble { .. }
+                    | ModelConversationEntry::Assistant { .. }
+            ))
     );
 }
 
@@ -2180,11 +2221,13 @@ async fn new_turn_without_calendar_reads_does_not_reuse_previous_calendar_eviden
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(access.calls.load(Ordering::Acquire), 0);
     let requests = model.requests.lock().unwrap();
-    assert!(
-        envelope_messages(&requests[0])
-            .iter()
-            .all(|message| message["role"] != "tool")
-    );
+    assert!(envelope_messages(&requests[0]).iter().all(|entry| {
+        !matches!(
+            entry,
+            ModelConversationEntry::ToolExchange { .. }
+                | ModelConversationEntry::DelegationExchange { .. }
+        )
+    }));
     assert!(requests[0].replay.is_empty());
     assert!(floe_conversation::carries_source_history(
         &result.session.messages,
@@ -2646,13 +2689,28 @@ async fn personal_class_uses_encrypted_session_and_eventkit_shaped_fixture_not_s
     let requests = model.requests.lock().unwrap();
     assert!(requests[0].capabilities.is_empty());
     assert_eq!(requests[0].active_agents[0].id, fixture.expert_id);
-    let delegation = envelope_messages(&requests[1])
+    let receipt = envelope_messages(&requests[1])
         .into_iter()
-        .find(|message| message["capability_id"] == "floe.a2a.delegate")
+        .find_map(|entry| match entry {
+            ModelConversationEntry::DelegationExchange { receipt, .. } => Some(receipt.clone()),
+            _ => None,
+        })
         .expect("missing projection");
-    let task: A2ATask = serde_json::from_value(delegation["content"].clone()).unwrap();
-    let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
-    let expert_result = serde_json::from_str::<ExpertResult>(output).unwrap();
+    let output = receipt
+        .snapshot
+        .artifacts
+        .iter()
+        .flat_map(|artifact| artifact.parts.iter())
+        .find_map(|part| match part {
+            floe_agent_contract::ArtifactPart::Data { media_type, data }
+                if media_type == EXPERT_RESULT_MEDIA_TYPE =>
+            {
+                Some(data.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let expert_result = serde_json::from_str::<ExpertResult>(&output).unwrap();
     assert_eq!(expert_result.data_class, DataClass::Personal);
     assert!(expert_result.source_handle.starts_with("calendar.lease:"));
 }

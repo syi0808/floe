@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_AGENT_MESSAGES, MAX_OUTPUT_BYTES,
-    ModelPlacement,
+    AGENT_SCHEMA_VERSION, AgentFailure, DependencyCoverage, MAX_OUTPUT_BYTES, ModelPlacement,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -174,11 +173,4 @@ pub(crate) fn bounded(value: &str, max: usize) -> bool {
         && !value
             .chars()
             .any(|character| character.is_control() && character != '\n')
-}
-
-pub(crate) fn bounded_messages(messages: &[AgentMessage]) -> Result<(), AgentFailure> {
-    if messages.len() > MAX_AGENT_MESSAGES {
-        return Err(AgentFailure::BudgetExceeded);
-    }
-    messages.iter().try_for_each(AgentMessage::validate)
 }

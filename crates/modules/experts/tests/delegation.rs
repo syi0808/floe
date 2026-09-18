@@ -9,10 +9,16 @@ use std::{
 
 use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentDefinition, AgentEndpoint,
-    AgentFailure, AllowedCatalog, BoundedContext, BoxFuture, DelegationPort, DelegationRequest,
+    AgentFailure, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
+    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
     DependencyCoverage, EndpointInvocation, EngineRequest, ExecutionJournal, ExpertReport,
-    JournalAck, JournalEvent, ModelPlacement, ModelPort, ModelRequest, ModelResponse, ModelStep,
-    ModelUsage, RoleSpec, TaskId, TaskSnapshot, TaskState, ToolCall, ToolPort, ToolResult,
+    JournalAck, JournalEvent, ModelConversation, ModelConversationEntry, ModelPlacement, ModelPort,
+    ModelProjectionPort, ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep,
+    ModelUsage, ProjectionRef, RoleSpec, RuntimeContext, ScopedInstructions, TaskId, TaskSnapshot,
+    TaskState, ToolCall, ToolPort, ToolResult,
+};
+use floe_agent_contract::prompts::{
+    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_agent_contract::{RunId, TraceContext};
 use floe_agent_runtime::Engine;
@@ -329,6 +335,7 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
     let engine_report = Engine::default()
         .drive_with_default_validator(
             manager_request(catalog, engine_scope),
+            &PROJECTOR,
             &ManagerModel {
                 selected_agent_id: "floe.test.ninth".into(),
                 observed_coverage: Arc::new(Mutex::new(vec![])),
@@ -646,6 +653,79 @@ async fn disabled_selection_is_persisted_as_rejected_without_endpoint_execution(
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+struct TestProjector;
+
+static PROJECTOR: TestProjector = TestProjector;
+
+impl ModelProjectionPort for TestProjector {
+    fn project<'a>(
+        &'a self,
+        request: ModelProjectionRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
+        request.validate().unwrap();
+        let envelope = ContextEnvelope {
+            schema_version: floe_agent_contract::AGENT_VERSION,
+            stable_instructions: PromptAssembly {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                role: PromptRole::Manager,
+                components: vec![
+                    PromptComponent {
+                        kind: PromptComponentKind::BehaviorKernel,
+                        source: "test-kernel".into(),
+                        revision: 1,
+                        content: "kernel".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::Role,
+                        source: "test-role".into(),
+                        revision: 1,
+                        content: "role".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::CapabilityProtocol,
+                        source: "test-protocol".into(),
+                        revision: 1,
+                        content: "protocol".into(),
+                    },
+                ],
+            },
+            scoped_instructions: ScopedInstructions {
+                purpose: "test-purpose".into(),
+                response_contract: request.role.output_contract.clone(),
+                available_capabilities: vec![],
+                active_experts: vec![],
+                correction: request.correction.clone(),
+            },
+            contextual_data: ContextualData {
+                projection_version: 1,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            conversation: request.conversation.clone(),
+            runtime: RuntimeContext {
+                max_output_bytes: request.max_output_bytes,
+            },
+            manifest: ContextManifest {
+                prompt_components: vec![],
+                evidence: vec![],
+                memories: vec![],
+                agent_cards: vec![],
+            },
+        };
+        Box::pin(async move {
+            Ok(AuthorizedModelProjection {
+                projection_ref: ProjectionRef::new(),
+                projection_revision: 1,
+                envelope,
+                coverage: DependencyCoverage::Independent,
+                input_data_classes: vec![DataClass::Synthetic],
+            })
+        })
+    }
+}
+
 struct ManagerModel {
     selected_agent_id: String,
     observed_coverage: Arc<Mutex<Vec<DependencyCoverage>>>,
@@ -660,28 +740,33 @@ impl ModelPort for ManagerModel {
         let observed_coverage = Arc::clone(&self.observed_coverage);
         let selected_agent_id = self.selected_agent_id.clone();
         Box::pin(async move {
-            observed_coverage.lock().unwrap().extend(
-                request
-                    .messages
-                    .iter()
-                    .filter(|message| message.role == floe_agent_contract::MessageRole::Tool)
-                    .map(|message| message.coverage.clone()),
-            );
-            let step = if request
-                .messages
+            let conversation = &request.projection.envelope.conversation;
+            let settled: Vec<DependencyCoverage> = conversation
+                .history
                 .iter()
-                .any(|message| message.role == floe_agent_contract::MessageRole::Tool)
-            {
-                ModelStep::Answer {
-                    text: "manager continued".into(),
-                    artifacts: vec![],
-                }
-            } else {
+                .chain(&conversation.current_turn)
+                .filter_map(|entry| match entry {
+                    ModelConversationEntry::DelegationExchange { receipt, .. } => {
+                        Some(receipt.snapshot.coverage.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            observed_coverage
+                .lock()
+                .unwrap()
+                .extend(settled.iter().cloned());
+            let step = if settled.is_empty() {
                 ModelStep::Delegate {
                     agent_id: selected_agent_id,
                     definition_revision: 1,
                     message: "Check communication".into(),
                     context_refs: vec![],
+                }
+            } else {
+                ModelStep::Answer {
+                    text: "manager continued".into(),
+                    artifacts: vec![],
                 }
             };
             Ok(ModelResponse {
@@ -791,6 +876,7 @@ async fn run_manager(
     let report = Engine::default()
         .drive_with_default_validator(
             manager_request(catalog, root_scope),
+            &PROJECTOR,
             &ManagerModel {
                 selected_agent_id: "floe.builtin.communication".into(),
                 observed_coverage: Arc::clone(&observed_coverage),
@@ -811,20 +897,25 @@ fn manager_request(catalog: AllowedCatalog, scope: ExecutionScope) -> EngineRequ
         principal: "person-a".into(),
         role_spec: RoleSpec {
             role_id: "manager".into(),
-            prompt: "delegate when useful".into(),
+            instructions: "delegate when useful".into(),
             output_contract: "plain text".into(),
         },
-        prompt: "What needs attention?".into(),
         scope,
-        bounded_context: BoundedContext {
-            text: "".into(),
-            coverage: DependencyCoverage::Independent,
+        conversation: ModelConversation {
+            history: vec![],
+            current_turn: vec![ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "What needs attention?".into(),
+            }],
         },
-        messages: vec![],
         allowed_catalog: catalog,
+        purpose: "test-purpose".into(),
+        consumer: "test-consumer".into(),
+        preferred_profile_id: None,
         max_iterations: 3,
         max_output_bytes: 16 * 1024,
         replay: vec![],
+        resume: None,
     }
 }
 

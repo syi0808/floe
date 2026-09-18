@@ -1,5 +1,6 @@
 use floe_agent_contract::{
-    AllowedCatalog, BoundedContext, DelegationPort, ModelPort, ReplayReceipt, RoleSpec, ToolPort,
+    AllowedCatalog, DelegationPort, ModelPort, ModelProjectionPort, ReplayReceipt, RoleSpec,
+    ToolPort,
 };
 use floe_agent_runtime::FinalPayloadValidator;
 use floe_execution::{Cancellation, budget::BudgetConfig};
@@ -10,12 +11,17 @@ use uuid::Uuid;
 
 use crate::{CanonicalTurnIntent, ProfileSelection, TurnMode};
 
+pub const FINALIZATION_ROLE_ID: &str = "manager.finalization";
 pub const FINALIZATION_ROLE_PROMPT: &str = "Produce one final answer using only the supplied settled observations. Do not call tools or delegate.";
 pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing answer. State that the requested execution did not complete; do not claim that a failed action succeeded.";
+pub const MANAGER_OUTPUT_CONTRACT: &str =
+    "Return one user-facing answer or one registered delegation.";
+pub const CONVERSATION_MODEL_CONSUMER: &str = "conversation.root";
 
 #[derive(Clone, Debug)]
 pub struct ManagerConfig {
     pub role_spec: RoleSpec,
+    pub purpose: String,
     pub max_iterations: u32,
     pub max_output_bytes: usize,
     pub max_run_duration: Duration,
@@ -26,6 +32,8 @@ impl ManagerConfig {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.role_spec.validate()?;
         if self.role_spec.role_id != "manager"
+            || self.purpose.trim().is_empty()
+            || self.purpose.len() > 512
             || self.max_iterations == 0
             || self.max_iterations > 64
             || self.max_output_bytes == 0
@@ -54,7 +62,6 @@ pub struct TurnRequest {
     pub retry_of: Option<RunId>,
     pub profile: ProfileSelection,
     pub execution_profile: String,
-    pub bounded_context: BoundedContext,
     pub allowed_catalog: AllowedCatalog,
     pub replay: Vec<ReplayReceipt>,
     pub deadline: Instant,
@@ -84,10 +91,6 @@ impl TurnRequest {
         if let TurnMode::Continue(reference) = &self.mode {
             reference.validate()?;
         }
-        self.bounded_context
-            .coverage
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
         self.allowed_catalog
             .cards
             .iter()
@@ -114,6 +117,7 @@ impl TurnRequest {
 
 #[derive(Clone, Copy)]
 pub struct ConversationPorts<'a> {
+    pub projection: &'a dyn ModelProjectionPort,
     pub model: &'a dyn ModelPort,
     pub tools: &'a dyn ToolPort,
     pub delegation: &'a dyn DelegationPort,

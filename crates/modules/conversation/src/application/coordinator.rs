@@ -1,21 +1,23 @@
 use std::sync::Arc;
 
 use floe_agent_contract::{
-    AgentMessage, DependencyCoverage, EngineRequest, EngineStep, MessageRole,
+    AgentMessage, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep, MessageRole,
+    ModelConversation, ModelConversationEntry,
 };
 use floe_agent_runtime::{Engine, EnginePorts};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    CancelRunRequest, CancelRunStatus, CommandQuery, CompactionReceipt, CompactionRequest,
-    ContinuationSnapshot, ConversationPorts, ConversationRepository, ManagerConfig,
-    RecoveryReceipt, RecoveryRequest, RunCancellationRegistry, RunQuery, RunReceipt, RunState,
-    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
+    CONVERSATION_MODEL_CONSUMER, CancelRunRequest, CancelRunStatus, CommandQuery, CompactionReceipt,
+    CompactionRequest, ContinuationSnapshot, ConversationPorts, ConversationRepository,
+    ManagerConfig, ProfileSelection, RecoveryReceipt, RecoveryRequest, RunCancellationRegistry,
+    RunQuery, RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode,
+    TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
-use super::recovery::project_journal;
+use super::recovery::{project_journal, project_transcript_history};
 
 pub struct ConversationService<Repository> {
     repository: Arc<Repository>,
@@ -244,28 +246,79 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             ledger.work_lease(),
             TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
         );
-        let base_coverage = request.bounded_context.coverage.clone();
-        let (messages, mut continuation_replay) = continuation
-            .map(|snapshot| (snapshot.messages, snapshot.replay))
-            .unwrap_or_else(|| (admitted.transcript, Vec::new()));
+        let user_entry = ModelConversationEntry::User {
+            message_id: request.command_id.as_uuid(),
+            text: intent.text,
+        };
+        let (model_conversation, resume, mut continuation_replay) = match continuation {
+            Some(snapshot) => {
+                // The new user message leads; the settled exchanges of the
+                // continued execution follow as context for it.
+                let mut current_turn =
+                    Vec::with_capacity(snapshot.model_conversation.current_turn.len() + 1);
+                current_turn.push(user_entry);
+                current_turn.extend(snapshot.model_conversation.current_turn);
+                let resume = snapshot
+                    .pending_batch
+                    .zip(snapshot.batch_cursor)
+                    .map(|(validated_batch, cursor)| EngineResumeState {
+                        validated_batch,
+                        cursor,
+                    });
+                (
+                    ModelConversation {
+                        history: snapshot.model_conversation.history,
+                        current_turn,
+                    },
+                    resume,
+                    snapshot.replay,
+                )
+            }
+            None => {
+                let history = project_transcript_history(&admitted.transcript)?
+                    .into_iter()
+                    .filter(|entry| {
+                        !matches!(
+                            entry,
+                            ModelConversationEntry::User { message_id, .. }
+                                if *message_id == request.command_id.as_uuid()
+                        )
+                    })
+                    .collect();
+                (
+                    ModelConversation {
+                        history,
+                        current_turn: vec![user_entry],
+                    },
+                    None,
+                    Vec::new(),
+                )
+            }
+        };
         continuation_replay.extend(request.replay);
         let engine_request = EngineRequest {
             principal: request.principal,
             role_spec: self.config.role_spec.clone(),
-            prompt: intent.text,
             scope,
-            bounded_context: request.bounded_context,
-            messages,
+            conversation: model_conversation,
             allowed_catalog: request.allowed_catalog,
+            purpose: self.config.purpose.clone(),
+            consumer: CONVERSATION_MODEL_CONSUMER.into(),
+            preferred_profile_id: match request.profile {
+                ProfileSelection::Auto => None,
+                ProfileSelection::Explicit(profile) => Some(profile),
+            },
             max_iterations: self.config.max_iterations - completed_iterations,
             max_output_bytes: self.config.max_output_bytes,
             replay: continuation_replay,
+            resume,
         };
         let result = self
             .engine
             .drive(
                 engine_request.clone(),
                 EnginePorts {
+                    projection: ports.projection,
                     model: ports.model,
                     tools: ports.tools,
                     delegation: ports.delegation,
@@ -276,7 +329,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             .await;
         let terminal = match result {
             Ok(report) => match report.output {
-                Some(output) => match report_coverage(base_coverage, &report.steps) {
+                Some(output) => match report_coverage(&report.steps) {
                     Ok(coverage) => RunTerminal {
                         state: RunState::Completed,
                         output: Some(output),
@@ -474,18 +527,19 @@ pub async fn continuation<Repository: ConversationRepository>(
     }
     chain.reverse();
 
-    let mut messages = admitted.transcript;
+    let history = project_transcript_history(&admitted.transcript)?;
+    let mut current_turn = Vec::new();
     let mut replay = Vec::new();
     let mut completed_iterations = 0_u32;
     let mut usage = floe_execution::budget::ModelUsage::default();
+    let mut pending_batch = None;
+    let mut batch_cursor = None;
     let mut total_entries = 0_usize;
-    let mut message_ids = messages
-        .iter()
-        .map(|message| message.message_id)
-        .collect::<std::collections::HashSet<_>>();
+    let mut seen_exchanges = std::collections::HashSet::new();
     let mut replay_invocations = std::collections::HashSet::new();
     let mut replay_calls = std::collections::HashSet::new();
-    for receipt in chain {
+    let chain_len = chain.len();
+    for (position, receipt) in chain.iter().enumerate() {
         let entries = repository.load_journal(receipt.run_id).await?;
         total_entries = total_entries
             .checked_add(entries.len())
@@ -493,20 +547,24 @@ pub async fn continuation<Repository: ConversationRepository>(
         if total_entries > 512 {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let projected = project_journal(&receipt, &entries)?;
-        if projected
-            .messages
-            .iter()
-            .any(|message| !message_ids.insert(message.message_id))
-            || projected.replay.iter().any(|receipt| {
-                !replay_invocations.insert(receipt.invocation_key)
-                    || !replay_calls.insert(receipt.call_id)
-            })
-        {
-            return Err(AgentFailure::StorageUnavailable);
+        let projected = project_journal(receipt, &entries)?;
+        // A resumed run re-journals the steps it replays, so the same logical
+        // exchange can appear in several runs: keep the first, skip repeats.
+        // Duplicates inside one journal are still rejected by projection.
+        for entry in projected.model_conversation.current_turn {
+            match exchange_identity(&entry) {
+                Some(id) if !seen_exchanges.insert(id) => continue,
+                _ => current_turn.push(entry),
+            }
         }
-        messages.extend(projected.messages);
-        replay.extend(projected.replay);
+        for receipt in projected.replay {
+            if !replay_invocations.insert(receipt.invocation_key)
+                || !replay_calls.insert(receipt.call_id)
+            {
+                continue;
+            }
+            replay.push(receipt);
+        }
         completed_iterations = completed_iterations
             .checked_add(projected.completed_iterations)
             .ok_or(AgentFailure::StorageUnavailable)?;
@@ -522,21 +580,44 @@ pub async fn continuation<Repository: ConversationRepository>(
             .cost_micros
             .checked_add(projected.usage.cost_micros)
             .ok_or(AgentFailure::StorageUnavailable)?;
+        // Only the newest run carries live state; an older pending batch was
+        // superseded the moment a newer run continued past it.
+        if position + 1 == chain_len {
+            pending_batch = projected.pending_batch;
+            batch_cursor = projected.cursor;
+        }
     }
-    if messages.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
+    let model_conversation = ModelConversation {
+        history,
+        current_turn,
+    };
+    if model_conversation.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
         return Err(AgentFailure::BudgetExceeded);
     }
-    messages.iter().try_for_each(AgentMessage::validate)?;
     Ok(ContinuationSnapshot {
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
         session_id: current.session_id,
         session_revision: current.session_revision,
         execution_profile: current.execution_profile,
-        messages,
+        model_conversation,
         replay,
+        pending_batch,
+        batch_cursor,
         completed_iterations,
         usage,
     })
+}
+
+fn exchange_identity(entry: &ModelConversationEntry) -> Option<uuid::Uuid> {
+    match entry {
+        ModelConversationEntry::ToolExchange { call, .. } => Some(call.call_id),
+        ModelConversationEntry::DelegationExchange { request, .. } => {
+            Some(request.task_id.as_uuid())
+        }
+        ModelConversationEntry::User { .. }
+        | ModelConversationEntry::Preamble { .. }
+        | ModelConversationEntry::Assistant { .. } => None,
+    }
 }
 
 fn verify_existing(
@@ -555,10 +636,10 @@ fn verify_existing(
     Ok(())
 }
 
-fn report_coverage(
-    mut coverage: DependencyCoverage,
-    steps: &[EngineStep],
-) -> Result<DependencyCoverage, AgentFailure> {
+fn report_coverage(steps: &[EngineStep]) -> Result<DependencyCoverage, AgentFailure> {
+    // The caller-supplied base coverage is gone with BoundedContext; the
+    // terminal coverage stands on what this run executed.
+    let mut coverage = DependencyCoverage::Independent;
     for step in steps {
         match step {
             EngineStep::Tool(result) => {

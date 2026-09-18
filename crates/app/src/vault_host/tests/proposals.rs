@@ -2,7 +2,8 @@ use chrono::TimeZone;
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission};
 use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
 use floe_agent_contract::{
-    AgentContext, DataClass, ExpertResult, InferencePolicyDecision, prompts::PromptRole,
+    AgentContext, DataClass, ExpertResult, InferencePolicyDecision, ModelConversationEntry,
+    prompts::PromptRole,
 };
 use floe_context::CalendarSource;
 use floe_context_contract::{CalendarProvider, ModelPlacement, TransferConsent};
@@ -45,7 +46,7 @@ fn fixture_now() -> chrono::DateTime<chrono::Utc> {
 }
 
 /// The conversation the envelope carries, history then current turn.
-fn envelope_messages(request: &ModelTransportRequest) -> Vec<&serde_json::Value> {
+fn envelope_messages(request: &ModelTransportRequest) -> Vec<&ModelConversationEntry> {
     request
         .envelope
         .conversation
@@ -67,31 +68,33 @@ impl ModelTransport for Model {
         let schedule_expert = request.prompt.role == PromptRole::ScheduleExpert;
         let messages = envelope_messages(&request);
         let step = if schedule_expert {
-            let coverage = messages.iter().find_map(|message| {
-                (message["role"] == "user")
-                    .then(|| message["content"].as_str())
-                    .flatten()
-                    .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-                    .map(|task| {
-                        (
-                            task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
-                            task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
-                        )
-                    })
+            let coverage = messages.iter().find_map(|entry| match entry {
+                ModelConversationEntry::User { text, .. } => {
+                    serde_json::from_str::<serde_json::Value>(text)
+                        .ok()
+                        .map(|task| {
+                            (
+                                task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
+                                task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
+                            )
+                        })
+                }
+                _ => None,
             });
             let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
                 coverage.ok_or(AgentFailure::InvalidModelOutput)?
             else {
                 return Err(AgentFailure::InvalidModelOutput);
             };
-            // A capability result reaches a transport as a tool message; a
-            // delegation settles as one too, and is not a capability call.
-            let latest = messages.iter().rev().find_map(|message| {
-                (message["role"] == "tool"
-                    && message["status"] == "success"
-                    && message["capability_id"] != "floe.a2a.delegate")
-                    .then(|| message["capability_id"].as_str())
-                    .flatten()
+            // A capability result reaches a transport as a tool exchange; a
+            // delegation settles as its own exchange, and is not one of these.
+            let latest = messages.iter().rev().find_map(|entry| match entry {
+                ModelConversationEntry::ToolExchange { call, result }
+                    if result.issue.is_none() =>
+                {
+                    Some(call.tool_id.as_str())
+                }
+                _ => None,
             });
             match latest {
                 Some("schedule.find_free_windows") => ModelStep::Answer {
@@ -107,10 +110,12 @@ impl ModelTransport for Model {
                     .to_string(),
                 },
             }
-        } else if messages
-            .iter()
-            .any(|message| message["capability_id"] == "floe.a2a.delegate")
-        {
+        } else if messages.iter().any(|entry| {
+            matches!(
+                entry,
+                ModelConversationEntry::DelegationExchange { .. }
+            )
+        }) {
             ModelStep::Answer {
                 text: "Synthetic proposal recorded.".into(),
             }

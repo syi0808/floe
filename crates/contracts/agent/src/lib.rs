@@ -14,8 +14,10 @@ mod expert_model;
 mod history;
 mod message;
 mod model;
+mod model_conversation;
 mod ports;
 pub mod prompts;
+mod projection;
 mod replay;
 mod timeline_view;
 
@@ -33,9 +35,9 @@ pub use endpoint::{
     MAX_ENDPOINT_SETTLEMENT_BYTES,
 };
 pub use envelope::{
-    AgentCardManifestEntry, ContextEnvelope, ContextManifest, ContextualData, ConversationContext,
+    AgentCardManifestEntry, ContextEnvelope, ContextManifest, ContextualData,
     EvidenceManifestEntry, MemoryManifestEntry, PromptManifestEntry, RuntimeContext,
-    ScopedInstructions,
+    ScopedInstructions, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
 };
 pub use expert::{
     AdmittedExpert, ExpertAssignments, ExpertBudget, ExpertFocusProposal, ExpertInput,
@@ -66,11 +68,19 @@ pub use message::{
     AgentCard, AgentMessage, Artifact, ArtifactPart, MessageRole, OutcomeIssue, ToolResult,
 };
 pub use model::{
-    AgentDefinition, AllowedCatalog, BoundedContext, EngineRequest, EngineStep, ModelRequest,
+    AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep, ModelRequest,
     ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, validate_tool_input,
 };
+pub use model_conversation::{
+    ModelConversation, ModelConversationEntry, MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES,
+};
 pub use ports::{
-    BoxFuture, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort, ToolPort,
+    BatchCursor, BoxFuture, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort,
+    ModelProjectionPort, PinnedAgentRevision, PinnedToolRevision, ToolPort, ValidatedModelBatch,
+};
+pub use projection::{
+    AuthorizedModelProjection, ModelCorrection, ModelProjectionRequest, ProjectionRef,
+    MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
 pub use timeline_view::TimelineViewRead;

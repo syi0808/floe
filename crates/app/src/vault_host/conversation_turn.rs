@@ -349,11 +349,12 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             floe_conversation::ManagerConfig {
                 role_spec: floe_agent_contract::RoleSpec {
                     role_id: "manager".into(),
-                    prompt: floe_conversation::prompts::manager_prompt(context.persona.as_ref())?
-                        .render(),
-                    output_contract: "Return one user-facing answer or one registered delegation."
-                        .into(),
+                    instructions:
+                        floe_conversation::prompts::manager_prompt(context.persona.as_ref())?
+                            .render(),
+                    output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
                 },
+                purpose: policy.purpose.clone(),
                 max_iterations: budget.max_iterations.min(64),
                 max_output_bytes: budget.max_output_bytes,
                 max_run_duration: duration,
@@ -369,6 +370,13 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             std::sync::Arc::clone(inputs.run_cancellations),
         )?;
         let root_model = RootModel(&model);
+        let projection_port = engine_ports::TransitionalModelProjection {
+            store: &governed_store,
+            policy: &policy,
+            context: &context,
+            capabilities: legacy_capabilities.clone(),
+            active_agents: active_agents.clone(),
+        };
         let model_port = engine_ports::LegacyModelPort {
             model: &root_model,
             store: &governed_store,
@@ -413,16 +421,13 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     retry_of,
                     profile,
                     execution_profile: execution_profile.into(),
-                    bounded_context: floe_agent_contract::BoundedContext {
-                        text: String::new(),
-                        coverage: floe_agent_contract::DependencyCoverage::Independent,
-                    },
                     allowed_catalog: catalog,
                     replay: vec![],
                     deadline,
                     cancellation,
                 },
                 floe_conversation::ConversationPorts {
+                    projection: &projection_port,
                     model: &model_port,
                     tools: &tool_port,
                     delegation: &delegation_port,
@@ -2510,12 +2515,12 @@ mod tests {
         let requests = governed_model.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         let (_, current_turn) = requests[1].model_conversation();
-        assert!(current_turn.iter().any(|message| {
-            message["role"] == "tool"
-                && message["status"] == "error"
-                && message["failure"] == "access_review_required"
-                && message.get("content").is_none()
-        }));
+        assert!(current_turn.iter().any(|entry| matches!(
+            entry,
+            floe_agent_contract::ModelConversationEntry::ToolExchange { result, .. }
+                if result.issue.as_ref().is_some_and(|issue| issue.failure
+                    == AgentFailure::AccessReviewRequired)
+        )));
     }
 
     fn test_expert_cards() -> Vec<AgentCard> {

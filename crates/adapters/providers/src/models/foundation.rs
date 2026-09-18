@@ -164,7 +164,10 @@ fn prepare(
     let prompt = json!({
         "scoped_instructions": envelope.scoped_instructions,
         "contextual_data": envelope.contextual_data,
-        "conversation": envelope.conversation,
+        "conversation": {
+            "history": super::wire::wire_messages(&envelope.conversation.history),
+            "current_turn": super::wire::wire_messages(&envelope.conversation.current_turn),
+        },
         "runtime": envelope.runtime,
         "manifest": envelope.manifest,
     })
@@ -344,8 +347,8 @@ mod tests {
     };
     use floe_agent_contract::{
         AgentContext, CapabilityDescriptor, ContextEnvelope, ContextEvidence, ContextManifest,
-        ContextualData, ConversationContext, InferencePolicyDecision, PromptManifestEntry,
-        RuntimeContext, ScopedInstructions,
+        ContextualData, InferencePolicyDecision, ModelConversation, ModelConversationEntry,
+        PromptManifestEntry, RuntimeContext, ScopedInstructions,
     };
     use floe_agent_contract::{DataClass, TransferConsent};
     use floe_execution::Cancellation;
@@ -463,8 +466,10 @@ mod tests {
                 stable_instructions: prompt.clone(),
                 scoped_instructions: ScopedInstructions {
                     purpose: policy.purpose.clone(),
+                    response_contract: String::new(),
                     available_capabilities: capabilities.clone(),
                     active_experts: vec![],
+                    correction: None,
                 },
                 contextual_data: ContextualData {
                     projection_version: context.projection_version,
@@ -472,11 +477,12 @@ mod tests {
                     optional_context_issues: vec![],
                     evidence: context.evidence.clone(),
                 },
-                conversation: ConversationContext {
+                conversation: ModelConversation {
                     history: vec![],
-                    current_turn: vec![
-                        json!({"role": "user", "content": "Summarize this fixture"}),
-                    ],
+                    current_turn: vec![ModelConversationEntry::User {
+                        message_id: Uuid::new_v4(),
+                        text: "Summarize this fixture".into(),
+                    }],
                 },
                 runtime: RuntimeContext {
                     max_output_bytes: 16384,
@@ -564,10 +570,15 @@ mod tests {
         let transport = Mock::new(answer());
         let mut request = request();
         request.envelope.conversation.history = vec![
-            json!({"role": "user", "content": "The earlier question"}),
-            json!({"role": "assistant", "content": "The earlier answer"}),
+            ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "The earlier question".into(),
+            },
+            ModelConversationEntry::Assistant {
+                message_id: Uuid::new_v4(),
+                text: "The earlier answer".into(),
+            },
         ];
-        let expected = request.envelope.conversation.clone();
 
         generate(&transport, request, SessionProtection::SyntheticOnly)
             .await
@@ -576,10 +587,16 @@ mod tests {
         let calls = transport.calls.lock().unwrap();
         let prompt: Value =
             serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
-        assert_eq!(prompt["conversation"]["history"], json!(expected.history));
         assert_eq!(
-            prompt["conversation"]["current_turn"],
-            json!(expected.current_turn)
+            prompt["conversation"]["history"],
+            json!([
+                {"role": "user", "content": "The earlier question"},
+                {"role": "assistant", "content": "The earlier answer"},
+            ])
+        );
+        assert_eq!(
+            prompt["conversation"]["current_turn"][0]["content"],
+            "Summarize this fixture"
         );
     }
 

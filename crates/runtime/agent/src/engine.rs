@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use floe_agent_contract::{
-    AgentFailure, AgentMessage, DelegationPort, DelegationRequest, EngineRequest, EngineStep,
-    ExecutionJournal, InvocationKey, JournalAck, JournalEvent, MessageRole, ModelPort,
-    ModelRequest, ModelStep, ReplayReceipt, TaskId, TaskReceipt, ToolCall, ToolPort, ToolResult,
+    AgentFailure, AllowedCatalog, BatchCursor, DelegationPort, DelegationRequest, EngineRequest,
+    EngineStep, ExecutionJournal, InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT,
+    ModelConversation, ModelConversationEntry, ModelCorrection, ModelPort, ModelProjectionPort,
+    ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision,
+    PinnedToolRevision, ProjectionRef, ReplayReceipt, TaskId, TaskReceipt, ToolCall, ToolPort,
+    ToolResult, ValidatedModelBatch,
 };
 use uuid::Uuid;
 
@@ -36,7 +39,9 @@ impl FinalPayloadValidator for ContractValidator {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct EnginePorts<'a> {
+    pub projection: &'a dyn ModelProjectionPort,
     pub model: &'a dyn ModelPort,
     pub tools: &'a dyn ToolPort,
     pub delegation: &'a dyn DelegationPort,
@@ -68,6 +73,50 @@ pub struct EngineReport {
     pub output: Option<String>,
     pub iterations: u32,
     pub attempt_ids: Vec<Uuid>,
+    pub execution_id: Uuid,
+}
+
+/// Which step kind a stable invocation identity belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvocationKind {
+    Tool,
+    Delegation,
+}
+
+/// Stable invocation identity: execution, batch, step ordinal, and kind only.
+/// Replaying or skipping an earlier step never changes a later step's identity.
+pub fn stable_invocation_key(
+    execution_id: Uuid,
+    batch_id: Uuid,
+    step_ordinal: u32,
+    kind: InvocationKind,
+) -> InvocationKey {
+    let tag = match kind {
+        InvocationKind::Tool => "tool",
+        InvocationKind::Delegation => "delegation",
+    };
+    InvocationKey::from_uuid(Uuid::new_v5(
+        &execution_id,
+        format!("{execution_id}:{batch_id}:{step_ordinal}:{tag}").as_bytes(),
+    ))
+    .expect("uuid v5 is non-nil")
+}
+
+/// Stable tool call id, derived from the same basis as the invocation key.
+pub fn stable_call_id(execution_id: Uuid, batch_id: Uuid, step_ordinal: u32) -> Uuid {
+    Uuid::new_v5(
+        &execution_id,
+        format!("{execution_id}:{batch_id}:{step_ordinal}:call").as_bytes(),
+    )
+}
+
+/// Stable delegation task id, derived from the same basis as the invocation key.
+pub fn stable_task_id(execution_id: Uuid, batch_id: Uuid, step_ordinal: u32) -> TaskId {
+    TaskId::from_uuid(Uuid::new_v5(
+        &execution_id,
+        format!("{execution_id}:{batch_id}:{step_ordinal}:task").as_bytes(),
+    ))
+    .expect("uuid v5 is non-nil")
 }
 
 pub struct Engine {
@@ -93,406 +142,19 @@ impl Engine {
         ports: EnginePorts<'_>,
     ) -> Result<EngineReport, AgentFailure> {
         request.validate()?;
-        let mut messages = request.messages.clone();
-        let mut model_replay = request.replay.clone();
-        let mut steps = Vec::new();
-        let mut attempts = Vec::new();
-        let mut tool_calls = 0;
-        let mut delegations = 0;
-        let mut unavailable = HashMap::<String, u8>::new();
-        let mut seen_invocations = HashSet::<InvocationKey>::new();
-
-        for iteration in 0..request.max_iterations {
-            if request.scope.cancellation().is_cancelled() {
-                return Err(floe_execution::tasks::cancellation_failure(
-                    request.scope.cancellation(),
-                ));
-            }
-            let attempt_id = Uuid::new_v4();
-            attempts.push(attempt_id);
-            let mut tokens = self.config.max_attempt_tokens;
-            let mut cost = self.config.max_attempt_cost_micros;
-            let mut reservation = request.scope.budget().begin(&mut tokens, &mut cost)?;
-            let intent = request
-                .scope
-                .run(async {
-                    ports
-                        .journal
-                        .record_intent(JournalEvent::ModelIntent { attempt_id })
-                        .await
-                })
-                .await?;
-            if let JournalAck::Replayed(receipt) = intent {
-                return Err(if receipt.tool_id.is_some() || receipt.agent_id.is_some() {
-                    AgentFailure::InvalidInput
-                } else {
-                    AgentFailure::Conflict
-                });
-            }
-            if tokio::time::Instant::now() >= request.scope.deadline() {
-                request
-                    .scope
-                    .cancellation()
-                    .cancel_with_reason(floe_execution::CancelReason::Deadline);
-                return Err(AgentFailure::DeadlineExceeded);
-            }
-            if request.scope.cancellation().is_cancelled() {
-                return Err(floe_execution::tasks::cancellation_failure(
-                    request.scope.cancellation(),
-                ));
-            }
-            let model_request = ModelRequest {
-                attempt_id,
-                role: request.role_spec.clone(),
-                prompt: request.prompt.clone(),
-                bounded_context: request.bounded_context.clone(),
-                messages: messages.clone(),
-                catalog: request.allowed_catalog.clone(),
-                replay: model_replay.clone(),
-            };
-            let model_scope = request.scope.child_scope(
-                request.scope.deadline(),
-                tokens.max(1),
-                cost.max(1),
-                None,
-            );
-            let response = model_scope
-                .run(async {
-                    reservation.mark_dispatched();
-                    ports.model.generate(model_request, &model_scope).await
-                })
-                .await?;
-            let settlement = reservation.settle(response.usage.tokens, response.usage.cost_micros);
-            let journal_result = request
-                .scope
-                .run(async {
-                    ports
-                        .journal
-                        .record_result(JournalEvent::ModelResult {
-                            attempt_id,
-                            usage: response.usage,
-                        })
-                        .await
-                })
-                .await;
-            settlement?;
-            journal_result?;
-            if response.attempt_id != attempt_id || response.steps.is_empty() {
-                return Err(AgentFailure::InvalidModelOutput);
-            }
-            let encoded_steps = serde_json::to_vec(&response.steps)
-                .map_err(|_| AgentFailure::InvalidModelOutput)?;
-            if encoded_steps.len() > request.max_output_bytes {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            let corrections = validate_model_steps(&response.steps, &request.allowed_catalog)?;
-            for step in &response.steps {
-                if let ModelStep::Answer { text, artifacts } = step {
-                    ports
-                        .validator
-                        .validate(&request.role_spec.role_id, text, artifacts)?;
-                    if artifacts
-                        .iter()
-                        .any(|artifact| artifact.validate(request.max_output_bytes).is_err())
-                    {
-                        return Err(AgentFailure::InvalidModelOutput);
-                    }
-                }
-            }
-
-            for (step_index, step) in response.steps.into_iter().enumerate() {
-                match step {
-                    ModelStep::Preamble { text } => {
-                        let message = AgentMessage {
-                            message_id: Uuid::new_v4(),
-                            role: MessageRole::Preamble,
-                            text,
-                            call_id: None,
-                            coverage: floe_agent_contract::DependencyCoverage::Unknown,
-                        };
-                        message.validate()?;
-                        messages.push(message);
-                    }
-                    ModelStep::Answer { text, artifacts } => {
-                        ports
-                            .validator
-                            .validate(&request.role_spec.role_id, &text, &artifacts)?;
-                        request
-                            .scope
-                            .run(async {
-                                ports
-                                    .journal
-                                    .record_output(JournalEvent::Output {
-                                        text: text.clone(),
-                                        artifacts: artifacts.clone(),
-                                    })
-                                    .await
-                            })
-                            .await?;
-                        steps.push(EngineStep::Answer {
-                            text: text.clone(),
-                            artifacts,
-                        });
-                        return Ok(EngineReport {
-                            steps,
-                            output: Some(text),
-                            iterations: iteration + 1,
-                            attempt_ids: attempts,
-                        });
-                    }
-                    ModelStep::CallTool {
-                        tool_id,
-                        definition_revision,
-                        input,
-                    } => {
-                        if tool_calls >= self.config.max_tool_calls {
-                            return Err(AgentFailure::BudgetExceeded);
-                        }
-                        tool_calls += 1;
-                        if let Some(correction) =
-                            corrections.get(step_index).and_then(Option::as_ref)
-                        {
-                            let mut result = unavailable_tool(Uuid::new_v4(), correction);
-                            result.issue = Some(floe_agent_contract::OutcomeIssue {
-                                failure: AgentFailure::InvalidModelOutput,
-                                retryable: true,
-                            });
-                            messages.push(observation(&result));
-                            steps.push(EngineStep::Tool(result));
-                            continue;
-                        }
-                        let Some(descriptor) = request
-                            .allowed_catalog
-                            .tools
-                            .iter()
-                            .find(|item| item.id == tool_id)
-                        else {
-                            let result = unavailable_tool(Uuid::new_v4(), "tool is not registered");
-                            messages.push(observation(&result));
-                            steps.push(EngineStep::Tool(result));
-                            continue;
-                        };
-                        if descriptor.definition_revision != definition_revision {
-                            let result =
-                                unavailable_tool(Uuid::new_v4(), "tool descriptor is stale");
-                            messages.push(observation(&result));
-                            steps.push(EngineStep::Tool(result));
-                            continue;
-                        }
-                        let invocation_key = stable_invocation_key(&request, iteration, tool_calls);
-                        let call_id = Uuid::new_v5(
-                            &request.scope.trace_context().request_id(),
-                            format!("call:{}", invocation_key.as_uuid()).as_bytes(),
-                        );
-                        floe_agent_contract::validate_tool_input(&input)?;
-                        let call = ToolCall {
-                            call_id,
-                            invocation_key,
-                            tool_id: tool_id.clone(),
-                            definition_revision,
-                            input,
-                        };
-                        if !seen_invocations.insert(invocation_key) {
-                            return Err(AgentFailure::Conflict);
-                        }
-                        let intent = request
-                            .scope
-                            .run(async {
-                                ports
-                                    .journal
-                                    .record_intent(JournalEvent::ToolIntent { call: call.clone() })
-                                    .await
-                            })
-                            .await?;
-                        let result = if let JournalAck::Replayed(receipt) = intent {
-                            verify_tool_replay(&request, &call, &receipt)?;
-                            ToolResult {
-                                call_id,
-                                text: receipt.result.clone(),
-                                artifacts: receipt.tool_artifacts.clone(),
-                                coverage: receipt.tool_coverage.clone(),
-                                issue: receipt.tool_issue.map(|failure| {
-                                    floe_agent_contract::OutcomeIssue {
-                                        failure,
-                                        retryable: false,
-                                    }
-                                }),
-                            }
-                        } else {
-                            let child = request.scope.child_scope(
-                                request.scope.deadline(),
-                                tokens.max(1),
-                                cost.max(1),
-                                None,
-                            );
-                            match child
-                                .run(async { ports.tools.invoke(call.clone(), &child).await })
-                                .await
-                            {
-                                Ok(result) => result,
-                                Err(
-                                    error @ (AgentFailure::CapabilityDenied
-                                    | AgentFailure::CapabilityUnavailable
-                                    | AgentFailure::PolicyDenied
-                                    | AgentFailure::ConsentRequired),
-                                ) => {
-                                    let count = unavailable.entry(tool_id.clone()).or_default();
-                                    *count += 1;
-                                    if *count > 2 {
-                                        return Err(AgentFailure::Stalled);
-                                    }
-                                    let mut result = unavailable_tool(call_id, "tool unavailable");
-                                    result.issue = Some(floe_agent_contract::OutcomeIssue {
-                                        failure: error,
-                                        retryable: true,
-                                    });
-                                    result
-                                }
-                                Err(error) => return Err(error),
-                            }
-                        };
-                        result.validate(call.call_id, request.max_output_bytes)?;
-                        request
-                            .scope
-                            .run(async {
-                                ports
-                                    .journal
-                                    .record_result(JournalEvent::ToolResult {
-                                        result: result.clone(),
-                                    })
-                                    .await
-                            })
-                            .await?;
-                        model_replay.push(tool_replay(&request, &call, &result));
-                        messages.push(observation(&result));
-                        steps.push(EngineStep::Tool(result));
-                    }
-                    ModelStep::Delegate {
-                        agent_id,
-                        definition_revision,
-                        message,
-                        context_refs,
-                    } => {
-                        if delegations >= self.config.max_delegations {
-                            return Err(AgentFailure::BudgetExceeded);
-                        }
-                        delegations += 1;
-                        let Some(card) = request
-                            .allowed_catalog
-                            .cards
-                            .iter()
-                            .find(|item| item.card.id == agent_id)
-                        else {
-                            messages.push(observation_text("delegation agent is not registered"));
-                            continue;
-                        };
-                        if card.definition_revision != definition_revision {
-                            messages.push(observation_text("delegation descriptor is stale"));
-                            continue;
-                        }
-                        let invocation_key = stable_invocation_key(
-                            &request,
-                            iteration,
-                            self.config.max_tool_calls + delegations,
-                        );
-                        let task_id = TaskId::from_uuid(Uuid::new_v5(
-                            &request.scope.trace_context().request_id(),
-                            format!("task:{}", invocation_key.as_uuid()).as_bytes(),
-                        ))
-                        .expect("uuid v5 is non-nil");
-                        let delegation = DelegationRequest {
-                            task_id,
-                            parent_run_id: request.scope.root_run_id().map(|id| id.as_uuid()),
-                            principal: request.principal.clone(),
-                            invocation_key,
-                            selected_agent_id: agent_id,
-                            selected_definition_revision: definition_revision,
-                            message,
-                            context_refs,
-                        };
-                        if !seen_invocations.insert(delegation.invocation_key) {
-                            return Err(AgentFailure::Conflict);
-                        }
-                        let intent = request
-                            .scope
-                            .run(async {
-                                ports
-                                    .journal
-                                    .record_intent(JournalEvent::DelegationIntent {
-                                        request: delegation.clone(),
-                                    })
-                                    .await
-                            })
-                            .await?;
-                        let child = request.scope.child_scope(
-                            request.scope.deadline(),
-                            tokens.max(1),
-                            cost.max(1),
-                            Some(delegation.task_id),
-                        );
-                        let receipt = if let JournalAck::Replayed(replay_receipt) = intent {
-                            replay_task(&delegation, &replay_receipt, request.max_output_bytes)?
-                        } else {
-                            child
-                                .run(async {
-                                    ports.delegation.delegate(delegation.clone(), &child).await
-                                })
-                                .await?
-                        };
-                        verify_receipt(&delegation, &receipt, request.max_output_bytes)?;
-                        request
-                            .scope
-                            .run(async {
-                                ports
-                                    .journal
-                                    .record_result(JournalEvent::DelegationResult {
-                                        receipt: Box::new(receipt.clone()),
-                                    })
-                                    .await
-                            })
-                            .await?;
-                        if let Some(replayed) = receipt.replay.clone() {
-                            model_replay.push(replayed);
-                        }
-                        let text = receipt
-                            .snapshot
-                            .result
-                            .clone()
-                            .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state));
-                        messages.push(observation_text_with_coverage(
-                            text,
-                            receipt.snapshot.coverage.clone(),
-                        ));
-                        steps.push(EngineStep::Delegation(Box::new(receipt)));
-                    }
-                }
-                if messages.len() > floe_agent_contract::MAX_AGENT_MESSAGES {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-            }
-            request
-                .scope
-                .run(async {
-                    ports
-                        .journal
-                        .checkpoint(JournalEvent::Checkpoint {
-                            iteration: iteration + 1,
-                        })
-                        .await
-                })
-                .await?;
+        Drive {
+            config: &self.config,
+            request,
+            ports,
         }
-        Ok(EngineReport {
-            steps,
-            output: None,
-            iterations: request.max_iterations,
-            attempt_ids: attempts,
-        })
+        .run()
+        .await
     }
 
     pub async fn drive_with_default_validator(
         &self,
         request: EngineRequest,
+        projection: &dyn ModelProjectionPort,
         model: &dyn ModelPort,
         tools: &dyn ToolPort,
         delegation: &dyn DelegationPort,
@@ -501,6 +163,7 @@ impl Engine {
         self.drive(
             request,
             EnginePorts {
+                projection,
                 model,
                 tools,
                 delegation,
@@ -512,39 +175,779 @@ impl Engine {
     }
 }
 
-fn observation(result: &ToolResult) -> AgentMessage {
-    AgentMessage {
-        message_id: Uuid::new_v4(),
-        role: MessageRole::Tool,
-        text: result.text.clone(),
-        call_id: Some(result.call_id),
-        coverage: result.coverage.clone(),
+struct Drive<'a> {
+    config: &'a EngineConfig,
+    request: EngineRequest,
+    ports: EnginePorts<'a>,
+}
+
+impl Drive<'_> {
+    async fn run(self) -> Result<EngineReport, AgentFailure> {
+        let mut drive = ActiveDrive {
+            config: self.config,
+            request: self.request,
+            ports: self.ports,
+            execution_id: Uuid::new_v4(),
+            conversation: ModelConversation {
+                history: Vec::new(),
+                current_turn: Vec::new(),
+            },
+            model_replay: Vec::new(),
+            steps: Vec::new(),
+            attempts: Vec::new(),
+            completed_iterations: 0,
+            tool_calls: 0,
+            delegations: 0,
+            unavailable: HashMap::new(),
+            seen_invocations: HashSet::new(),
+        };
+        drive.conversation = drive.request.conversation.clone();
+        drive.model_replay.clone_from(&drive.request.replay);
+        if let Some(resume) = drive.request.resume.clone() {
+            drive.execution_id = resume.validated_batch.execution_id;
+            if !resume
+                .validated_batch
+                .pinned_revisions_hold(&drive.request.allowed_catalog)
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            // Re-record the resumed batch so this run's journal is self-contained;
+            // a crash mid-resume stays recoverable without the older journal.
+            drive
+                .checkpoint(JournalEvent::ValidatedBatch {
+                    batch: resume.validated_batch.clone(),
+                })
+                .await?;
+            drive
+                .checkpoint(JournalEvent::BatchProgress {
+                    cursor: resume.cursor.clone(),
+                })
+                .await?;
+            // Corrections are deterministic given the batch and the catalog, so a
+            // resume recomputes rather than stores them.
+            let corrections = validate_model_steps(
+                &resume.validated_batch.steps,
+                &drive.request.allowed_catalog,
+            )?;
+            if let Some(report) = drive
+                .execute_batch(
+                    &resume.validated_batch,
+                    resume.cursor.next_step_index,
+                    &corrections,
+                )
+                .await?
+            {
+                return Ok(report);
+            }
+            drive.completed_iterations += 1;
+            drive
+                .checkpoint(JournalEvent::Checkpoint {
+                    iteration: drive.completed_iterations,
+                })
+                .await?;
+        }
+        for _ in 0..drive.request.max_iterations {
+            if drive.request.scope.cancellation().is_cancelled() {
+                return Err(floe_execution::tasks::cancellation_failure(
+                    drive.request.scope.cancellation(),
+                ));
+            }
+            let (batch, corrections) = drive.validated_batch().await?;
+            drive
+                .checkpoint(JournalEvent::ValidatedBatch {
+                    batch: batch.clone(),
+                })
+                .await?;
+            drive
+                .checkpoint(JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: batch.batch_id,
+                        next_step_index: 0,
+                    },
+                })
+                .await?;
+            if let Some(report) = drive.execute_batch(&batch, 0, &corrections).await? {
+                return Ok(report);
+            }
+            drive.completed_iterations += 1;
+            drive
+                .checkpoint(JournalEvent::Checkpoint {
+                    iteration: drive.completed_iterations,
+                })
+                .await?;
+        }
+        Ok(EngineReport {
+            steps: drive.steps,
+            output: None,
+            iterations: drive.completed_iterations,
+            attempt_ids: drive.attempts,
+            execution_id: drive.execution_id,
+        })
     }
 }
-fn observation_text(text: &str) -> AgentMessage {
-    observation_text_with_call(text.to_owned(), None)
+
+struct ActiveDrive<'a> {
+    config: &'a EngineConfig,
+    request: EngineRequest,
+    ports: EnginePorts<'a>,
+    execution_id: Uuid,
+    conversation: ModelConversation,
+    model_replay: Vec<ReplayReceipt>,
+    steps: Vec<EngineStep>,
+    attempts: Vec<Uuid>,
+    completed_iterations: u32,
+    tool_calls: u32,
+    delegations: u32,
+    unavailable: HashMap<String, u8>,
+    seen_invocations: HashSet<InvocationKey>,
 }
-fn observation_text_with_coverage(
-    text: String,
-    coverage: floe_agent_contract::DependencyCoverage,
-) -> AgentMessage {
-    AgentMessage {
-        message_id: Uuid::new_v4(),
-        role: MessageRole::Tool,
-        text,
-        call_id: None,
-        coverage,
+
+impl ActiveDrive<'_> {
+    fn report(&self, output: Option<String>) -> EngineReport {
+        EngineReport {
+            steps: self.steps.clone(),
+            output,
+            iterations: self.completed_iterations + 1,
+            attempt_ids: self.attempts.clone(),
+            execution_id: self.execution_id,
+        }
+    }
+
+    async fn checkpoint(&self, event: JournalEvent) -> Result<JournalAck, AgentFailure> {
+        self.request.scope.run(self.ports.journal.checkpoint(event)).await
+    }
+
+    async fn record_model_result(
+        &self,
+        attempt_id: Uuid,
+        usage: ModelUsage,
+    ) -> Result<(), AgentFailure> {
+        self.request
+            .scope
+            .run(self.ports.journal.record_result(JournalEvent::ModelResult {
+                attempt_id,
+                usage,
+            }))
+            .await?;
+        Ok(())
+    }
+
+    /// One validated batch: project, attempt (plus at most one host correction
+    /// on invalid structured output), then validate the whole batch before
+    /// anything is dispatched.
+    async fn validated_batch(
+        &mut self,
+    ) -> Result<(ValidatedModelBatch, Vec<Option<String>>), AgentFailure> {
+        let mut correction: Option<ModelCorrection> = None;
+        loop {
+            let projection_request = ModelProjectionRequest {
+                principal: self.request.principal.clone(),
+                role: self.request.role_spec.clone(),
+                conversation: self.conversation.clone(),
+                catalog: self.request.allowed_catalog.clone(),
+                max_output_bytes: self.request.max_output_bytes,
+                correction: correction.clone(),
+            };
+            projection_request.validate()?;
+            let projection = self
+                .request
+                .scope
+                .run(
+                    self.ports
+                        .projection
+                        .project(projection_request, &self.request.scope),
+                )
+                .await?;
+            projection.validate()?;
+            let attempt_id = Uuid::new_v4();
+            self.attempts.push(attempt_id);
+            let intent = self
+                .request
+                .scope
+                .run(self.ports.journal.record_intent(JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: projection.projection_ref,
+                }))
+                .await?;
+            if let JournalAck::Replayed(receipt) = intent {
+                return Err(if receipt.tool_id.is_some() || receipt.agent_id.is_some() {
+                    AgentFailure::InvalidInput
+                } else {
+                    AgentFailure::Conflict
+                });
+            }
+            if tokio::time::Instant::now() >= self.request.scope.deadline() {
+                self.request
+                    .scope
+                    .cancellation()
+                    .cancel_with_reason(floe_execution::CancelReason::Deadline);
+                return Err(AgentFailure::DeadlineExceeded);
+            }
+            if self.request.scope.cancellation().is_cancelled() {
+                return Err(floe_execution::tasks::cancellation_failure(
+                    self.request.scope.cancellation(),
+                ));
+            }
+            let model_projection_ref = projection.projection_ref;
+            let model_request = ModelRequest {
+                attempt_id,
+                principal: self.request.principal.clone(),
+                projection,
+                catalog: self.request.allowed_catalog.clone(),
+                purpose: self.request.purpose.clone(),
+                consumer: self.request.consumer.clone(),
+                preferred_profile_id: self.request.preferred_profile_id.clone(),
+                replay: self.model_replay.clone(),
+            };
+            let model_scope = self.request.scope.child_scope(
+                self.request.scope.deadline(),
+                self.config.max_attempt_tokens.max(1),
+                self.config.max_attempt_cost_micros.max(1),
+                None,
+            );
+            let response = model_scope
+                .run(self.ports.model.generate(model_request, &model_scope))
+                .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(failure) => {
+                    // Pair every intent with a result so recovery never sees a
+                    // dangling attempt from a failed call; no usage was reported.
+                    self.record_model_result(attempt_id, ModelUsage::default())
+                        .await?;
+                    if is_correctable(&failure) && correction.is_none() {
+                        correction = Some(ModelCorrection {
+                            text: MODEL_CORRECTION_TEXT.into(),
+                        });
+                        continue;
+                    }
+                    return Err(failure);
+                }
+            };
+            self.record_model_result(attempt_id, response.usage).await?;
+            match self.validated_response(attempt_id, model_projection_ref, &response) {
+                Ok(validated) => return Ok(validated),
+                Err(failure) => {
+                    if is_correctable(&failure) && correction.is_none() {
+                        correction = Some(ModelCorrection {
+                            text: MODEL_CORRECTION_TEXT.into(),
+                        });
+                        continue;
+                    }
+                    return Err(failure);
+                }
+            }
+        }
+    }
+
+    fn validated_response(
+        &self,
+        attempt_id: Uuid,
+        projection_ref: ProjectionRef,
+        response: &ModelResponse,
+    ) -> Result<(ValidatedModelBatch, Vec<Option<String>>), AgentFailure> {
+        if response.attempt_id != attempt_id || response.steps.is_empty() {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        let encoded_steps = serde_json::to_vec(&response.steps)
+            .map_err(|_| AgentFailure::InvalidModelOutput)?;
+        if encoded_steps.len() > self.request.max_output_bytes {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let corrections = validate_model_steps(&response.steps, &self.request.allowed_catalog)?;
+        for step in &response.steps {
+            if let ModelStep::Answer { text, artifacts } = step {
+                self.ports
+                    .validator
+                    .validate(&self.request.role_spec.role_id, text, artifacts)?;
+                if artifacts
+                    .iter()
+                    .any(|artifact| artifact.validate(self.request.max_output_bytes).is_err())
+                {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
+            }
+        }
+        let (tool_revisions, agent_revisions) =
+            pin_revisions(&response.steps, &self.request.allowed_catalog);
+        Ok((
+            ValidatedModelBatch {
+                execution_id: self.execution_id,
+                attempt_id,
+                projection_ref,
+                batch_id: Uuid::new_v4(),
+                steps: response.steps.clone(),
+                catalog_revision: self.request.allowed_catalog.revision,
+                tool_revisions,
+                agent_revisions,
+            },
+            corrections,
+        ))
+    }
+
+    /// Execute stored steps from `start_index`. Returns a report when an answer
+    /// commits; `None` means the batch ran out without one. Step ordinals are
+    /// batch indexes, so identities never shift under replay or resume.
+    async fn execute_batch(
+        &mut self,
+        batch: &ValidatedModelBatch,
+        start_index: u32,
+        corrections: &[Option<String>],
+    ) -> Result<Option<EngineReport>, AgentFailure> {
+        for (step_index, step) in batch.steps.iter().enumerate() {
+            let ordinal = step_index as u32;
+            if ordinal < start_index {
+                continue;
+            }
+            match step {
+                ModelStep::Preamble { text } => {
+                    self.push_current(ModelConversationEntry::Preamble {
+                        message_id: Uuid::new_v4(),
+                        text: text.clone(),
+                    })?;
+                }
+                ModelStep::Answer { text, artifacts } => {
+                    self.ports.validator.validate(
+                        &self.request.role_spec.role_id,
+                        text,
+                        artifacts,
+                    )?;
+                    self.request
+                        .scope
+                        .run(self.ports.journal.record_output(JournalEvent::Output {
+                            text: text.clone(),
+                            artifacts: artifacts.clone(),
+                        }))
+                        .await?;
+                    self.steps.push(EngineStep::Answer {
+                        text: text.clone(),
+                        artifacts: artifacts.clone(),
+                    });
+                    return Ok(Some(self.report(Some(text.clone()))));
+                }
+                ModelStep::CallTool {
+                    tool_id,
+                    definition_revision,
+                    input,
+                } => {
+                    self.execute_tool(
+                        batch,
+                        ordinal,
+                        corrections.get(step_index).and_then(Option::as_ref),
+                        tool_id,
+                        *definition_revision,
+                        input,
+                    )
+                    .await?;
+                }
+                ModelStep::Delegate {
+                    agent_id,
+                    definition_revision,
+                    message,
+                    context_refs,
+                } => {
+                    self.execute_delegation(
+                        batch,
+                        ordinal,
+                        agent_id,
+                        *definition_revision,
+                        message,
+                        context_refs,
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    async fn execute_tool(
+        &mut self,
+        batch: &ValidatedModelBatch,
+        ordinal: u32,
+        correction: Option<&String>,
+        tool_id: &str,
+        definition_revision: u64,
+        input: &str,
+    ) -> Result<(), AgentFailure> {
+        if self.tool_calls >= self.config.max_tool_calls {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        self.tool_calls += 1;
+        // Malformed arguments are invalid model output (host-correctable), even
+        // when the tool itself is unknown; every path below keeps the input.
+        floe_agent_contract::validate_tool_input(input)?;
+        if tool_id.trim().is_empty() || definition_revision == 0 {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        if let Some(reason) = correction {
+            let mut result = unavailable_tool(Uuid::new_v4(), reason);
+            result.issue = Some(floe_agent_contract::OutcomeIssue {
+                failure: AgentFailure::InvalidModelOutput,
+                retryable: true,
+            });
+            self.push_current(soft_tool_exchange(
+                tool_id,
+                definition_revision,
+                input,
+                &result,
+            ))?;
+            self.steps.push(EngineStep::Tool(result));
+            return Ok(());
+        }
+        let known = self.request.allowed_catalog.tools.iter().any(|descriptor| {
+            descriptor.id == tool_id && descriptor.definition_revision == definition_revision
+        });
+        if !self
+            .request
+            .allowed_catalog
+            .tools
+            .iter()
+            .any(|descriptor| descriptor.id == tool_id)
+        {
+            let result = unavailable_tool(Uuid::new_v4(), "tool is not registered");
+            self.push_current(soft_tool_exchange(
+                tool_id,
+                definition_revision,
+                input,
+                &result,
+            ))?;
+            self.steps.push(EngineStep::Tool(result));
+            return Ok(());
+        }
+        if !known {
+            let result = unavailable_tool(Uuid::new_v4(), "tool descriptor is stale");
+            self.push_current(soft_tool_exchange(
+                tool_id,
+                definition_revision,
+                input,
+                &result,
+            ))?;
+            self.steps.push(EngineStep::Tool(result));
+            return Ok(());
+        }
+        let invocation_key =
+            stable_invocation_key(self.execution_id, batch.batch_id, ordinal, InvocationKind::Tool);
+        let call = ToolCall {
+            call_id: stable_call_id(self.execution_id, batch.batch_id, ordinal),
+            invocation_key,
+            tool_id: tool_id.to_owned(),
+            definition_revision,
+            input: input.to_owned(),
+        };
+        if !self.seen_invocations.insert(invocation_key) {
+            return Err(AgentFailure::Conflict);
+        }
+        let intent = self
+            .request
+            .scope
+            .run(
+                self.ports
+                    .journal
+                    .record_intent(JournalEvent::ToolIntent { call: call.clone() }),
+            )
+            .await?;
+        let result = if let JournalAck::Replayed(receipt) = intent {
+            verify_tool_replay(&self.request, &call, &receipt)?;
+            ToolResult {
+                call_id: call.call_id,
+                text: receipt.result.clone(),
+                artifacts: receipt.tool_artifacts.clone(),
+                coverage: receipt.tool_coverage.clone(),
+                issue: receipt.tool_issue.map(|failure| {
+                    floe_agent_contract::OutcomeIssue {
+                        failure,
+                        retryable: false,
+                    }
+                }),
+            }
+        } else if let Some(receipt) = find_tool_replay(&self.model_replay, &call) {
+            // A settled result survived without its cursor ack: reuse it under
+            // the same identity and only advance the cursor, never redispatch.
+            verify_resumed_tool_replay(&self.request, &call, &receipt)?;
+            ToolResult {
+                call_id: call.call_id,
+                text: receipt.result.clone(),
+                artifacts: receipt.tool_artifacts.clone(),
+                coverage: receipt.tool_coverage.clone(),
+                issue: receipt.tool_issue.map(|failure| {
+                    floe_agent_contract::OutcomeIssue {
+                        failure,
+                        retryable: false,
+                    }
+                }),
+            }
+        } else {
+            let child = self.request.scope.child_scope(
+                self.request.scope.deadline(),
+                self.config.max_attempt_tokens.max(1),
+                self.config.max_attempt_cost_micros.max(1),
+                None,
+            );
+            match child
+                .run(self.ports.tools.invoke(call.clone(), &child))
+                .await
+            {
+                Ok(result) => {
+                    self.model_replay
+                        .push(tool_replay(&self.request, &call, &result));
+                    result
+                }
+                Err(
+                    error @ (AgentFailure::CapabilityDenied
+                    | AgentFailure::CapabilityUnavailable
+                    | AgentFailure::PolicyDenied
+                    | AgentFailure::ConsentRequired),
+                ) => {
+                    let count = self.unavailable.entry(tool_id.to_owned()).or_default();
+                    *count += 1;
+                    if *count > 2 {
+                        return Err(AgentFailure::Stalled);
+                    }
+                    let mut result = unavailable_tool(call.call_id, "tool unavailable");
+                    result.issue = Some(floe_agent_contract::OutcomeIssue {
+                        failure: error,
+                        retryable: true,
+                    });
+                    result
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        result.validate(call.call_id, self.request.max_output_bytes)?;
+        self.request
+            .scope
+            .run(
+                self.ports
+                    .journal
+                    .record_result(JournalEvent::ToolResult {
+                        result: result.clone(),
+                    }),
+            )
+            .await?;
+        self.checkpoint(JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: ordinal + 1,
+            },
+        })
+        .await?;
+        self.push_current(ModelConversationEntry::ToolExchange {
+            call,
+            result: result.clone(),
+        })?;
+        self.steps.push(EngineStep::Tool(result));
+        Ok(())
+    }
+
+    async fn execute_delegation(
+        &mut self,
+        batch: &ValidatedModelBatch,
+        ordinal: u32,
+        agent_id: &str,
+        definition_revision: u64,
+        message: &str,
+        context_refs: &[String],
+    ) -> Result<(), AgentFailure> {
+        if self.delegations >= self.config.max_delegations {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        self.delegations += 1;
+        let Some(card) = self
+            .request
+            .allowed_catalog
+            .cards
+            .iter()
+            .find(|item| item.card.id == agent_id)
+        else {
+            self.push_current(ModelConversationEntry::Assistant {
+                message_id: Uuid::new_v4(),
+                text: "delegation agent is not registered".into(),
+            })?;
+            return Ok(());
+        };
+        if card.definition_revision != definition_revision {
+            self.push_current(ModelConversationEntry::Assistant {
+                message_id: Uuid::new_v4(),
+                text: "delegation descriptor is stale".into(),
+            })?;
+            return Ok(());
+        }
+        let invocation_key = stable_invocation_key(
+            self.execution_id,
+            batch.batch_id,
+            ordinal,
+            InvocationKind::Delegation,
+        );
+        let delegation = DelegationRequest {
+            task_id: stable_task_id(self.execution_id, batch.batch_id, ordinal),
+            parent_run_id: self.request.scope.root_run_id().map(|id| id.as_uuid()),
+            principal: self.request.principal.clone(),
+            invocation_key,
+            selected_agent_id: agent_id.to_owned(),
+            selected_definition_revision: definition_revision,
+            message: message.to_owned(),
+            context_refs: context_refs.to_owned(),
+        };
+        if !self.seen_invocations.insert(delegation.invocation_key) {
+            return Err(AgentFailure::Conflict);
+        }
+        let intent = self
+            .request
+            .scope
+            .run(self.ports.journal.record_intent(JournalEvent::DelegationIntent {
+                request: delegation.clone(),
+            }))
+            .await?;
+        let child = self.request.scope.child_scope(
+            self.request.scope.deadline(),
+            self.config.max_attempt_tokens.max(1),
+            self.config.max_attempt_cost_micros.max(1),
+            Some(delegation.task_id),
+        );
+        let receipt = if let JournalAck::Replayed(replay_receipt) = intent {
+            replay_task(
+                &delegation,
+                &replay_receipt,
+                self.request.max_output_bytes,
+            )?
+        } else if let Some(replay_receipt) = find_task_replay(&self.model_replay, &delegation) {
+            // Same-identity result replay: the receipt is re-issued under this
+            // run so the new journal pairs; outcome and coverage are preserved.
+            let mut receipt = replay_resumed_task(
+                &delegation,
+                &replay_receipt,
+                self.request.max_output_bytes,
+            )?;
+            receipt.snapshot.parent_run_id = delegation.parent_run_id;
+            receipt.snapshot.validate(self.request.max_output_bytes)?;
+            receipt
+        } else {
+            let delegated = self
+                .ports
+                .delegation
+                .delegate(delegation.clone(), &child);
+            let receipt = child.run(delegated).await?;
+            verify_receipt(&delegation, &receipt, self.request.max_output_bytes)?;
+            if let Some(replayed) = receipt.replay.clone() {
+                self.model_replay.push(replayed);
+            }
+            receipt
+        };
+        self.request
+            .scope
+            .run(self.ports.journal.record_result(JournalEvent::DelegationResult {
+                receipt: Box::new(receipt.clone()),
+            }))
+            .await?;
+        self.checkpoint(JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: ordinal + 1,
+            },
+        })
+        .await?;
+        self.push_current(ModelConversationEntry::DelegationExchange {
+            request: delegation,
+            receipt: receipt.clone(),
+        })?;
+        self.steps.push(EngineStep::Delegation(Box::new(receipt)));
+        Ok(())
+    }
+
+    fn push_current(&mut self, entry: ModelConversationEntry) -> Result<(), AgentFailure> {
+        entry.validate()?;
+        self.conversation.current_turn.push(entry);
+        if self.conversation.len() > floe_agent_contract::MAX_AGENT_MESSAGES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        Ok(())
     }
 }
-fn observation_text_with_call(text: String, call_id: Option<Uuid>) -> AgentMessage {
-    AgentMessage {
-        message_id: Uuid::new_v4(),
-        role: MessageRole::Tool,
-        text,
-        call_id,
-        coverage: floe_agent_contract::DependencyCoverage::Unknown,
+
+fn is_correctable(failure: &AgentFailure) -> bool {
+    matches!(
+        failure,
+        AgentFailure::InvalidModelOutput
+            | AgentFailure::LocalModelInvalidOutput
+            | AgentFailure::ServerModelInvalidOutput
+    )
+}
+
+/// Pin only references that matched the catalog at validation time. Steps that
+/// reference unknown tools or agents soft-fail at execution both now and on
+/// resume; pinning them would wrongly demand their presence later.
+fn pin_revisions(
+    steps: &[ModelStep],
+    catalog: &AllowedCatalog,
+) -> (Vec<PinnedToolRevision>, Vec<PinnedAgentRevision>) {
+    let mut tools = Vec::new();
+    let mut agents = Vec::new();
+    for step in steps {
+        match step {
+            ModelStep::CallTool {
+                tool_id,
+                definition_revision,
+                ..
+            } => {
+                if catalog.tools.iter().any(|descriptor| {
+                    descriptor.id == *tool_id
+                        && descriptor.definition_revision == *definition_revision
+                }) && !tools.iter().any(|pinned: &PinnedToolRevision| {
+                    pinned.tool_id == *tool_id
+                }) {
+                    tools.push(PinnedToolRevision {
+                        tool_id: tool_id.clone(),
+                        definition_revision: *definition_revision,
+                    });
+                }
+            }
+            ModelStep::Delegate {
+                agent_id,
+                definition_revision,
+                ..
+            } => {
+                if catalog.cards.iter().any(|definition| {
+                    definition.card.id == *agent_id
+                        && definition.definition_revision == *definition_revision
+                }) && !agents.iter().any(|pinned: &PinnedAgentRevision| {
+                    pinned.agent_id == *agent_id
+                }) {
+                    agents.push(PinnedAgentRevision {
+                        agent_id: agent_id.clone(),
+                        definition_revision: *definition_revision,
+                    });
+                }
+            }
+            ModelStep::Preamble { .. } | ModelStep::Answer { .. } => {}
+        }
+    }
+    tools.sort_by(|left, right| left.tool_id.cmp(&right.tool_id));
+    agents.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+    (tools, agents)
+}
+
+/// Memory-only exchange for a step that never dispatches: the attempted call
+/// is preserved so the model sees what failed, but the identity is random and
+/// must never be journaled or replayed.
+fn soft_tool_exchange(
+    tool_id: &str,
+    definition_revision: u64,
+    input: &str,
+    result: &ToolResult,
+) -> ModelConversationEntry {
+    ModelConversationEntry::ToolExchange {
+        call: ToolCall {
+            call_id: result.call_id,
+            invocation_key: InvocationKey::new(),
+            tool_id: tool_id.to_owned(),
+            definition_revision,
+            input: input.to_owned(),
+        },
+        result: result.clone(),
     }
 }
+
 fn unavailable_tool(call_id: Uuid, text: &str) -> ToolResult {
     ToolResult {
         call_id,
@@ -558,6 +961,7 @@ fn unavailable_tool(call_id: Uuid, text: &str) -> ToolResult {
 fn input_digest(input: &str) -> [u8; 32] {
     floe_agent_contract::input_digest(input)
 }
+
 fn tool_replay(request: &EngineRequest, call: &ToolCall, result: &ToolResult) -> ReplayReceipt {
     ReplayReceipt {
         principal: request.principal.clone(),
@@ -580,22 +984,32 @@ fn tool_replay(request: &EngineRequest, call: &ToolCall, result: &ToolResult) ->
         tool_issue: result.issue.as_ref().map(|issue| issue.failure),
     }
 }
-fn stable_invocation_key(request: &EngineRequest, iteration: u32, ordinal: u32) -> InvocationKey {
-    let identity = format!(
-        "{}:{:?}:{:?}:{}:{}:{}",
-        request.principal,
-        request.scope.root_run_id(),
-        request.scope.task_id(),
-        request.scope.trace_context().request_id(),
-        iteration,
-        ordinal
-    );
-    InvocationKey::from_uuid(Uuid::new_v5(
-        &request.scope.trace_context().request_id(),
-        identity.as_bytes(),
-    ))
-    .expect("uuid v5 is non-nil")
+
+fn find_tool_replay(replay: &[ReplayReceipt], call: &ToolCall) -> Option<ReplayReceipt> {
+    replay
+        .iter()
+        .find(|receipt| {
+            receipt.agent_id.is_none()
+                && receipt.invocation_key == call.invocation_key
+                && receipt.call_id == call.call_id
+        })
+        .cloned()
 }
+
+fn find_task_replay(
+    replay: &[ReplayReceipt],
+    delegation: &DelegationRequest,
+) -> Option<ReplayReceipt> {
+    replay
+        .iter()
+        .find(|receipt| {
+            receipt.tool_id.is_none()
+                && receipt.invocation_key == delegation.invocation_key
+                && receipt.call_id == delegation.task_id.as_uuid()
+        })
+        .cloned()
+}
+
 fn replay_task(
     request: &DelegationRequest,
     receipt: &ReplayReceipt,
@@ -627,6 +1041,42 @@ fn replay_task(
     }
     Ok(task)
 }
+
+/// Cross-run result replay: same invocation identity and input, but the linkage
+/// (run, parent) belongs to the run that recorded it, so linkage is not
+/// compared here. The caller re-issues the receipt under this run.
+fn replay_resumed_task(
+    request: &DelegationRequest,
+    receipt: &ReplayReceipt,
+    maximum_bytes: usize,
+) -> Result<TaskReceipt, AgentFailure> {
+    verify_resumed_task_replay(request, receipt)?;
+    let task = TaskReceipt {
+        task_id: request.task_id,
+        snapshot: floe_agent_contract::TaskSnapshot {
+            task_id: request.task_id,
+            parent_run_id: request.parent_run_id,
+            principal: request.principal.clone(),
+            agent_id: request.selected_agent_id.clone(),
+            definition_revision: request.selected_definition_revision,
+            state: receipt.task_state.ok_or(AgentFailure::InvalidInput)?,
+            result: receipt.task_result.clone(),
+            artifacts: receipt.task_artifacts.clone(),
+            coverage: receipt.task_coverage.clone(),
+            issue: receipt.task_issue,
+        },
+        replay: Some(receipt.clone()),
+    };
+    task.snapshot.validate(maximum_bytes)?;
+    if serde_json::to_vec(&task)
+        .map(|encoded| encoded.len() > maximum_bytes)
+        .unwrap_or(true)
+    {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    Ok(task)
+}
+
 fn verify_receipt(
     request: &DelegationRequest,
     receipt: &TaskReceipt,
@@ -654,6 +1104,7 @@ fn verify_receipt(
         .then_some(())
         .ok_or(AgentFailure::InvalidInput)
 }
+
 fn verify_tool_replay(
     request: &EngineRequest,
     call: &ToolCall,
@@ -676,6 +1127,28 @@ fn verify_tool_replay(
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)
 }
+
+fn verify_resumed_tool_replay(
+    request: &EngineRequest,
+    call: &ToolCall,
+    receipt: &ReplayReceipt,
+) -> Result<(), AgentFailure> {
+    (receipt.principal == request.principal
+        && receipt.agent_id.is_none()
+        && receipt.tool_id.as_deref() == Some(call.tool_id.as_str())
+        && receipt.definition_revision == call.definition_revision
+        && receipt.invocation_key == call.invocation_key
+        && receipt.call_id == call.call_id
+        && receipt.task_state.is_none()
+        && receipt.task_result.is_none()
+        && receipt.task_artifacts.is_empty()
+        && receipt.task_coverage == floe_agent_contract::DependencyCoverage::Unknown
+        && receipt.task_issue.is_none()
+        && receipt.input_digest == input_digest(&call.input))
+    .then_some(())
+    .ok_or(AgentFailure::InvalidInput)
+}
+
 fn verify_task_replay(
     request: &DelegationRequest,
     receipt: &ReplayReceipt,
@@ -692,6 +1165,37 @@ fn verify_task_replay(
         && receipt.definition_revision == request.selected_definition_revision
         && receipt.invocation_key == request.invocation_key
         && receipt.task_state.is_some()
+        && receipt.tool_artifacts.is_empty()
+        && receipt.tool_issue.is_none()
+        && receipt
+            .task_artifacts
+            .iter()
+            .all(|artifact| artifact.coverage.validate().is_ok())
+        && receipt.task_coverage.validate().is_ok()
+        && receipt.input_digest == input_digest(&request.message))
+    .then_some(())
+    .ok_or(AgentFailure::InvalidInput)
+}
+
+fn verify_resumed_task_replay(
+    request: &DelegationRequest,
+    receipt: &ReplayReceipt,
+) -> Result<(), AgentFailure> {
+    (receipt.principal == request.principal
+        && receipt.task_id == Some(request.task_id)
+        && receipt.call_id == request.task_id.as_uuid()
+        && receipt.agent_id.as_deref() == Some(request.selected_agent_id.as_str())
+        && receipt.tool_id.is_none()
+        && receipt.definition_revision == request.selected_definition_revision
+        && receipt.invocation_key == request.invocation_key
+        && receipt.task_state.is_some()
+        && !matches!(
+            receipt.task_state,
+            Some(
+                floe_agent_contract::TaskState::Submitted
+                    | floe_agent_contract::TaskState::Working
+            )
+        )
         && receipt.tool_artifacts.is_empty()
         && receipt.tool_issue.is_none()
         && receipt
@@ -768,19 +1272,131 @@ fn validate_model_steps(
 #[cfg(test)]
 mod tests {
     use floe_agent_contract::{
-        AllowedCatalog, BoundedContext, DependencyCoverage, EngineRequest, ModelResponse,
-        ModelUsage, RoleSpec, ToolDescriptor,
+        AllowedCatalog, AuthorizedModelProjection, ContextEnvelope, ContextManifest, ContextualData,
+        DataClass, DependencyCoverage, EngineRequest, EngineResumeState, ModelConversation,
+        ModelConversationEntry, ModelProjectionRequest, ModelResponse, ModelUsage, ProjectionRef,
+        RoleSpec, RuntimeContext, ScopedInstructions, ToolDescriptor,
+        prompts::{
+            PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
+        },
     };
     use floe_execution::budget::{BudgetConfig, BudgetLedger};
     use floe_execution::{Cancellation, ExecutionScope};
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
     use std::time::Duration;
     use uuid::Uuid;
 
     use super::*;
+
+    fn test_envelope(
+        conversation: ModelConversation,
+        correction: Option<ModelCorrection>,
+        max_output_bytes: usize,
+    ) -> ContextEnvelope {
+        ContextEnvelope {
+            schema_version: floe_agent_contract::AGENT_VERSION,
+            stable_instructions: PromptAssembly {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                role: PromptRole::Manager,
+                components: vec![
+                    PromptComponent {
+                        kind: PromptComponentKind::BehaviorKernel,
+                        source: "test-kernel".into(),
+                        revision: 1,
+                        content: "kernel".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::Role,
+                        source: "test-role".into(),
+                        revision: 1,
+                        content: "role".into(),
+                    },
+                    PromptComponent {
+                        kind: PromptComponentKind::CapabilityProtocol,
+                        source: "test-protocol".into(),
+                        revision: 1,
+                        content: "protocol".into(),
+                    },
+                ],
+            },
+            scoped_instructions: ScopedInstructions {
+                purpose: "test-purpose".into(),
+                response_contract: "text".into(),
+                available_capabilities: vec![],
+                active_experts: vec![],
+                correction,
+            },
+            contextual_data: ContextualData {
+                projection_version: 1,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            conversation,
+            runtime: RuntimeContext { max_output_bytes },
+            manifest: ContextManifest {
+                prompt_components: vec![],
+                evidence: vec![],
+                memories: vec![],
+                agent_cards: vec![],
+            },
+        }
+    }
+
+    struct Projector {
+        corrections: Arc<Mutex<Vec<Option<ModelCorrection>>>>,
+    }
+    impl Projector {
+        fn new() -> (Self, Arc<Mutex<Vec<Option<ModelCorrection>>>>) {
+            let corrections = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    corrections: Arc::clone(&corrections),
+                },
+                corrections,
+            )
+        }
+    }
+    impl ModelProjectionPort for Projector {
+        fn project<'a>(
+            &'a self,
+            request: ModelProjectionRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>>
+        {
+            request.validate().unwrap();
+            self.corrections
+                .lock()
+                .unwrap()
+                .push(request.correction.clone());
+            let envelope = test_envelope(
+                request.conversation.clone(),
+                request.correction.clone(),
+                request.max_output_bytes,
+            );
+            Box::pin(async move {
+                Ok(AuthorizedModelProjection {
+                    projection_ref: ProjectionRef::new(),
+                    projection_revision: 1,
+                    envelope,
+                    coverage: DependencyCoverage::Independent,
+                    input_data_classes: vec![DataClass::Synthetic],
+                })
+            })
+        }
+    }
+
+    fn has_tool_exchange(request: &ModelRequest) -> bool {
+        let conversation = &request.projection.envelope.conversation;
+        conversation
+            .history
+            .iter()
+            .chain(&conversation.current_turn)
+            .any(|entry| matches!(entry, ModelConversationEntry::ToolExchange { .. }))
+    }
 
     struct Model;
     impl ModelPort for Model {
@@ -790,11 +1406,7 @@ mod tests {
             _: &'a ExecutionScope,
         ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
             Box::pin(async move {
-                let steps = if request
-                    .messages
-                    .iter()
-                    .any(|message| message.role == MessageRole::Tool)
-                {
+                let steps = if has_tool_exchange(&request) {
                     vec![ModelStep::Answer {
                         text: "done".into(),
                         artifacts: vec![],
@@ -839,6 +1451,40 @@ mod tests {
                             artifacts: vec![],
                         },
                     ],
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                })
+            })
+        }
+    }
+
+    struct InvalidOnceModel {
+        calls: Arc<AtomicUsize>,
+    }
+    impl ModelPort for InvalidOnceModel {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let steps = if call == 0 {
+                    vec![ModelStep::Answer {
+                        text: String::new(),
+                        artifacts: vec![],
+                    }]
+                } else {
+                    vec![ModelStep::Answer {
+                        text: "fixed".into(),
+                        artifacts: vec![],
+                    }]
+                };
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps,
                     usage: ModelUsage {
                         tokens: 1,
                         cost_micros: 1,
@@ -909,6 +1555,7 @@ mod tests {
             Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
         }
     }
+
     struct Journal {
         reject_tool: bool,
         model_tokens: Arc<AtomicUsize>,
@@ -950,6 +1597,69 @@ mod tests {
             Box::pin(async { Ok(JournalAck::Accepted { revision: 1 }) })
         }
     }
+
+    struct RecordingJournal {
+        events: Arc<Mutex<Vec<JournalEvent>>>,
+        fail_batch: bool,
+        fail_cursor_from: Option<u32>,
+    }
+    impl RecordingJournal {
+        fn new() -> (Self, Arc<Mutex<Vec<JournalEvent>>>) {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    events: Arc::clone(&events),
+                    fail_batch: false,
+                    fail_cursor_from: None,
+                },
+                events,
+            )
+        }
+    }
+    impl ExecutionJournal for RecordingJournal {
+        fn record_intent<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            self.events.lock().unwrap().push(event);
+            Box::pin(async { Ok(JournalAck::Accepted { revision: 1 }) })
+        }
+        fn record_result<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            self.events.lock().unwrap().push(event);
+            Box::pin(async { Ok(JournalAck::Accepted { revision: 1 }) })
+        }
+        fn record_output<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            self.events.lock().unwrap().push(event);
+            Box::pin(async { Ok(JournalAck::Accepted { revision: 1 }) })
+        }
+        fn checkpoint<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            let fail = self.fail_batch && matches!(event, JournalEvent::ValidatedBatch { .. })
+                || matches!(&event, JournalEvent::BatchProgress { cursor }
+                    if self
+                        .fail_cursor_from
+                        .is_some_and(|from| cursor.next_step_index >= from));
+            if !fail {
+                self.events.lock().unwrap().push(event);
+            }
+            Box::pin(async move {
+                if fail {
+                    Err(AgentFailure::StorageUnavailable)
+                } else {
+                    Ok(JournalAck::Accepted { revision: 1 })
+                }
+            })
+        }
+    }
+
     struct DeadlineAfterAckJournal {
         cancellation: Cancellation,
     }
@@ -1002,16 +1712,17 @@ mod tests {
             principal: "person:test".into(),
             role_spec: RoleSpec {
                 role_id: "neutral".into(),
-                prompt: "answer".into(),
+                instructions: "answer".into(),
                 output_contract: "text".into(),
             },
-            prompt: "question".into(),
             scope,
-            bounded_context: BoundedContext {
-                text: "context".into(),
-                coverage: DependencyCoverage::Independent,
+            conversation: ModelConversation {
+                history: vec![],
+                current_turn: vec![ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: "question".into(),
+                }],
             },
-            messages: vec![],
             allowed_catalog: AllowedCatalog {
                 cards: vec![],
                 tools: vec![ToolDescriptor {
@@ -1023,9 +1734,13 @@ mod tests {
                 }],
                 revision: 1,
             },
+            purpose: "test-purpose".into(),
+            consumer: "test-consumer".into(),
+            preferred_profile_id: None,
             max_iterations: 3,
             max_output_bytes: 1024,
             replay: vec![],
+            resume: None,
         }
     }
 
@@ -1039,6 +1754,23 @@ mod tests {
         )
     }
 
+    fn ports<'a>(
+        projection: &'a Projector,
+        model: &'a dyn ModelPort,
+        tools: &'a dyn ToolPort,
+        journal: &'a dyn ExecutionJournal,
+        validator: &'a dyn FinalPayloadValidator,
+    ) -> EnginePorts<'a> {
+        EnginePorts {
+            projection,
+            model,
+            tools,
+            delegation: &Delegations,
+            journal,
+            validator,
+        }
+    }
+
     #[tokio::test]
     async fn drives_tool_then_answer_without_domain_ports() {
         let tools = Tools {
@@ -1048,16 +1780,11 @@ mod tests {
             reject_tool: false,
             model_tokens: Arc::new(AtomicUsize::new(0)),
         };
+        let (projection, _) = Projector::new();
         let report = Engine::default()
             .drive(
                 request(scope()),
-                EnginePorts {
-                    model: &Model,
-                    tools: &tools,
-                    delegation: &Delegations,
-                    journal: &journal,
-                    validator: &Validator,
-                },
+                ports(&projection, &Model, &tools, &journal, &Validator),
             )
             .await
             .unwrap();
@@ -1071,19 +1798,20 @@ mod tests {
         let tools = Tools {
             calls: Arc::new(AtomicUsize::new(0)),
         };
+        let (projection, _) = Projector::new();
         let result = Engine::default()
             .drive(
                 request(scope()),
-                EnginePorts {
-                    model: &Model,
-                    tools: &tools,
-                    delegation: &Delegations,
-                    journal: &Journal {
+                ports(
+                    &projection,
+                    &Model,
+                    &tools,
+                    &Journal {
                         reject_tool: true,
                         model_tokens: Arc::new(AtomicUsize::new(0)),
                     },
-                    validator: &Validator,
-                },
+                    &Validator,
+                ),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::StorageUnavailable)));
@@ -1099,21 +1827,18 @@ mod tests {
             reject_tool: false,
             model_tokens: Arc::new(AtomicUsize::new(0)),
         };
+        let (projection, corrections) = Projector::new();
         let result = Engine::default()
             .drive(
                 request(scope()),
-                EnginePorts {
-                    model: &MalformedBatchModel,
-                    tools: &tools,
-                    delegation: &Delegations,
-                    journal: &journal,
-                    validator: &Validator,
-                },
+                ports(&projection, &MalformedBatchModel, &tools, &journal, &Validator),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(journal.model_tokens.load(Ordering::SeqCst), 1);
+        // The malformed batch gets exactly one host correction, then stops.
+        assert_eq!(journal.model_tokens.load(Ordering::SeqCst), 2);
+        assert_eq!(corrections.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -1121,22 +1846,23 @@ mod tests {
         let tools = Tools {
             calls: Arc::new(AtomicUsize::new(0)),
         };
-        let mut request = request(scope());
-        request.allowed_catalog.tools[0].input_schema =
+        let mut engine_request = request(scope());
+        engine_request.allowed_catalog.tools[0].input_schema =
             r#"{"type":"object","required":["value"]}"#.into();
+        let (projection, _) = Projector::new();
         let report = Engine::default()
             .drive(
-                request,
-                EnginePorts {
-                    model: &Model,
-                    tools: &tools,
-                    delegation: &Delegations,
-                    journal: &Journal {
+                engine_request,
+                ports(
+                    &projection,
+                    &Model,
+                    &tools,
+                    &Journal {
                         reject_tool: false,
                         model_tokens: Arc::new(AtomicUsize::new(0)),
                     },
-                    validator: &Validator,
-                },
+                    &Validator,
+                ),
             )
             .await
             .unwrap();
@@ -1149,21 +1875,22 @@ mod tests {
         let tools = Tools {
             calls: Arc::new(AtomicUsize::new(0)),
         };
-        let mut request = request(scope());
-        request.max_output_bytes = 1;
+        let mut engine_request = request(scope());
+        engine_request.max_output_bytes = 1;
+        let (projection, _) = Projector::new();
         let result = Engine::default()
             .drive(
-                request,
-                EnginePorts {
-                    model: &Model,
-                    tools: &tools,
-                    delegation: &Delegations,
-                    journal: &Journal {
+                engine_request,
+                ports(
+                    &projection,
+                    &Model,
+                    &tools,
+                    &Journal {
                         reject_tool: false,
                         model_tokens: Arc::new(AtomicUsize::new(0)),
                     },
-                    validator: &Validator,
-                },
+                    &Validator,
+                ),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::BudgetExceeded)));
@@ -1173,37 +1900,39 @@ mod tests {
     #[tokio::test]
     async fn provider_result_identity_and_bytes_are_fail_closed() {
         let wrong = InvalidResultTools { oversized: false };
+        let (projection, _) = Projector::new();
         let result = Engine::default()
             .drive(
                 request(scope()),
-                EnginePorts {
-                    model: &Model,
-                    tools: &wrong,
-                    delegation: &Delegations,
-                    journal: &Journal {
+                ports(
+                    &projection,
+                    &Model,
+                    &wrong,
+                    &Journal {
                         reject_tool: false,
                         model_tokens: Arc::new(AtomicUsize::new(0)),
                     },
-                    validator: &Validator,
-                },
+                    &Validator,
+                ),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
 
         let oversized = InvalidResultTools { oversized: true };
+        let (projection, _) = Projector::new();
         let result = Engine::default()
             .drive(
                 request(scope()),
-                EnginePorts {
-                    model: &Model,
-                    tools: &oversized,
-                    delegation: &Delegations,
-                    journal: &Journal {
+                ports(
+                    &projection,
+                    &Model,
+                    &oversized,
+                    &Journal {
                         reject_tool: false,
                         model_tokens: Arc::new(AtomicUsize::new(0)),
                     },
-                    validator: &Validator,
-                },
+                    &Validator,
+                ),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
@@ -1212,27 +1941,410 @@ mod tests {
     #[tokio::test]
     async fn deadline_after_intent_ack_is_not_flattened_to_cancelled() {
         let cancellation = Cancellation::new();
-        let mut request = request(scope());
-        request.scope = ExecutionScope::root(
+        let mut engine_request = request(scope());
+        engine_request.scope = ExecutionScope::root(
             cancellation.clone(),
             tokio::time::Instant::now() + Duration::from_secs(5),
-            request.scope.budget().clone(),
-            request.scope.trace_context(),
+            engine_request.scope.budget().clone(),
+            engine_request.scope.trace_context(),
         );
+        let (projection, _) = Projector::new();
         let result = Engine::default()
             .drive(
-                request,
-                EnginePorts {
-                    model: &Model,
-                    tools: &Tools {
+                engine_request,
+                ports(
+                    &projection,
+                    &Model,
+                    &Tools {
                         calls: Arc::new(AtomicUsize::new(0)),
                     },
-                    delegation: &Delegations,
-                    journal: &DeadlineAfterAckJournal { cancellation },
-                    validator: &Validator,
-                },
+                    &DeadlineAfterAckJournal { cancellation },
+                    &Validator,
+                ),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::DeadlineExceeded)));
+    }
+
+    #[tokio::test]
+    async fn validated_batch_ack_failure_dispatches_nothing() {
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (mut journal, events) = RecordingJournal::new();
+        journal.fail_batch = true;
+        let (projection, _) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &Model, &tools, &journal, &Validator),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::StorageUnavailable)));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+        let events = events.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, JournalEvent::Output { .. }))
+        );
+        assert!(
+            events.iter().all(|event| !matches!(
+                event,
+                JournalEvent::ToolIntent { .. } | JournalEvent::DelegationIntent { .. }
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_resumes_validated_batch_without_model_recall() {
+        let execution_id = Uuid::new_v4();
+        let batch = ValidatedModelBatch {
+            execution_id,
+            attempt_id: Uuid::new_v4(),
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::CallTool {
+                tool_id: "lookup".into(),
+                definition_revision: 1,
+                input: "{}".into(),
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![PinnedToolRevision {
+                tool_id: "lookup".into(),
+                definition_revision: 1,
+            }],
+            agent_revisions: vec![],
+        };
+        batch.validate(1024).unwrap();
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, projections) = Projector::new();
+        struct AnswerOnce {
+            calls: Arc<AtomicUsize>,
+            saw_exchange: Arc<AtomicUsize>,
+        }
+        impl ModelPort for AnswerOnce {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if has_tool_exchange(&request) {
+                    self.saw_exchange.fetch_add(1, Ordering::SeqCst);
+                }
+                Box::pin(async move {
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![ModelStep::Answer {
+                            text: "done".into(),
+                            artifacts: vec![],
+                        }],
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let model = AnswerOnce {
+            calls: Arc::new(AtomicUsize::new(0)),
+            saw_exchange: Arc::new(AtomicUsize::new(0)),
+        };
+        let mut engine_request = request(scope());
+        engine_request.resume = Some(EngineResumeState {
+            validated_batch: batch.clone(),
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 0,
+            },
+        });
+        let report = Engine::default()
+            .drive(engine_request, ports(&projection, &model, &tools, &journal, &Validator))
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(report.execution_id, execution_id);
+        // The stored step dispatched fresh (no replay) under its stable identity,
+        // then exactly one model call ran for the following iteration.
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(model.saw_exchange.load(Ordering::SeqCst), 1);
+        assert_eq!(projections.lock().unwrap().len(), 1);
+        let events = events.lock().unwrap();
+        let intent = events.iter().find_map(|event| match event {
+            JournalEvent::ToolIntent { call } => Some(call.clone()),
+            _ => None,
+        });
+        let intent = intent.expect("resumed step journals its intent");
+        assert_eq!(
+            intent.invocation_key,
+            stable_invocation_key(execution_id, batch.batch_id, 0, InvocationKind::Tool)
+        );
+        assert_eq!(
+            intent.call_id,
+            stable_call_id(execution_id, batch.batch_id, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn stable_invocation_identity_is_deterministic_per_step() {
+        let execution_id = Uuid::new_v4();
+        let batch_id = Uuid::new_v4();
+        assert_eq!(
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Tool),
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Tool)
+        );
+        assert_eq!(
+            stable_call_id(execution_id, batch_id, 0),
+            stable_call_id(execution_id, batch_id, 0)
+        );
+        assert_ne!(
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Tool),
+            stable_invocation_key(execution_id, batch_id, 1, InvocationKind::Tool)
+        );
+        assert_ne!(
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Tool),
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Delegation)
+        );
+        assert_ne!(
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Tool),
+            stable_invocation_key(execution_id, Uuid::new_v4(), 0, InvocationKind::Tool)
+        );
+        assert_ne!(
+            stable_call_id(execution_id, batch_id, 0),
+            stable_task_id(execution_id, batch_id, 0).as_uuid()
+        );
+    }
+
+    #[tokio::test]
+    async fn cursor_ack_loss_replays_result_without_side_effect() {
+        // Run 1 journals intent and result, then loses the cursor ack.
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (mut journal, run_events) = RecordingJournal::new();
+        journal.fail_cursor_from = Some(1);
+        let (projection, _) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &Model, &tools, &journal, &Validator),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::StorageUnavailable)));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        let run_events = run_events.lock().unwrap().clone();
+        let batch = run_events.iter().find_map(|event| match event {
+            JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+            _ => None,
+        });
+        let batch = batch.expect("batch is journaled before execution");
+        let (call, result) = run_events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ToolResult { result } => Some(result.clone()),
+                _ => None,
+            })
+            .and_then(|result| {
+                run_events
+                    .iter()
+                    .find_map(|event| match event {
+                        JournalEvent::ToolIntent { call }
+                            if call.call_id == result.call_id =>
+                        {
+                            Some((call.clone(), result.clone()))
+                        }
+                        _ => None,
+                    })
+            })
+            .expect("intent and result are journaled before the lost cursor ack");
+
+        // Run 2 resumes from cursor 0 with the settled receipt carried over a
+        // run boundary (no run linkage): same identity, no redispatch.
+        let receipt = ReplayReceipt {
+            principal: "person:test".into(),
+            run_id: None,
+            task_id: None,
+            agent_id: None,
+            tool_id: Some(call.tool_id.clone()),
+            definition_revision: call.definition_revision,
+            input_digest: floe_agent_contract::input_digest(&call.input),
+            invocation_key: call.invocation_key,
+            call_id: call.call_id,
+            result: result.text.clone(),
+            task_result: None,
+            task_state: None,
+            task_artifacts: vec![],
+            task_coverage: DependencyCoverage::Unknown,
+            task_issue: None,
+            tool_artifacts: result.artifacts.clone(),
+            tool_coverage: result.coverage.clone(),
+            tool_issue: None,
+        };
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, resumed_events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        struct AnswerDone;
+        impl ModelPort for AnswerDone {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                Box::pin(async move {
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![ModelStep::Answer {
+                            text: "done".into(),
+                            artifacts: vec![],
+                        }],
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let mut engine_request = request(scope());
+        engine_request.replay = vec![receipt];
+        engine_request.resume = Some(EngineResumeState {
+            validated_batch: batch.clone(),
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 0,
+            },
+        });
+        let report = Engine::default()
+            .drive(
+                engine_request,
+                ports(&projection, &AnswerDone, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(report.execution_id, batch.execution_id);
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+        let resumed_events = resumed_events.lock().unwrap();
+        let replayed = resumed_events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ToolIntent { call } => Some(call.clone()),
+                _ => None,
+            })
+            .expect("resumed step re-journals its intent in the new run");
+        assert_eq!(replayed.call_id, call.call_id);
+        assert_eq!(replayed.invocation_key, call.invocation_key);
+        assert!(
+            resumed_events.iter().any(|event| matches!(
+                event,
+                JournalEvent::BatchProgress { cursor }
+                    if cursor.batch_id == batch.batch_id && cursor.next_step_index == 1
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_model_output_gets_one_host_correction() {
+        let model = InvalidOnceModel {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (projection, corrections) = Projector::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                ports(
+                    &projection,
+                    &model,
+                    &tools,
+                    &Journal {
+                        reject_tool: false,
+                        model_tokens: Arc::new(AtomicUsize::new(0)),
+                    },
+                    &Validator,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("fixed"));
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(report.attempt_ids.len(), 2);
+        assert_ne!(report.attempt_ids[0], report.attempt_ids[1]);
+        let corrections = corrections.lock().unwrap();
+        assert_eq!(corrections.len(), 2);
+        assert!(corrections[0].is_none());
+        assert_eq!(
+            corrections[1].as_ref().map(|correction| correction.text.as_str()),
+            Some(MODEL_CORRECTION_TEXT)
+        );
+    }
+
+    #[tokio::test]
+    async fn second_invalid_model_output_stops_without_unbounded_retry() {
+        // Always invalid: every call fails, so the engine must stop after the
+        // single correction instead of retrying forever.
+        struct AlwaysInvalid {
+            calls: Arc<AtomicUsize>,
+        }
+        impl ModelPort for AlwaysInvalid {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![ModelStep::Answer {
+                            text: String::new(),
+                            artifacts: vec![],
+                        }],
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let invalid = AlwaysInvalid {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (projection, corrections) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(scope()),
+                ports(
+                    &projection,
+                    &invalid,
+                    &tools,
+                    &Journal {
+                        reject_tool: false,
+                        model_tokens: Arc::new(AtomicUsize::new(0)),
+                    },
+                    &Validator,
+                ),
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
+        assert_eq!(invalid.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(corrections.lock().unwrap().len(), 2);
     }
 }

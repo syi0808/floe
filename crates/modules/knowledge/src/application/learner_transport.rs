@@ -7,9 +7,9 @@
 
 use floe_agent_contract::{
     AGENT_VERSION, AgentCard, AgentContext, AgentFailure, ContextEnvelope, ContextManifest,
-    ContextualData, ConversationContext, DataClass, EvidenceManifestEntry, InferencePolicyDecision,
-    MemoryManifestEntry, ModelPlacement, PromptManifestEntry, RuntimeContext, ScopedInstructions,
-    TransferConsent,
+    ContextualData, DataClass, EvidenceManifestEntry, InferencePolicyDecision,
+    MemoryManifestEntry, ModelConversation, ModelConversationEntry, ModelPlacement,
+    PromptManifestEntry, RuntimeContext, ScopedInstructions, TransferConsent,
 };
 use floe_inference::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
@@ -95,9 +95,10 @@ pub async fn review_with_model(
     }
     // The review must name the turn it came from, even though the turn itself
     // does not cross to the transport.
-    if request.input.turn_ids.last().is_none() {
+    let Some(origin_turn) = request.input.turn_ids.last() else {
         return Err(AgentFailure::InvalidInput);
-    }
+    };
+    let origin_turn = *origin_turn;
     let prompt = learner_prompt();
     prompt.validate()?;
     let policy = InferencePolicyDecision {
@@ -122,8 +123,10 @@ pub async fn review_with_model(
         stable_instructions: prompt.clone(),
         scoped_instructions: ScopedInstructions {
             purpose: policy.purpose.clone(),
+            response_contract: String::new(),
             available_capabilities: vec![],
             active_experts: Vec::<AgentCard>::new(),
+            correction: None,
         },
         contextual_data: ContextualData {
             projection_version: context.projection_version,
@@ -132,12 +135,12 @@ pub async fn review_with_model(
             evidence: vec![],
         },
         // The Learner reviews one digest; there is no conversation to project.
-        conversation: ConversationContext {
+        conversation: ModelConversation {
             history: vec![],
-            current_turn: vec![serde_json::json!({
-                "role": "user",
-                "content": request.input.digest,
-            })],
+            current_turn: vec![ModelConversationEntry::User {
+                message_id: origin_turn,
+                text: request.input.digest.clone(),
+            }],
         },
         runtime: RuntimeContext {
             max_output_bytes: request.max_output_bytes.min(16384),

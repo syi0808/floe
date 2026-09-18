@@ -10,7 +10,8 @@ pub mod turn;
 
 pub use adapters::model_transport::{TransportModelRunner, transport_request};
 pub use api::{
-    ConversationPorts, FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_PROMPT, ManagerConfig,
+    CONVERSATION_MODEL_CONSUMER, ConversationPorts, FINALIZATION_OUTPUT_CONTRACT,
+    FINALIZATION_ROLE_ID, FINALIZATION_ROLE_PROMPT, MANAGER_OUTPUT_CONTRACT, ManagerConfig,
     TurnRequest,
 };
 pub use application::{

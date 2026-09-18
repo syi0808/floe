@@ -296,11 +296,11 @@ fn model_input(request: &ModelTransportRequest) -> Result<serde_json::Value, Age
         "runtime": envelope.runtime,
         "manifest": envelope.manifest,
     }).to_string()})];
-    for mut message in envelope
-        .conversation
-        .history
+    for mut message in super::wire::wire_messages(&envelope.conversation.history)
         .into_iter()
-        .chain(envelope.conversation.current_turn)
+        .chain(super::wire::wire_messages(
+            &envelope.conversation.current_turn,
+        ))
     {
         rewrite_tool_calls(&mut message)?;
         if message["role"] == "tool" {
@@ -830,8 +830,10 @@ mod tests {
                 stable_instructions: prompt.clone(),
                 scoped_instructions: floe_agent_contract::ScopedInstructions {
                     purpose: policy.purpose.clone(),
+                    response_contract: String::new(),
                     available_capabilities: vec![],
                     active_experts: vec![],
+                    correction: None,
                 },
                 contextual_data: floe_agent_contract::ContextualData {
                     projection_version: 1,
@@ -839,9 +841,12 @@ mod tests {
                     optional_context_issues: vec![],
                     evidence: vec![],
                 },
-                conversation: floe_agent_contract::ConversationContext {
+                conversation: floe_agent_contract::ModelConversation {
                     history: vec![],
-                    current_turn: vec![json!({"role": "user", "content": "Hello"})],
+                    current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
+                        message_id: uuid::Uuid::new_v4(),
+                        text: "Hello".into(),
+                    }],
                 },
                 runtime: floe_agent_contract::RuntimeContext {
                     max_output_bytes: 1024,
