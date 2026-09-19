@@ -1,19 +1,65 @@
-# Architecture documentation
+# Current architecture
 
-This directory describes Floe's current architecture, responsibilities and dependency boundaries. Refactoring execution is separate: three Stage overview documents define direction and Stage 2/3 link to step-specific execution plans:
+This directory describes Floe's **current semantic ownership and repository boundaries**. It is the first source to read when a code task needs architectural context.
 
-| Refactoring scope | Document |
+The physical Rust workspace has already moved to the approved modular-monolith package layout. Stage 2 is still active because some production callers have not yet converged on the canonical owner services. Do not confuse a transitional caller with ownership: temporary compatibility does not transfer policy to App, FFI, Flutter or an adapter.
+
+## Layer map
+
+```text
+Product callers
+Flutter / native / server
+        |
+        v
+Bindings
+protocol -> FFI
+        |
+        v
+App
+composition and service wiring
+        |
+        +-------------------------------+
+        |                               |
+        v                               v
+Business modules                    Generic runtime
+Conversation  Experts               Agent Runtime
+Context       Access                Execution
+Inference     Connections
+Actions       Knowledge
+Day
+        |
+        v
+Adapters / platform
+Vault  Providers  Native  Diagnostics
+        |
+        v
+OS / provider / storage
+```
+
+Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts are extensions and may depend on owner APIs; business modules must not depend on the built-in package.
+
+## Read next
+
+| Need | Document |
 |---|---|
-| Completed semantic ownership placement | [Stage 1 — Physical Ownership](../refactoring/stage-1.md) |
-| Active canonical internal-runtime cutover | [Stage 2 — Canonical Internal Runtime](../refactoring/stage-2.md) |
-| Product-boundary and final-composition cutover | [Stage 3 — Product Boundary and Final Composition](../refactoring/stage-3.md) |
+| Exact owner/package responsibilities | [Modules and ownership](modules.md) |
+| General Conversation model/tool/delegation flow | [Runtime](runtime.md) |
+| Authority, provenance, crash recovery and side-effect invariants | [Authority and recovery](authority-recovery.md) |
+| Allowed Rust dependency edges | [Dependency policy](../../tools/architecture/module-dependencies.json) |
+| Why a durable decision exists | [ADR index](../decisions/README.md) |
+| Active caller cutover | [Stage 2](../refactoring/stage-2.md) |
+| Product-boundary cutover after Stage 2 | [Stage 3](../refactoring/stage-3.md) |
 
-| Needed information | Source |
-|---|---|
-| Module dependency policy | [Dependency policy](../../tools/architecture/module-dependencies.json) |
-| Product meaning and long-term scope | [Product planning](../planning/README.md) |
-| Individual design decisions | [ADR index](../decisions/README.md) |
-| Active refactoring status | [Stage 2](../refactoring/stage-2.md) |
-| Historical plans and acceptance snapshots | Git history |
+## Source-of-truth rules
 
-Target policy and the current manifest may differ while Stage 2 is active. Do not describe a transitional caller as final architecture merely because its owner types already exist. Distinguish source-level wiring, compile/test evidence and actual product behavior.
+- `Cargo.toml` manifests are the current physical dependency graph.
+- `tools/architecture/module-dependencies.json` is the **allowed dependency policy**, not a manually copied current graph.
+- `tools/architecture/check_boundaries.py` compares manifests with that policy and requires the current target packages and paths.
+- These architecture documents describe stable ownership and explicitly call out active transitions.
+- Stage documents own execution status. ADRs own rationale. Neither replaces current architecture documentation.
+
+## Current transition
+
+Stage 1 completed semantic ownership placement. Stage 2 is converging the real internal runtime on that ownership, including canonical model, Context Tool and Expert delegation paths. Stage 3 will then remove outer product-boundary routing/compatibility from AppHost, FFI, Flutter, native and server callers.
+
+The active checkpoint and exact remaining work belong only in [Stage 2](../refactoring/stage-2.md); this file intentionally does not copy its progress checklist.

@@ -45,7 +45,7 @@ During structural work, check the affected module and boundaries rather than sta
 
 ```sh
 cargo check -p floe-conversation
-python3 tools/architecture/check_boundaries.py --mode migration
+python3 tools/architecture/check_boundaries.py
 git diff --check
 ```
 

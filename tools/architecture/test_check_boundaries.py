@@ -58,11 +58,13 @@ class GraphTests(unittest.TestCase):
 class CliTests(unittest.TestCase):
     checker = Path(__file__).with_name("check_boundaries.py")
 
-    def run_check(self, cargo_manifests, mode="migration", extra_args=(), include_repo=True):
+    def run_check(self, cargo_manifests, extra_args=(), include_repo=True, workspace_members=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            members = [path for _, path, _ in cargo_manifests] if workspace_members is None else workspace_members
+            member_lines = ", ".join(json.dumps(path) for path in members)
             (root / "Cargo.toml").write_text(
-                "[workspace]\nmembers = []\n[workspace.dependencies]\n"
+                f"[workspace]\nmembers = [{member_lines}]\n[workspace.dependencies]\n"
                 'shared = { package = "floe-shared", version = "0.1" }\n',
                 encoding="utf-8",
             )
@@ -73,7 +75,7 @@ class CliTests(unittest.TestCase):
             command = [sys.executable, str(self.checker)]
             if include_repo:
                 command.append(str(root))
-            command.extend(["--mode", mode, *extra_args])
+            command.extend(extra_args)
             result = subprocess.run(
                 command,
                 cwd=root,
@@ -85,7 +87,7 @@ class CliTests(unittest.TestCase):
 
     def test_default_repo_and_policy_paths_work(self):
         result = subprocess.run(
-            [sys.executable, str(self.checker), "--mode", "migration"],
+            [sys.executable, str(self.checker)],
             cwd=tempfile.gettempdir(),
             capture_output=True,
             text=True,
@@ -93,12 +95,12 @@ class CliTests(unittest.TestCase):
         )
         report = json.loads(result.stdout)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(report["mode"], "migration")
+        self.assertEqual(report["mode"], "final")
         self.assertGreater(report["nodes"], 0)
 
     def test_dev_wiring_is_reported_but_not_gated(self):
         manifest = """[package]
-name = "floe-domain"
+name = "floe-kernel"
 version = "0.1.0"
 
 [dev-dependencies]
@@ -108,11 +110,12 @@ fixture = "1"
 platform-fixture = "1"
 """
         result, report = self.run_check(
-            [("floe-domain", "crates/floe-domain", manifest)]
+            [("floe-kernel", "crates/contracts/kernel", manifest)],
+            workspace_members=[],
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            report["dev_wiring"]["floe-domain"], ["fixture", "platform-fixture"]
+            report["dev_wiring"]["floe-kernel"], ["fixture", "platform-fixture"]
         )
 
     def test_target_crate_cannot_depend_on_unmigrated_legacy_crate(self):
@@ -139,7 +142,7 @@ version = "0.1.0"
         )
 
     def test_final_mode_requires_all_target_crates(self):
-        result, report = self.run_check([], mode="final")
+        result, report = self.run_check([])
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(any("missing target crate" in error for error in report["errors"]))
 

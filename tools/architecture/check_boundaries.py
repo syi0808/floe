@@ -173,7 +173,7 @@ def _workspace_member(path: str, root: dict) -> bool:
     )
 
 
-def _check_repository(policy: dict, repo: Path, mode: str) -> tuple[dict[str, set[str]], list[str], list[str], dict[str, list[str]]]:
+def _check_repository(policy: dict, repo: Path) -> tuple[dict[str, set[str]], list[str], list[str], dict[str, list[str]]]:
     entries = policy["target"]
     expected = {entry["package"]: entry for entry in entries}
     allowed, errors = _policy_graph(policy)
@@ -182,20 +182,12 @@ def _check_repository(policy: dict, repo: Path, mode: str) -> tuple[dict[str, se
     root, manifests, paths = _load_manifests(repo)
     workspace = root.get("workspace", {}).get("dependencies", {})
 
-    if mode == "final":
-        for name in set(expected) - set(manifests):
-            errors.append("missing target crate: " + name)
-        for name in set(manifests) - set(expected):
-            errors.append("unexpected/legacy crate: " + name)
-    else:
-        warnings.append(
-            "migration mode is NOT the final architecture gate; old roots may remain temporarily"
-        )
+    for name in set(expected) - set(manifests):
+        errors.append("missing target crate: " + name)
+    for name in set(manifests) - set(expected):
+        errors.append("unexpected/legacy crate: " + name)
 
     graph: dict[str, set[str]] = {}
-    baseline_paths = {
-        name: "crates/" + name for name in policy.get("current", {}).get("dependencies", {})
-    }
     legacy = {
         name
         for name in manifests
@@ -214,13 +206,7 @@ def _check_repository(policy: dict, repo: Path, mode: str) -> tuple[dict[str, se
             continue
         relocated = paths[name] == expected[name]["path"]
         if not relocated:
-            if mode == "migration" and paths[name] == baseline_paths.get(name):
-                warnings.append(
-                    f"{name}: approved baseline path retained temporarily ({paths[name]})"
-                )
-                continue
-            else:
-                errors.append(f"{name}: wrong directory {paths[name]}")
+            errors.append(f"{name}: wrong directory {paths[name]}")
         elif not _workspace_member(paths[name], root):
             errors.append(f"{name}: target crate is not a workspace member")
         for dependency in graph[name] - allowed[name]:
@@ -249,7 +235,6 @@ def main() -> int:
         default=Path(__file__).resolve().with_name("module-dependencies.json"),
     )
     parser.add_argument("--policy-only", action="store_true")
-    parser.add_argument("--mode", choices=["final", "migration"], default="final")
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
     try:
@@ -262,9 +247,9 @@ def main() -> int:
             report_mode = "policy-only"
         else:
             graph, errors, warnings, dev_wiring = _check_repository(
-                policy, args.repo.resolve(), args.mode
+                policy, args.repo.resolve()
             )
-            report_mode = args.mode
+            report_mode = "final"
         report = {
             "mode": report_mode,
             "nodes": len(graph),

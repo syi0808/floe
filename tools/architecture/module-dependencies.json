@@ -1,41 +1,8 @@
 {
   "schema_version": 1,
-  "source_commit": "efedfc6089341ed0a480d7401764284fa5e7543e",
-  "status": "approved architecture v0.3; implementation target, not current code",
+  "status": "canonical allowed dependency policy; current repository graph is read from Cargo manifests",
   "edge_semantics": "A -> B means A may directly depend on B public API at compile time; adapters implement owner-defined ports.",
   "contract_reference_note": "v0.3: naming a pure contract crate (kernel, agent_contract, context_contract) directly is not a violation for a crate whose own API or stored records carry those values. The composition root, the vault adapter and Actions are the cases: the app composes owners that trade in them, the vault stores agent sessions, tasks, settlements and dependencies, and an action records the Expert result and package that proposed it. Routing any of them through a module re-export would hide the dependency rather than remove it. This does not extend to protocol, which carries a wire, nor to any execution or storage implementation.",
-  "current": {
-    "method": "manually transcribed from seven reviewed Cargo manifests; internal normal path dependencies only",
-    "dependencies": {
-      "floe-ffi": [
-        "floe-core",
-        "floe-agent",
-        "floe-domain",
-        "floe-infra",
-        "floe-protocol"
-      ],
-      "floe-infra": [
-        "floe-agent",
-        "floe-core",
-        "floe-domain",
-        "floe-protocol"
-      ],
-      "floe-core": [
-        "floe-agent",
-        "floe-domain"
-      ],
-      "floe-agent": [
-        "floe-agent-contract",
-        "floe-domain"
-      ],
-      "floe-protocol": [
-        "floe-agent-contract",
-        "floe-domain"
-      ],
-      "floe-agent-contract": [],
-      "floe-domain": []
-    }
-  },
   "target": [
     {
       "id": "kernel",
