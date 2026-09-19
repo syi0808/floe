@@ -22,7 +22,7 @@ Detailed work is split into the execution plans linked below. This overview owns
     - [x] durable model usage, cursor, Tool/Delegation binding and single-journal recovery
     - [x] cross-run pending batch → child resume lineage
     - [x] freeze 2-B.1 after the lineage P0 closes
-  - [ ] **2-B.2 — Canonical Model vertical slice**
+  - [ ] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md)
   - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice**
   - [ ] **2-B.4 — App production cutover**
   - [ ] **2-B.5 — Integrated 2-B hardening**
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**2-B.1 complete / frozen.** Next: 2-B.2.
+**Active: 2-B.2 — Canonical Model vertical slice.**
 
-Cross-run continuation lineage is closed: a child run takes over a parent's pending validated batch only by durably re-journaling the exact same batch and starting cursor. If the child crashes before takeover, the parent's pending batch remains authoritative for the next continuation.
+2-B.1 is complete / frozen. The current work is the production root model cutover: remove pre-admission placement authority, add Access exact-recipient dispatch fencing, implement secret-free Inference-owned profile/attempt/budget routing, adapt Provider transport, and replace root `LegacyModelPort` wiring.
 
-2-B.1 is **frozen**. Do not perform another broad recovery audit before starting 2-B.2.
+Use [the 2-B.2 execution plan](stage-2/2-b2.md) as the authoritative task document. Do not reopen 2-B.1 and do not start 2-B.3 before the 2-B.2 exit gates are green.
 
 ## Target internal architecture
 
