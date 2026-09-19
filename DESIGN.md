@@ -304,7 +304,7 @@ must remain understandable when applicable. Creation and collection are distinct
 outcomes. Describe recovery in terms of what the user can safely do next, not the
 internal state machine. Do not repeat the same disclaimer at every hierarchy level.
 
-See [the accepted product principle](docs/planning/00-overview/product-principles.md#판단에-필요한-정보만-먼저)
+See [the product principles](docs/product/principles.md#show-the-information-needed-for-the-decision)
 and [action review specification](docs/design/s3-calendar-action-ui.md).
 
 ## Layout hierarchy

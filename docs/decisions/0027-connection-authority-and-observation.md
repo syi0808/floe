@@ -65,7 +65,7 @@ The first vertical implementation targets native Calendar and headless tool-time
 by server Calendar/Mail and the remaining context domains. The design does not claim that all
 connectors have the reported Calendar bug, nor that cross-device authorization has shipped.
 
-- [Semantic contract](../planning/05-integrations/connection-access-and-observation.md)
-- [Runtime, migration and conformance plan](../planning/09-implementation/connection-authorization-runtime.md)
+- [Semantic contract](../product/integrations-and-privacy.md)
+- [Runtime, migration and conformance plan](../architecture/authority-recovery.md)
 
 Runtime changes, live acceptance evidence and rollout approval remain separate work.

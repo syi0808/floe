@@ -24,7 +24,7 @@ There is no separate versioned refactoring edition or migration ledger. The Stag
 | Resume the active refactor | [Stage 2 — Canonical Internal Runtime](docs/refactoring/stage-2.md) |
 | Understand current architecture and ownership | [Architecture](docs/architecture/README.md) |
 | Understand why an architectural decision exists | [ADR index](docs/decisions/README.md) |
-| Read product meaning and long-term scope | [Product planning](docs/planning/README.md) |
+| Read product meaning and long-term scope | [Product](docs/product/README.md) |
 | Work on presentation | [Design system](DESIGN.md) and [screen specifications](docs/design/README.md) |
 | Build or diagnose the client | [Client guide](apps/client/README.md) and [Agent debugging](docs/development/agent-debugging.md) |
 | Configure the loopback model/provider gateway | [Server guide](server/README.md) |

@@ -92,9 +92,9 @@ different boundaries:
 
 ## References
 
-- [Vertical Slice Delivery](../planning/08-engineering/vertical-slice-delivery.md)
-- [Initial Connector Set](../planning/05-integrations/initial-connector-set.md)
-- [Assistant Context Portfolio](../planning/05-integrations/assistant-context-portfolio.md)
+- [Vertical Slice Delivery](../product/roadmap.md)
+- [Initial Connector Set](../product/integrations-and-privacy.md)
+- [Assistant Context Portfolio](../product/integrations-and-privacy.md)
 - [Gmail message listing](https://developers.google.com/workspace/gmail/api/guides/list-messages)
 - [Screen Time frameworks](https://developer.apple.com/documentation/ScreenTimeAPIDocumentation)
 - [Family Controls entitlement](https://developer.apple.com/documentation/xcode/configuring-family-controls)

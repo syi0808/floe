@@ -59,7 +59,7 @@ Order content as toolbar, Now/Next, timeline, high-priority tasks, optional sugg
   shared Review only when Action Authority requires a decision.
 
 Detailed create, drag, context-menu and authority behavior follows
-[Calendar Direct Manipulation](../../planning/01-experience/calendar-direct-manipulation.md).
+[Calendar direct manipulation](../../product/experience.md#calendar-direct-manipulation).
 
 ## Empty and exceptional states
 

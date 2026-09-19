@@ -117,5 +117,5 @@ language range parsing.
 
 - [Ambient assistant model](0020-ambient-assistant-expert-connector-model.md)
 - [Generalizable agent guidance](0022-generalizable-agent-guidance.md)
-- [Manager and Experts](../planning/03-intelligence/manager-and-experts.md)
-- [Vertical Slice Delivery](../planning/08-engineering/vertical-slice-delivery.md)
+- [Manager and Experts](../product/intelligence.md)
+- [Vertical Slice Delivery](../product/roadmap.md)

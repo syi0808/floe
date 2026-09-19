@@ -104,10 +104,7 @@ Revisit this decision after the first macOS dogfood cycle, when the Flutter SDK 
 
 ## References
 
-- `docs/planning/00-overview/roadmap.md`
-- `docs/planning/01-experience/day-canvas.md`
-- `docs/planning/01-experience/capture-and-transcription.md`
-- `docs/planning/02-domain/personal-timeline.md`
-- `docs/planning/08-engineering/poc-plan.md`
-- `docs/planning/09-implementation/client-architecture.md`
-- `docs/planning/09-implementation/turso-storage.md`
+- [Product experience](../product/experience.md)
+- [Personal domains](../product/domains.md)
+- [Capability roadmap](../product/roadmap.md)
+- [Current architecture](../architecture/README.md)

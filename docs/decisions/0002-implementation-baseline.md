@@ -33,16 +33,14 @@ Desktop separates a resident Rust/native Device Agent from the Flutter UI. Mobil
 - Go and the Rust Core share protocol/schema/test vectors rather than requiring the entire server to be Rust.
 - The P0-G Turso PoC gates storage/sync topology; technology decisions remain revisable with evidence.
 
-## Source precedence
+## Historical scope
 
-The v0.5 `09-implementation/connector-runtime.md` diagram labels the Floe Server as Rust. That conflicts with D-024, `technology-selection.md`, `server-stack.md`, and `architecture-map.md`, all of which designate **Go** for the server control plane. This ADR uses D-024 and those detailed implementation documents as the controlling decision; the connector runtime diagram should be corrected in the next planning bundle revision.
+This ADR records the 2026-09-02 implementation baseline that allowed the first product work to start. Its Node/TypeScript Connector Host direction was superseded by [ADR 0003](0003-native-connectors-and-experts.md), and the physical Rust package structure has since moved to the modular monolith described by [current architecture](../architecture/README.md).
+
+Do not use this ADR as a current repository-layout or runtime-topology document.
 
 ## References
 
-- `docs/planning/08-engineering/decisions.md` (D-017–D-025)
-- `docs/planning/09-implementation/technology-selection.md`
-- `docs/planning/09-implementation/client-architecture.md`
-- `docs/planning/09-implementation/rust-core.md`
-- `docs/planning/09-implementation/server-stack.md`
-- `docs/planning/09-implementation/turso-storage.md`
-- `docs/planning/09-implementation/repository-layout.md`
+- [Current architecture](../architecture/README.md)
+- [Current product](../product/README.md)
+- [ADR 0003 — Native connectors and Experts](0003-native-connectors-and-experts.md)

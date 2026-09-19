@@ -6,7 +6,7 @@ This file is the entry point for repository documentation. Do not recursively re
 
 | Question | Canonical source |
 |---|---|
-| What product is Floe building? | [Product documentation](planning/README.md) until the product consolidation is complete |
+| What product is Floe building? | [Product documentation](product/README.md) |
 | How is the code structured now? | [Architecture](architecture/README.md) and `tools/architecture/module-dependencies.json` |
 | Why was a durable design choice made? | [Architecture decisions](decisions/README.md) |
 | What refactoring work is active now? | [Stage 2](refactoring/stage-2.md) and only its linked current execution plan |

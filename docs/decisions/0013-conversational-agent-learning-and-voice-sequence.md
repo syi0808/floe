@@ -78,8 +78,8 @@ Expert signatures or model weights.
 
 ## References
 
-- [Agent Runtime and Governed Learning](../planning/03-intelligence/agent-runtime-and-learning.md)
-- [Vertical Slice Delivery](../planning/08-engineering/vertical-slice-delivery.md)
+- [Agent Runtime and Governed Learning](../architecture/runtime.md)
+- [Vertical Slice Delivery](../product/roadmap.md)
 - [Hermes Agent architecture](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/architecture.md)
 - [Hermes Agent loop](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/agent-loop.md)
 - [Hermes memory](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory.md)

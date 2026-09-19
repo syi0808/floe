@@ -6,8 +6,7 @@
 
 Floe is always available but not always speaking. Voice is the long-term primary
 conversation channel; visual presentation is an escalation surface for consent,
-approval, complex comparison, provenance, recovery and audit. Presentation follows
-the intervention budget in [`docs/planning/01-experience/interventions.md`](../planning/01-experience/interventions.md);
+approval, complex comparison, provenance, recovery and audit. Presentation follows the [product intervention model](../product/experience.md#interventions);
 the UI does not promote every generated insight or automatically open when an Expert
 finishes work.
 

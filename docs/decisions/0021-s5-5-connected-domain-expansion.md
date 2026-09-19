@@ -82,8 +82,8 @@ criterion.
 
 ## References
 
-- [Vertical Slice Delivery](../planning/08-engineering/vertical-slice-delivery.md)
-- [Manager and Experts](../planning/03-intelligence/manager-and-experts.md)
-- [Assistant Context Portfolio](../planning/05-integrations/assistant-context-portfolio.md)
-- [Initial Connector Set](../planning/05-integrations/initial-connector-set.md)
+- [Vertical Slice Delivery](../product/roadmap.md)
+- [Manager and Experts](../product/intelligence.md)
+- [Assistant Context Portfolio](../product/integrations-and-privacy.md)
+- [Initial Connector Set](../product/integrations-and-privacy.md)
 - [Ambient assistant model](0020-ambient-assistant-expert-connector-model.md)

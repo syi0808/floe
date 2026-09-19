@@ -68,7 +68,7 @@ Current execution order is owned by [Stage 2](../refactoring/stage-2.md).
 
 ## References
 
-- [Roadmap](../planning/00-overview/roadmap.md)
-- [Personal Memory](../planning/02-domain/personal-memory.md)
-- [Manager and Experts](../planning/03-intelligence/manager-and-experts.md)
-- [Expert Runtime](../planning/09-implementation/expert-runtime.md)
+- [Roadmap](../product/roadmap.md)
+- [Personal Memory](../product/domains.md#personal-memory)
+- [Manager and Experts](../product/intelligence.md)
+- [Expert Runtime](../architecture/runtime.md)

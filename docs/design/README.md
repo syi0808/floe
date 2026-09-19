@@ -11,7 +11,7 @@ These documents turn Floe's product principles into implementable interface rule
 
 When documents disagree, use this order:
 
-1. Accepted product, privacy, and action-authority principles in `docs/planning/`.
+1. Accepted product, privacy, and action-authority principles in `docs/product/`.
 2. Normative tokens and system rules in [`DESIGN.md`](../../DESIGN.md).
 3. Shared component and accessibility specifications in this directory.
 4. Screen specifications in `screens/`.

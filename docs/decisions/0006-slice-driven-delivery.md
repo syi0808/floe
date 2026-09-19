@@ -60,6 +60,6 @@ imply always-listening recording.
 
 ## References
 
-- [Roadmap](../planning/00-overview/roadmap.md)
+- [Roadmap](../product/roadmap.md)
 - [First local slice](0004-personal-day-first-slice.md)
 - [Native connectors and experts](0003-native-connectors-and-experts.md)

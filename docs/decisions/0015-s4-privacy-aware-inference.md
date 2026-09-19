@@ -77,8 +77,8 @@ a remote prompt merely because another component summarized or retrieved them.
 
 ## References
 
-- [S4 Vertical Slice](../planning/08-engineering/vertical-slice-delivery.md)
-- [Model Layer](../planning/03-intelligence/model-layer.md)
-- [Sensitive Local Compute](../planning/06-security/sensitive-local-compute.md)
+- [S4 Vertical Slice](../product/roadmap.md)
+- [Model Layer](../architecture/runtime.md)
+- [Sensitive Local Compute](../product/integrations-and-privacy.md)
 - [OpenAI Codex authentication](https://developers.openai.com/codex/auth)
 - [Apple Foundation Models](https://developer.apple.com/documentation/FoundationModels/)

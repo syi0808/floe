@@ -9,7 +9,7 @@ design authority.
 This document retains the validated decision surface but no longer defines the
 Calendar entry point. The labeled planning button is superseded by the Calendar
 toolbar `+`, empty-slot double-click and event direct-manipulation contract in
-[Calendar Direct Manipulation](../planning/01-experience/calendar-direct-manipulation.md).
+[Calendar direct manipulation](../product/experience.md#calendar-direct-manipulation).
 
 ## Decision-first review
 

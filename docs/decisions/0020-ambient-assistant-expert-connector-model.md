@@ -129,8 +129,8 @@ report and hands off to the existing approval UI.
 
 ## References
 
-- [Manager and Experts](../planning/03-intelligence/manager-and-experts.md)
-- [Voice and Presence](../planning/01-experience/voice-and-presence.md)
-- [Interventions](../planning/01-experience/interventions.md)
-- [Initial Connector Set](../planning/05-integrations/initial-connector-set.md)
+- [Manager and Experts](../product/intelligence.md)
+- [Voice and Presence](../product/experience.md)
+- [Interventions](../product/experience.md)
+- [Initial Connector Set](../product/integrations-and-privacy.md)
 - [Vertical Slice Delivery](../planning/08-engineering/vertical-slice-delivery.md)

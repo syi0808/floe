@@ -36,16 +36,12 @@ Planning v0.8 replaces the default Node/TypeScript Connector Host with a native-
 - Third-party capabilities require explicit, semantic, scoped grants and re-approval whenever a package expands its permissions.
 - The extension contract, sandbox behavior, resource budgets, audit events, and ConnectorSpec portability require dedicated PoCs before ecosystem rollout.
 
-## Planning consistency note
+## Historical planning note
 
-`docs/planning/08-engineering/decisions.md` reuses D-029 through D-033 for two separate decision groups (connectors and Experts). This ADR cites titles and source paths rather than treating those duplicated numeric labels as globally unique. The source bundle is preserved unchanged; renumbering belongs in a future planning revision.
+The imported planning bundle that informed this ADR contained duplicated internal D-number labels. That bundle is now retained only in Git history. This ADR, the current product documents and current architecture are the active sources for the durable connector/Expert boundary.
 
 ## References
 
-- `docs/planning/03-intelligence/expert-extension-model.md`
-- `docs/planning/05-integrations/initial-connector-set.md`
-- `docs/planning/05-integrations/connector-data-policy.md`
-- `docs/planning/06-security/expert-permissions-and-sandbox.md`
-- `docs/planning/09-implementation/expert-runtime.md`
-- `docs/planning/09-implementation/connector-runtime.md`
-- `docs/planning/10-ecosystem/`
+- [Manager, Experts and extensions](../product/intelligence.md)
+- [Integrations, privacy and distribution](../product/integrations-and-privacy.md)
+- [Current architecture](../architecture/README.md)
