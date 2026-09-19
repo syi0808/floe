@@ -373,18 +373,22 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             std::sync::Arc::clone(inputs.run_cancellations),
         )?;
         // Canonical root model path: Engine → InferenceService →
-        // Access dispatch fence → provider transport. The provider is built
-        // from verified caller identity plus the product-supplied or
-        // keychain-stored saved connection only; the turn's pre-resolved
-        // `remote_route` never selects the root model. The legacy `model`
-        // below stays solely for transitional Tool/Expert paths.
+        // Access dispatch fence → provider transport. The provider is
+        // prepared once from the admitted saved connection; the recipient
+        // authority re-reads the current saved-connection store on every
+        // Access check, bound to the verified person/device. The turn's
+        // pre-resolved `remote_route` never selects the root model. The
+        // legacy `model` below stays solely for transitional Tool/Expert
+        // paths.
         let provider = crate::inference_routes::HostInferenceRoutes::root_model_provider(
             &person_id.to_string(),
             &request.device_id,
             request.saved_server_connection.clone(),
         )?;
-        let authority = crate::inference_routes::HostRecipientAuthority::admitted(
-            provider.consented_external_recipients(),
+        let authority = crate::inference_routes::root_recipient_authority(
+            &person_id.to_string(),
+            &request.device_id,
+            request.saved_server_connection.clone(),
         );
         let model_service =
             floe_inference::InferenceService::new(provider, resolver, authority);

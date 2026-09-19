@@ -10,39 +10,30 @@ use crate::CallerContext;
 #[derive(Clone, Copy, Default)]
 pub struct HostInferenceRoutes;
 
-/// Current exact-recipient authority for the canonical root model path,
-/// without credentials.
+/// Current exact-recipient authority for the canonical root model path.
 ///
-/// Reports whether one exact external recipient still holds processing
-/// authority/consent right now, from the admitted saved connection bound to
-/// the verified caller. Device dispatch never consults it.
-pub struct HostRecipientAuthority {
-    consented_recipients: Vec<String>,
-}
-
-impl HostRecipientAuthority {
-    /// Report exactly the consented recipients derived from the admitted
-    /// saved connection. An empty list denies every external recipient:
-    /// fail closed.
-    pub fn admitted(recipients: Vec<String>) -> Self {
-        Self {
-            consented_recipients: recipients,
+/// Every recipient check reloads the current saved connection bound to the
+/// verified caller; no recipient list is copied at construction. Production
+/// (`None`) re-reads the host keychain slot. A test-only injected connection
+/// (`Some`) is re-read from a fixed store with the same per-check shape.
+pub fn root_recipient_authority(
+    person_id: &str,
+    device_id: &str,
+    saved: Option<floe_inference::SavedServerConnection>,
+) -> floe_provider_adapters::control::SavedConnectionRecipientAuthority<
+    floe_provider_adapters::control::CurrentSavedConnectionStore,
+> {
+    use floe_provider_adapters::control::{
+        CurrentSavedConnectionStore, FixedSavedConnectionStore, SavedConnectionRecipientAuthority,
+        SavedServerConnectionStore,
+    };
+    let store = match saved {
+        Some(saved) => {
+            CurrentSavedConnectionStore::Fixed(FixedSavedConnectionStore::fixed(Some(saved)))
         }
-    }
-}
-
-impl floe_access::ModelDispatchRecipientAuthority for HostRecipientAuthority {
-    fn check_recipient(&self, recipient: &str) -> Result<(), floe_agent_contract::AgentFailure> {
-        if self
-            .consented_recipients
-            .iter()
-            .any(|allowed| allowed == recipient)
-        {
-            Ok(())
-        } else {
-            Err(floe_agent_contract::AgentFailure::PolicyDenied)
-        }
-    }
+        None => CurrentSavedConnectionStore::Keychain(SavedServerConnectionStore),
+    };
+    SavedConnectionRecipientAuthority::new(store, person_id.to_owned(), device_id.to_owned())
 }
 
 impl HostInferenceRoutes {

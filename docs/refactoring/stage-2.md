@@ -22,7 +22,7 @@ Detailed work is split into the execution plans linked below. This overview owns
     - [x] durable model usage, cursor, Tool/Delegation binding and single-journal recovery
     - [x] cross-run pending batch → child resume lineage
     - [x] freeze 2-B.1 after the lineage P0 closes
-  - [ ] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
+  - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
   - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice**
   - [ ] **2-B.4 — App production cutover**
   - [ ] **2-B.5 — Integrated 2-B hardening**
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-B.2 final P0 — current recipient authority.**
+**Active: 2-B.3.**
 
-The 2-B.2 vertical cutover is otherwise complete, but the production root recipient authority currently snapshots consented recipients at service construction. Access admit/consume/post-response checks must read the current saved-connection authority so revocation during a model call suppresses release.
+2-B.2 is complete, including the current-recipient authority P0: the production root recipient authority now reloads the current saved-connection authority bound to the verified person/device on every Access admit/consume/post-response check, so revocation during a model call suppresses release.
 
-Use [the current-authority residual plan](stage-2/2-b2-current-authority.md) as the authoritative task document. This is a P0 reopen under the Stage 2 triage rule, not a general 2-B.2 re-audit. Do not start 2-B.3 until this P0 is green.
+Use [the current-authority residual plan](stage-2/2-b2-current-authority.md) as the completed authoritative task document. Do not implement 2-B.3 in the same change set.
 
 ## Target internal architecture
 

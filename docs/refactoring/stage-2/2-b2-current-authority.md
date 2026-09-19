@@ -1,6 +1,6 @@
 # 2-B.2 Final P0 — Current Recipient Authority
 
-**Status: active — final 2-B.2 blocker**
+**Status: complete — 2-B.2 current-authority P0 closed**
 
 **Code baseline reviewed:** `cd73321b3159da94d1a7671e76e001eacd57b65a`
 
