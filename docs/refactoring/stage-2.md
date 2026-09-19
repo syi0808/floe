@@ -16,7 +16,7 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 - [x] **2-A — Compile and test ownership restoration** — [execution plan](stage-2/2-a.md)
 - [ ] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
-  - [ ] **2-B.1 — Runtime contract and recovery foundation**
+  - [ ] **2-B.1 — Runtime contract and recovery foundation** — [final P0 plan](stage-2/2-b1.md)
     - [x] typed model conversation and authorized projection
     - [x] durable validated batches and stable execution/batch/ordinal identities
     - [x] durable model usage, cursor, Tool/Delegation binding and single-journal recovery
