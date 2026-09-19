@@ -10,9 +10,36 @@ Operating rule:
 
 > minimum sound foundation → vertical canonical path → old-path cutover → integrated hardening.
 
-See [Stage 1](stage-1.md) for ownership and [Stage 3](stage-3.md) for product-boundary/FFI/Flutter cutover.
+Detailed work is split into the execution plans linked below. This overview owns the Stage 2 progress checkboxes and current checkpoint.
 
-## Target internal path
+## Progress
+
+- [x] **2-A — Compile and test ownership restoration** — [execution plan](stage-2/2-a.md)
+- [ ] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
+  - [ ] **2-B.1 — Runtime contract and recovery foundation**
+    - [x] typed model conversation and authorized projection
+    - [x] durable validated batches and stable execution/batch/ordinal identities
+    - [x] durable model usage, cursor, Tool/Delegation binding and single-journal recovery
+    - [ ] cross-run pending batch → child resume lineage
+    - [ ] freeze 2-B.1 after the lineage P0 closes
+  - [ ] **2-B.2 — Canonical Model vertical slice**
+  - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice**
+  - [ ] **2-B.4 — App production cutover**
+  - [ ] **2-B.5 — Integrated 2-B hardening**
+- [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
+- [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
+- [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
+- [ ] **2-F — Stage 2 final validation** — [execution plan](stage-2/2-f.md)
+
+## Current checkpoint
+
+**Active:** 2-B.1 final P0.
+
+The remaining 2-B.1 blocker is cross-run continuation lineage: a child run may take over a parent's pending validated batch only by durably re-journaling the exact same batch and starting cursor. If the child crashes before takeover, the parent's pending batch remains authoritative for the next continuation.
+
+When that regression is green, mark 2-B.1 complete and **freeze it**. Do not perform another broad recovery audit before starting 2-B.2.
+
+## Target internal architecture
 
 Model:
 
@@ -36,7 +63,7 @@ Engine
   → ToolResult { coverage, artifacts, issue }
 ~~~
 
-Delegation may remain the one explicit compatibility bridge until 2-C:
+Delegation during 2-B may temporarily remain:
 
 ~~~text
 Engine
@@ -45,216 +72,36 @@ Engine
   → staged endpoint context
 ~~~
 
-## Current checkpoint
+2-C removes that final internal bridge.
 
-Stage 2-A is complete and Stage 2-B is active.
+## Stage-wide rules
 
-2-B.1 has established typed model conversation, authorized projection, durable validated batches, stable execution/batch/ordinal identities, bounded correction, recovery cursors, durable model-usage recovery and exact single-journal Tool/Delegation binding.
+- App is composition, not model/source/access policy.
+- Context owns projection/source semantics, not model route.
+- Inference owns model profile/route/attempt/usage, not source authorization.
+- Access owns exact-recipient and authority fences.
+- Provider owns transport and private credential use.
+- Experts own Task/A2A semantics.
+- Do not introduce permanent `v2`/`v3`/`next` paths or rename legacy bridges into equivalent wrappers.
 
-The remaining P0 item before freezing 2-B.1 is **cross-run continuation lineage**: a child run may take over a parent's pending validated batch only by durably re-journaling the exact batch and starting cursor. A child that crashes before takeover must not silently discard the parent's pending batch.
+### Issue triage
 
-After that fix, **2-B.1 freezes**. Further non-P0 recovery hardening moves to 2-B.5.
+**P0 — current slice blocker:** authority/data-release risk, duplicate external effects, budget resurrection/double accounting, stable execution identity corruption, loss of durable pending work followed by a different side-effect plan, or an ownership problem blocking the next vertical cutover.
 
-## 2-A — Compile and test ownership restoration
+**P1 — integrated hardening:** rare malformed-state fail-close improvements, extra corrupt-journal validation and error-classification refinement. Handle in 2-B.5.
 
-**Status: done**
+**P2 — cleanup:** naming, visibility, dead code, aliases, fixture cleanup and API ergonomics. Handle in 2-D/2-E.
 
-- Restore workspace compilation after Stage 1 moves.
-- Put tests with semantic owners.
-- Remove stale reverse dev-dependency pressure.
-- Close migration regressions without preserving old ownership through wrappers.
+## Stage 2 exit gate
 
-2-A is not reopened for later runtime changes.
+- `LegacyModelPort` production callers = 0.
+- `LegacyToolPort` production callers = 0.
+- `LegacyDelegationPort` = 0 after 2-C.
+- production `ModelPort` = `InferenceService`.
+- production `ToolPort` = `ContextToolService`.
+- canonical model projection is Conversation/Context owned.
+- App General Conversation model-selection policy = 0.
+- raw bearer/token in Inference public API = 0.
+- workspace tests/checks and architecture boundaries are green.
 
-## 2-B — General Conversation canonical runtime cutover
-
-Objective:
-
-> remove `LegacyModelPort` and `LegacyToolPort` from the production General Conversation path.
-
-### 2-B.1 — Runtime contract and recovery foundation
-
-Required foundation:
-
-- typed `ModelConversation`;
-- immutable `AuthorizedModelProjection`;
-- whole-batch validation before the first side effect;
-- durable `ValidatedModelBatch` before Tool/Delegation execution;
-- stable identity from execution + batch + ordinal + kind;
-- durable cursor and call/result recovery;
-- pending validated batch resumes without model re-call;
-- Engine-owned invalid-output correction, never a fake User message;
-- model attempt usage cannot disappear across restart/continuation.
-
-#### Freeze rule
-
-After cross-run pending/resume lineage is closed and focused regressions are green, 2-B.1 is frozen.
-
-Reopen only if a finding can cause:
-
-1. duplicate external side effects;
-2. unauthorized data release;
-3. loss of durable pending work followed by generation of a different side-effect plan.
-
-Other recovery hardening goes to 2-B.5.
-
-### 2-B.2 — Canonical Model vertical slice
-
-Treat Access dispatch, Inference ownership and Provider adaptation as one vertical cutover.
-
-Target:
-
-~~~text
-Engine
-  → InferenceService : ModelPort
-  → Access DispatchPermit / DispatchFence
-  → Prepared Provider Transport
-~~~
-
-Access owns exact recipient, purpose/consumer binding, projection/coverage/data-class binding, revocation/lease fencing, pre-handoff consume and post-response authority revalidation.
-
-Inference owns non-secret model-profile observation, explicit/Auto profile selection, route/recipient planning, attempt lifecycle, model usage/budget and transport retry/fallback. The same caller-provided attempt ID follows the entire attempt.
-
-Provider owns HTTP/native transport, wire conversion, timeout/body/redirect/no-proxy safeguards, private credential use and provider identity/response validation. Provider does not own Access or Context policy.
-
-2-B.2 production exit:
-
-- General Conversation no longer calls `LegacyModelPort`.
-- Canonical production `ModelPort` is `InferenceService`.
-- Inference public API carries no raw bearer/token.
-- Model discovery is separated from source connector catalog.
-- App no longer chooses Foundation vs Server for General Conversation.
-
-### 2-B.3 — Canonical Context projection and Tool vertical slice
-
-Projection:
-
-~~~text
-Conversation durable transcript
-  → Conversation history projection
-  → Context assembly
-  → AuthorizedModelProjection
-~~~
-
-Context does not choose model route. Inference does not call a concrete Context implementation.
-
-Tool:
-
-~~~text
-Engine
-  → ContextToolService : ToolPort
-  → Context / Access
-~~~
-
-Exit:
-
-- Context-owned `ToolDescriptor` catalog is the Manager execution truth.
-- `ToolResult.coverage` is returned directly.
-- App capability IDs no longer implement business dispatch.
-- Tool/source availability is independent from model route.
-- `TransitionalModelProjection` and `LegacyToolPort` have zero production callers.
-
-### 2-B.4 — App production cutover
-
-App becomes composition-only for General Conversation.
-
-Remove production ownership of:
-
-- `LegacyModelPort` and `LegacyToolPort`;
-- Foundation/Server model branching;
-- `RootModel` / `GovernedModel` routing policy;
-- App-side model consent and route selection;
-- `ConversationCapabilities` business dispatch;
-- compatibility conversions used only by the old General Conversation path.
-
-Remove pre-turn model-route resolution. Conversation admits user intent; Inference resolves the model attempt later.
-
-Expected wiring:
-
-~~~text
-ConversationService
-  projection = canonical Conversation/Context projection
-  model      = InferenceService
-  tools      = ContextToolService
-  delegation = LegacyDelegationPort   # until 2-C
-  validator  = ManagerPayloadValidator
-~~~
-
-### 2-B.5 — Integrated 2-B hardening
-
-This is the deliberate deep-review point.
-
-Review together:
-
-- Security: exact recipient, revoke-before-handoff, revoke-during-call/post-response rejection, history/source reauthorization, provenance/coverage/freshness, secret boundaries.
-- Recovery: validated batch before effects, pending-batch resume, cross-run lineage, stable Tool/Task identity, cursor/result pairing.
-- Accounting: one attempt ID, one model usage owner, no double settlement, finalization reserve.
-- Ownership: App business policy absent, Inference has no concrete Context dependency, Provider does not own Access policy.
-
-## 2-C — Delegation ownership convergence
-
-Remove `LegacyDelegationPort`, staged run-id endpoint context and App stage/clear.
-
-Target:
-
-~~~text
-Engine
-  → DelegationPort
-  → Experts-owned Task lifecycle
-  → explicit endpoint request
-~~~
-
-Expert input becomes explicit contract data rather than hidden mutable staging state.
-
-## 2-D — Internal compatibility cleanup
-
-After production caller cutover, remove old internal APIs such as old Conversation model contracts, `CapabilityHost`, stale aliases, route compatibility and fixture-only entry points no longer needed by product callers.
-
-Rule: **cut callers first, delete compatibility second**.
-
-## 2-E — Internal public-surface closure
-
-Reduce exports to actual owner contracts. Remove obsolete re-exports, transition constructors, compatibility aliases and accidental test-only production surface.
-
-Outer product DTO cleanup belongs to Stage 3.
-
-## 2-F — Stage 2 final validation
-
-~~~sh
-cargo check --workspace --lib
-cargo test --workspace --no-fail-fast
-python3 tools/architecture/check_boundaries.py
-git diff --check
-~~~
-
-Stage 2 exit requires:
-
-- `LegacyModelPort` production callers: 0.
-- `LegacyToolPort` production callers: 0.
-- `LegacyDelegationPort` removed after 2-C.
-- Production `ModelPort` = InferenceService.
-- Production `ToolPort` = ContextToolService.
-- Canonical projection owned by Conversation/Context.
-- App General Conversation model-selection policy: 0.
-- Raw bearer/token in Inference public API: 0.
-- Workspace and architecture checks green.
-
-## Issue triage
-
-### P0 — current slice blocker
-
-Fix immediately only for authority/data-release risk, duplicate external effects, budget resurrection/double accounting, stable execution identity corruption, loss of durable pending work followed by re-planning, or ownership direction that blocks the next canonical cutover.
-
-### P1 — 2-B.5 integrated hardening
-
-Additional corrupt-journal detection, rare malformed-state fail-close improvements, error-classification refinement and defensive validation that do not change authority/side-effect safety.
-
-### P2 — 2-D / 2-E cleanup
-
-Naming, visibility, dead code, compatibility aliases, fixture cleanup and API ergonomics.
-
-## Stage 2 boundary
-
-Stage 2 succeeds when Floe's **internal General Conversation runtime** follows one canonical owner architecture.
-
-It does not require every outer FFI/Flutter/native/server caller or old product DTO to be deleted. Those are Stage 3 concerns.
+Outer FFI/Flutter/native/server DTO and caller cleanup is Stage 3.

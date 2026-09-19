@@ -1,6 +1,6 @@
 # Architecture documentation
 
-This directory describes Floe's current architecture, responsibilities and dependency boundaries. Refactoring execution is separate and intentionally consists of only three documents:
+This directory describes Floe's current architecture, responsibilities and dependency boundaries. Refactoring execution is separate: three Stage overview documents define direction and Stage 2/3 link to step-specific execution plans:
 
 | Refactoring scope | Document |
 |---|---|

@@ -2,7 +2,7 @@
 
 This directory contains dated product history and validation context. It is not the active refactoring plan.
 
-Current refactoring direction is intentionally limited to three documents:
+Current refactoring direction is anchored by three Stage overview documents; Stage 2 and Stage 3 link to step-specific execution plans:
 
 - [Stage 1 — Physical Ownership](../refactoring/stage-1.md)
 - [Stage 2 — Canonical Internal Runtime](../refactoring/stage-2.md)

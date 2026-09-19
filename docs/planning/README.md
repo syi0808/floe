@@ -1,7 +1,7 @@
 # Floe Planning Documents
 
 > Status: Product planning specification, not the active refactoring schedule.  
-> 현재 코드 리팩터링은 [Stage 1](../refactoring/stage-1.md), [Stage 2](../refactoring/stage-2.md), [Stage 3](../refactoring/stage-3.md) 세 문서만 사용한다. 현재 실행 순서와 checkpoint는 Stage 2가 소유한다. 이 디렉터리의 slice/PoC 순서는 현재 리팩터링의 선행 gate가 아니다.
+> 현재 코드 리팩터링의 방향은 [Stage 1](../refactoring/stage-1.md), [Stage 2](../refactoring/stage-2.md), [Stage 3](../refactoring/stage-3.md) overview가 정의한다. Stage 2·3의 구체 실행은 각 overview가 링크하는 단계별 실행 문서에 둔다. 현재 실행 순서와 checkpoint는 Stage 2 overview가 소유한다. 이 디렉터리의 slice/PoC 순서는 현재 리팩터링의 선행 gate가 아니다.
 
 ## Floe in one sentence
 

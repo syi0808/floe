@@ -12,8 +12,8 @@
 
 # Active refactoring instructions
 
-- Read the three current documents only: [Stage 1](docs/refactoring/stage-1.md), [Stage 2](docs/refactoring/stage-2.md), and [Stage 3](docs/refactoring/stage-3.md). Stage 1 is complete, Stage 2 is active, and Stage 3 follows the internal cutover.
-- Stage 2 is the active execution source of truth. Follow its current checkpoint, vertical-cutover order, freeze rules and P0/P1/P2 triage. Do not recreate a versioned plan bundle, migration ledger, STATUS file, or parallel task board.
+- Use [Stage 2](docs/refactoring/stage-2.md) as the active progress overview and read only the linked execution plan for the current Stage 2 step. [Stage 1](docs/refactoring/stage-1.md) is completed ownership context; [Stage 3](docs/refactoring/stage-3.md) and its linked execution plans are future product-boundary work.
+- Stage 2 is the active progress source of truth. Its step-specific documents under `docs/refactoring/stage-2/` contain concrete execution plans. Follow the current checkpoint, vertical-cutover order, freeze rules and P0/P1/P2 triage. Do not recreate a versioned plan bundle, migration ledger, STATUS file, or parallel task board.
 - One coding agent performs the refactoring sequentially. Keep one active change set in one workspace; build-tool parallelism is allowed.
 - The Manager still selects Experts through A2A, and product Run/Task concurrency and cancellation scopes remain independent.
 - Preserve current user changes. Check actual HEAD and working tree before editing; do not reset to historical plan commits.

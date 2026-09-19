@@ -14,7 +14,7 @@ Floe is undergoing a three-stage refactor toward the approved modular monolith:
 
 Stage 1 established semantic owners. Stage 2 is converging the actual General Conversation runtime on those owners. Stage 3 will carry that architecture through AppHost, FFI, Flutter, native/server callers and remaining domain-specific roots.
 
-There is no separate versioned refactoring edition or migration ledger. The three Stage documents are the current refactoring source of truth; Stage 2 contains the active checkpoint and freeze/exit rules.
+There is no separate versioned refactoring edition or migration ledger. The three Stage overview documents are the refactoring source of truth; Stage 2 and Stage 3 link to step-specific execution plans. Stage 2 contains the active progress checklist and current checkpoint.
 
 ## Start here
 

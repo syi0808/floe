@@ -1,6 +1,6 @@
 # Floe progress
 
-The refactor is organized by three current documents only:
+The refactor is organized by three Stage overviews; Stage 2 and Stage 3 link to step-specific execution plans:
 
 - [Stage 1 — Physical Ownership](docs/refactoring/stage-1.md): **complete**.
 - [Stage 2 — Canonical Internal Runtime](docs/refactoring/stage-2.md): **active**.
