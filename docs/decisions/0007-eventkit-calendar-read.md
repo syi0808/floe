@@ -53,7 +53,7 @@ Migration and live acceptance of the all-calendar scope remain pending.
 
 ## Known limits and live gate
 
-See [S1 validation](../validation/s1-calendar.md). In particular, EventKit identifiers
+Historical S1 validation snapshots are retained in Git history. EventKit identifiers
 may change when calendars/accounts are rebuilt or an event changes calendars.
 Recurring exception identity needs live testing. Existing day queries use one fixed
 offset per day; DST-transition-day correctness is not yet verified. S8 cannot reuse

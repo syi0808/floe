@@ -87,4 +87,4 @@ IDs or private event data.
 - A no-match lookup does not prove no external event exists. Do not create a
   replacement automatically or overwrite the ledger.
 
-See [live evidence](../../docs/validation/eventkit-live-poc.md).
+Historical live-evidence snapshots are available in Git history. This README documents the current disposable PoC workflow only.

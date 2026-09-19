@@ -104,8 +104,6 @@ Revisit this decision after the first macOS dogfood cycle, when the Flutter SDK 
 
 ## References
 
-- `docs/mvp.md`
-- `docs/open-questions.md`
 - `docs/planning/00-overview/roadmap.md`
 - `docs/planning/01-experience/day-canvas.md`
 - `docs/planning/01-experience/capture-and-transcription.md`

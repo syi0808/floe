@@ -49,8 +49,8 @@ cheaply.
   contracts; a fixed evaluation corpus measures false memory, false merge,
   grounding and unnecessary advice before live-model evidence is accepted.
 
-The detailed scope and acceptance criteria live in the
-[vertical slice delivery plan](../planning/08-engineering/vertical-slice-delivery.md).
+The detailed historical slice scope and acceptance criteria are preserved in Git history.
+Current execution order is owned by [Stage 2](../refactoring/stage-2.md).
 
 ## Consequences
 
@@ -72,4 +72,3 @@ The detailed scope and acceptance criteria live in the
 - [Personal Memory](../planning/02-domain/personal-memory.md)
 - [Manager and Experts](../planning/03-intelligence/manager-and-experts.md)
 - [Expert Runtime](../planning/09-implementation/expert-runtime.md)
-- [Progress](../../PROGRESS.md)

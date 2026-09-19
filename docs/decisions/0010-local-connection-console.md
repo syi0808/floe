@@ -83,4 +83,3 @@ cross-platform secret stores are deferred.
 - [CLIProxyAPI Codex OAuth reference implementation](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/codex/openai_auth.go)
 - [CLIProxyAPI Codex token storage model](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/codex/token.go)
 - [Native OAuth browser/PKCE guidance](https://www.rfc-editor.org/rfc/rfc8252.html)
-- [Validation evidence](../validation/local-connections.md)

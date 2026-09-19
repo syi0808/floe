@@ -74,4 +74,3 @@ Role prompts refine the common principles without fixing a workflow:
 
 - [Agent context assembly](0017-agent-context-assembly.md)
 - [Manager/Expert delegation](0018-manager-expert-a2a-delegation.md)
-- [Agent context and Schedule Expert generalization](../validation/s4-agent-context-generalization.md)

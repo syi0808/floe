@@ -1,10 +1,10 @@
 # S3 approved Calendar action
 
-2026-09-06: [Native execution](../validation/s3-native-executor.md) binds the
-Flutter review to the durable ledger. A later product decision replaces this
-Calendar-specific surface with shared Review and Activity and makes runtime
-Action Authority the authorization gate. All app builds include the trusted
-executor.
+The 2026-09-06 native-execution checkpoint bound the Flutter review to the durable
+ledger. A later product decision replaces this Calendar-specific surface with
+shared Review and Activity and makes runtime Action Authority the authorization
+gate. Historical checkpoint evidence is retained in Git history, not as active
+design authority.
 
 This document retains the validated decision surface but no longer defines the
 Calendar entry point. The labeled planning button is superseded by the Calendar
@@ -55,6 +55,6 @@ ambiguous states remain accessible through the card; never rely only on a toast.
 
 The simplified review is implemented in Flutter. Production decisions and state
 remain bound to the Rust ledger. All app builds include Calendar create. Review the
-surface with the Flutter preview and design-feedback mode. This presentation does not
-advance the remaining live acceptance or dogfood gates recorded in
-[S3 native validation](../validation/s3-native-executor.md).
+surface with the Flutter preview and design-feedback mode. Presentation checks do not
+replace the product-boundary, authority and recovery validation required by
+[Stage 3 end-to-end validation](../refactoring/stage-3/3-f.md).

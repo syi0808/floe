@@ -23,7 +23,7 @@ topology보다 먼저 실패시켜 보기 위한 것이다. Phase 0 PoC는 필�
 수행하며 보안·권한 검증을 생략하지 않는다.
 
 Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것은 아니다.
-현재 상태와 검증 근거는 [PROGRESS.md](../../../PROGRESS.md)에서 관리한다.
+현재 리팩터링 상태와 다음 작업은 [Stage 2](../../refactoring/stage-2.md)가 소유한다.
 
 ## Phase 0 — Architecture PoCs
 

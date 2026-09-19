@@ -10,10 +10,10 @@ This directory describes Floe's current architecture, responsibilities and depen
 
 | Needed information | Source |
 |---|---|
-| Approved target module boundaries | [Dependency policy](../../tools/architecture/module-dependencies.json) |
+| Module dependency policy | [Dependency policy](../../tools/architecture/module-dependencies.json) |
 | Product meaning and long-term scope | [Product planning](../planning/README.md) |
-| Individual design decisions | [ADRs](../decisions/) |
-| Executed validation evidence | [Validation](../validation/) |
-| Dated product history | [History](../history/README.md) |
+| Individual design decisions | [ADR index](../decisions/README.md) |
+| Active refactoring status | [Stage 2](../refactoring/stage-2.md) |
+| Historical plans and acceptance snapshots | Git history |
 
 Target policy and the current manifest may differ while Stage 2 is active. Do not describe a transitional caller as final architecture merely because its owner types already exist. Distinguish source-level wiring, compile/test evidence and actual product behavior.

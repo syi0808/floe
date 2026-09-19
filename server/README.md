@@ -284,4 +284,4 @@ go vet ./...
 FLOE_TEST_KEYCHAIN=1 go test ./internal/credentials
 ```
 
-Console/pairing specifics: [local connection validation](../docs/validation/local-connections.md).
+Historical console/pairing validation snapshots live in Git history. This README is the current operational source for the loopback server.

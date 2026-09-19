@@ -144,8 +144,8 @@ disconnect/cache deletion, recurrence metadata and original-zone formatting requ
 work and are not falsely exposed as implemented. The existing task collection and capture
 classification flows remain functional rather than being replaced by static demo content.
 
-Live acceptance, timezone/recurrence limitations, and dogfood steps are tracked in
-[`docs/validation/s1-calendar.md`](../../docs/validation/s1-calendar.md).
+Historical S1 acceptance snapshots have been removed from the active documentation tree.
+Current Apple product-boundary validation belongs to [Stage 3 end-to-end validation](../../docs/refactoring/stage-3/3-f.md).
 
 ## Validation commands
 
