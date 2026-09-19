@@ -1,7 +1,8 @@
 # ADR 0007: EventKit for the first connected Calendar slice
 
 - Date: 2026-09-04
-- Status: selected for S1 implementation; live read/create PoC pending
+- Status: superseded
+- Superseded by: [ADR 0008](0008-unified-calendar-read.md) for Calendar scope; the EventKit permission/read-only rationale below was carried forward
 
 ## Decision
 
@@ -11,9 +12,7 @@ persists, and projects the canonical mirror. No JavaScript runtime, credentials,
 model, background agent, or external write operation is introduced.
 
 EventKit is the preferred candidate because it exposes calendars already connected
-to macOS without a separate OAuth service. This choice is not evidence that a real
-account has passed the read/create PoC. The app builds against the actual SDK;
-permission, provider behavior, and S3 creation still require explicit live evidence.
+to macOS without a separate OAuth service. This decision did not itself establish live provider acceptance. Current implementation and product-boundary validation are tracked by current source, architecture and Stage documents rather than this ADR.
 
 ## Permission exception approved by the user
 
@@ -31,7 +30,7 @@ S3 must still implement its separate explicit approval and execution boundary.
 
 The single-calendar selection scope below describes the existing native implementation.
 It is superseded as a product target by [ADR 0008](0008-unified-calendar-read.md).
-Migration and live acceptance of the all-calendar scope remain pending.
+ADR 0008 defines the later product scope; this section remains only as rationale for the original EventKit mirror boundary.
 
 - One selected calendar per Person. Identity is Person + provider + calendar ID.
 - EventKit local item ID plus original recurrence occurrence date identifies an

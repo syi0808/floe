@@ -1,7 +1,7 @@
 # ADR 0008: Unified read of connected calendars
 
 - Date: 2026-09-04
-- Status: dual scope and per-source recovery implemented; live acceptance pending
+- Status: accepted
 - Supersedes: ADR 0007's one-selected-calendar scope, not its EventKit/read-only boundary
 
 ## Decision
@@ -19,7 +19,7 @@ next refresh/date read. Checking every individual source does not enable All.
 Legacy connections remain Selected; new connections offer All explicitly.
 Cancel preserves saved scope; saving requires at least one available calendar.
 
-## Native multi-selection delivery
+## Multi-selection contract
 
 The native client persists the selected calendar IDs and names, restores legacy
 single-calendar connections, and reads all selected sources on explicit refresh.
@@ -54,13 +54,6 @@ late reads cannot resurrect disconnected data across reconnect.
   source toolbar, permission footer, marketing heading, or prototype controls.
   Provenance/timezones remain accessible in event details; inventory lives in Connect.
 
-## Delivery boundary
+## Evidence boundary
 
-The Flutter preview demonstrates the unified composition with Work, Personal and
-Product team fixtures. It does not implement native storage migration, per-source
-partial-fetch reconciliation, discovery, or real permissions. Existing single-calendar
-native tests remain historical evidence, not acceptance of this expanded contract.
-Tests cover persisted modes, discovery, source-ID collisions, retained identities,
-partial recovery, disconnect races and 23/25-hour boundaries. Real-account discovery,
-revocation, recurrence and lifecycle still require controlled S1-A1–A4 acceptance.
-Fixture tests do not replace live evidence.
+This ADR defines the accepted product and data contract; it does not claim that any particular source snapshot, fixture suite or live-provider scenario is currently passing. Current implementation reality is determined from source and [current architecture](../architecture/README.md), while product-boundary validation belongs to [Stage 3](../refactoring/stage-3/3-f.md). Historical S1 acceptance snapshots remain available in Git history.

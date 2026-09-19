@@ -70,7 +70,7 @@ raw provider codes belong in collapsed technical details,
 not between the proposal and its approval controls. Do not invent rationale from
 an ID or implementation state, and do not conceal guests, alerts or other effects.
 
-See [Review, Action Authority & Activity](../planning/01-experience/review-authority-and-activity.md)
+See [Review, authority and Activity](../product/experience.md#review-authority-and-activity)
 and [decision-first action review](s3-calendar-action-ui.md). Metadata remains
 inspectable without becoming mandatory reading for ordinary approval.
 

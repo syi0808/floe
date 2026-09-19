@@ -133,4 +133,4 @@ report and hands off to the existing approval UI.
 - [Voice and Presence](../product/experience.md)
 - [Interventions](../product/experience.md)
 - [Initial Connector Set](../product/integrations-and-privacy.md)
-- [Vertical Slice Delivery](../planning/08-engineering/vertical-slice-delivery.md)
+- [Capability roadmap](../product/roadmap.md)
