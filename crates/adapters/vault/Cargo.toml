@@ -43,6 +43,7 @@ apple-native-keyring-store = { version = "1.0.2", default-features = false, feat
 
 [dev-dependencies]
 floe-agent-contract = { path = "../../contracts/agent" }
+floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-conversation = { path = "../../modules/conversation" }
 floe-day = { path = "../../modules/day" }

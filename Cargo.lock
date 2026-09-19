@@ -1129,6 +1129,7 @@ dependencies = [
  "floe-access",
  "floe-actions",
  "floe-agent-contract",
+ "floe-agent-runtime",
  "floe-context",
  "floe-context-contract",
  "floe-conversation",

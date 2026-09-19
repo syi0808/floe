@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, JournalEvent, MessageRole, ModelConversation,
-    ModelConversationEntry, ProjectionRef, ReplayReceipt, TaskState, ValidatedModelBatch,
-    input_digest,
+    ModelConversationEntry, ModelStep, ProjectionRef, ReplayReceipt, TaskState,
+    ValidatedModelBatch, input_digest,
 };
 use floe_kernel::AgentFailure;
 use uuid::Uuid;
@@ -116,6 +116,16 @@ pub(super) fn project_active_journal(
     project_entries(source, entries)
 }
 
+struct PendingTool {
+    ordinal: u32,
+    call: floe_agent_contract::ToolCall,
+}
+
+struct PendingDelegation {
+    ordinal: u32,
+    request: floe_agent_contract::DelegationRequest,
+}
+
 struct PendingBatch {
     batch: ValidatedModelBatch,
     /// Whether the batch's attempt completed in this journal. A batch without
@@ -123,6 +133,22 @@ struct PendingBatch {
     fresh: bool,
     /// Last acknowledged cursor, if any progress was recorded.
     cursor: Option<u32>,
+    /// Ordinal settled by an intent/result pair but not yet consumed by a
+    /// cursor advance. A crash between result and cursor ack leaves this set.
+    settled_step: Option<u32>,
+}
+
+impl PendingBatch {
+    fn next_index(&self) -> usize {
+        self.cursor.unwrap_or(0) as usize
+    }
+
+    fn next_step(&self) -> Result<&ModelStep, AgentFailure> {
+        self.batch
+            .steps
+            .get(self.next_index())
+            .ok_or(AgentFailure::StorageUnavailable)
+    }
 }
 
 /// One model attempt's projection binding and terminal state. A validated
@@ -142,9 +168,9 @@ fn project_entries(
     let mut exchanges = Vec::new();
     let mut replay = Vec::new();
     let mut attempts: HashMap<Uuid, AttemptState> = HashMap::new();
-    let mut tools = HashMap::new();
+    let mut tools: HashMap<Uuid, PendingTool> = HashMap::new();
     let mut seen_calls = HashSet::new();
-    let mut delegations = HashMap::new();
+    let mut delegations: HashMap<floe_kernel::TaskId, PendingDelegation> = HashMap::new();
     let mut seen_tasks = HashSet::new();
     let mut seen_invocations = HashSet::new();
     let mut seen_batches = HashSet::new();
@@ -206,6 +232,45 @@ fn project_entries(
                     .ok_or(AgentFailure::StorageUnavailable)?;
             }
             JournalEvent::ToolIntent { call } => {
+                // The intent must exactly match the current validated step:
+                // kind, payload, and stable identity. Anything else is a
+                // forged journal and fails closed as storage corruption.
+                let Some(state) = pending.as_ref() else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                if state.settled_step.is_some() {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let ordinal = state.cursor.unwrap_or(0);
+                let step = state.next_step()?;
+                let (step_tool_id, step_revision, step_input) = match step {
+                    ModelStep::CallTool {
+                        tool_id,
+                        definition_revision,
+                        input,
+                    } => (tool_id, definition_revision, input),
+                    _ => return Err(AgentFailure::StorageUnavailable),
+                };
+                if call.tool_id != *step_tool_id
+                    || call.definition_revision != *step_revision
+                    || call.input != *step_input
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let expected_key = floe_agent_runtime::stable_invocation_key(
+                    state.batch.execution_id,
+                    state.batch.batch_id,
+                    ordinal,
+                    floe_agent_runtime::InvocationKind::Tool,
+                );
+                let expected_call = floe_agent_runtime::stable_call_id(
+                    state.batch.execution_id,
+                    state.batch.batch_id,
+                    ordinal,
+                );
+                if call.invocation_key != expected_key || call.call_id != expected_call {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 if call.call_id.is_nil()
                     || call.invocation_key.as_uuid().is_nil()
                     || !seen_invocations.insert(call.invocation_key)
@@ -213,17 +278,36 @@ fn project_entries(
                     || call.definition_revision == 0
                     || floe_agent_contract::validate_tool_input(&call.input).is_err()
                     || !seen_calls.insert(call.call_id)
-                    || tools.insert(call.call_id, call.clone()).is_some()
-                    || pending.is_none()
+                    || tools
+                        .insert(
+                            call.call_id,
+                            PendingTool {
+                                ordinal,
+                                call: call.clone(),
+                            },
+                        )
+                        .is_some()
                 {
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
             JournalEvent::ToolResult { result } => {
-                let call = tools
+                let settled = tools
                     .remove(&result.call_id)
                     .ok_or(AgentFailure::StorageUnavailable)?;
+                let Some(state) = pending.as_mut() else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                // Only the current cursor's active intent may settle, and only
+                // once: the cursor has not advanced past its ordinal yet.
+                if state.cursor.unwrap_or(0) != settled.ordinal
+                    || state.settled_step.is_some()
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let call = settled.call;
                 result.validate(call.call_id, floe_agent_contract::MAX_OUTPUT_BYTES)?;
+                state.settled_step = Some(settled.ordinal);
                 let receipt = ReplayReceipt {
                     principal: source.principal.clone(),
                     run_id: Some(source.run_id),
@@ -251,6 +335,47 @@ fn project_entries(
                 replay.push(receipt);
             }
             JournalEvent::DelegationIntent { request } => {
+                // Same binding as tools: the intent must exactly match the
+                // current validated delegation step, including stable ids.
+                let Some(state) = pending.as_ref() else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                if state.settled_step.is_some() {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let ordinal = state.cursor.unwrap_or(0);
+                let step = state.next_step()?;
+                let (step_agent, step_revision, step_message, step_refs) = match step {
+                    ModelStep::Delegate {
+                        agent_id,
+                        definition_revision,
+                        message,
+                        context_refs,
+                    } => (agent_id, definition_revision, message, context_refs),
+                    _ => return Err(AgentFailure::StorageUnavailable),
+                };
+                if request.selected_agent_id != *step_agent
+                    || request.selected_definition_revision != *step_revision
+                    || request.message != *step_message
+                    || request.context_refs != *step_refs
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let expected_key = floe_agent_runtime::stable_invocation_key(
+                    state.batch.execution_id,
+                    state.batch.batch_id,
+                    ordinal,
+                    floe_agent_runtime::InvocationKind::Delegation,
+                );
+                let expected_task = floe_agent_runtime::stable_task_id(
+                    state.batch.execution_id,
+                    state.batch.batch_id,
+                    ordinal,
+                );
+                if request.invocation_key != expected_key || request.task_id != expected_task
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 if !request.task_id.is_valid()
                     || request.parent_run_id != Some(source.run_id.as_uuid())
                     || request.principal != source.principal
@@ -263,20 +388,35 @@ fn project_entries(
                     || !floe_agent_contract::valid_context_refs(&request.context_refs)
                     || !seen_tasks.insert(request.task_id)
                     || delegations
-                        .insert(request.task_id, request.clone())
+                        .insert(
+                            request.task_id,
+                            PendingDelegation {
+                                ordinal,
+                                request: request.clone(),
+                            },
+                        )
                         .is_some()
-                    || pending.is_none()
                 {
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
             JournalEvent::DelegationResult { receipt } => {
-                let request = delegations
+                let settled = delegations
                     .remove(&receipt.task_id)
                     .ok_or(AgentFailure::StorageUnavailable)?;
+                let Some(state) = pending.as_mut() else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                if state.cursor.unwrap_or(0) != settled.ordinal
+                    || state.settled_step.is_some()
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let request = settled.request;
                 receipt
                     .snapshot
                     .validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
+                state.settled_step = Some(settled.ordinal);
                 if receipt.snapshot.task_id != request.task_id
                     || receipt.snapshot.parent_run_id != request.parent_run_id
                     || receipt.snapshot.principal != request.principal
@@ -384,37 +524,99 @@ fn project_entries(
                     batch: batch.clone(),
                     fresh,
                     cursor: None,
+                    settled_step: None,
                 });
             }
             JournalEvent::BatchProgress { cursor } => {
                 cursor
                     .validate()
                     .map_err(|_| AgentFailure::StorageUnavailable)?;
-                let Some(state) = pending.as_mut() else {
-                    return Err(AgentFailure::StorageUnavailable);
+                // Exact cursor binding: the cursor is the authoritative plan
+                // index, so it may only advance by exactly one, and only with
+                // completion evidence for the step it leaves behind.
+                let step_text: Option<(u32, String)> = {
+                    let Some(state) = pending.as_mut() else {
+                        return Err(AgentFailure::StorageUnavailable);
+                    };
+                    if cursor.batch_id != state.batch.batch_id
+                        || cursor.next_step_index as usize > state.batch.steps.len()
+                    {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    match state.cursor {
+                        None => {
+                            // A fresh batch always starts at zero; a resumed
+                            // batch restarts wherever its cursor was. Initial
+                            // progress carries no in-journal evidence and
+                            // rebuilds no preamble: older journals hold it.
+                            if state.fresh && cursor.next_step_index != 0 {
+                                return Err(AgentFailure::StorageUnavailable);
+                            }
+                            state.cursor = Some(cursor.next_step_index);
+                            None
+                        }
+                        Some(last) => {
+                            if cursor.next_step_index != last + 1 {
+                                return Err(AgentFailure::StorageUnavailable);
+                            }
+                            let step = state
+                                .batch
+                                .steps
+                                .get(last as usize)
+                                .ok_or(AgentFailure::StorageUnavailable)?;
+                            match step {
+                                ModelStep::Preamble { text } => {
+                                    if state.settled_step.is_some() {
+                                        return Err(AgentFailure::StorageUnavailable);
+                                    }
+                                    let text = text.clone();
+                                    state.cursor = Some(cursor.next_step_index);
+                                    Some((last, text))
+                                }
+                                ModelStep::CallTool { .. }
+                                | ModelStep::Delegate { .. } => {
+                                    if state.settled_step != Some(last) {
+                                        return Err(AgentFailure::StorageUnavailable);
+                                    }
+                                    state.settled_step = None;
+                                    state.cursor = Some(cursor.next_step_index);
+                                    None
+                                }
+                                ModelStep::Answer { .. } => {
+                                    // Terminal answers carry no intent/result
+                                    // evidence. Projections of timed-out or
+                                    // failed runs still complete them through
+                                    // the cursor so iteration accounting stays
+                                    // exact; live output stays the Output path.
+                                    if state.settled_step.is_some() {
+                                        return Err(AgentFailure::StorageUnavailable);
+                                    }
+                                    state.cursor = Some(cursor.next_step_index);
+                                    None
+                                }
+                            }
+                        }
+                    }
                 };
-                if cursor.batch_id != state.batch.batch_id
-                    || cursor.next_step_index as usize > state.batch.steps.len()
-                {
-                    return Err(AgentFailure::StorageUnavailable);
+                if let Some((ordinal, text)) = step_text {
+                    let Some(state) = pending.as_ref() else {
+                        return Err(AgentFailure::StorageUnavailable);
+                    };
+                    let message_id = floe_agent_runtime::stable_preamble_id(
+                        state.batch.execution_id,
+                        state.batch.batch_id,
+                        ordinal,
+                    );
+                    let entry = ModelConversationEntry::Preamble { message_id, text };
+                    entry
+                        .validate()
+                        .map_err(|_| AgentFailure::StorageUnavailable)?;
+                    exchanges.push(entry);
                 }
-                match state.cursor {
-                    None => {
-                        // A fresh batch always starts at zero; a resumed batch
-                        // restarts wherever its cursor was.
-                        if state.fresh && cursor.next_step_index != 0 {
-                            return Err(AgentFailure::StorageUnavailable);
-                        }
-                        state.cursor = Some(cursor.next_step_index);
-                    }
-                    Some(last) => {
-                        if cursor.next_step_index <= last {
-                            return Err(AgentFailure::StorageUnavailable);
-                        }
-                        state.cursor = Some(cursor.next_step_index);
-                    }
-                }
-                if cursor.next_step_index as usize == state.batch.steps.len() {
+                let completed = pending
+                    .as_ref()
+                    .is_some_and(|state| cursor.next_step_index as usize == state.batch.steps.len());
+                if completed {
                     pending = None;
                     uncheckpointed_completion = true;
                 }
@@ -557,20 +759,124 @@ mod tests {
         }
     }
 
+    fn tool_call_for(
+        batch: &ValidatedModelBatch,
+        ordinal: u32,
+        tool_id: &str,
+        definition_revision: u64,
+        input: &str,
+    ) -> ToolCall {
+        ToolCall {
+            call_id: floe_agent_runtime::stable_call_id(
+                batch.execution_id,
+                batch.batch_id,
+                ordinal,
+            ),
+            invocation_key: floe_agent_runtime::stable_invocation_key(
+                batch.execution_id,
+                batch.batch_id,
+                ordinal,
+                floe_agent_runtime::InvocationKind::Tool,
+            ),
+            tool_id: tool_id.into(),
+            definition_revision,
+            input: input.into(),
+        }
+    }
+
+    fn delegation_request_for(
+        admitted: &AdmittedTurn,
+        batch: &ValidatedModelBatch,
+        ordinal: u32,
+        agent_id: &str,
+        definition_revision: u64,
+        message: &str,
+        context_refs: Vec<String>,
+    ) -> DelegationRequest {
+        DelegationRequest {
+            task_id: floe_agent_runtime::stable_task_id(
+                batch.execution_id,
+                batch.batch_id,
+                ordinal,
+            ),
+            parent_run_id: Some(admitted.receipt.run_id.as_uuid()),
+            principal: admitted.receipt.principal.clone(),
+            invocation_key: floe_agent_runtime::stable_invocation_key(
+                batch.execution_id,
+                batch.batch_id,
+                ordinal,
+                floe_agent_runtime::InvocationKind::Delegation,
+            ),
+            selected_agent_id: agent_id.into(),
+            selected_definition_revision: definition_revision,
+            message: message.into(),
+            context_refs,
+        }
+    }
+
+    fn pending_delegation_batch(
+        admitted: &AdmittedTurn,
+        attempt_id: Uuid,
+        context_refs: Vec<String>,
+    ) -> (ValidatedModelBatch, Vec<JournalEvent>) {
+        let execution_id = Uuid::new_v4();
+        let batch = ValidatedModelBatch {
+            execution_id,
+            attempt_id,
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Delegate {
+                agent_id: "expert-a".into(),
+                definition_revision: 2,
+                message: "summarize".into(),
+                context_refs: context_refs.clone(),
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![floe_agent_contract::PinnedAgentRevision {
+                agent_id: "expert-a".into(),
+                definition_revision: 2,
+            }],
+        };
+        let batch_id = batch.batch_id;
+        let prefix = vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch { batch: batch.clone() },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ];
+        let _ = admitted;
+        (batch, prefix)
+    }
+
     #[test]
     fn projection_pairs_settled_work_and_rejects_an_unsettled_intent() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         let model_batch = batch(
             attempt_id,
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
+        let call = tool_call_for(&model_batch, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -635,16 +941,16 @@ mod tests {
     fn tool_exchange_preserves_original_input_and_revision() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         let model_batch = batch(
             attempt_id,
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
+        let call = tool_call_for(&model_batch, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -699,17 +1005,35 @@ mod tests {
     fn delegation_exchange_preserves_context_refs() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let task_id = floe_agent_contract::TaskId::new();
-        let request = DelegationRequest {
-            task_id,
-            parent_run_id: Some(admitted.receipt.run_id.as_uuid()),
-            principal: admitted.receipt.principal.clone(),
-            invocation_key: InvocationKey::new(),
-            selected_agent_id: "expert-a".into(),
-            selected_definition_revision: 2,
-            message: "summarize".into(),
-            context_refs: vec!["turn:1".into(), "evidence:9".into()],
+        let context_refs = vec!["turn:1".into(), "evidence:9".into()];
+        let model_batch = ValidatedModelBatch {
+            execution_id: Uuid::new_v4(),
+            attempt_id,
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Delegate {
+                agent_id: "expert-a".into(),
+                definition_revision: 2,
+                message: "summarize".into(),
+                context_refs: context_refs.clone(),
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![floe_agent_contract::PinnedAgentRevision {
+                agent_id: "expert-a".into(),
+                definition_revision: 2,
+            }],
         };
+        let request = delegation_request_for(
+            &admitted,
+            &model_batch,
+            0,
+            "expert-a",
+            2,
+            "summarize",
+            context_refs,
+        );
+        let task_id = request.task_id;
         let receipt = TaskReceipt {
             task_id,
             snapshot: TaskSnapshot {
@@ -725,24 +1049,6 @@ mod tests {
                 issue: None,
             },
             replay: None,
-        };
-        let model_batch = ValidatedModelBatch {
-            execution_id: Uuid::new_v4(),
-            attempt_id,
-            projection_ref: ProjectionRef::new(),
-            batch_id: Uuid::new_v4(),
-            steps: vec![ModelStep::Delegate {
-                agent_id: request.selected_agent_id.clone(),
-                definition_revision: request.selected_definition_revision,
-                message: request.message.clone(),
-                context_refs: request.context_refs.clone(),
-            }],
-            catalog_revision: 1,
-            tool_revisions: vec![],
-            agent_revisions: vec![floe_agent_contract::PinnedAgentRevision {
-                agent_id: request.selected_agent_id.clone(),
-                definition_revision: request.selected_definition_revision,
-            }],
         };
         let snapshot = project_continuation(
             &admitted,
@@ -800,25 +1106,25 @@ mod tests {
     fn validated_batch_and_cursor_survive_projection() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         // Two steps, one settled: the projection must return the pending batch
         // with its cursor instead of discarding it as interrupted.
         let model_batch = batch(
             attempt_id,
             vec![
                 ModelStep::CallTool {
-                    tool_id: call.tool_id.clone(),
-                    definition_revision: call.definition_revision,
-                    input: call.input.clone(),
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
                 },
                 ModelStep::CallTool {
-                    tool_id: call.tool_id.clone(),
-                    definition_revision: call.definition_revision,
-                    input: call.input.clone(),
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
                 },
             ],
         );
+        let call = tool_call_for(&model_batch, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -871,18 +1177,18 @@ mod tests {
     fn settled_result_with_stale_cursor_is_recoverable() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         // The cursor ack was lost after the result ack: the result is settled
         // and the batch is still pending from the last acked cursor.
         let model_batch = batch(
             attempt_id,
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
+        let call = tool_call_for(&model_batch, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -999,18 +1305,18 @@ mod tests {
         let admitted = admitted();
         let execution_id = Uuid::new_v4();
         let first_attempt = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         let mut first = batch(
             first_attempt,
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
         first.execution_id = execution_id;
         let first_batch_id = first.batch_id;
+        let call = tool_call_for(&first, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let second_attempt = Uuid::new_v4();
         let mut second = batch(second_attempt, first.steps.clone());
         while second.execution_id == execution_id {
@@ -1074,31 +1380,31 @@ mod tests {
         let admitted = admitted();
         let execution_id = Uuid::new_v4();
         let first_attempt = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         let mut first = batch(
             first_attempt,
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
         first.execution_id = execution_id;
         let first_batch_id = first.batch_id;
+        let call = tool_call_for(&first, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let second_attempt = Uuid::new_v4();
-        let second_call = tool_call();
-        let second_result = tool_result(second_call.call_id);
         let mut second = batch(
             second_attempt,
             vec![ModelStep::CallTool {
-                tool_id: second_call.tool_id.clone(),
-                definition_revision: second_call.definition_revision,
-                input: second_call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
         second.execution_id = execution_id;
         let second_batch_id = second.batch_id;
+        let second_call = tool_call_for(&second, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let second_result = tool_result(second_call.call_id);
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -1173,18 +1479,18 @@ mod tests {
 
     fn completed_iteration(execution_id: Uuid, iteration: u32) -> Vec<JournalEvent> {
         let attempt_id = Uuid::new_v4();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         let mut completed = batch(
             attempt_id,
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
         completed.execution_id = execution_id;
         let batch_id = completed.batch_id;
+        let call = tool_call_for(&completed, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         vec![
             JournalEvent::ModelIntent {
                 attempt_id,
@@ -1263,13 +1569,23 @@ mod tests {
         let attempt_id = Uuid::new_v4();
         // A stale call keeps its exact attempted input and revision; the
         // host-generated result carries the retryable invalid-output issue.
-        let stale_call = ToolCall {
-            call_id: Uuid::new_v4(),
-            invocation_key: InvocationKey::new(),
-            tool_id: "read.context".into(),
-            definition_revision: 99,
-            input: r#"{"path":"a"}"#.into(),
-        };
+        let model_batch = batch(
+            attempt_id,
+            vec![
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 99,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+            ],
+        );
+        let stale_call =
+            tool_call_for(&model_batch, 0, "read.context", 99, r#"{"path":"a"}"#);
         let stale_result = ToolResult {
             call_id: stale_call.call_id,
             text: "tool descriptor is stale".into(),
@@ -1280,23 +1596,8 @@ mod tests {
                 retryable: true,
             }),
         };
-        let call = tool_call();
+        let call = tool_call_for(&model_batch, 1, "read.context", 3, r#"{"path":"a"}"#);
         let result = tool_result(call.call_id);
-        let model_batch = batch(
-            attempt_id,
-            vec![
-                ModelStep::CallTool {
-                    tool_id: stale_call.tool_id.clone(),
-                    definition_revision: stale_call.definition_revision,
-                    input: stale_call.input.clone(),
-                },
-                ModelStep::CallTool {
-                    tool_id: call.tool_id.clone(),
-                    definition_revision: call.definition_revision,
-                    input: call.input.clone(),
-                },
-            ],
-        );
         // Crash after the later real result, before its cursor ack: the soft
         // observation must still project alongside the real one.
         let snapshot = project_continuation(
@@ -1362,19 +1663,33 @@ mod tests {
     fn unknown_agent_rejection_survives_recovery() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let task_id = floe_agent_contract::TaskId::new();
         // The host never dispatched: the intent carries the exact attempted
         // request and the terminal rejection carries no result.
-        let request = DelegationRequest {
-            task_id,
-            parent_run_id: Some(admitted.receipt.run_id.as_uuid()),
-            principal: admitted.receipt.principal.clone(),
-            invocation_key: InvocationKey::new(),
-            selected_agent_id: "missing-expert".into(),
-            selected_definition_revision: 1,
-            message: "summarize".into(),
-            context_refs: vec!["turn:1".into()],
+        let model_batch = ValidatedModelBatch {
+            execution_id: Uuid::new_v4(),
+            attempt_id,
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Delegate {
+                agent_id: "missing-expert".into(),
+                definition_revision: 1,
+                message: "summarize".into(),
+                context_refs: vec!["turn:1".into()],
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
         };
+        let request = delegation_request_for(
+            &admitted,
+            &model_batch,
+            0,
+            "missing-expert",
+            1,
+            "summarize",
+            vec!["turn:1".into()],
+        );
+        let task_id = request.task_id;
         let receipt = TaskReceipt {
             task_id,
             snapshot: TaskSnapshot {
@@ -1390,21 +1705,6 @@ mod tests {
                 issue: Some(AgentFailure::InvalidModelOutput),
             },
             replay: None,
-        };
-        let model_batch = ValidatedModelBatch {
-            execution_id: Uuid::new_v4(),
-            attempt_id,
-            projection_ref: ProjectionRef::new(),
-            batch_id: Uuid::new_v4(),
-            steps: vec![ModelStep::Delegate {
-                agent_id: request.selected_agent_id.clone(),
-                definition_revision: request.selected_definition_revision,
-                message: request.message.clone(),
-                context_refs: request.context_refs.clone(),
-            }],
-            catalog_revision: 1,
-            tool_revisions: vec![],
-            agent_revisions: vec![],
         };
         let snapshot = project_continuation(
             &admitted,
@@ -1461,13 +1761,22 @@ mod tests {
     fn soft_result_and_following_real_result_keep_original_batch_order() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let soft_call = ToolCall {
-            call_id: Uuid::new_v4(),
-            invocation_key: InvocationKey::new(),
-            tool_id: "missing.tool".into(),
-            definition_revision: 1,
-            input: "{}".into(),
-        };
+        let model_batch = batch(
+            attempt_id,
+            vec![
+                ModelStep::CallTool {
+                    tool_id: "missing.tool".into(),
+                    definition_revision: 1,
+                    input: "{}".into(),
+                },
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+            ],
+        );
+        let soft_call = tool_call_for(&model_batch, 0, "missing.tool", 1, "{}");
         let soft_result = ToolResult {
             call_id: soft_call.call_id,
             text: "tool is not registered".into(),
@@ -1478,23 +1787,8 @@ mod tests {
                 retryable: true,
             }),
         };
-        let call = tool_call();
+        let call = tool_call_for(&model_batch, 1, "read.context", 3, r#"{"path":"a"}"#);
         let result = tool_result(call.call_id);
-        let model_batch = batch(
-            attempt_id,
-            vec![
-                ModelStep::CallTool {
-                    tool_id: soft_call.tool_id.clone(),
-                    definition_revision: soft_call.definition_revision,
-                    input: soft_call.input.clone(),
-                },
-                ModelStep::CallTool {
-                    tool_id: call.tool_id.clone(),
-                    definition_revision: call.definition_revision,
-                    input: call.input.clone(),
-                },
-            ],
-        );
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -1601,18 +1895,18 @@ mod tests {
     #[test]
     fn resumed_first_batch_without_local_attempt_is_still_allowed() {
         let admitted = admitted();
-        let call = tool_call();
-        let result = tool_result(call.call_id);
         // No model intent in this journal: the batch was validated by an older
         // run and re-recorded here before its steps resume.
         let model_batch = batch(
             Uuid::new_v4(),
             vec![ModelStep::CallTool {
-                tool_id: call.tool_id.clone(),
-                definition_revision: call.definition_revision,
-                input: call.input.clone(),
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
             }],
         );
+        let call = tool_call_for(&model_batch, 0, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
         let snapshot = project_continuation(
             &admitted,
             &entries(vec![
@@ -1997,11 +2291,24 @@ mod tests {
     fn oversized_context_ref_in_journal_is_storage_fault() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let (_, mut events) = pending_answer_batch(attempt_id);
-        let oversized = "x".repeat(floe_agent_contract::MAX_OUTPUT_BYTES + 1);
-        events.push(JournalEvent::DelegationIntent {
-            request: delegation_request(&admitted, vec![oversized]),
-        });
+        // Count over the bound with small refs so the batch itself still fits
+        // the wire budget: the journal intent must fail on the ref bound.
+        let oversized: Vec<String> = (0..(floe_agent_contract::MAX_CONTEXT_REFS + 1))
+            .map(|index| format!("turn:{index}"))
+            .collect();
+        assert_eq!(oversized.len(), floe_agent_contract::MAX_CONTEXT_REFS + 1);
+        let (batch, mut events) =
+            pending_delegation_batch(&admitted, attempt_id, oversized.clone());
+        let request = delegation_request_for(
+            &admitted,
+            &batch,
+            0,
+            "expert-a",
+            2,
+            "summarize",
+            oversized,
+        );
+        events.push(JournalEvent::DelegationIntent { request });
         assert!(matches!(
             project_continuation(&admitted, &entries(events)),
             Err(AgentFailure::StorageUnavailable)
@@ -2012,13 +2319,23 @@ mod tests {
     fn maximum_valid_context_ref_survives_recovery() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let (batch, mut events) = pending_answer_batch(attempt_id);
-        let mut context_refs = vec!["x".repeat(floe_agent_contract::MAX_OUTPUT_BYTES)];
-        for index in 1..floe_agent_contract::MAX_CONTEXT_REFS {
-            context_refs.push(format!("turn:{index}"));
-        }
+        // Maximum count with small refs so the validated batch still fits the
+        // wire budget; a 64 KiB single ref can never sit in a batch.
+        let context_refs: Vec<String> = (0..floe_agent_contract::MAX_CONTEXT_REFS)
+            .map(|index| format!("turn:{index}"))
+            .collect();
         assert_eq!(context_refs.len(), floe_agent_contract::MAX_CONTEXT_REFS);
-        let request = delegation_request(&admitted, context_refs);
+        let (batch, mut events) =
+            pending_delegation_batch(&admitted, attempt_id, context_refs.clone());
+        let request = delegation_request_for(
+            &admitted,
+            &batch,
+            0,
+            "expert-a",
+            2,
+            "summarize",
+            context_refs,
+        );
         let receipt = TaskReceipt {
             task_id: request.task_id,
             snapshot: TaskSnapshot {
@@ -2102,5 +2419,284 @@ mod tests {
             project_continuation(&admitted, &entries(events)),
             Err(AgentFailure::StorageUnavailable)
         ));
+    }
+
+    #[test]
+    fn tool_intent_must_match_current_validated_step() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (_, mut events) = pending_answer_batch(attempt_id);
+        events.push(JournalEvent::ToolIntent { call: tool_call() });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn delegation_intent_must_match_current_validated_step() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (_, mut events) = pending_answer_batch(attempt_id);
+        events.push(JournalEvent::DelegationIntent {
+            request: delegation_request(&admitted, vec!["turn:1".into()]),
+        });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn tool_intent_payload_must_match_validated_step() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let model_batch = batch(
+            attempt_id,
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: "{}".into(),
+            }],
+        );
+        let mut call = tool_call_for(&model_batch, 0, "read.context", 3, "{}");
+        call.input = r#"{"x":1}"#.into();
+        let prefix = vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: model_batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch {
+                batch: model_batch.clone(),
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: model_batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ];
+        let mut events = prefix;
+        events.push(JournalEvent::ToolIntent { call });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn delegation_intent_payload_must_match_validated_step() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (batch, mut events) =
+            pending_delegation_batch(&admitted, attempt_id, vec!["a".into()]);
+        let request =
+            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", vec!["b".into()]);
+        events.push(JournalEvent::DelegationIntent { request });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn tool_intent_requires_exact_stable_identity() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let model_batch = batch(
+            attempt_id,
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
+            }],
+        );
+        // Same payload, random stable identity: must fail closed.
+        let call = tool_call();
+        assert_eq!(call.tool_id, "read.context");
+        let mut events = vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: model_batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch {
+                batch: model_batch.clone(),
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: model_batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ];
+        events.push(JournalEvent::ToolIntent { call });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn delegation_intent_requires_exact_stable_identity() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let context_refs = vec!["turn:1".into()];
+        let (batch, mut events) =
+            pending_delegation_batch(&admitted, attempt_id, context_refs.clone());
+        // Same payload, random stable identity: must fail closed.
+        let request = delegation_request(&admitted, context_refs);
+        events.push(JournalEvent::DelegationIntent { request });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn cursor_cannot_skip_executable_step() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let model_batch = batch(
+            attempt_id,
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
+            }],
+        );
+        // No intent/result between the two cursors: skipping the executable
+        // step must fail closed.
+        let events = vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref: model_batch.projection_ref,
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+            JournalEvent::ValidatedBatch {
+                batch: model_batch.clone(),
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: model_batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: model_batch.batch_id,
+                    next_step_index: 1,
+                },
+            },
+        ];
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn preamble_advances_cursor_and_recovers_deterministically() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let model_batch = batch(
+            attempt_id,
+            vec![
+                ModelStep::Preamble {
+                    text: "thinking".into(),
+                },
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+            ],
+        );
+        // Crash after the preamble cursor, before any tool work.
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: model_batch.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 0,
+                    },
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 1,
+                    },
+                },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot.batch_cursor,
+            Some(BatchCursor {
+                batch_id: model_batch.batch_id,
+                next_step_index: 1,
+            })
+        );
+        let expected_id = floe_agent_runtime::stable_preamble_id(
+            model_batch.execution_id,
+            model_batch.batch_id,
+            0,
+        );
+        assert!(
+            matches!(
+                snapshot.model_conversation.current_turn.as_slice(),
+                [ModelConversationEntry::Preamble { message_id, text }]
+                    if *message_id == expected_id && text == "thinking"
+            ),
+            "preamble must recover once with its stable id: {:?}",
+            snapshot.model_conversation.current_turn
+        );
+        // Resume starts the tool at ordinal 1 under its stable identity.
+        let pending = snapshot.pending_batch.as_ref().expect("batch stays pending");
+        assert!(matches!(
+            pending.steps.get(1),
+            Some(ModelStep::CallTool { .. })
+        ));
+        let expected_call = floe_agent_runtime::stable_call_id(
+            model_batch.execution_id,
+            model_batch.batch_id,
+            1,
+        );
+        let next_call = tool_call_for(&model_batch, 1, "read.context", 3, r#"{"path":"a"}"#);
+        assert_eq!(next_call.call_id, expected_call);
     }
 }

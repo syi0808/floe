@@ -119,6 +119,16 @@ pub fn stable_task_id(execution_id: Uuid, batch_id: Uuid, step_ordinal: u32) -> 
     .expect("uuid v5 is non-nil")
 }
 
+/// Stable preamble message id, derived from the same basis as the step
+/// identities. Recovery rebuilds the same id so a preamble never depends on
+/// the random id its first execution used.
+pub fn stable_preamble_id(execution_id: Uuid, batch_id: Uuid, step_ordinal: u32) -> Uuid {
+    Uuid::new_v5(
+        &execution_id,
+        format!("{execution_id}:{batch_id}:{step_ordinal}:preamble").as_bytes(),
+    )
+}
+
 pub struct Engine {
     config: EngineConfig,
     default_validator: ContractValidator,
@@ -508,8 +518,23 @@ impl ActiveDrive<'_> {
             }
             match step {
                 ModelStep::Preamble { text } => {
+                    // A preamble consumes its validated step even though it
+                    // has no side effect: the cursor is durable before the
+                    // in-memory push, and recovery rebuilds the same stable
+                    // id from the batch.
+                    self.checkpoint(JournalEvent::BatchProgress {
+                        cursor: BatchCursor {
+                            batch_id: batch.batch_id,
+                            next_step_index: ordinal + 1,
+                        },
+                    })
+                    .await?;
                     self.push_current(ModelConversationEntry::Preamble {
-                        message_id: Uuid::new_v4(),
+                        message_id: stable_preamble_id(
+                            batch.execution_id,
+                            batch.batch_id,
+                            ordinal,
+                        ),
                         text: text.clone(),
                     })?;
                 }
@@ -1245,10 +1270,23 @@ const MAX_BATCH_TOOL_CALLS: usize = 8;
 /// Whole-batch grammar, checked before any per-step validation or dispatch.
 /// An answer batch is exactly one final answer with no tool or delegation;
 /// a tool batch carries no answer or delegation; a delegation batch carries
-/// exactly one delegation and nothing else executable. Preambles may lead an
-/// answer or tool batch but never trail an answer.
+/// exactly one delegation and nothing else executable. Every preamble leads
+/// its batch: no preamble may follow an executable step.
 fn validate_batch_shape(steps: &[ModelStep]) -> Result<(), AgentFailure> {
     if steps.is_empty() || steps.len() > MAX_BATCH_STEPS {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    if let Some(first_executable) = steps
+        .iter()
+        .position(|step| !matches!(step, ModelStep::Preamble { .. }))
+    {
+        if steps[first_executable..]
+            .iter()
+            .any(|step| matches!(step, ModelStep::Preamble { .. }))
+        {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+    } else {
         return Err(AgentFailure::InvalidModelOutput);
     }
     let mut answers = 0;
@@ -2628,6 +2666,116 @@ mod tests {
         assert_eq!(outcome.tool_calls, 0);
         assert_eq!(outcome.delegation_calls, 0);
         assert_eq!(outcome.validated_batches, 1);
+    }
+
+    #[tokio::test]
+    async fn trailing_preamble_is_invalid_model_output() {
+        assert_shape_rejected(
+            drive_shape(vec![
+                tool_call(),
+                ModelStep::Preamble {
+                    text: "trailing".into(),
+                },
+            ])
+            .await,
+        );
+        assert_shape_rejected(
+            drive_shape(vec![
+                delegation(),
+                ModelStep::Preamble {
+                    text: "trailing".into(),
+                },
+            ])
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn preamble_advances_cursor_with_stable_identity() {
+        struct PreambleToolOnce;
+        impl ModelPort for PreambleToolOnce {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                Box::pin(async move {
+                    let steps = if has_tool_exchange(&request) {
+                        vec![answer("done")]
+                    } else {
+                        vec![
+                            ModelStep::Preamble {
+                                text: "thinking".into(),
+                            },
+                            tool_call(),
+                        ]
+                    };
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                ports(
+                    &projection,
+                    &PreambleToolOnce,
+                    &tools,
+                    &journal,
+                    &Validator,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        let events = events.lock().unwrap();
+        let batch = events
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+                _ => None,
+            })
+            .expect("preamble batch is validated");
+        assert!(matches!(batch.steps.as_slice(), [ModelStep::Preamble { .. }, ModelStep::CallTool { .. }]));
+        let cursors = events
+            .iter()
+            .filter_map(|event| match event {
+                JournalEvent::BatchProgress { cursor } if cursor.batch_id == batch.batch_id => {
+                    Some(cursor.next_step_index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            cursors.contains(&1),
+            "preamble consumes its step: {cursors:?}"
+        );
+        assert!(
+            cursors.contains(&2),
+            "tool consumes its step: {cursors:?}"
+        );
+        assert_eq!(
+            stable_preamble_id(batch.execution_id, batch.batch_id, 0),
+            stable_preamble_id(batch.execution_id, batch.batch_id, 0)
+        );
+        assert_ne!(
+            stable_preamble_id(batch.execution_id, batch.batch_id, 0),
+            stable_call_id(batch.execution_id, batch.batch_id, 0)
+        );
     }
 
     #[tokio::test]

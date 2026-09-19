@@ -939,9 +939,35 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         .await
         .unwrap();
     let attempt_id = Uuid::new_v4();
+    let batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id,
+        projection_ref: ProjectionRef::new(),
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::CallTool {
+            tool_id: "read.context".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![PinnedToolRevision {
+            tool_id: "read.context".into(),
+            definition_revision: 1,
+        }],
+        agent_revisions: vec![],
+    };
     let call = ToolCall {
-        call_id: Uuid::new_v4(),
-        invocation_key: floe_agent_contract::InvocationKey::new(),
+        call_id: floe_agent_runtime::stable_call_id(
+            batch.execution_id,
+            batch.batch_id,
+            0,
+        ),
+        invocation_key: floe_agent_runtime::stable_invocation_key(
+            batch.execution_id,
+            batch.batch_id,
+            0,
+            floe_agent_runtime::InvocationKind::Tool,
+        ),
         tool_id: "read.context".into(),
         definition_revision: 1,
         input: "{}".into(),
@@ -952,23 +978,6 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         artifacts: vec![],
         coverage: DependencyCoverage::Independent,
         issue: None,
-    };
-    let batch = ValidatedModelBatch {
-        execution_id: Uuid::new_v4(),
-        attempt_id,
-        projection_ref: ProjectionRef::new(),
-        batch_id: Uuid::new_v4(),
-        steps: vec![ModelStep::CallTool {
-            tool_id: call.tool_id.clone(),
-            definition_revision: call.definition_revision,
-            input: call.input.clone(),
-        }],
-        catalog_revision: 1,
-        tool_revisions: vec![PinnedToolRevision {
-            tool_id: call.tool_id.clone(),
-            definition_revision: call.definition_revision,
-        }],
-        agent_revisions: vec![],
     };
     for (kind, event) in [
         (
@@ -1072,9 +1081,35 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         .await
         .unwrap();
     let second_attempt_id = Uuid::new_v4();
+    let second_batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id: second_attempt_id,
+        projection_ref: ProjectionRef::new(),
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::CallTool {
+            tool_id: "read.more-context".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![PinnedToolRevision {
+            tool_id: "read.more-context".into(),
+            definition_revision: 1,
+        }],
+        agent_revisions: vec![],
+    };
     let second_call = ToolCall {
-        call_id: Uuid::new_v4(),
-        invocation_key: floe_agent_contract::InvocationKey::new(),
+        call_id: floe_agent_runtime::stable_call_id(
+            second_batch.execution_id,
+            second_batch.batch_id,
+            0,
+        ),
+        invocation_key: floe_agent_runtime::stable_invocation_key(
+            second_batch.execution_id,
+            second_batch.batch_id,
+            0,
+            floe_agent_runtime::InvocationKind::Tool,
+        ),
         tool_id: "read.more-context".into(),
         definition_revision: 1,
         input: "{}".into(),
@@ -1085,23 +1120,6 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         artifacts: vec![],
         coverage: DependencyCoverage::Independent,
         issue: None,
-    };
-    let second_batch = ValidatedModelBatch {
-        execution_id: Uuid::new_v4(),
-        attempt_id: second_attempt_id,
-        projection_ref: ProjectionRef::new(),
-        batch_id: Uuid::new_v4(),
-        steps: vec![ModelStep::CallTool {
-            tool_id: second_call.tool_id.clone(),
-            definition_revision: second_call.definition_revision,
-            input: second_call.input.clone(),
-        }],
-        catalog_revision: 1,
-        tool_revisions: vec![PinnedToolRevision {
-            tool_id: second_call.tool_id.clone(),
-            definition_revision: second_call.definition_revision,
-        }],
-        agent_revisions: vec![],
     };
     for (kind, event) in [
         (
