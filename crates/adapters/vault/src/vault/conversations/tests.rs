@@ -51,7 +51,7 @@ fn request(
         text: "hello".into(),
         continuation: None,
         retry_of: None,
-        model_placement: ModelPlacement::DeviceLocal,
+        profile: floe_conversation::ProfileSelection::Auto,
     }
 }
 
@@ -327,7 +327,6 @@ async fn continuation_admission_is_generation_bound_and_preserves_one_user_messa
             turn_id: run_id.as_uuid(),
             level: 0,
             usage: AgentUsage::default(),
-            placement: ModelPlacement::DeviceLocal,
         })
     );
 

@@ -100,6 +100,10 @@ impl InferenceRouter {
                 if recipient.trim().is_empty() || recipient.len() > 256 {
                     return Err(RoutePlanError::Denied);
                 }
+                // Legacy request consent is still enforced for old callers.
+                // Canonical InferenceService does not use this router; Access
+                // owns exact-recipient authority there. ModelProfile consent
+                // was removed and is never consulted here.
                 if !*consent {
                     return Err(RoutePlanError::ConsentRequired);
                 }
@@ -112,10 +116,6 @@ impl InferenceRouter {
                 }
             }
         };
-
-        if profile.data_recipient.is_external() && !profile.external_transfer_consent {
-            return Err(RoutePlanError::ConsentRequired);
-        }
 
         Ok(PlannedRoute {
             profile_id: profile.id.clone(),
@@ -151,7 +151,7 @@ mod tests {
     use super::*;
     use crate::api::{ExecutionLocation, ModelCapabilities, ModelConsumer, ModelPurpose};
 
-    fn profile(recipient: DataRecipient, consent: bool) -> ModelProfile {
+    fn profile(recipient: DataRecipient) -> ModelProfile {
         ModelProfile {
             id: "profile".into(),
             purpose: ModelPurpose::new("everyday_assistance").unwrap(),
@@ -160,7 +160,6 @@ mod tests {
             data_recipient: recipient,
             capabilities: ModelCapabilities(vec!["chat".into()]),
             available: true,
-            external_transfer_consent: consent,
         }
     }
 
@@ -176,7 +175,7 @@ mod tests {
 
     #[test]
     fn recipient_and_execution_are_independent() {
-        let router = InferenceRouter::new([profile(DataRecipient::Device, false)]).unwrap();
+        let router = InferenceRouter::new([profile(DataRecipient::Device)]).unwrap();
         let route = router
             .plan(&request(RecipientConstraint::DeviceOnly))
             .unwrap();
@@ -185,10 +184,9 @@ mod tests {
     }
 
     #[test]
-    fn external_recipient_requires_exact_consent_and_identity() {
+    fn external_recipient_requires_exact_identity() {
         let router = InferenceRouter::new([profile(
             DataRecipient::external("fixture-recipient").unwrap(),
-            true,
         )])
         .unwrap();
         assert_eq!(
@@ -198,6 +196,8 @@ mod tests {
             })),
             Err(RoutePlanError::Denied)
         );
+        // Legacy request consent is still enforced; ModelProfile consent was
+        // removed and is never consulted.
         assert_eq!(
             router.plan(&request(RecipientConstraint::External {
                 recipient: "fixture-recipient".into(),
@@ -205,19 +205,26 @@ mod tests {
             })),
             Err(RoutePlanError::ConsentRequired)
         );
+        assert!(matches!(
+            router.plan(&request(RecipientConstraint::External {
+                recipient: "fixture-recipient".into(),
+                consent: true,
+            })),
+            Ok(_)
+        ));
     }
 
     #[test]
     fn explicit_missing_profile_does_not_fall_back_and_duplicate_ids_are_rejected() {
         assert_eq!(
             InferenceRouter::new([
-                profile(DataRecipient::Device, false),
-                profile(DataRecipient::Device, false),
+                profile(DataRecipient::Device),
+                profile(DataRecipient::Device),
             ])
             .unwrap_err(),
             RoutePlanError::Denied
         );
-        let router = InferenceRouter::new([profile(DataRecipient::Device, false)]).unwrap();
+        let router = InferenceRouter::new([profile(DataRecipient::Device)]).unwrap();
         let mut request = request(RecipientConstraint::DeviceOnly);
         request.preferred_profile_id = Some("missing".into());
         assert_eq!(router.plan(&request), Err(RoutePlanError::NotConfigured));
@@ -225,7 +232,7 @@ mod tests {
 
     #[test]
     fn ambiguous_or_deserialized_invalid_profiles_are_denied() {
-        let first = profile(DataRecipient::Device, false);
+        let first = profile(DataRecipient::Device);
         let mut second = first.clone();
         second.id = "second".into();
         let router = InferenceRouter::new([first.clone(), second]).unwrap();
@@ -243,7 +250,7 @@ mod tests {
 
     #[test]
     fn scope_capability_and_remote_device_claims_are_checked() {
-        let base = profile(DataRecipient::Device, false);
+        let base = profile(DataRecipient::Device);
         let router = InferenceRouter::new([base.clone()]).unwrap();
         let mut query = request(RecipientConstraint::DeviceOnly);
         query.preferred_profile_id = Some(base.id.clone());

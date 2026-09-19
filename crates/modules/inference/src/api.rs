@@ -82,7 +82,6 @@ pub struct ModelProfile {
     pub data_recipient: DataRecipient,
     pub capabilities: ModelCapabilities,
     pub available: bool,
-    pub external_transfer_consent: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

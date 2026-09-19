@@ -1027,7 +1027,9 @@ name = "floe-inference"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-access",
  "floe-agent-contract",
+ "floe-context-contract",
  "floe-execution",
  "floe-kernel",
  "serde",

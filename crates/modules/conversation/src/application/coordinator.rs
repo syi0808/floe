@@ -90,6 +90,9 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 {
                     return Err(AgentFailure::Conflict);
                 }
+                if snapshot.profile != request.profile {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 Some(snapshot)
             }
         };
@@ -120,7 +123,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 request_digest,
                 mode: request.mode.clone(),
                 retry_of: request.retry_of,
-                execution_profile: request.execution_profile.clone(),
+                profile: request.profile.clone(),
                 user_message: AgentMessage {
                     message_id: request.command_id.as_uuid(),
                     role: MessageRole::User,
@@ -144,6 +147,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             || admitted.receipt.principal != request.principal
             || admitted.receipt.request_digest != request_digest
             || admitted.receipt.retry_of != request.retry_of
+            || admitted.receipt.profile != request.profile
             || admitted.receipt.state != RunState::Working
             || match &request.mode {
                 TurnMode::New => {
@@ -515,7 +519,7 @@ pub async fn continuation<Repository: ConversationRepository>(
         parent.validate()?;
         if parent.principal != principal
             || parent.session_id != current.session_id
-            || parent.execution_profile != current.execution_profile
+            || parent.profile != current.profile
             || child.continuation_executor_generation != Some(parent.executor_generation)
             || parent.continuation().as_ref().is_none_or(|reference| {
                 reference.run_id != parent_run_id || reference.level != child.continuation_level
@@ -599,7 +603,7 @@ pub async fn continuation<Repository: ConversationRepository>(
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
         session_id: current.session_id,
         session_revision: current.session_revision,
-        execution_profile: current.execution_profile,
+        profile: current.profile.clone(),
         model_conversation,
         replay,
         pending_batch,

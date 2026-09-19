@@ -6,7 +6,6 @@ use std::{
 };
 
 use crate::{VaultConversationAdmissionRequest, VaultKey};
-use floe_agent_contract::ModelPlacement;
 use floe_agent_contract::{
     AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture, ContextEnvelope,
     ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
@@ -378,7 +377,6 @@ fn request(
         mode: TurnMode::New,
         retry_of: None,
         profile: floe_conversation::ProfileSelection::Auto,
-        execution_profile: "device_local".into(),
         allowed_catalog: AllowedCatalog::default(),
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
@@ -934,7 +932,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             text: "continue safely".into(),
             continuation: None,
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();
@@ -1076,7 +1074,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
                 level: continuation.reference.level,
             }),
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();
@@ -1275,7 +1273,7 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
             text: "unfinished".into(),
             continuation: None,
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();
@@ -1325,7 +1323,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
             text: "continue safely".into(),
             continuation: None,
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();
@@ -1428,7 +1426,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
                 level: parent.reference.level,
             }),
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();
@@ -1523,7 +1521,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
             text: "continue safely".into(),
             continuation: None,
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();
@@ -1618,7 +1616,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
                 level: parent.reference.level,
             }),
             retry_of: None,
-            model_placement: ModelPlacement::DeviceLocal,
+            profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
         .unwrap();

@@ -22,7 +22,7 @@ Detailed work is split into the execution plans linked below. This overview owns
     - [x] durable model usage, cursor, Tool/Delegation binding and single-journal recovery
     - [x] cross-run pending batch → child resume lineage
     - [x] freeze 2-B.1 after the lineage P0 closes
-  - [ ] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md)
+  - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md)
   - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice**
   - [ ] **2-B.4 — App production cutover**
   - [ ] **2-B.5 — Integrated 2-B hardening**
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-B.2 — Canonical Model vertical slice.**
+**Active: 2-B.3 — Canonical Context projection and Tool vertical slice.**
 
-2-B.1 is complete / frozen. The current work is the production root model cutover: remove pre-admission placement authority, add Access exact-recipient dispatch fencing, implement secret-free Inference-owned profile/attempt/budget routing, adapt Provider transport, and replace root `LegacyModelPort` wiring.
+2-B.1 is complete / frozen. 2-B.2 is complete: the production root model path is Engine → `InferenceService : ModelPort` → Access dispatch fence → Provider transport, with Inference-owned profile selection, attempt and budget ownership, and no App Foundation/Server pre-selection for the root Manager attempt.
 
-Use [the 2-B.2 execution plan](stage-2/2-b2.md) as the authoritative task document. Do not reopen 2-B.1 and do not start 2-B.3 before the 2-B.2 exit gates are green.
+Use [the 2-B execution plan](stage-2/2-b.md) as the authoritative task document. Do not reopen 2-B.1 or 2-B.2 for normal caller cutover work.
 
 ## Target internal architecture
 

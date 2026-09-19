@@ -1,6 +1,6 @@
 use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
-use floe_agent_contract::{DataClass, ModelPlacement};
-use floe_conversation::{AgentContinuation, AgentMessage, AgentOutcome, AgentUsage};
+use floe_agent_contract::DataClass;
+use floe_conversation::{AgentContinuation, AgentMessage, AgentOutcome, AgentUsage, ProfileSelection};
 use serde::{Deserialize, Serialize};
 use turso::transaction::{Transaction, TransactionBehavior};
 
@@ -51,11 +51,14 @@ pub struct VaultConversationRunRecord {
     pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
     pub retry_of: Option<RunId>,
-    pub model_placement: ModelPlacement,
+    pub profile: ProfileSelection,
 }
 
 impl VaultConversationRunRecord {
     fn validate(&self, person_id: PersonId) -> Result<(), AgentFailure> {
+        self.profile
+            .validate()
+            .map_err(|_| AgentFailure::VaultUnavailable)?;
         let admitted_revision = self
             .initial_session_revision
             .checked_add(1)
@@ -152,6 +155,7 @@ impl VaultConversationRunRecord {
             && self.continuation_level
                 == request.continuation.as_ref().map_or(0, |value| value.level)
             && self.retry_of == request.retry_of
+            && self.profile == request.profile
     }
 }
 
@@ -173,11 +177,14 @@ pub struct VaultConversationAdmissionRequest {
     pub text: String,
     pub continuation: Option<VaultConversationContinuationRef>,
     pub retry_of: Option<RunId>,
-    pub model_placement: ModelPlacement,
+    pub profile: ProfileSelection,
 }
 
 impl VaultConversationAdmissionRequest {
     fn validate(&self) -> Result<(), AgentFailure> {
+        self.profile
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
         if !self.run_id.is_valid()
             || !self.command_id.is_valid()
             || self.session_id.is_nil()
@@ -607,7 +614,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .map(|value| value.executor_generation),
                 continuation_level: request.continuation.as_ref().map_or(0, |value| value.level),
                 retry_of: request.retry_of,
-                model_placement: request.model_placement,
+                profile: request.profile.clone(),
             };
             record.validate(self.person_id)?;
             transaction
@@ -862,7 +869,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 turn_id: run_id.as_uuid(),
                 level: current.continuation_level,
                 usage: AgentUsage::default(),
-                placement: current.model_placement,
             });
             session.last_outcome = Some(match terminal.state {
                 VaultConversationRunState::Completed => AgentOutcome::Completed,

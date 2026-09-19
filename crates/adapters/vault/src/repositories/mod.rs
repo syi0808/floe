@@ -20,7 +20,7 @@ mod task;
 #[cfg(unix)]
 pub use context_evidence::ContextEvidenceReader;
 #[cfg(unix)]
-pub use conversation::{VaultConversationRepository, execution_profile};
+pub use conversation::VaultConversationRepository;
 #[cfg(unix)]
 pub use personal_grants::VaultGrantRecords;
 #[cfg(unix)]

@@ -15,7 +15,6 @@ pub use error::{StoreError, StoreErrorCode};
 #[cfg(unix)]
 pub use repositories::{
     ContextEvidenceReader, VaultConversationRepository, VaultGrantRecords, VaultTaskRepository,
-    execution_profile,
 };
 #[cfg(unix)]
 pub use vault::*;

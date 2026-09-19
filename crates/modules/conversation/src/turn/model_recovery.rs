@@ -86,6 +86,7 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         };
         let lifecycle = floe_inference::AttemptLifecycle::start(
             &request.usage,
+            uuid::Uuid::new_v4(),
             request.turn_id,
             request.session_id,
             attempt + 1,

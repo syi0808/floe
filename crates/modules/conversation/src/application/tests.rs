@@ -144,7 +144,7 @@ impl ConversationRepository for MemoryRepository {
                 },
                 continuation_level,
                 retry_of: request.retry_of,
-                execution_profile: request.execution_profile,
+                profile: request.profile,
             };
             receipt.validate()?;
             let admitted = AdmittedTurn {
@@ -735,7 +735,6 @@ fn request(
         mode: crate::TurnMode::New,
         retry_of: None,
         profile: crate::ProfileSelection::Auto,
-        execution_profile: "test-local".into(),
         allowed_catalog: AllowedCatalog::default(),
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
@@ -1357,4 +1356,84 @@ async fn consent_exhaustion_does_not_start_finalization() {
     assert!(receipt.output.is_none());
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn auto_admission_records_profile_intent_without_route() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let receipt = service
+        .run_turn(
+            request(CommandId::new(), session_id, 0, "hello"),
+            ports(&model),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(receipt.profile, crate::ProfileSelection::Auto);
+    let debug = format!("{receipt:?}");
+    assert!(!debug.contains("device_local"));
+    assert!(!debug.contains("remote"));
+    assert!(!debug.contains("endpoint"));
+    assert!(!debug.contains("recipient"));
+}
+
+#[tokio::test]
+async fn explicit_profile_persisted_and_same_command_different_profile_conflicts() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let command_id = CommandId::new();
+    let mut first = request(command_id, session_id, 0, "hello");
+    first.profile = crate::ProfileSelection::Explicit("local-fast".into());
+    let receipt = service.run_turn(first, ports(&model)).await.unwrap();
+    assert_eq!(
+        receipt.profile,
+        crate::ProfileSelection::Explicit("local-fast".into())
+    );
+
+    let mut conflicting = request(command_id, session_id, 0, "hello");
+    conflicting.profile = crate::ProfileSelection::Auto;
+    assert_eq!(
+        service.run_turn(conflicting, ports(&model)).await,
+        Err(AgentFailure::Conflict)
+    );
+
+    let mut same = request(command_id, session_id, 0, "hello");
+    same.profile = crate::ProfileSelection::Explicit("local-fast".into());
+    let replayed = service.run_turn(same, ports(&model)).await.unwrap();
+    assert_eq!(replayed, receipt);
+}
+
+#[tokio::test]
+async fn continuation_profile_mismatch_fails_closed() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut initial = request(CommandId::new(), session_id, 0, "finish this");
+    initial.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+    let timed_out = service.run_turn(initial, ports(&model)).await.unwrap();
+    assert_eq!(timed_out.state, RunState::TimedOut);
+    assert_eq!(timed_out.profile, crate::ProfileSelection::Auto);
+    let reference = timed_out.continuation().unwrap();
+
+    let mut mismatched = request(
+        CommandId::new(),
+        session_id,
+        timed_out.session_revision,
+        "finish this",
+    );
+    mismatched.profile = crate::ProfileSelection::Explicit("local-fast".into());
+    mismatched.mode = crate::TurnMode::Continue(reference);
+    assert_eq!(
+        service.run_turn(mismatched, ports(&model)).await,
+        Err(AgentFailure::StorageUnavailable)
+    );
 }

@@ -40,7 +40,6 @@ pub fn learner_profile(profile_id: &str, available: bool) -> Result<ModelProfile
         data_recipient: DataRecipient::Device,
         capabilities: ModelCapabilities(vec![LEARNER_INFERENCE_CAPABILITY.into()]),
         available,
-        external_transfer_consent: false,
     })
 }
 

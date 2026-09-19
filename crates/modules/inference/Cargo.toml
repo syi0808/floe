@@ -7,7 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
+floe-access = { path = "../access" }
 floe-agent-contract = { path = "../../contracts/agent" }
+floe-context-contract = { path = "../../contracts/context" }
 floe-execution = { path = "../../runtime/execution" }
 serde.workspace = true
 thiserror.workspace = true

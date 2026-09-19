@@ -206,7 +206,6 @@ mod tests {
             data_recipient,
             capabilities: ModelCapabilities(vec![LEARNER_INFERENCE_CAPABILITY.into()]),
             available: true,
-            external_transfer_consent: false,
         }
     }
 

@@ -77,6 +77,9 @@ impl crate::ConversationCommands for AppComposition {
                     continuation: precheck.continuation,
                     retry_of,
                     remote_route,
+                    // The canonical root provider consults the host keychain
+                    // slot when the product supplies no saved connection.
+                    saved_server_connection: None,
                 },
             )
             .map_err(service_failure)?;

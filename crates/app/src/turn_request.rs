@@ -49,4 +49,10 @@ pub struct ConversationTurnRequest {
     /// is part of the command identity.
     pub device_id: String,
     pub remote_route: Option<RemoteTurnRoute>,
+    /// Product-supplied saved server connection for the canonical root model
+    /// path, if any. The canonical provider admits it against the verified
+    /// caller identity and never consumes `remote_route` for model selection.
+    /// When absent, the host keychain slot is consulted. Like the route, this
+    /// credential is excluded from the command identity.
+    pub saved_server_connection: Option<floe_inference::SavedServerConnection>,
 }

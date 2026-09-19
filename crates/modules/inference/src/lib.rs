@@ -14,12 +14,17 @@ pub use api::{
     PlannedRoute, RecipientConstraint, RouteRequest,
 };
 pub use application::{
-    AttemptJournal, AttemptLifecycle, AttemptUpdate, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter,
+    AttemptJournal, AttemptLifecycle, AttemptUpdate, CANONICAL_MODEL_CONSUMER,
+    CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter, InferenceService,
     LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY, ModelAttemptRecord, ModelAttemptState,
     ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute, RemoteRouteResolver,
     RoutePairing, RoutePlanError, SavedConnectionStore, SavedServerConnection, UsageLedger,
     admit_saved_connection, candidate_route, plan_remote_route, select_remote_route,
     valid_external_recipient,
+};
+pub use ports::model_provider::{
+    CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,
+    PreparedModelTransport,
 };
 pub use ports::model_transport::{
     ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,

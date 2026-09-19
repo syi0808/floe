@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::*;
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_agent_contract::{CapabilityExecutionState, ModelPlacement, ModelReplay};
+use floe_agent_contract::{CapabilityExecutionState, ModelReplay};
 use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_execution::tasks::run_bounded as bounded;
@@ -135,13 +135,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             );
             session.active_turn = None;
             session.last_outcome = Some(outcome);
-            session.continuation = soft_continuation(
-                resumable && !interrupted,
-                turn_id,
-                0,
-                usage,
-                self.model.placement(),
-            );
+            session.continuation =
+                soft_continuation(resumable && !interrupted, turn_id, 0, usage);
             self.commit(&mut session).await?;
             for record in attempts {
                 emit_event(
@@ -220,14 +215,12 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             return Err(AgentFailure::Cancelled);
         }
         let continuation = session.continuation.ok_or(AgentFailure::InvalidInput)?;
-        if continuation.placement != self.model.placement()
-            || !matches!(
-                session.last_outcome,
-                Some(AgentOutcome::Halted {
-                    reason: AgentFailure::BudgetExceeded | AgentFailure::DeadlineExceeded
-                })
-            )
-        {
+        if !matches!(
+            session.last_outcome,
+            Some(AgentOutcome::Halted {
+                reason: AgentFailure::BudgetExceeded | AgentFailure::DeadlineExceeded
+            })
+        ) {
             return Err(AgentFailure::PolicyDenied);
         }
         let level = continuation
@@ -291,7 +284,6 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 continuation.turn_id,
                 level,
                 usage,
-                self.model.placement(),
             );
             self.commit(&mut session).await?;
             for record in attempts {
@@ -1142,13 +1134,11 @@ fn soft_continuation(
     turn_id: Uuid,
     level: u8,
     usage: AgentUsage,
-    placement: ModelPlacement,
 ) -> Option<AgentContinuation> {
     (resumable && level < 3).then_some(AgentContinuation {
         turn_id,
         level,
         usage,
-        placement,
     })
 }
 

@@ -90,7 +90,7 @@ pub fn project_continuation(
             .ok_or(AgentFailure::Conflict)?,
         session_id: admitted.receipt.session_id,
         session_revision: admitted.receipt.session_revision,
-        execution_profile: admitted.receipt.execution_profile.clone(),
+        profile: admitted.receipt.profile.clone(),
         model_conversation,
         replay: projected.replay,
         pending_batch: projected.pending_batch,
@@ -766,7 +766,7 @@ mod tests {
                 continuation_executor_generation: None,
                 continuation_level: 0,
                 retry_of: None,
-                execution_profile: "test-local".into(),
+                profile: crate::ProfileSelection::Auto,
             },
             transcript: vec![AgentMessage {
                 message_id: command_id.as_uuid(),

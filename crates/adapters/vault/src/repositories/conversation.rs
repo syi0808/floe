@@ -6,7 +6,6 @@ use crate::{
     VaultConversationContinuationRef, VaultConversationRunRecord, VaultConversationRunState,
     VaultConversationTerminal, VaultKeyProvider,
 };
-use floe_agent_contract::ModelPlacement;
 use floe_agent_contract::{
     AgentFailure, AgentMessage as ContractMessage, ArchivePointer, ArchiveReadRequest,
     ArchiveSnapshot, ArchivedMessage, Artifact as ContractArtifact,
@@ -218,7 +217,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     text,
                     continuation,
                     retry_of: request.retry_of,
-                    model_placement: parse_execution_profile(&request.execution_profile)?,
+                    profile: request.profile.clone(),
                 })
                 .await?
             {
@@ -500,7 +499,7 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         continuation_executor_generation: record.continuation_executor_generation,
         continuation_level: record.continuation_level,
         retry_of: record.retry_of,
-        execution_profile: execution_profile(record.model_placement).into(),
+        profile: record.profile,
     };
     receipt.validate()?;
     Ok(receipt)
@@ -523,21 +522,6 @@ fn session_receipt(
     };
     receipt.validate()?;
     Ok(receipt)
-}
-
-pub const fn execution_profile(placement: ModelPlacement) -> &'static str {
-    match placement {
-        ModelPlacement::DeviceLocal => "device_local",
-        ModelPlacement::Remote => "remote",
-    }
-}
-
-fn parse_execution_profile(value: &str) -> Result<ModelPlacement, AgentFailure> {
-    match value {
-        "device_local" => Ok(ModelPlacement::DeviceLocal),
-        "remote" => Ok(ModelPlacement::Remote),
-        _ => Err(AgentFailure::InvalidInput),
-    }
 }
 
 fn vault_state(state: RunState) -> VaultConversationRunState {

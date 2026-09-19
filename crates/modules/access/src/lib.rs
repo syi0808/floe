@@ -65,6 +65,13 @@ pub use ports::CurrentAuthority;
 pub use ports::dependency_authorization::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver,
 };
+pub use ports::model_dispatch::{
+    ModelDispatchRecipientAuthority, ModelDispatchRequest, ModelDispatchTarget,
+};
+pub use application::model_dispatch::{
+    ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
+    revalidate_model_dispatch,
+};
 pub use ports::personal_grants::{
     PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };

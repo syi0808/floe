@@ -141,7 +141,6 @@ pub struct AgentContinuation {
     pub turn_id: Uuid,
     pub level: u8,
     pub usage: AgentUsage,
-    pub placement: ModelPlacement,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

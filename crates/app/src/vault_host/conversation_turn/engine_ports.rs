@@ -199,6 +199,10 @@ fn filter_agents(
         .collect()
 }
 
+/// Non-root legacy compatibility only. The root General Conversation turn no
+/// longer constructs this; `InferenceService` is the production root
+/// `ModelPort`. Actual deletion belongs to 2-D/3-A, which own the remaining
+/// transitional callers.
 pub(super) struct LegacyModelPort<'a, Keys, Runner: LegacyModelRunner> {
     pub model: &'a Runner,
     pub store: &'a GovernedSessionStore<'a, EncryptedAgentVault<Keys>>,
@@ -287,7 +291,9 @@ where
     }
 }
 
-/// Transitional only; removed when InferenceService implements ModelPort.
+/// Non-root legacy compatibility only. No root production caller remains;
+/// the root turn settles budget inside `InferenceService`. Actual deletion
+/// belongs to 2-D/3-A, which own the remaining transitional callers.
 ///
 /// Binds one legacy model attempt to the scope budget: preflight once before
 /// any dispatch fence, then begin once, dispatch the legacy runner exactly

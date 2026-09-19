@@ -635,6 +635,9 @@ fn conversation_turn_request(
             })
             .transpose()?,
         remote_route: request.remote_route.as_ref().map(remote_route),
+        // The product boundary supplies no saved server connection yet; the
+        // canonical root provider consults the host keychain slot instead.
+        saved_server_connection: None,
     })
 }
 

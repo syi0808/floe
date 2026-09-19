@@ -134,7 +134,6 @@ impl ModelRouteConfig {
             data_recipient,
             capabilities: ModelCapabilities(vec![MODEL_GENERATION_CAPABILITY.into()]),
             available: true,
-            external_transfer_consent: self.allow_external,
         };
         let recipient = if self.external {
             RecipientConstraint::External {

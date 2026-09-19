@@ -4,6 +4,7 @@ pub mod calendar_lease;
 pub mod calendar_read;
 pub mod dependency;
 pub mod grants;
+pub mod model_dispatch;
 pub mod native_calendar;
 pub mod personal_grants;
 pub mod personal_read;

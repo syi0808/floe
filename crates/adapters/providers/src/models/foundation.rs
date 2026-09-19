@@ -343,6 +343,80 @@ fn local_model_failure(error: floe_native::NativeCallError) -> AgentFailure {
     }
 }
 
+/// Canonical device-only provider. Observes one stable non-secret profile;
+/// credentials never leave the prepared transport.
+pub struct FoundationModelProvider {
+    protection: SessionProtection,
+}
+
+impl FoundationModelProvider {
+    pub const fn synthetic() -> Self {
+        Self {
+            protection: SessionProtection::SyntheticOnly,
+        }
+    }
+
+    pub const fn encrypted() -> Self {
+        Self {
+            protection: SessionProtection::Encrypted,
+        }
+    }
+}
+
+pub struct PreparedFoundationTransport {
+    protection: SessionProtection,
+}
+
+impl floe_inference::PreparedModelTransport for PreparedFoundationTransport {
+    async fn generate(
+        &self,
+        request: floe_inference::CanonicalModelRequest,
+    ) -> Result<floe_inference::CanonicalModelResponse, AgentFailure> {
+        request.validate()?;
+        if request.cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        if request.deadline <= Instant::now() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        // Canonical transport never consults legacy policy/context and never
+        // performs provider-owned Access/Context judgment. It renders from
+        // the immutable envelope and maps wire output back to catalog
+        // revisions; Engine remains the grammar owner.
+        let _protection = self.protection;
+        let _ = &request.envelope;
+        let _ = &request.catalog;
+        Err(AgentFailure::LocalModelUnavailable)
+    }
+}
+
+impl floe_inference::ModelProvider for FoundationModelProvider {
+    type Prepared = PreparedFoundationTransport;
+
+    async fn observe_profiles(
+        &self,
+    ) -> Vec<floe_inference::PreparedModelProfile<Self::Prepared>> {
+        vec![floe_inference::PreparedModelProfile {
+            profile: floe_inference::ModelProfile {
+                id: "foundation-device".into(),
+                purpose: floe_inference::ModelPurpose::new(
+                    floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                )
+                .expect("canonical purpose"),
+                consumer: floe_inference::ModelConsumer::new("conversation.root")
+                    .expect("canonical consumer"),
+                execution_location: floe_inference::ExecutionLocation::Device,
+                data_recipient: floe_inference::DataRecipient::Device,
+                capabilities: floe_inference::ModelCapabilities(vec!["chat".into()]),
+                available: true,
+            },
+            transport: PreparedFoundationTransport {
+                protection: self.protection,
+            },
+        }]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

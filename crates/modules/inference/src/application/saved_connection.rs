@@ -8,7 +8,7 @@ use floe_agent_contract::AgentFailure;
 use crate::RemoteModelConnection;
 
 /// A saved connection exactly as it was persisted, before admission.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct SavedServerConnection {
     pub base_url: String,
     pub token: String,
@@ -17,6 +17,22 @@ pub struct SavedServerConnection {
     pub device_id: String,
     pub allow_external: bool,
     pub external_recipients: Vec<String>,
+}
+
+impl std::fmt::Debug for SavedServerConnection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SavedServerConnection")
+            .field("base_url", &self.base_url)
+            // Credentials are named but never rendered, matching RemoteRoute.
+            .field("token", &"[REDACTED]")
+            .field("client_id", &self.client_id)
+            .field("person_id", &self.person_id)
+            .field("device_id", &self.device_id)
+            .field("allow_external", &self.allow_external)
+            .field("external_recipients", &self.external_recipients)
+            .finish()
+    }
 }
 
 /// Bind a saved connection to the verified caller and its recorded consent.

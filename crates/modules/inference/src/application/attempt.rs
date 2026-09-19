@@ -42,14 +42,18 @@ pub struct AttemptLifecycle<'journal, Journal: AttemptJournal> {
 impl<'journal, Journal: AttemptJournal> AttemptLifecycle<'journal, Journal> {
     pub async fn start(
         journal: &'journal Journal,
+        attempt_id: Uuid,
         turn_id: Uuid,
         scope_id: Uuid,
         ordinal: u8,
         placement: ModelPlacement,
         usage: ModelUsage,
     ) -> Result<Self, AgentFailure> {
+        if attempt_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
         let record = ModelAttemptRecord {
-            id: Uuid::new_v4(),
+            id: attempt_id,
             turn_id,
             scope_id,
             attempt: ordinal,
@@ -116,6 +120,7 @@ mod tests {
             ),
         ] {
             let journal = Journal::default();
+            let attempt_id = Uuid::new_v4();
             let turn_id = Uuid::new_v4();
             let scope_id = Uuid::new_v4();
             let initial = ModelUsage {
@@ -126,6 +131,7 @@ mod tests {
             };
             let attempt = AttemptLifecycle::start(
                 &journal,
+                attempt_id,
                 turn_id,
                 scope_id,
                 1,
@@ -145,6 +151,7 @@ mod tests {
             assert_eq!(records.len(), 2);
             assert_eq!(records[0].state, ModelAttemptState::Started);
             assert_eq!(records[0].usage, initial);
+            assert_eq!(records[0].id, attempt_id);
             assert_eq!(records[0].id, records[1].id);
             assert_eq!(records[1].turn_id, turn_id);
             assert_eq!(records[1].scope_id, scope_id);
@@ -165,6 +172,7 @@ mod tests {
                 &journal,
                 Uuid::new_v4(),
                 Uuid::new_v4(),
+                Uuid::new_v4(),
                 1,
                 ModelPlacement::DeviceLocal,
                 ModelUsage::default()
@@ -183,6 +191,7 @@ mod tests {
         };
         let attempt = AttemptLifecycle::start(
             &journal,
+            Uuid::new_v4(),
             Uuid::new_v4(),
             Uuid::new_v4(),
             1,

@@ -162,7 +162,7 @@ pub struct RunReceipt {
     pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
     pub retry_of: Option<RunId>,
-    pub execution_profile: String,
+    pub profile: ProfileSelection,
 }
 
 impl RunReceipt {
@@ -180,10 +180,7 @@ impl RunReceipt {
             || self.executor_generation == 0
             || self.continuation_level > 3
             || self.retry_of == Some(self.run_id)
-            || self.execution_profile.trim() != self.execution_profile
-            || self.execution_profile.is_empty()
-            || self.execution_profile.len() > 64
-            || self.execution_profile.chars().any(char::is_control)
+            || self.profile.validate().is_err()
             || self.coverage.validate().is_err()
             || self
                 .output
@@ -258,13 +255,14 @@ pub struct TurnAdmissionRequest {
     pub request_digest: [u8; 32],
     pub mode: TurnMode,
     pub retry_of: Option<RunId>,
-    pub execution_profile: String,
+    pub profile: ProfileSelection,
     pub user_message: AgentMessage,
 }
 
 impl TurnAdmissionRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.user_message.validate()?;
+        self.profile.validate()?;
         if !self.run_id.is_valid()
             || !self.command_id.is_valid()
             || self.session_id.is_nil()
@@ -273,10 +271,6 @@ impl TurnAdmissionRequest {
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
             || self.request_digest == [0; 32]
-            || self.execution_profile.trim() != self.execution_profile
-            || self.execution_profile.is_empty()
-            || self.execution_profile.len() > 64
-            || self.execution_profile.chars().any(char::is_control)
             || self.user_message.message_id != self.command_id.as_uuid()
             || self.user_message.role != floe_agent_contract::MessageRole::User
             || self.user_message.call_id.is_some()
@@ -373,7 +367,7 @@ pub struct ContinuationSnapshot {
     pub reference: ContinuationRef,
     pub session_id: Uuid,
     pub session_revision: u64,
-    pub execution_profile: String,
+    pub profile: ProfileSelection,
     /// History from the durable transcript plus the settled exchanges of the
     /// continued execution. The continuing turn prepends its own user message;
     /// until then the current turn carries exchanges only.

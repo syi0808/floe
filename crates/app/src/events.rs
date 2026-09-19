@@ -167,7 +167,7 @@ mod tests {
             continuation_executor_generation: None,
             continuation_level: 0,
             retry_of: None,
-            execution_profile: "device_local".into(),
+            profile: floe_conversation::ProfileSelection::Auto,
         }
     }
 

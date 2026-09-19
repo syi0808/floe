@@ -8,7 +8,8 @@ use super::TurnMode;
 pub const MAX_TURN_TEXT_BYTES: usize = 8_192;
 const MAX_PROFILE_ID_BYTES: usize = 128;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProfileSelection {
     Auto,
     Explicit(String),

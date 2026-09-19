@@ -2,12 +2,17 @@
 
 pub mod foundation;
 pub mod learner;
+pub mod root;
 pub mod server;
 pub(crate) mod wire;
 
-pub use foundation::{FoundationModelRunner, LocalModelAvailability};
+pub use foundation::{
+    FoundationModelProvider, FoundationModelRunner, LocalModelAvailability,
+    PreparedFoundationTransport,
+};
+pub use root::{PreparedRootTransport, RootModelProvider};
 pub use learner::FoundationLearnerTransport;
 pub use server::{
-    RemoteModelRouteResolver, ResolvedRemoteConnection, ServerModelRunner,
-    resolve_remote_model_route,
+    PreparedServerTransport, RemoteModelRouteResolver, ResolvedRemoteConnection, ServerModelProvider,
+    ServerModelRunner, resolve_remote_model_route,
 };

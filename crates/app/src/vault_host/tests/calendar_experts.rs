@@ -250,9 +250,10 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     expected_revision: session.revision,
                     text: text.into(),
                     device_id: "iphone".into(),
-                    profile: ProfileSelection::Auto,
+                    profile: ProfileSelection::Explicit("server-model".into()),
                     continuation: false,
                     retry_of: None,
+                    saved_server_connection: Some(saved_server_connection(&route, person, "iphone")),
                     remote_route: Some(route.clone()),
                 }),
             },
@@ -429,9 +430,10 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
                 expected_revision: session.revision,
                 text: "Find an open hour".into(),
                 device_id: "mac-local".into(),
-                profile: ProfileSelection::Auto,
+                profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
+                saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
                 remote_route: Some(route),
             }),
         },
@@ -500,9 +502,10 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             expected_revision: session.revision,
             text: "Answer once".into(),
             device_id: "mac-local".into(),
-            profile: ProfileSelection::Auto,
+            profile: ProfileSelection::Explicit("server-model".into()),
             continuation: false,
             retry_of: None,
+            saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
             remote_route: Some(route.clone()),
         }),
     };
@@ -613,9 +616,10 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         expected_revision: session.revision,
                         text: "Answer first".into(),
                         device_id: "mac-local".into(),
-                        profile: ProfileSelection::Auto,
+                        profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
+                        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
                         remote_route: Some(route.clone()),
                     }),
                 }),
@@ -638,9 +642,10 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         expected_revision: first_session.revision,
                         text: "Answer second".into(),
                         device_id: "mac-local".into(),
-                        profile: ProfileSelection::Auto,
+                        profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
+                        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
                         remote_route: Some(route),
                     }),
                 }),
@@ -745,9 +750,10 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         expected_revision: session.revision,
                         text: "Wait for the model".into(),
                         device_id: "mac-local".into(),
-                        profile: ProfileSelection::Auto,
+                        profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
+                        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
                         remote_route: Some(route),
                     }),
                 }),
@@ -780,9 +786,10 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         expected_revision: session.revision,
                         text: "Compete for the same session".into(),
                         device_id: "mac-local".into(),
-                        profile: ProfileSelection::Auto,
+                        profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
+                        saved_server_connection: Some(saved_server_connection(&competing_route, person, "mac-local")),
                         remote_route: Some(competing_route),
                     }),
                 }),
@@ -916,9 +923,10 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         expected_revision: session.revision,
         text: "Cancel this run".into(),
         device_id: "mac-local".into(),
-        profile: ProfileSelection::Auto,
+        profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
+        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
         remote_route: Some(route.clone()),
     };
     let admitted = worker
@@ -1067,9 +1075,10 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
         expected_revision: session.revision,
         text: "Answer once".into(),
         device_id: "mac-local".into(),
-        profile: ProfileSelection::Auto,
+        profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
+        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
         remote_route: Some(route.clone()),
     };
     let admitted = worker
@@ -1121,9 +1130,10 @@ fn same_request_id_with_different_profile_conflicts() {
         expected_revision: session.revision,
         text: "Answer once".into(),
         device_id: "mac-local".into(),
-        profile: ProfileSelection::Auto,
+        profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
+        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
         remote_route: Some(route.clone()),
     };
     worker
@@ -1173,9 +1183,10 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
         expected_revision: session.revision,
         text: "Answer once".into(),
         device_id: "mac-local".into(),
-        profile: ProfileSelection::Auto,
+        profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
+        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
         remote_route: Some(route.clone()),
     };
     worker
@@ -1232,9 +1243,10 @@ fn same_request_id_with_route_refresh_only_replays_without_redispatch() {
         expected_revision: session.revision,
         text: "Answer once".into(),
         device_id: "mac-local".into(),
-        profile: ProfileSelection::Auto,
+        profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
+        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
         remote_route: Some(route.clone()),
     };
     let admitted = worker
@@ -1320,9 +1332,10 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
                 expected_revision: session.revision,
                 text: "Answer without expert setup".into(),
                 device_id: "mac-local".into(),
-                profile: ProfileSelection::Auto,
+                profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
+                saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
                 remote_route: Some(route),
             }),
         },
@@ -1390,7 +1403,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
                 text: "Finish after the deadline".into(),
                 continuation: None,
                 retry_of: None,
-                model_placement: floe_agent_contract::ModelPlacement::DeviceLocal,
+                profile: floe_conversation::ProfileSelection::Explicit("server-model".into()),
             }),
         )
         .unwrap();
@@ -1425,9 +1438,10 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             expected_revision: session.revision + 2,
             text: "Finish after the deadline".into(),
             device_id: "mac-local".into(),
-            profile: ProfileSelection::Auto,
+            profile: ProfileSelection::Explicit("server-model".into()),
             continuation: true,
             retry_of: None,
+            saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
             remote_route: Some(route.clone()),
         }),
     };
@@ -1512,9 +1526,10 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
                 expected_revision: session.revision,
                 text: "Review my commitments".into(),
                 device_id: "mac-local".into(),
-                profile: ProfileSelection::Auto,
+                profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
+                saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
                 remote_route: Some(route),
             }),
         },
@@ -1645,7 +1660,9 @@ fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHand
         ];
         let mut requests = vec![];
         let mut model_index = 0;
-        for _ in 0..2 {
+        // Two scripted non-discovery requests; canonical purposes discovery
+        // is served but never counted.
+        while requests.len() < 2 {
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
                 match listener.accept() {
@@ -1662,7 +1679,7 @@ fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHand
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut bytes = vec![];
-            loop {
+            let (headers, body) = loop {
                 let mut chunk = [0; 4096];
                 let count = socket.read(&mut chunk).unwrap();
                 assert!(count > 0);
@@ -1676,13 +1693,34 @@ fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHand
                                 .strip_prefix("content-length: ")
                                 .and_then(|value| value.parse::<usize>().ok())
                         })
-                        .unwrap();
+                        .unwrap_or(0);
                     if body.len() >= length {
-                        requests.push(text.to_string());
-                        break;
+                        break (headers.to_string(), body.to_string());
                     }
                 }
+            };
+            let path = headers
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default();
+            if path == "/v1/inference-purposes" {
+                let inventory = canonical_inventory_body();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            inventory.len(),
+                            inventory
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                continue;
             }
+            requests.push(format!("{headers}\r\n\r\n{body}"));
             let request = requests.last().unwrap();
             let body = if request.starts_with("POST /v1/views/mail.communication ") {
                 assert!(
@@ -1751,6 +1789,44 @@ fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHand
     )
 }
 
+/// Saved server connection matching a mock route, for the canonical root
+/// provider. The provider admits it against the verified caller; the turn's
+/// pre-resolved route still serves legacy source/Expert paths only.
+fn saved_server_connection(
+    route: &crate::RemoteTurnRoute,
+    person: PersonId,
+    device: &str,
+) -> floe_inference::SavedServerConnection {
+    floe_inference::SavedServerConnection {
+        base_url: route.route.base_url.clone(),
+        token: route.route.bearer_token.clone(),
+        client_id: route
+            .route
+            .pairing
+            .as_ref()
+            .map(|pairing| pairing.client_id.clone())
+            .unwrap_or_else(|| "test-client".into()),
+        person_id: person.to_string(),
+        device_id: device.into(),
+        allow_external: route.route.allow_external,
+        external_recipients: vec![],
+    }
+}
+
+fn canonical_inventory_body() -> String {
+    serde_json::json!({
+        "schema_version": 1,
+        "purposes": {
+            "everyday_assistance": {
+                "available": true,
+                "requires_external_consent": false,
+                "placement": "server_local"
+            }
+        }
+    })
+    .to_string()
+}
+
 fn answer_server(
     steps: Vec<floe_conversation::ModelStep>,
 ) -> (crate::RemoteTurnRoute, std::thread::JoinHandle<Vec<String>>) {
@@ -1760,10 +1836,12 @@ fn answer_server(
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
         let mut requests = vec![];
-        for (index, mut step) in steps.into_iter().enumerate() {
-            let has_call = matches!(step, floe_conversation::ModelStep::Call { .. });
-            if let floe_conversation::ModelStep::Call { capability_id, .. } = &mut step {
-                *capability_id = remote_tool_name(capability_id);
+        let mut steps = steps.into_iter().enumerate().peekable();
+        loop {
+            // Exact termination like before: exit once the scripted steps
+            // are served, without waiting on the listener.
+            if steps.peek().is_none() {
+                return requests;
             }
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
@@ -1781,7 +1859,7 @@ fn answer_server(
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut bytes = vec![];
-            loop {
+            let (headers, body) = loop {
                 let mut chunk = [0; 4096];
                 let count = socket.read(&mut chunk).unwrap();
                 assert!(count > 0);
@@ -1795,13 +1873,43 @@ fn answer_server(
                                 .strip_prefix("content-length: ")
                                 .and_then(|value| value.parse::<usize>().ok())
                         })
-                        .unwrap();
+                        .unwrap_or(0);
                     if body.len() >= length {
-                        requests.push(text.to_string());
-                        break;
+                        break (headers.to_string(), body.to_string());
                     }
                 }
+            };
+            let path = headers
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            // Canonical discovery is served but never counted: only model
+            // calls advance the scripted steps.
+            if path == "/v1/inference-purposes" {
+                let inventory = canonical_inventory_body();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            inventory.len(),
+                            inventory
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                continue;
             }
+            assert_eq!(path, "/v1/agent");
+            let (index, mut step) = steps.next().expect("scripted steps peeked Some");
+            let has_call = matches!(step, floe_conversation::ModelStep::Call { .. });
+            if let floe_conversation::ModelStep::Call { capability_id, .. } = &mut step {
+                *capability_id = remote_tool_name(capability_id);
+            }
+            requests.push(format!("{headers}\r\n\r\n{body}"));
             let output = if has_call {
                 serde_json::json!({
                     "output": [step],
@@ -1852,32 +1960,57 @@ fn blocking_answer_server() -> (
     let server_entered = Arc::clone(&entered);
     let server_release = Arc::clone(&release);
     let server = std::thread::spawn(move || {
-        let mut socket = listener.accept().unwrap().0;
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut bytes = vec![];
-        loop {
-            let mut chunk = [0; 4096];
-            let count = socket.read(&mut chunk).unwrap();
-            assert!(count > 0);
-            bytes.extend_from_slice(&chunk[..count]);
-            let text = String::from_utf8_lossy(&bytes);
-            let Some((headers, body)) = text.split_once("\r\n\r\n") else {
-                continue;
-            };
-            let length = headers
-                .lines()
-                .find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length: ")
-                        .and_then(|value| value.parse::<usize>().ok())
-                })
+        // Canonical discovery first, then the single blocking model call.
+        let mut socket = loop {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            if body.len() >= length {
-                break;
+            let mut bytes = vec![];
+            let path = loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break headers
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .split_whitespace()
+                            .nth(1)
+                            .unwrap_or_default()
+                            .to_string();
+                    }
+                }
+            };
+            if path == "/v1/inference-purposes" {
+                let inventory = canonical_inventory_body();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            inventory.len(),
+                            inventory
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                continue;
             }
-        }
+            assert_eq!(path, "/v1/agent");
+            break socket;
+        };
         server_entered.store(true, Ordering::Release);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !server_release.load(Ordering::Acquire) {
@@ -1934,6 +2067,367 @@ fn remote_tool_name(identifier: &str) -> String {
             (hash ^ u64::from(value)).wrapping_mul(0x100000001b3)
         });
     format!("floe_{hash:016x}")
+}
+
+/// Mock that serves canonical discovery, then watches for model calls until
+/// released. Discovery hits and model posts are counted separately, so tests
+/// can prove the canonical order: profiles first, transport after Access.
+fn observing_server(
+    inventory: serde_json::Value,
+    agent_script: Vec<serde_json::Value>,
+) -> (
+    crate::RemoteTurnRoute,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<AtomicBool>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let purposes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let agent_posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let done = Arc::new(AtomicBool::new(false));
+    let server_purposes = Arc::clone(&purposes);
+    let server_posts = Arc::clone(&agent_posts);
+    let server_done = Arc::clone(&done);
+    let inventory_text = inventory.to_string();
+    let server = std::thread::spawn(move || {
+        let mut script = agent_script.into_iter();
+        loop {
+            if server_done.load(Ordering::Acquire) {
+                return;
+            }
+            let mut socket = match listener.accept() {
+                Ok((socket, _)) => socket,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("accept: {error}"),
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![];
+            let (headers, body) = loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break (headers.to_string(), body.to_string());
+                    }
+                }
+            };
+            let path = headers
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default();
+            if path == "/v1/inference-purposes" {
+                server_purposes.fetch_add(1, Ordering::SeqCst);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            inventory_text.len(),
+                            inventory_text
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                continue;
+            }
+            assert_eq!(path, "/v1/agent", "unexpected request: {headers}");
+            server_posts.fetch_add(1, Ordering::SeqCst);
+            let output = script.next().expect("unexpected model call").to_string();
+            let response = serde_json::json!({
+                "schema_version": 1,
+                "purpose": "everyday_assistance",
+                "trace_id": "c".repeat(32),
+                "routing": {
+                    "placement": "server_local",
+                    "external_transfer": false,
+                    "replay_source": "c".repeat(64),
+                },
+                "output": output,
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            let _ = body;
+        }
+    });
+    (
+        crate::RemoteTurnRoute {
+            route: floe_inference::RemoteRoute {
+                base_url: format!("http://{address}"),
+                bearer_token: "a".repeat(32),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                pairing: None,
+            },
+            calendar_connections: vec![],
+        },
+        purposes,
+        agent_posts,
+        done,
+        server,
+    )
+}
+
+fn server_local_inventory() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "purposes": {
+            "everyday_assistance": {
+                "available": true,
+                "requires_external_consent": false,
+                "placement": "server_local"
+            }
+        }
+    })
+}
+
+fn canonical_answer_script(text: &str) -> Vec<serde_json::Value> {
+    vec![serde_json::json!({
+        "output": [{"kind": "answer", "text": text}],
+        "used_tokens": 7,
+    })]
+}
+
+#[test]
+fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, purposes, agent_posts, done, server) =
+        observing_server(server_local_inventory(), canonical_answer_script("Canonical hello."));
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "canonical-proof".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            request_id,
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::ConversationTurn {
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
+                        expected_revision: session.revision,
+                        text: "Hello".into(),
+                        device_id: "mac-local".into(),
+                        profile: ProfileSelection::Explicit("server-model".into()),
+                        continuation: false,
+                        retry_of: None,
+                        saved_server_connection: Some(saved_server_connection(
+                            &route, person, "mac-local",
+                        )),
+                        remote_route: Some(route),
+                    }),
+                }),
+            },
+        )
+        .unwrap();
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "canonical turn: {finished:?}");
+    let session = finished.session.unwrap();
+    assert_eq!(
+        session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Completed)
+    );
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Assistant { text, .. } if text == "Canonical hello."
+    )));
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    // The legacy root path never fetched purposes: discovery-then-transport
+    // proves the turn ran through InferenceService, not LegacyModelPort.
+    assert!(purposes.load(Ordering::SeqCst) >= 1);
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 1);
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+}
+
+#[test]
+fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, purposes, agent_posts, done, server) =
+        observing_server(server_local_inventory(), vec![]);
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "canonical-explicit".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            request_id,
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::ConversationTurn {
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
+                        expected_revision: session.revision,
+                        text: "Hello".into(),
+                        device_id: "mac-local".into(),
+                        profile: ProfileSelection::Explicit("no-such-profile".into()),
+                        continuation: false,
+                        retry_of: None,
+                        saved_server_connection: Some(saved_server_connection(
+                            &route, person, "mac-local",
+                        )),
+                        remote_route: Some(route),
+                    }),
+                }),
+            },
+        )
+        .unwrap();
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "explicit turn job: {finished:?}");
+    // Explicit selection is exact: a missing profile never falls back to
+    // another profile or transport.
+    assert_eq!(
+        finished.session.unwrap().last_outcome,
+        Some(floe_conversation::AgentOutcome::Halted {
+            reason: AgentFailure::ModelUnavailable
+        })
+    );
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    assert!(purposes.load(Ordering::SeqCst) >= 1);
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+}
+
+#[test]
+fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let inventory = serde_json::json!({
+        "schema_version": 1,
+        "purposes": {
+            "everyday_assistance": {
+                "available": true,
+                "requires_external_consent": true,
+                "placement": "external",
+                "recipient": "someone-else.example"
+            }
+        }
+    });
+    let (mut route, purposes, agent_posts, done, server) =
+        observing_server(inventory, vec![]);
+    route.route.pairing = Some(floe_inference::RoutePairing {
+        client_id: "canonical-external".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            request_id,
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::ConversationTurn {
+                    request: Box::new(ConversationTurnRequest {
+                        session_id: session.id,
+                        expected_revision: session.revision,
+                        text: "Hello".into(),
+                        device_id: "mac-local".into(),
+                        profile: ProfileSelection::Explicit("server-model".into()),
+                        continuation: false,
+                        retry_of: None,
+                        // The saved connection never consented to external
+                        // use, so the exact-recipient fence must deny before
+                        // any transport handoff.
+                        saved_server_connection: Some(saved_server_connection(
+                            &route, person, "mac-local",
+                        )),
+                        remote_route: Some(route),
+                    }),
+                }),
+            },
+        )
+        .unwrap();
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "external turn job: {finished:?}");
+    assert_eq!(
+        finished.session.unwrap().last_outcome,
+        Some(floe_conversation::AgentOutcome::Halted {
+            reason: AgentFailure::PolicyDenied
+        })
+    );
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    assert!(purposes.load(Ordering::SeqCst) >= 1);
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
 }
 
 #[test]

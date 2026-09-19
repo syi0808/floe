@@ -193,6 +193,9 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             ServerSourceClient::new(route.route.clone(), route.calendar_connections.clone())
         })
         .transpose()?;
+    // Non-authoritative for the root Manager attempt: this legacy transport
+    // serves transitional Tool/Expert paths only. Root model selection is
+    // Inference-owned through `model_service` below.
     let model = Model::new(request.remote_route.clone())?;
     let remote_reader = match (&model, request.remote_route.as_ref()) {
         (Model::Server(_), Some(route)) => {
@@ -369,25 +372,28 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             },
             std::sync::Arc::clone(inputs.run_cancellations),
         )?;
-        let root_model = RootModel(&model);
+        // Canonical root model path: Engine → InferenceService →
+        // Access dispatch fence → provider transport. The provider is built
+        // from verified caller identity plus the product-supplied or
+        // keychain-stored saved connection only; the turn's pre-resolved
+        // `remote_route` never selects the root model. The legacy `model`
+        // below stays solely for transitional Tool/Expert paths.
+        let provider = crate::inference_routes::HostInferenceRoutes::root_model_provider(
+            &person_id.to_string(),
+            &request.device_id,
+            request.saved_server_connection.clone(),
+        )?;
+        let authority = crate::inference_routes::HostRecipientAuthority::admitted(
+            provider.consented_external_recipients(),
+        );
+        let model_service =
+            floe_inference::InferenceService::new(provider, resolver, authority);
         let projection_port = engine_ports::TransitionalModelProjection {
             store: &governed_store,
             policy: &policy,
             context: &context,
             capabilities: legacy_capabilities.clone(),
             active_agents: active_agents.clone(),
-        };
-        let model_port = engine_ports::LegacyModelPort {
-            model: &root_model,
-            store: &governed_store,
-            resolver: &resolver,
-            policy: &policy,
-            context: &context,
-            person_id,
-            session_id,
-            capabilities: legacy_capabilities,
-            active_agents,
-            max_output_bytes: budget.max_output_bytes,
         };
         let tool_port = engine_ports::LegacyToolPort {
             host: &capabilities,
@@ -405,8 +411,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             session_id,
             max_output_bytes: budget.max_output_bytes,
         };
-        let execution_profile =
-            floe_vault::execution_profile(floe_inference::ModelTransport::placement(&model));
         let retry_of = request.retry_of;
         let profile = request.profile.clone();
         let receipt = service
@@ -420,7 +424,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     mode: inputs.mode.clone(),
                     retry_of,
                     profile,
-                    execution_profile: execution_profile.into(),
                     allowed_catalog: catalog,
                     replay: vec![],
                     deadline,
@@ -428,7 +431,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 },
                 floe_conversation::ConversationPorts {
                     projection: &projection_port,
-                    model: &model_port,
+                    model: &model_service,
                     tools: &tool_port,
                     delegation: &delegation_port,
                     validator: &engine_ports::ManagerPayloadValidator,
@@ -556,7 +559,10 @@ pub(super) async fn recover<Keys: VaultKeyProvider + 'static>(
 
 fn policy(model: &Model, route: Option<&RemoteTurnRoute>) -> InferencePolicyDecision {
     InferencePolicyDecision {
-        purpose: "everyday-assistance".into(),
+        // Canonical root purpose. The root ModelRequest purpose, the envelope
+        // scoped purpose and the provider wire purpose must agree on this;
+        // App no longer invents a different purpose per resolved route.
+        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
         data_classes: vec![DataClass::Personal],
         allowed_placements: vec![floe_inference::ModelTransport::placement(model)],
         performance_class: "interactive".into(),
@@ -635,28 +641,6 @@ impl floe_inference::ModelTransport for Model {
             ),
         }
         result
-    }
-}
-
-/// The root Run's model boundary over whichever transport was chosen.
-///
-/// Bounding the history a source may still be shown in is the Session owner's
-/// rule, so it is applied here rather than inside a transport.
-pub(crate) struct RootModel<'a>(pub(crate) &'a Model);
-
-impl ModelRunner for RootModel<'_> {
-    fn placement(&self) -> ModelPlacement {
-        floe_inference::ModelTransport::placement(self.0)
-    }
-
-    async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        floe_conversation::project_source_history(
-            &mut request,
-            &floe_experts_builtin::schedule::CalendarHistoryBoundary,
-        );
-        floe_conversation::TransportModelRunner::new(self.0)
-            .generate(request)
-            .await
     }
 }
 
@@ -824,7 +808,10 @@ impl<Transport: floe_inference::ModelTransport + Sync> floe_agent_contract::Expe
     }
 }
 
-struct GovernedModel<'a, Keys, Runner: ModelRunner + ?Sized = RootModel<'a>> {
+/// Non-root legacy compatibility only. The root turn no longer runs through
+/// this; it survives behind `LegacyModelPort` for transitional callers.
+/// Actual deletion belongs to 2-D/3-A.
+struct GovernedModel<'a, Keys, Runner: ModelRunner + ?Sized> {
     model: &'a Runner,
     store: &'a GovernedSessionStore<'a, EncryptedAgentVault<Keys>>,
     resolver: &'a dyn floe_access::DependencyResolver,

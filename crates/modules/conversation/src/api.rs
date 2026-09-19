@@ -61,7 +61,6 @@ pub struct TurnRequest {
     pub mode: TurnMode,
     pub retry_of: Option<RunId>,
     pub profile: ProfileSelection,
-    pub execution_profile: String,
     pub allowed_catalog: AllowedCatalog,
     pub replay: Vec<ReplayReceipt>,
     pub deadline: Instant,
@@ -76,10 +75,6 @@ impl TurnRequest {
             || self.principal.is_empty()
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
-            || self.execution_profile.trim() != self.execution_profile
-            || self.execution_profile.is_empty()
-            || self.execution_profile.len() > 64
-            || self.execution_profile.chars().any(char::is_control)
             || self.replay.len() > 128
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
