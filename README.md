@@ -14,24 +14,26 @@ Floe is undergoing a three-stage refactor toward the approved modular monolith:
 
 Stage 1 established semantic owners. Stage 2 is converging the actual General Conversation runtime on those owners. Stage 3 will carry that architecture through AppHost, FFI, Flutter, native/server callers and remaining domain-specific roots.
 
-There is no separate versioned refactoring edition or migration ledger. The three Stage overview documents are the refactoring source of truth; Stage 2 and Stage 3 link to step-specific execution plans. Stage 2 contains the active progress checklist and current checkpoint.
+There is no separate versioned refactoring edition or migration ledger. The Stage overviews are the refactoring source of truth; Stage 2 and Stage 3 link to step-specific execution plans. Stage 2 contains the active progress checklist and current checkpoint.
 
 ## Start here
 
 | Need | Document |
 |---|---|
-| Read completed ownership work | [Stage 1 — Physical Ownership](docs/refactoring/stage-1.md) |
-| Resume the active internal-runtime refactor | [Stage 2 — Canonical Internal Runtime](docs/refactoring/stage-2.md) |
-| Understand the final product-boundary cutover | [Stage 3 — Product Boundary and Final Composition](docs/refactoring/stage-3.md) |
-| Understand architecture documentation ownership | [Architecture guide](docs/architecture/README.md) |
-| Read product requirements and long-term scope | [Product planning](docs/planning/README.md) |
+| Find the authoritative document for a task | [Documentation map](docs/README.md) |
+| Resume the active refactor | [Stage 2 — Canonical Internal Runtime](docs/refactoring/stage-2.md) |
+| Understand current architecture and ownership | [Architecture](docs/architecture/README.md) |
+| Understand why an architectural decision exists | [ADR index](docs/decisions/README.md) |
+| Read product meaning and long-term scope | [Product planning](docs/planning/README.md) |
 | Work on presentation | [Design system](DESIGN.md) and [screen specifications](docs/design/README.md) |
 | Build or diagnose the client | [Client guide](apps/client/README.md) and [Agent debugging](docs/development/agent-debugging.md) |
 | Configure the loopback model/provider gateway | [Server guide](server/README.md) |
 
+Do not recursively read the whole documentation tree. Use [docs/README.md](docs/README.md) as the router and follow only the material relevant to the task.
+
 ## Repository boundaries
 
-The current workspace is transitional while Stage 2 completes the canonical internal runtime. The [approved dependency policy](tools/architecture/module-dependencies.json) describes the target boundaries; [Stage 2](docs/refactoring/stage-2.md) defines the remaining internal cutover and deletion gates.
+The current workspace is transitional while Stage 2 completes the canonical internal runtime. The architecture dependency policy in `tools/architecture/module-dependencies.json` defines allowed ownership edges; [Stage 2](docs/refactoring/stage-2.md) defines the remaining internal cutover and deletion gates.
 
 Rust owns Session/Run, Expert Task and Connection Operation semantics through their respective modules. Flutter consumes typed commands and an application-lifetime read model. Native and Go adapters own actual OS/provider access. Host eligibility and authority checks remain separate from the Manager LLM's choice of Expert.
 
@@ -55,4 +57,4 @@ Keep inspectable, source-backed memory, explicit action approval, exact-recipien
 
 This local-development refactor does not maintain old APIs or data formats. Do not add parallel v2/v3 implementations or increase schema numbers merely for this rewrite. A fixed number does not make old binaries or data compatible: build the client and bundled library together, and explicitly select fresh Floe development data when stored meaning changes. Never automatically replace keys or delete data on an access error. Refactoring Stage numbers are planning boundaries only; they are independent of application/schema versions.
 
-Historical refactoring plans remain available in Git history only. They are not current execution policy or acceptance evidence.
+Historical refactoring plans and obsolete implementation checkpoints live in Git history. They are not current execution policy or acceptance evidence.

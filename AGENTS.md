@@ -10,6 +10,13 @@
 - Android is out of scope for current implementation work. Do not spend time extending Android support, maintaining platform parity, or running Android builds/tests unless explicitly requested.
 - Existing Android code may remain dormant; Apple delivery must not be blocked by Android compatibility or validation.
 
+# Documentation reading policy
+
+- Start at [docs/README.md](docs/README.md) and follow only the documents relevant to the task. Do not recursively read the entire documentation tree as default context.
+- Current code and manifests define implementation reality; [current architecture](docs/architecture/README.md) describes the intended ownership of that reality. ADRs explain rationale; Stage documents own refactoring execution.
+- Do not treat historical slice numbers, old validation matrices, removed crate paths or implementation-status prose inside ADRs as current state.
+- If a task changes a durable architecture boundary, update the corresponding current architecture document in the same change set. If it changes the reason for a durable decision, amend or supersede the ADR rather than adding a second progress document.
+
 # Active refactoring instructions
 
 - Use [Stage 2](docs/refactoring/stage-2.md) as the active progress overview and read only the linked execution plan for the current Stage 2 step. [Stage 1](docs/refactoring/stage-1.md) is completed ownership context; [Stage 3](docs/refactoring/stage-3.md) and its linked execution plans are future product-boundary work.
