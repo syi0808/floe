@@ -23,7 +23,7 @@ Detailed work is split into the execution plans linked below. This overview owns
     - [x] cross-run pending batch → child resume lineage
     - [x] freeze 2-B.1 after the lineage P0 closes
   - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
-  - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice**
+  - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
   - [ ] **2-B.4 — App production cutover**
   - [ ] **2-B.5 — Integrated 2-B hardening**
 - [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-B.3.**
+**Active: 2-B.3 — Canonical Context projection and Tool vertical slice.**
 
-2-B.2 is complete, including the current-recipient authority P0: the production root recipient authority now reloads the current saved-connection authority bound to the verified person/device on every Access admit/consume/post-response check, so revocation during a model call suppresses release.
+2-B.1 and 2-B.2 are complete. The current work is to make history/source reauthorization route-neutral, replace `TransitionalModelProjection` with the canonical Conversation/Context projector, bind answering projection coverage durably to validated batches, and replace the root `LegacyToolPort → ConversationCapabilities` path with `ContextToolService` returning direct coverage.
 
-Use [the current-authority residual plan](stage-2/2-b2-current-authority.md) as the completed authoritative task document. Do not implement 2-B.3 in the same change set.
+Use [the 2-B.3 execution plan](stage-2/2-b3.md) as the authoritative task document. Do not start 2-B.4 before the 2-B.3 exit gates are green.
 
 ## Target internal architecture
 
