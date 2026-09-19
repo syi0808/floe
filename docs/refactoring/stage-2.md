@@ -16,12 +16,12 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 - [x] **2-A — Compile and test ownership restoration** — [execution plan](stage-2/2-a.md)
 - [ ] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
-  - [ ] **2-B.1 — Runtime contract and recovery foundation** — [final P0 plan](stage-2/2-b1.md)
+  - [x] **2-B.1 — Runtime contract and recovery foundation** — [final P0 plan](stage-2/2-b1.md)
     - [x] typed model conversation and authorized projection
     - [x] durable validated batches and stable execution/batch/ordinal identities
     - [x] durable model usage, cursor, Tool/Delegation binding and single-journal recovery
-    - [ ] cross-run pending batch → child resume lineage
-    - [ ] freeze 2-B.1 after the lineage P0 closes
+    - [x] cross-run pending batch → child resume lineage
+    - [x] freeze 2-B.1 after the lineage P0 closes
   - [ ] **2-B.2 — Canonical Model vertical slice**
   - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice**
   - [ ] **2-B.4 — App production cutover**
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active:** 2-B.1 final P0.
+**2-B.1 complete / frozen.** Next: 2-B.2.
 
-The remaining 2-B.1 blocker is cross-run continuation lineage: a child run may take over a parent's pending validated batch only by durably re-journaling the exact same batch and starting cursor. If the child crashes before takeover, the parent's pending batch remains authoritative for the next continuation.
+Cross-run continuation lineage is closed: a child run takes over a parent's pending validated batch only by durably re-journaling the exact same batch and starting cursor. If the child crashes before takeover, the parent's pending batch remains authoritative for the next continuation.
 
-When that regression is green, mark 2-B.1 complete and **freeze it**. Do not perform another broad recovery audit before starting 2-B.2.
+2-B.1 is **frozen**. Do not perform another broad recovery audit before starting 2-B.2.
 
 ## Target internal architecture
 

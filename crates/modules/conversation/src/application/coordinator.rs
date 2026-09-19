@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use floe_agent_contract::{
-    AgentMessage, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep, MessageRole,
-    ModelConversation, ModelConversationEntry,
+    AgentMessage, BatchCursor, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep,
+    MessageRole, ModelConversation, ModelConversationEntry, ValidatedModelBatch,
 };
 use floe_agent_runtime::{Engine, EnginePorts};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
-use super::recovery::{project_journal, project_transcript_history};
+use super::recovery::{JournalLineage, project_journal, project_transcript_history};
 
 pub struct ConversationService<Repository> {
     repository: Arc<Repository>,
@@ -532,14 +532,12 @@ pub async fn continuation<Repository: ConversationRepository>(
     let mut replay = Vec::new();
     let mut completed_iterations = 0_u32;
     let mut usage = floe_execution::budget::ModelUsage::default();
-    let mut pending_batch = None;
-    let mut batch_cursor = None;
+    let mut carried: Option<(ValidatedModelBatch, BatchCursor)> = None;
     let mut total_entries = 0_usize;
     let mut seen_exchanges = std::collections::HashSet::new();
     let mut replay_invocations = std::collections::HashSet::new();
     let mut replay_calls = std::collections::HashSet::new();
-    let chain_len = chain.len();
-    for (position, receipt) in chain.iter().enumerate() {
+    for receipt in chain.iter() {
         let entries = repository.load_journal(receipt.run_id).await?;
         total_entries = total_entries
             .checked_add(entries.len())
@@ -580,12 +578,12 @@ pub async fn continuation<Repository: ConversationRepository>(
             .cost_micros
             .checked_add(projected.usage.cost_micros)
             .ok_or(AgentFailure::StorageUnavailable)?;
-        // Only the newest run carries live state; an older pending batch was
-        // superseded the moment a newer run continued past it.
-        if position + 1 == chain_len {
-            pending_batch = projected.pending_batch;
-            batch_cursor = projected.cursor;
-        }
+        // Cross-run resume lineage: a newer run supersedes an older pending
+        // batch only after durably re-recording the exact batch and starting
+        // cursor. A child that crashed before takeover leaves the parent
+        // pending state authoritative.
+        let live = projected.pending_batch.clone().zip(projected.cursor.clone());
+        carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
     }
     let model_conversation = ModelConversation {
         history,
@@ -594,6 +592,9 @@ pub async fn continuation<Repository: ConversationRepository>(
     if model_conversation.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
         return Err(AgentFailure::BudgetExceeded);
     }
+    let (pending_batch, batch_cursor) = carried.map_or((None, None), |(batch, cursor)| {
+        (Some(batch), Some(cursor))
+    });
     Ok(ContinuationSnapshot {
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
         session_id: current.session_id,
@@ -606,6 +607,52 @@ pub async fn continuation<Repository: ConversationRepository>(
         completed_iterations,
         usage,
     })
+}
+
+/// Oldest → newest resume-lineage reconciliation. `carried` is the inherited
+/// parent pending batch/cursor, `lineage` describes how the child journal
+/// began, and `live` is the child's projected pending batch/cursor.
+fn reconcile_resume_lineage(
+    carried: Option<(ValidatedModelBatch, BatchCursor)>,
+    lineage: &JournalLineage,
+    live: Option<(ValidatedModelBatch, BatchCursor)>,
+) -> Result<Option<(ValidatedModelBatch, BatchCursor)>, AgentFailure> {
+    match (carried, lineage) {
+        // No inherited pending work: only a journal that never claimed a
+        // resume may carry live state forward.
+        (None, JournalLineage::Empty | JournalLineage::Fresh) => Ok(live),
+        (None, JournalLineage::ResumeBatchOnly { .. } | JournalLineage::ResumeClaimed { .. }) => {
+            Err(AgentFailure::StorageUnavailable)
+        }
+        // The child has not taken over yet; the parent stays authoritative.
+        (Some(parent), JournalLineage::Empty) => Ok(Some(parent)),
+        // Batch-only re-records never started: an exact batch keeps the
+        // parent authoritative, anything else is corruption.
+        (
+            Some((parent_batch, parent_cursor)),
+            JournalLineage::ResumeBatchOnly { batch },
+        ) => {
+            if *batch == parent_batch {
+                Ok(Some((parent_batch, parent_cursor)))
+            } else {
+                Err(AgentFailure::StorageUnavailable)
+            }
+        }
+        // Exact batch/cursor takeover confirmed: the child's live state
+        // becomes authoritative from this point on.
+        (
+            Some((parent_batch, parent_cursor)),
+            JournalLineage::ResumeClaimed { batch, cursor },
+        ) => {
+            if *batch == parent_batch && *cursor == parent_cursor {
+                Ok(live)
+            } else {
+                Err(AgentFailure::StorageUnavailable)
+            }
+        }
+        // A fresh model plan cannot skip parent pending work.
+        (Some(_), JournalLineage::Fresh) => Err(AgentFailure::StorageUnavailable),
+    }
 }
 
 fn exchange_identity(entry: &ModelConversationEntry) -> Option<uuid::Uuid> {
@@ -672,4 +719,227 @@ fn report_coverage(steps: &[EngineStep]) -> Result<DependencyCoverage, AgentFail
         }
     }
     Ok(coverage)
+}
+
+#[cfg(test)]
+mod tests {
+    use floe_agent_contract::{ModelStep, ProjectionRef};
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn tool_batch() -> ValidatedModelBatch {
+        ValidatedModelBatch {
+            execution_id: Uuid::new_v4(),
+            attempt_id: Uuid::new_v4(),
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+            ],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+        }
+    }
+
+    fn cursor_at(batch: &ValidatedModelBatch, next_step_index: u32) -> BatchCursor {
+        BatchCursor {
+            batch_id: batch.batch_id,
+            next_step_index,
+        }
+    }
+
+    #[test]
+    fn child_resume_must_match_parent_pending_batch() {
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch.clone(), parent_cursor));
+        // A different batch id never takes over.
+        let other = tool_batch();
+        let other_cursor = cursor_at(&other, 1);
+        assert!(matches!(
+            reconcile_resume_lineage(
+                carried.clone(),
+                &JournalLineage::ResumeClaimed {
+                    batch: other.clone(),
+                    cursor: other_cursor,
+                },
+                Some((other.clone(), cursor_at(&other, 2))),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        assert!(matches!(
+            reconcile_resume_lineage(
+                carried.clone(),
+                &JournalLineage::ResumeBatchOnly { batch: other },
+                None,
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        // Same batch id with different steps is still a mismatch: full
+        // batch equality decides, never the id alone.
+        let mut same_id = parent_batch.clone();
+        same_id.steps.pop();
+        assert!(matches!(
+            reconcile_resume_lineage(
+                carried,
+                &JournalLineage::ResumeClaimed {
+                    batch: same_id,
+                    cursor: cursor_at(&parent_batch, 1),
+                },
+                None,
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn child_resume_must_match_parent_cursor() {
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch.clone(), parent_cursor));
+        // Same batch, different starting cursor: no takeover.
+        let shifted = cursor_at(&parent_batch, 0);
+        assert!(matches!(
+            reconcile_resume_lineage(
+                carried,
+                &JournalLineage::ResumeClaimed {
+                    batch: parent_batch,
+                    cursor: shifted,
+                },
+                None,
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn child_crash_before_resume_takeover_preserves_parent_pending() {
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
+        // An empty child journal means takeover never happened.
+        assert_eq!(
+            reconcile_resume_lineage(carried, &JournalLineage::Empty, None).unwrap(),
+            Some((parent_batch, parent_cursor))
+        );
+    }
+
+    #[test]
+    fn child_batch_only_before_cursor_preserves_parent_pending() {
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
+        // The child's unclaimed re-record projects a zero cursor, but the
+        // parent's starting cursor stays authoritative until the claim.
+        let child_live = Some((parent_batch.clone(), cursor_at(&parent_batch, 0)));
+        assert_eq!(
+            reconcile_resume_lineage(
+                carried,
+                &JournalLineage::ResumeBatchOnly {
+                    batch: parent_batch.clone(),
+                },
+                child_live,
+            )
+            .unwrap(),
+            Some((parent_batch, parent_cursor))
+        );
+    }
+
+    #[test]
+    fn child_resume_without_parent_pending_is_storage_fault() {
+        let batch = tool_batch();
+        let cursor = cursor_at(&batch, 0);
+        assert!(matches!(
+            reconcile_resume_lineage(
+                None,
+                &JournalLineage::ResumeBatchOnly {
+                    batch: batch.clone()
+                },
+                Some((batch.clone(), cursor.clone())),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        assert!(matches!(
+            reconcile_resume_lineage(
+                None,
+                &JournalLineage::ResumeClaimed { batch, cursor },
+                None,
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        // Empty and fresh journals without a parent stay allowed.
+        assert_eq!(
+            reconcile_resume_lineage(None, &JournalLineage::Empty, None).unwrap(),
+            None
+        );
+        let fresh = tool_batch();
+        let fresh_live = Some((fresh.clone(), cursor_at(&fresh, 0)));
+        assert_eq!(
+            reconcile_resume_lineage(None, &JournalLineage::Fresh, fresh_live.clone()).unwrap(),
+            fresh_live
+        );
+    }
+
+    #[test]
+    fn child_fresh_model_plan_cannot_skip_parent_pending() {
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch, parent_cursor));
+        let fresh = tool_batch();
+        let fresh_live = Some((fresh.clone(), cursor_at(&fresh, 0)));
+        assert!(matches!(
+            reconcile_resume_lineage(carried, &JournalLineage::Fresh, fresh_live),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn exact_child_resume_supersedes_parent_pending_after_cursor() {
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
+        // Exact takeover: the child's live state becomes authoritative,
+        // including an advanced cursor after resumed execution.
+        let advanced = Some((parent_batch.clone(), cursor_at(&parent_batch, 2)));
+        assert_eq!(
+            reconcile_resume_lineage(
+                carried.clone(),
+                &JournalLineage::ResumeClaimed {
+                    batch: parent_batch.clone(),
+                    cursor: parent_cursor.clone(),
+                },
+                advanced.clone(),
+            )
+            .unwrap(),
+            advanced
+        );
+        // A completed takeover carries no pending work forward, and the next
+        // empty child keeps that completed state instead of resurrecting the
+        // parent.
+        let completed = reconcile_resume_lineage(
+            carried,
+            &JournalLineage::ResumeClaimed {
+                batch: parent_batch,
+                cursor: parent_cursor,
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(completed, None);
+        assert_eq!(
+            reconcile_resume_lineage(completed, &JournalLineage::Empty, None).unwrap(),
+            None
+        );
+    }
 }

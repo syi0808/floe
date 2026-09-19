@@ -1299,3 +1299,390 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
         *recovered
     );
 }
+
+#[tokio::test]
+async fn child_crash_before_resume_takeover_preserves_parent_pending() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    // Parent times out with a pending answer batch at cursor 0.
+    let run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: 0,
+            request_digest: [9; 32],
+            text: "continue safely".into(),
+            continuation: None,
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id,
+        projection_ref,
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::Answer {
+            text: "done".into(),
+            artifacts: vec![],
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![],
+        agent_revisions: vec![],
+    };
+    for (kind, event) in [
+        (
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref,
+            },
+        ),
+        (
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ),
+    ] {
+        vault
+            .append_conversation_journal(run_id, kind, &serde_json::to_string(&event).unwrap())
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            run_id,
+            1,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let parent =
+        floe_conversation::continuation(repository.as_ref(), run_id, &person_id.to_string())
+            .await
+            .unwrap();
+    assert_eq!(parent.pending_batch.as_ref(), Some(&batch));
+    assert_eq!(
+        parent.batch_cursor,
+        Some(BatchCursor {
+            batch_id: batch.batch_id,
+            next_step_index: 0,
+        })
+    );
+    // The child is admitted but crashes before durably re-recording the
+    // resume batch and cursor: its journal stays empty.
+    let child_run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id: child_run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: parent.session_revision,
+            request_digest: [8; 32],
+            text: "continue safely".into(),
+            continuation: Some(crate::VaultConversationContinuationRef {
+                run_id: parent.reference.run_id,
+                executor_generation: parent.reference.executor_generation,
+                level: parent.reference.level,
+            }),
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .load_journal(child_run_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    vault
+        .finish_conversation_run(
+            child_run_id,
+            1,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    // Takeover never happened, so the parent pending batch stays
+    // authoritative for the next continuation.
+    let child =
+        floe_conversation::continuation(repository.as_ref(), child_run_id, &person_id.to_string())
+            .await
+            .unwrap();
+    assert_eq!(child.pending_batch.as_ref(), Some(&batch));
+    assert_eq!(
+        child.batch_cursor,
+        Some(BatchCursor {
+            batch_id: batch.batch_id,
+            next_step_index: 0,
+        })
+    );
+    // The next Engine resume executes the parent batch from its cursor
+    // without a model call.
+    let service = build_service(Arc::clone(&repository));
+    let model = Model::default();
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = person_id.to_string();
+    turn.expected_session_revision = child.session_revision;
+    turn.prompt = "continue safely".into();
+    turn.mode = TurnMode::Continue(child.reference);
+    let completed = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                projection: &PROJECTOR,
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(completed.output.as_deref(), Some("done"));
+    assert_eq!(completed.continuation_of, Some(child_run_id));
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn child_resume_batch_mismatch_is_storage_fault() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: 0,
+            request_digest: [9; 32],
+            text: "continue safely".into(),
+            continuation: None,
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id,
+        projection_ref,
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::Answer {
+            text: "done".into(),
+            artifacts: vec![],
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![],
+        agent_revisions: vec![],
+    };
+    for (kind, event) in [
+        (
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id,
+                projection_ref,
+            },
+        ),
+        (
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ),
+    ] {
+        vault
+            .append_conversation_journal(run_id, kind, &serde_json::to_string(&event).unwrap())
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            run_id,
+            1,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let parent =
+        floe_conversation::continuation(repository.as_ref(), run_id, &person_id.to_string())
+            .await
+            .unwrap();
+    assert_eq!(parent.pending_batch.as_ref(), Some(&batch));
+    // The child re-records a different batch: recovery must fail closed.
+    let child_run_id = RunId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id: child_run_id,
+            command_id: floe_agent_contract::CommandId::new(),
+            session_id: session.id,
+            person_id,
+            expected_session_revision: parent.session_revision,
+            request_digest: [8; 32],
+            text: "continue safely".into(),
+            continuation: Some(crate::VaultConversationContinuationRef {
+                run_id: parent.reference.run_id,
+                executor_generation: parent.reference.executor_generation,
+                level: parent.reference.level,
+            }),
+            retry_of: None,
+            model_placement: ModelPlacement::DeviceLocal,
+        })
+        .await
+        .unwrap();
+    let other = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id: Uuid::new_v4(),
+        projection_ref: ProjectionRef::new(),
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::Answer {
+            text: "a different plan".into(),
+            artifacts: vec![],
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![],
+        agent_revisions: vec![],
+    };
+    assert_ne!(other.batch_id, batch.batch_id);
+    for (kind, event) in [
+        (
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: other.clone(),
+            },
+        ),
+        (
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: other.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        ),
+    ] {
+        vault
+            .append_conversation_journal(
+                child_run_id,
+                kind,
+                &serde_json::to_string(&event).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    vault
+        .finish_conversation_run(
+            child_run_id,
+            1,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        floe_conversation::continuation(
+            repository.as_ref(),
+            child_run_id,
+            &person_id.to_string()
+        )
+        .await,
+        Err(AgentFailure::StorageUnavailable)
+    ));
+}

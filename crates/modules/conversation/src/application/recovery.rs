@@ -17,6 +17,21 @@ pub(super) struct JournalProjection {
     pub(super) cursor: Option<BatchCursor>,
     pub(super) completed_iterations: u32,
     pub(super) usage: floe_execution::budget::ModelUsage,
+    pub(super) lineage: JournalLineage,
+}
+
+/// How this run's journal began. A child takes over a parent's pending batch
+/// only after durably re-recording the exact batch and its starting cursor;
+/// a batch re-record without its initial cursor is not a takeover.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum JournalLineage {
+    Empty,
+    Fresh,
+    ResumeBatchOnly { batch: ValidatedModelBatch },
+    ResumeClaimed {
+        batch: ValidatedModelBatch,
+        cursor: BatchCursor,
+    },
 }
 
 /// Durable transcript history as basic typed model history.
@@ -181,6 +196,7 @@ fn project_entries(
     let mut uncheckpointed_completion = false;
     let mut completed_iterations = 0;
     let mut usage = floe_execution::budget::ModelUsage::default();
+    let mut lineage = JournalLineage::Empty;
     for (index, entry) in entries.iter().enumerate() {
         if entry.revision != (index as u64) + 1 {
             return Err(AgentFailure::StorageUnavailable);
@@ -190,6 +206,11 @@ fn project_entries(
                 attempt_id,
                 projection_ref,
             } => {
+                // A resumed batch without its initial cursor never started;
+                // a local attempt before that cursor is a skipped takeover.
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 if attempt_id.is_nil()
                     || projection_ref.as_uuid().is_nil()
                     || attempts.contains_key(attempt_id)
@@ -206,11 +227,17 @@ fn project_entries(
                         batch_bound: false,
                     },
                 );
+                if matches!(lineage, JournalLineage::Empty) {
+                    lineage = JournalLineage::Fresh;
+                }
             }
             JournalEvent::ModelResult {
                 attempt_id,
                 usage: result_usage,
             } => {
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 let state = attempts
                     .get_mut(attempt_id)
                     .ok_or(AgentFailure::StorageUnavailable)?;
@@ -232,6 +259,11 @@ fn project_entries(
                     .ok_or(AgentFailure::StorageUnavailable)?;
             }
             JournalEvent::ToolIntent { call } => {
+                // A batch-only re-record never started: cursor.unwrap_or(0)
+                // must not make it look as if it started at ordinal 0.
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 // The intent must exactly match the current validated step:
                 // kind, payload, and stable identity. Anything else is a
                 // forged journal and fails closed as storage corruption.
@@ -292,6 +324,9 @@ fn project_entries(
                 }
             }
             JournalEvent::ToolResult { result } => {
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 let settled = tools
                     .remove(&result.call_id)
                     .ok_or(AgentFailure::StorageUnavailable)?;
@@ -335,6 +370,9 @@ fn project_entries(
                 replay.push(receipt);
             }
             JournalEvent::DelegationIntent { request } => {
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 // Same binding as tools: the intent must exactly match the
                 // current validated delegation step, including stable ids.
                 let Some(state) = pending.as_ref() else {
@@ -401,6 +439,9 @@ fn project_entries(
                 }
             }
             JournalEvent::DelegationResult { receipt } => {
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 let settled = delegations
                     .remove(&receipt.task_id)
                     .ok_or(AgentFailure::StorageUnavailable)?;
@@ -460,6 +501,9 @@ fn project_entries(
                 });
             }
             JournalEvent::Checkpoint { iteration } => {
+                if matches!(lineage, JournalLineage::ResumeBatchOnly { .. }) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 // A checkpoint watermarks exactly one completed batch: no batch
                 // may be pending and no completion may pass uncheckpointed.
                 if pending.is_some()
@@ -520,6 +564,19 @@ fn project_entries(
                     None => execution_id = Some(batch.execution_id),
                 }
                 batches_seen += 1;
+                match &lineage {
+                    JournalLineage::Empty if !fresh => {
+                        lineage = JournalLineage::ResumeBatchOnly {
+                            batch: batch.clone(),
+                        };
+                    }
+                    JournalLineage::Empty => {
+                        lineage = JournalLineage::Fresh;
+                    }
+                    JournalLineage::ResumeBatchOnly { .. }
+                    | JournalLineage::Fresh
+                    | JournalLineage::ResumeClaimed { .. } => {}
+                }
                 pending = Some(PendingBatch {
                     batch: batch.clone(),
                     fresh,
@@ -613,6 +670,14 @@ fn project_entries(
                         .map_err(|_| AgentFailure::StorageUnavailable)?;
                     exchanges.push(entry);
                 }
+                // The first progress for a leading resumed re-record is the
+                // durable takeover claim: store the exact starting cursor.
+                if let JournalLineage::ResumeBatchOnly { batch } = &lineage {
+                    lineage = JournalLineage::ResumeClaimed {
+                        batch: batch.clone(),
+                        cursor: cursor.clone(),
+                    };
+                }
                 let completed = pending
                     .as_ref()
                     .is_some_and(|state| cursor.next_step_index as usize == state.batch.steps.len());
@@ -664,6 +729,7 @@ fn project_entries(
         cursor,
         completed_iterations,
         usage,
+        lineage,
     })
 }
 
@@ -2698,5 +2764,210 @@ mod tests {
         );
         let next_call = tool_call_for(&model_batch, 1, "read.context", 3, r#"{"path":"a"}"#);
         assert_eq!(next_call.call_id, expected_call);
+    }
+
+    #[test]
+    fn leading_resumed_batch_without_cursor_is_not_claimed() {
+        let admitted = admitted();
+        let model_batch = batch(
+            Uuid::new_v4(),
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
+            }],
+        );
+        // A crash between ValidatedBatch and its initial BatchProgress leaves
+        // a re-record that never started: pending projects, but lineage proves
+        // no durable takeover claim was recorded.
+        let projected = project_journal(
+            &admitted.receipt,
+            &entries(vec![JournalEvent::ValidatedBatch {
+                batch: model_batch.clone(),
+            }]),
+        )
+        .unwrap();
+        assert!(
+            matches!(&projected.lineage, JournalLineage::ResumeBatchOnly { batch }
+                if batch == &model_batch),
+            "batch-only re-record must not count as claimed: {:?}",
+            projected.lineage
+        );
+        assert_eq!(projected.pending_batch.as_ref(), Some(&model_batch));
+    }
+
+    #[test]
+    fn resumed_batch_cannot_execute_before_initial_cursor() {
+        let admitted = admitted();
+        let model_batch = batch(
+            Uuid::new_v4(),
+            vec![ModelStep::CallTool {
+                tool_id: "read.context".into(),
+                definition_revision: 3,
+                input: r#"{"path":"a"}"#.into(),
+            }],
+        );
+        let call = tool_call_for(&model_batch, 0, "read.context", 3, r#"{"path":"a"}"#);
+        // Tool work before the initial cursor would exploit the
+        // cursor.unwrap_or(0) ambiguity: it must fail closed.
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ValidatedBatch {
+                        batch: model_batch.clone(),
+                    },
+                    JournalEvent::ToolIntent { call },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        // A fresh model attempt before takeover skips the pending plan.
+        let attempt_id = Uuid::new_v4();
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ValidatedBatch {
+                        batch: model_batch.clone(),
+                    },
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        projection_ref: ProjectionRef::new(),
+                    },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        // Delegation work before the initial cursor fails the same way.
+        let context_refs = vec!["turn:1".into()];
+        let (delegation_batch, _) =
+            pending_delegation_batch(&admitted, Uuid::new_v4(), context_refs.clone());
+        let delegation_request = delegation_request_for(
+            &admitted,
+            &delegation_batch,
+            0,
+            "expert-a",
+            2,
+            "summarize",
+            context_refs,
+        );
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ValidatedBatch {
+                        batch: delegation_batch,
+                    },
+                    JournalEvent::DelegationIntent {
+                        request: delegation_request,
+                    },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn leading_resumed_cursor_is_preserved_exactly() {
+        let admitted = admitted();
+        let model_batch = batch(
+            Uuid::new_v4(),
+            vec![
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+                ModelStep::CallTool {
+                    tool_id: "read.context".into(),
+                    definition_revision: 3,
+                    input: r#"{"path":"a"}"#.into(),
+                },
+            ],
+        );
+        // A resumed batch may restart past ordinal 0: the exact starting
+        // cursor is the takeover claim, never normalized to zero.
+        let initial = BatchCursor {
+            batch_id: model_batch.batch_id,
+            next_step_index: 1,
+        };
+        let projected = project_journal(
+            &admitted.receipt,
+            &entries(vec![
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: initial.clone(),
+                },
+            ]),
+        )
+        .unwrap();
+        assert!(
+            matches!(&projected.lineage, JournalLineage::ResumeClaimed { batch, cursor }
+                if batch == &model_batch && cursor == &initial),
+            "initial resume cursor must be preserved exactly: {:?}",
+            projected.lineage
+        );
+        assert_eq!(projected.cursor, Some(initial.clone()));
+        // The claim survives later completion and fresh model attempts.
+        let call = tool_call_for(&model_batch, 1, "read.context", 3, r#"{"path":"a"}"#);
+        let result = tool_result(call.call_id);
+        let fresh_attempt = Uuid::new_v4();
+        let mut fresh = answer_batch(
+            fresh_attempt,
+            model_batch.execution_id,
+            ProjectionRef::new(),
+        );
+        fresh.catalog_revision = model_batch.catalog_revision;
+        let fresh_id = fresh.batch_id;
+        let projected = project_journal(
+            &admitted.receipt,
+            &entries(vec![
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: initial.clone(),
+                },
+                JournalEvent::ToolIntent { call: call.clone() },
+                JournalEvent::ToolResult {
+                    result: result.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 2,
+                    },
+                },
+                JournalEvent::Checkpoint { iteration: 1 },
+                JournalEvent::ModelIntent {
+                    attempt_id: fresh_attempt,
+                    projection_ref: fresh.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id: fresh_attempt,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch { batch: fresh },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: fresh_id,
+                        next_step_index: 0,
+                    },
+                },
+            ]),
+        )
+        .unwrap();
+        assert!(
+            matches!(&projected.lineage, JournalLineage::ResumeClaimed { batch, cursor }
+                if batch == &model_batch && cursor == &initial),
+            "lineage must keep the original claim: {:?}",
+            projected.lineage
+        );
     }
 }
