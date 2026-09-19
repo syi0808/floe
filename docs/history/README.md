@@ -1,10 +1,14 @@
 # Progress history
 
-This directory contains dated product history. Current refactoring status is maintained only in the [migration ledger](../refactoring/migration-ledger.md); [PROGRESS.md](../../PROGRESS.md) points there rather than duplicating a board.
+This directory contains dated product history and validation context. It is not the active refactoring plan.
 
-## Refactoring history
+Current refactoring direction is intentionally limited to three documents:
 
-The [refactoring index](../refactoring/README.md) selects the active document edition and preserves the prior plans. The [evidence history](../refactoring/history/README.md) preserves the complete migration ledger through source commit `89452eb5523ef6b1c76b7fe857095748d76de22d` and links the previous product progress board at its original commit.
+- [Stage 1 — Physical Ownership](../refactoring/stage-1.md)
+- [Stage 2 — Canonical Internal Runtime](../refactoring/stage-2.md)
+- [Stage 3 — Product Boundary and Final Composition](../refactoring/stage-3.md)
+
+Older refactoring editions, migration ledgers and imported implementation bundles were removed from the working tree. They remain recoverable from Git history when historical investigation is necessary; they are not current execution policy.
 
 ## Product history
 
@@ -17,4 +21,4 @@ The [refactoring index](../refactoring/README.md) selects the active document ed
 
 ## Maintenance
 
-Keep detailed executed evidence in [validation](../validation/) or a dated historical checkpoint with its source snapshot and environment. Preserve historical acceptance values as historical; do not promote them to current acceptance. The active refactor uses structure completion first and product validation second, as specified by the [active edition](../refactoring/README.md).
+Keep detailed executed evidence in [validation](../validation/) or a dated historical checkpoint with its source snapshot and environment. Preserve historical acceptance values as historical; do not promote them to current acceptance. Refactoring execution follows the current Stage documents above.

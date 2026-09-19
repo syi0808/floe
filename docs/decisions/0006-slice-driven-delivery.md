@@ -1,9 +1,9 @@
 # ADR 0006: Deliver through connected vertical slices
 
 - **Date:** 2026-09-04
-- **Status:** accepted as historical product delivery rationale; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md) and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md). For the current refactor, execution order and progress ownership are superseded by the [active refactoring edition](../refactoring/README.md).
+- **Status:** accepted as historical product delivery rationale; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md) and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md). For the current refactor, execution order is superseded by [Stage 2 — Canonical Internal Runtime](../refactoring/stage-2.md), with [Stage 1](../refactoring/stage-1.md) recording completed ownership and [Stage 3](../refactoring/stage-3.md) defining the final product-boundary cutover.
 
-> Current refactor: one coding agent completes structure, real callers and old-path removal before broad product validation. The [migration ledger](../refactoring/migration-ledger.md), not PROGRESS.md, owns current status. The historical decision below does not require a live demonstration after every structural change or declare any old acceptance gate passed. Product requirements and safety conditions remain in force.
+> Current refactor: one coding agent completes canonical internal owner cutovers in Stage 2 before Stage 3 closes the outer product boundary and end-to-end product validation. The Stage 2 Current checkpoint, not this historical ADR or PROGRESS.md, owns the active sequence. The historical decision below does not require a live demonstration after every structural change or declare any old acceptance gate passed. Product requirements and safety conditions remain in force.
 
 ## Context
 

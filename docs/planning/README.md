@@ -1,7 +1,7 @@
 # Floe Planning Documents
 
 > Status: Product planning specification, not the active refactoring schedule.  
-> 현재 코드 리팩터링의 계획·상세 실행서·프롬프트는 [버전별 리팩터링 문서](../refactoring/README.md)에서 활성판을 선택한다. 실제 진행 상태는 [migration-ledger.md](../refactoring/migration-ledger.md) 한 곳에서 관리한다. 이 디렉터리의 slice/PoC 순서는 현재 구조 우선 작업의 선행 gate가 아니다.
+> 현재 코드 리팩터링은 [Stage 1](../refactoring/stage-1.md), [Stage 2](../refactoring/stage-2.md), [Stage 3](../refactoring/stage-3.md) 세 문서만 사용한다. 현재 실행 순서와 checkpoint는 Stage 2가 소유한다. 이 디렉터리의 slice/PoC 순서는 현재 리팩터링의 선행 gate가 아니다.
 
 ## Floe in one sentence
 
@@ -39,9 +39,9 @@ LLM, Agent Runtime, MCP, 특정 inference provider는 이 위에서 교체 가�
 
 ## 현재 리팩터링을 시작하는 경우
 
-[활성 문서판과 실행 프롬프트](../refactoring/README.md) → [현행 원장](../refactoring/migration-ledger.md) → 해당 판의 상세 실행서 현재 단계 → 실제 코드·직접 호출자 순서로 읽는다. 과거 전체 planning bundle이나 모든 PoC를 다시 수행하지 않는다.
+[Stage 2 — Canonical Internal Runtime](../refactoring/stage-2.md)의 현재 checkpoint → 실제 코드와 직접 호출자 순서로 읽는다. Stage 1은 완료된 ownership 기준이고 Stage 3는 제품 경계/실사용 검증의 후속 단계다. 과거 전체 planning bundle이나 모든 PoC를 다시 수행하지 않는다.
 
-1차는 실제 모듈·상태 소유권·adapter·caller·구형 제거와 구조 검사다. 일반 앱·Keychain·OAuth·실제 LLM·넓은 기능 회귀는 구조 완료 후 2차에 검증한다. 설계 성립을 좌우하는 가정과 변경한 고위험 불변식은 필요한 최소 범위만 앞서 확인한다.
+Stage 2에서는 canonical owner의 실제 production path와 old-path cutover를 우선한다. 일반 앱·Keychain·OAuth·실제 LLM을 포함한 제품 경계 end-to-end 검증은 Stage 3에서 닫는다. 설계 성립을 좌우하는 고위험 불변식은 해당 owner 단계에서 최소 범위로 먼저 검증한다.
 
 [Vertical Slice Delivery](08-engineering/vertical-slice-delivery.md)와 기존 slice/ADR은 제품 시나리오·인수 조건·과거 결정의 근거로 보존한다. 현재 리팩터링의 작업 순서와 상태 원본은 아니며, 이 문서 변경이 이전 acceptance를 통과시키지도 않는다.
 
@@ -53,13 +53,13 @@ LLM, Agent Runtime, MCP, 특정 inference provider는 이 위에서 교체 가�
 4. [ADR 0028](../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
 5. [페어링·connection permission 배경 계획](09-implementation/pairing-and-connection-permissions.md)
 
-각 문서의 결정/제안 상태와 당시 근거를 구별한다. 설계에 적혀 있다는 이유로 현재 runtime 구현·검증을 완료로 표시하지 않는다. 현행 구현 상태는 원장을 확인한다.
+각 문서의 결정/제안 상태와 당시 근거를 구별한다. 설계에 적혀 있다는 이유로 현재 runtime 구현·검증을 완료로 표시하지 않는다. 현행 리팩터링 상태는 Stage 2의 Current checkpoint를 확인한다.
 
 ## 문서 관리 규칙
 
 - 제품 의미, 현재 기술 실행 계획, 진행 상태, 과거 검증을 구별한다. 현재 구조 이관의 세부 지시를 이 디렉터리에 복제하지 않는다.
 - 공통 abstraction은 하위 도메인 세부 구현을 숨길 만큼만 둔다. 미확정 사항을 구현된 것으로 쓰지 않는다.
-- 중요한 제품 설계 변경은 관련 결정에 기록하되 실행 상태는 현행 원장 한 곳에 둔다.
+- 중요한 제품 설계 변경은 관련 결정에 기록하되 리팩터링 실행 상태는 현재 활성 Stage 문서 한 곳에만 둔다.
 - 플랫폼의 장기 experience parity와 현재 Apple 우선 범위를 혼동하지 않는다. Android parity는 현재 리팩터링 gate가 아니다.
 - 보안·privacy·원자성·복구 불변식은 유지한다. 과거 migration/버전 계획보다 현재 하위호환 없음·스키마 추가 증가 없음 방침이 우선한다.
 
