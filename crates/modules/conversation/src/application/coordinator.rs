@@ -4,7 +4,7 @@ use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep,
     MessageRole, ModelConversation, ModelConversationEntry, ValidatedModelBatch,
 };
-use floe_agent_runtime::{Engine, EnginePorts};
+use floe_agent_runtime::{Engine, EnginePorts, EngineReport};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
@@ -332,28 +332,36 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             )
             .await;
         let terminal = match result {
-            Ok(report) => match report.output {
-                Some(output) => match report_coverage(&report.steps) {
-                    Ok(coverage) => RunTerminal {
-                        state: RunState::Completed,
-                        output: Some(output),
-                        steps: report.steps,
-                        coverage,
-                        issue: None,
+            Ok(report) => {
+                let EngineReport {
+                    steps,
+                    output,
+                    answering_projection_coverage,
+                    ..
+                } = report;
+                match output {
+                    Some(output) => match report_coverage(answering_projection_coverage, &steps) {
+                        Ok(coverage) => RunTerminal {
+                            state: RunState::Completed,
+                            output: Some(output),
+                            steps,
+                            coverage,
+                            issue: None,
+                        },
+                        Err(failure) => RunTerminal::from_failure(failure),
                     },
-                    Err(failure) => RunTerminal::from_failure(failure),
-                },
-                None => {
-                    self.finalize_exhaustion(
-                        run_id,
-                        &engine_request.scope,
-                        &engine_request,
-                        ports,
-                        AgentFailure::Stalled,
-                    )
-                    .await
+                    None => {
+                        self.finalize_exhaustion(
+                            run_id,
+                            &engine_request.scope,
+                            &engine_request,
+                            ports,
+                            AgentFailure::Stalled,
+                        )
+                        .await
+                    }
                 }
-            },
+            }
             Err(failure @ (AgentFailure::BudgetExceeded | AgentFailure::Stalled)) => {
                 self.finalize_exhaustion(
                     run_id,
@@ -687,10 +695,15 @@ fn verify_existing(
     Ok(())
 }
 
-fn report_coverage(steps: &[EngineStep]) -> Result<DependencyCoverage, AgentFailure> {
-    // The caller-supplied base coverage is gone with BoundedContext; the
-    // terminal coverage stands on what this run executed.
-    let mut coverage = DependencyCoverage::Independent;
+fn report_coverage(
+    answering: Option<DependencyCoverage>,
+    steps: &[EngineStep],
+) -> Result<DependencyCoverage, AgentFailure> {
+    // The answering projection coverage is the base: the final answer may
+    // depend on reauthorized history even when this run executed nothing new.
+    // Engine-step coverage merges on top; exact duplicates merge idempotently
+    // while conflicting coverage fails closed.
+    let mut coverage = answering.ok_or(AgentFailure::InvalidModelOutput)?;
     for step in steps {
         match step {
             EngineStep::Tool(result) => {
@@ -737,6 +750,7 @@ mod tests {
             execution_id: Uuid::new_v4(),
             attempt_id: Uuid::new_v4(),
             projection_ref: ProjectionRef::new(),
+            projection_coverage: DependencyCoverage::Independent,
             batch_id: Uuid::new_v4(),
             steps: vec![
                 ModelStep::CallTool {
@@ -794,6 +808,65 @@ mod tests {
         // batch equality decides, never the id alone.
         let mut same_id = parent_batch.clone();
         same_id.steps.pop();
+        assert!(matches!(
+            reconcile_resume_lineage(
+                carried,
+                &JournalLineage::ResumeClaimed {
+                    batch: same_id,
+                    cursor: cursor_at(&parent_batch, 1),
+                },
+                None,
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn child_resume_must_match_parent_projection_coverage() {
+        use floe_context_contract::{
+            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
+            GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+            GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        };
+        let parent_batch = tool_batch();
+        let parent_cursor = cursor_at(&parent_batch, 1);
+        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
+        // Same batch id, same steps, different answering projection coverage:
+        // full batch equality decides, so no takeover.
+        let person = floe_kernel::PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person,
+            ConnectionId::try_new("connection").unwrap(),
+            ConnectorId::try_new("connector").unwrap(),
+            ExecutionOwnerId::try_new("owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let now = chrono::Utc::now();
+        let mut same_id = parent_batch.clone();
+        same_id.projection_coverage = DependencyCoverage::dependent(
+            ContextDependency::try_new(
+                person,
+                GrantId::new(),
+                GrantAuthority::new(),
+                source,
+                vec![ResourceHandle::try_new("resource").unwrap()],
+                vec![GrantDataCategory::Metadata],
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("assistant").unwrap(),
+                ProcessingRestriction::LocalOnly,
+                ConsumerPolicyAuthority::new(),
+                Uuid::new_v4(),
+                b"fingerprint".to_vec(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                now - chrono::Duration::minutes(1),
+                now + chrono::Duration::minutes(5),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(matches!(
             reconcile_resume_lineage(
                 carried,

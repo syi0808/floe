@@ -95,6 +95,16 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_,
     }
 }
 
+impl<Keys: VaultKeyProvider> floe_context::SourceReader for &RemoteViewReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        request: &'a floe_context::SourceReadRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
+    {
+        <RemoteViewReader<'_, Keys> as floe_context::SourceReader>::read(*self, request)
+    }
+}
+
 impl<Keys: VaultKeyProvider> DependencyLiveness for RemoteDependencyResolver<'_, Keys> {
     fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure> {
         remote_dependency_live(dependency, self.reader.person_id, chrono::Utc::now())

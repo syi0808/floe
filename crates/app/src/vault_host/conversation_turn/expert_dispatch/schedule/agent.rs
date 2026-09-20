@@ -295,6 +295,15 @@ impl FloeCore {
             if request.command.person_id != request.grant.person_id {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            // Schedule keeps its own model-placement eligibility check:
+            // dependency reauthorization is route-neutral and never sees it.
+            if !request
+                .policy
+                .allowed_placements
+                .contains(&model.placement())
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
             let saved = vault
                 .load(request.command.person_id, request.command.session_id)
                 .await?;
@@ -979,7 +988,6 @@ impl<
                 .filter(|turn_id| *turn_id != current_turn),
             Some(&resolver),
             &floe_access::DependencyAuthorization {
-                allowed_placements: request.policy.allowed_placements.clone(),
                 deadline: self.deadline,
                 cancellation: self.cancellation.clone(),
             },

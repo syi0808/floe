@@ -16,12 +16,14 @@ pub use api::{
 };
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
-    CancelRunStatus, ConversationService, GovernedSessionRepository, GovernedSessionStore,
-    HistoryProjection, PreparedTurn, RunCancellationRegistry, TurnPrecheck, TurnPrecheckRequest,
-    TurnPreparationRequest, admit_unscoped_session, admitted_session, cancel_run_command,
-    compact_session, continuation, get_command, get_run, get_session, narrow_by_source_boundary,
-    precheck_turn, prepare_turn, project_continuation, project_history_into, read_archive,
-    recover_session, recovered_session, resume_session, start_session,
+    CancelRunStatus, ConversationModelProjection, ConversationService, GovernedSessionRepository,
+    GovernedSessionStore, HistoryProjection, PreparedTurn, ProjectedModelConversation,
+    RunCancellationRegistry,
+    TurnPrecheck, TurnPrecheckRequest, TurnPreparationRequest, admit_unscoped_session,
+    admitted_session, cancel_run_command, compact_session, continuation, get_command, get_run,
+    get_session, narrow_by_source_boundary, precheck_turn, prepare_turn, project_continuation,
+    project_history_into, project_model_conversation_history, read_archive, recover_session,
+    recovered_session, resume_session, start_session,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest,

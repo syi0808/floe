@@ -10,6 +10,7 @@ pub mod application {
     pub mod history;
     pub mod leases;
     pub mod model_coverage;
+    pub mod model_projection;
     pub mod native_calendar;
     pub mod observations;
     pub mod personal_lineage;
@@ -20,6 +21,7 @@ pub mod application {
     pub mod routing;
     pub mod service;
     pub mod source_view;
+    pub mod tools;
 }
 
 pub mod ports {
@@ -51,6 +53,9 @@ pub use application::leases::{
 pub use application::model_coverage::{
     TurnCoverageDecision, project_history, revalidate_turn_coverage,
 };
+pub use application::model_projection::{
+    ContextProjectionInput, ContextProjectionRole, assemble_context_projection, context_manifest,
+};
 pub use application::native_calendar::{
     AdmittedNativeCalendarSource, CalendarConnectionReader, NativeCalendarSourceRequest,
     NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
@@ -71,8 +76,8 @@ pub use application::personal_sources::{
     WELLBEING_CONNECTION, WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention,
     apple_execution_owner, attention_execution_owner, attention_source,
     authorize_personal_dependency, contacts_connection, contacts_execution_owner,
-    feasibility_source, personal_dependency_holds, read_feasibility, read_people, read_wellbeing,
-    wellbeing_source,
+    feasibility_source, personal_dependency_holds, read_feasibility, read_manager_people,
+    read_people, read_wellbeing, wellbeing_source,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{
@@ -86,6 +91,11 @@ pub use application::remote_views::{
 };
 pub use application::service::{ContextService, PreparedContext};
 pub use application::source_view::SourceView;
+pub use application::tools::{
+    ATTENTION_COARSE_READ, ContextToolService, LIFE_LOGISTICS_READ, MAIL_COMMUNICATION_READ,
+    MANAGER_TOOL_DEFINITION_REVISION, PEOPLE_IDENTITY_READ, SCHEDULE_FEASIBILITY_READ,
+    WELLBEING_DERIVED_READ, WORK_CONTEXT_READ, manager_tool_descriptors,
+};
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver, RemoteCallWindow,

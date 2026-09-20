@@ -89,3 +89,162 @@ pub async fn revalidate_turn_coverage(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+    use floe_context_contract::PersonId;
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+    use floe_execution::Cancellation;
+    use tokio::time::Instant;
+
+    use super::*;
+
+    fn dependency(
+        person: PersonId,
+        connector: &str,
+        processing: ProcessingRestriction,
+    ) -> ContextDependency {
+        let source = GrantSourceBinding::try_new(
+            person,
+            ConnectionId::try_new("connection").unwrap(),
+            ConnectorId::try_new(connector).unwrap(),
+            ExecutionOwnerId::try_new("owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let now = Utc::now();
+        ContextDependency::try_new(
+            person,
+            GrantId::new(),
+            GrantAuthority::new(),
+            source,
+            vec![ResourceHandle::try_new("resource").unwrap()],
+            vec![GrantDataCategory::Metadata],
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("assistant").unwrap(),
+            processing,
+            ConsumerPolicyAuthority::new(),
+            Uuid::new_v4(),
+            b"fingerprint".to_vec(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now - Duration::minutes(1),
+            now + Duration::minutes(5),
+        )
+        .unwrap()
+    }
+
+    fn personal_dependency(person: PersonId) -> ContextDependency {
+        dependency(person, "contacts.apple", ProcessingRestriction::LocalOnly)
+    }
+
+    fn remote_dependency(person: PersonId) -> ContextDependency {
+        dependency(
+            person,
+            "mail.remote",
+            ProcessingRestriction::ApprovedRecipient {
+                recipient: "gateway-local".into(),
+                categories: vec![GrantDataCategory::Metadata],
+            },
+        )
+    }
+
+    fn authorization() -> DependencyAuthorization {
+        DependencyAuthorization {
+            deadline: Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: Cancellation::default(),
+        }
+    }
+
+    struct StaticReader {
+        coverage: DependencyCoverage,
+    }
+
+    impl EvidenceReader for StaticReader {
+        fn read_turn_coverage(
+            &self,
+            _session_id: Uuid,
+            _turn_id: Uuid,
+        ) -> impl std::future::Future<Output = Result<DependencyCoverage, AgentFailure>> + Send
+        {
+            let coverage = self.coverage.clone();
+            async move { Ok(coverage) }
+        }
+    }
+
+    struct AcceptAll;
+
+    impl DependencyResolver for AcceptAll {
+        fn authorize<'a>(
+            &'a self,
+            _dependency: &'a ContextDependency,
+            _request: &'a DependencyAuthorization,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+        {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    struct DenyAll;
+
+    impl DependencyResolver for DenyAll {
+        fn authorize<'a>(
+            &'a self,
+            _dependency: &'a ContextDependency,
+            _request: &'a DependencyAuthorization,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+        {
+            Box::pin(async move { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    #[tokio::test]
+    async fn one_route_neutral_authorization_reauthorizes_personal_and_remote() {
+        let person = PersonId::new();
+        let personal = personal_dependency(person);
+        let remote = remote_dependency(person);
+        let coverage = DependencyCoverage::dependent(personal.clone())
+            .unwrap()
+            .merge(&DependencyCoverage::dependent(remote.clone()).unwrap())
+            .unwrap();
+        let reader = StaticReader { coverage };
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+
+        let decisions =
+            project_history(&reader, session_id, [turn_id], Some(&AcceptAll), &authorization())
+                .await
+                .unwrap();
+
+        let decision = decisions.get(&turn_id).unwrap();
+        assert!(decision.retain_derived);
+        assert_eq!(decision.authorized_dependencies.len(), 2);
+        assert!(decision.authorized_dependencies.contains(&personal));
+        assert!(decision.authorized_dependencies.contains(&remote));
+    }
+
+    #[tokio::test]
+    async fn revoked_dependency_denies_its_turn_without_failing_projection() {
+        let person = PersonId::new();
+        let coverage =
+            DependencyCoverage::dependent(personal_dependency(person)).unwrap();
+        let reader = StaticReader { coverage };
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+
+        let decisions =
+            project_history(&reader, session_id, [turn_id], Some(&DenyAll), &authorization())
+                .await
+                .unwrap();
+
+        let decision = decisions.get(&turn_id).unwrap();
+        assert!(!decision.retain_derived);
+        assert!(decision.authorized_dependencies.is_empty());
+    }
+}

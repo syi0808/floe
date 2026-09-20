@@ -2,15 +2,12 @@ use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
-use floe_context::{
-    AttentionView, CalendarContextView, FeasibilityView, PeopleView, WellbeingView,
-};
-use floe_conversation::{
-    AgentBudget, AgentEvent, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
-    ModelRequest, ModelResponse, ModelRunner, SessionStore,
-};
+use floe_context::{AttentionView, CalendarContextView, PeopleView, WellbeingView};
+use floe_conversation::{AgentBudget, AgentEvent, ModelRequest, ModelResponse, ModelRunner, SessionStore};
 #[cfg(test)]
-use floe_conversation::{AgentCommand, AgentRuntime};
+use floe_conversation::{
+    AgentCommand, AgentRuntime, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
+};
 use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
@@ -87,6 +84,9 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     builtin_expert_endpoint: &'a expert_dispatch::BuiltinExpertEndpoint<Keys>,
     /// The Run this turn continues, as Conversation admitted it.
     mode: floe_conversation::TurnMode,
+    /// The data classes of the admitted Session, carried to the canonical
+    /// projector. Session admission owns them; App policy does not.
+    session_data_classes: Vec<DataClass>,
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
@@ -141,6 +141,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         schedule_endpoint,
         builtin_expert_endpoint,
         mode: prepared.mode,
+        session_data_classes: prepared.session.data_classes.clone(),
     };
     Box::pin(expert_dispatch::run(
         &inputs,
@@ -194,11 +195,15 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         })
         .transpose()?;
     // Non-authoritative for the root Manager attempt: this legacy transport
-    // serves transitional Tool/Expert paths only. Root model selection is
-    // Inference-owned through `model_service` below.
+    // serves Expert paths only. Root model selection is Inference-owned
+    // through `model_service` below, and root Tool availability never depends
+    // on it.
     let model = Model::new(request.remote_route.clone())?;
-    let remote_reader = match (&model, request.remote_route.as_ref()) {
-        (Model::Server(_), Some(route)) => {
+    // The remote source reader exists exactly when the turn names a remote
+    // route: no model match, no host consent check. Without one, remote tools
+    // report CapabilityUnavailable instead of falling back to another route.
+    let remote_reader = match request.remote_route.as_ref() {
+        Some(route) => {
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
             floe_access::admit_device_pairing(
                 person_id,
@@ -219,7 +224,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 &pairing.device_id,
             ))
         }
-        _ => None,
+        None => None,
     };
     let personal_liveness = personal_grants::PersonalDependencyLiveness {
         local_context,
@@ -258,11 +263,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         local_context,
         device_id: &request.device_id,
     };
-    let feasibility_reader = PersonalFeasibilityReader {
-        vault,
-        local_context,
-        device_id: &request.device_id,
-    };
     let wellbeing_reader = PersonalWellbeingReader {
         vault,
         local_context,
@@ -288,19 +288,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         .builtin_expert_overview()
         .await?
         .map(|overview| overview.setup);
-    let capabilities = ConversationCapabilities {
-        model: &model,
-        policy: &policy,
-        local_context,
-        attention: Some(&attention_reader),
-        people_reader: Some(&people_reader),
-        feasibility_reader: Some(&feasibility_reader),
-        wellbeing_reader: Some(&wellbeing_reader),
-        recorder: Some(&result_recorder),
-        remote_reader: remote_reader
-            .as_ref()
-            .map(|reader| reader as &dyn floe_context::SourceReader),
-    };
     let schedule_runner = expert_dispatch::RegisteredScheduleTaskRunner {
         coordinator: inputs.task_coordinator,
         endpoint: inputs.schedule_endpoint,
@@ -316,7 +303,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         local_context,
         attention: Some(&attention_reader),
         people_reader: Some(&people_reader),
-        feasibility_reader: Some(&feasibility_reader),
         wellbeing_reader: Some(&wellbeing_reader),
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
@@ -332,14 +318,16 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         )],
     };
     {
-        let legacy_capabilities = capabilities.descriptors(person_id);
         let active_agents = experts.agent_cards(person_id);
+        // Canonical root catalog: Manager tools come straight from Context's
+        // descriptor definitions; Expert cards stay App-composed until Expert
+        // convergence.
         let catalog = floe_agent_contract::AllowedCatalog {
             cards: active_agents
                 .iter()
                 .map(engine_ports::contract_definition)
                 .collect(),
-            tools: engine_ports::contract_tools(&legacy_capabilities),
+            tools: floe_context::manager_tool_descriptors(),
             revision: builtin_setup
                 .as_ref()
                 .map_or(1, |setup| setup.expected_revision.max(1)),
@@ -357,7 +345,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                             .render(),
                     output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
                 },
-                purpose: policy.purpose.clone(),
+                purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
                 max_iterations: budget.max_iterations.min(64),
                 max_output_bytes: budget.max_output_bytes,
                 max_run_duration: duration,
@@ -378,8 +366,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         // authority re-reads the current saved-connection store on every
         // Access check, bound to the verified person/device. The turn's
         // pre-resolved `remote_route` never selects the root model. The
-        // legacy `model` below stays solely for transitional Tool/Expert
-        // paths.
+        // legacy `model` below stays solely for Expert paths.
         let provider = crate::inference_routes::HostInferenceRoutes::root_model_provider(
             &person_id.to_string(),
             &request.device_id,
@@ -392,20 +379,29 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         );
         let model_service =
             floe_inference::InferenceService::new(provider, resolver, authority);
-        let projection_port = engine_ports::TransitionalModelProjection {
-            store: &governed_store,
-            policy: &policy,
-            context: &context,
-            capabilities: legacy_capabilities.clone(),
-            active_agents: active_agents.clone(),
-        };
-        let tool_port = engine_ports::LegacyToolPort {
-            host: &capabilities,
-            store: &governed_store,
-            person_id,
+        // Canonical root projection: Conversation filtering plus Context
+        // assembly, reauthorizing history through the same Context dependency
+        // authority the model fence uses. Committed turn coverage is the
+        // evidence; no recorder side channel participates.
+        let evidence_reader = floe_vault::ContextEvidenceReader::new(vault, session_id);
+        let projection_port = floe_conversation::ConversationModelProjection::new(
+            evidence_reader,
+            resolver,
             session_id,
-            max_output_bytes: budget.max_output_bytes,
-        };
+            context.clone(),
+            inputs.session_data_classes.clone(),
+            active_agents.clone(),
+        )?;
+        // Canonical root tools: Context owns the descriptors and the reads;
+        // each successful result returns its dependency coverage directly.
+        let tool_service = floe_context::ContextToolService::new(
+            person_id,
+            request.device_id.clone(),
+            floe_vault::VaultGrantRecords::new(vault),
+            personal_grants::native_driver(local_context),
+            remote_reader.as_ref(),
+        )?;
+        let tool_port = &tool_service;
         let delegation_port = engine_ports::LegacyDelegationPort {
             task_coordinator: inputs.task_coordinator,
             schedule_endpoint: inputs.schedule_endpoint,
@@ -436,7 +432,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 floe_conversation::ConversationPorts {
                     projection: &projection_port,
                     model: &model_service,
-                    tools: &tool_port,
+                    tools: tool_port,
                     delegation: &delegation_port,
                     validator: &engine_ports::ManagerPayloadValidator,
                 },
@@ -875,6 +871,7 @@ impl floe_access::DependencyLiveness for CompositeDependencyLiveness<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 struct CompositeDependencyResolver<'a> {
     personal: &'a dyn floe_access::DependencyResolver,
     remote: Option<&'a dyn floe_access::DependencyResolver>,
@@ -902,7 +899,6 @@ struct PersonalViewSource<'a> {
     policy: &'a InferencePolicyDecision,
     person_id: PersonId,
     people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
-    feasibility_reader: Option<&'a dyn PersonalFeasibilityReaderApi>,
     wellbeing_reader: Option<&'a dyn PersonalWellbeingReaderApi>,
     remote_reader: Option<&'a dyn floe_context::SourceReader>,
     recorder: Option<&'a dyn ResultRecorder>,
@@ -939,45 +935,6 @@ impl PersonalViewSource<'_> {
             )?;
         }
         Ok(view)
-    }
-
-    async fn feasibility_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<FeasibilityView, AgentFailure> {
-        self.record_result_independent()?;
-        let reader = self
-            .feasibility_reader
-            .ok_or(AgentFailure::CapabilityUnavailable)?;
-        let (view, dependency) = reader
-            .read(
-                self.person_id,
-                self.consumer_name,
-                self.dependency_result_id,
-                deadline,
-                cancellation,
-            )
-            .await?;
-        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
-            recorder.record(
-                self.dependency_turn_id,
-                self.dependency_result_id,
-                dependency,
-            )?;
-        }
-        Ok(view)
-    }
-
-    #[cfg(test)]
-    async fn attention_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<AttentionView, AgentFailure> {
-        self.record_result_independent()?;
-        let _ = (deadline, cancellation);
-        Err(AgentFailure::CapabilityUnavailable)
     }
 
     async fn wellbeing_view(
@@ -1141,18 +1098,6 @@ impl CapabilityHost for NoCapabilities {
     }
 }
 
-struct ConversationCapabilities<'model> {
-    model: &'model Model,
-    policy: &'model InferencePolicyDecision,
-    local_context: &'model LocalContextHost,
-    attention: Option<&'model dyn PersonalAttentionReaderApi>,
-    people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
-    feasibility_reader: Option<&'model dyn PersonalFeasibilityReaderApi>,
-    wellbeing_reader: Option<&'model dyn PersonalWellbeingReaderApi>,
-    recorder: Option<&'model dyn ResultRecorder>,
-    remote_reader: Option<&'model dyn floe_context::SourceReader>,
-}
-
 async fn read_context_source(
     reader: &dyn floe_context::SourceReader,
     person_id: PersonId,
@@ -1264,27 +1209,6 @@ trait PersonalPeopleReaderApi: Send + Sync {
     >;
 }
 
-trait PersonalFeasibilityReaderApi: Send + Sync {
-    fn read<'a>(
-        &'a self,
-        person_id: PersonId,
-        consumer: &'a str,
-        call_id: Uuid,
-        deadline: tokio::time::Instant,
-        cancellation: &'a floe_execution::Cancellation,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (FeasibilityView, floe_context_contract::ContextDependency),
-                        AgentFailure,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    >;
-}
-
 trait PersonalWellbeingReaderApi: Send + Sync {
     fn read<'a>(
         &'a self,
@@ -1363,51 +1287,10 @@ struct PersonalPeopleReader<'a, Keys: VaultKeyProvider> {
     device_id: &'a str,
 }
 
-struct PersonalFeasibilityReader<'a, Keys: VaultKeyProvider> {
-    vault: &'a EncryptedAgentVault<Keys>,
-    local_context: &'a LocalContextHost,
-    device_id: &'a str,
-}
-
 struct PersonalWellbeingReader<'a, Keys: VaultKeyProvider> {
     vault: &'a EncryptedAgentVault<Keys>,
     local_context: &'a LocalContextHost,
     device_id: &'a str,
-}
-
-impl<Keys: VaultKeyProvider> PersonalFeasibilityReaderApi for PersonalFeasibilityReader<'_, Keys> {
-    fn read<'a>(
-        &'a self,
-        person_id: PersonId,
-        consumer: &'a str,
-        call_id: Uuid,
-        deadline: tokio::time::Instant,
-        cancellation: &'a floe_execution::Cancellation,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (FeasibilityView, floe_context_contract::ContextDependency),
-                        AgentFailure,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            floe_context::read_feasibility(
-                &floe_vault::VaultGrantRecords::new(self.vault),
-                &super::personal_grants::native_driver(self.local_context),
-                person_id,
-                self.device_id,
-                consumer,
-                call_id,
-                deadline,
-                cancellation,
-            )
-            .await
-        })
-    }
 }
 
 impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingReader<'_, Keys> {
@@ -1493,226 +1376,6 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
             .await
         })
     }
-}
-
-impl CapabilityHost for ConversationCapabilities<'_> {
-    fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
-        let _ = self.local_context;
-        let mut descriptors = vec![
-            read_capability("people.identity.read"),
-            read_capability("schedule.feasibility.read"),
-            read_capability("attention.coarse.read"),
-            read_capability("wellbeing.derived.read"),
-        ];
-        if matches!(self.model, Model::Server(_)) {
-            descriptors.extend([
-                CapabilityDescriptor {
-                    schema_version: AGENT_VERSION,
-                    id: "mail.communication.read".into(),
-                    version: "1.0.0".into(),
-                    read_only: true,
-                    output_data_class: DataClass::Personal,
-                    input_schema: Some(serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "maxLength": 512},
-                            "cursor": {"type": "integer", "minimum": 0, "maximum": 10000},
-                            "limit": {"type": "integer", "minimum": 1, "maximum": 100}
-                        },
-                        "additionalProperties": false
-                    })),
-                },
-                read_capability("work.context.read"),
-                read_capability("life.logistics.read"),
-            ]);
-        }
-        descriptors
-    }
-
-    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Input {
-            #[serde(default)]
-            query: String,
-            #[serde(default)]
-            cursor: usize,
-            #[serde(default = "default_communication_limit")]
-            limit: usize,
-        }
-        if matches!(
-            invocation.capability_id.as_str(),
-            "mail.communication.read"
-                | "work.context.read"
-                | "life.logistics.read"
-                | "people.identity.read"
-                | "schedule.feasibility.read"
-                | "attention.coarse.read"
-                | "wellbeing.derived.read"
-        ) {
-            if let Some(recorder) = self.recorder {
-                recorder.record_independent(invocation.turn_id, invocation.call_id)?;
-            }
-        }
-        let output = match invocation.capability_id.as_str() {
-            "mail.communication.read" => {
-                let input: Input = serde_json::from_str(&invocation.input)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                let reader = self
-                    .remote_reader
-                    .ok_or(AgentFailure::CapabilityUnavailable)?;
-                let source_view = read_context_source(
-                    reader,
-                    invocation.person_id,
-                    "mail.communication",
-                    floe_access::ATTENTION_ASSISTANT_CONSUMER,
-                    serde_json::json!({
-                        "schema_version": AGENT_VERSION,
-                        "query": input.query,
-                        "cursor": input.cursor,
-                        "limit": input.limit,
-                    }),
-                    invocation.deadline,
-                    &invocation.cancellation,
-                )
-                .await?;
-                let value = source_view.payload().clone();
-                let dependency = source_view.dependency().clone();
-                self.recorder
-                    .ok_or(AgentFailure::CapabilityUnavailable)?
-                    .record(invocation.turn_id, invocation.call_id, dependency)?;
-                Ok(value)
-            }
-            "work.context.read"
-            | "life.logistics.read"
-            | "people.identity.read"
-            | "schedule.feasibility.read"
-            | "attention.coarse.read"
-            | "wellbeing.derived.read" => {
-                #[derive(serde::Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Empty {}
-                serde_json::from_str::<Empty>(&invocation.input)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                let personal = PersonalViewSource {
-                    model: self.model,
-                    source_client: None,
-                    policy: self.policy,
-                    person_id: invocation.person_id,
-                    people_reader: self.people_reader,
-                    feasibility_reader: self.feasibility_reader,
-                    wellbeing_reader: self.wellbeing_reader,
-                    remote_reader: self.remote_reader,
-                    recorder: self.recorder,
-                    dependency_turn_id: invocation.turn_id,
-                    dependency_result_id: invocation.call_id,
-                    consumer_name: "assistant",
-                };
-                match invocation.capability_id.as_str() {
-                    "work.context.read" => {
-                        let reader = self
-                            .remote_reader
-                            .ok_or(AgentFailure::CapabilityUnavailable)?;
-                        let source_view = read_context_source(
-                            reader,
-                            invocation.person_id,
-                            "work.context",
-                            floe_access::ATTENTION_ASSISTANT_CONSUMER,
-                            serde_json::json!({"schema_version": AGENT_VERSION}),
-                            invocation.deadline,
-                            &invocation.cancellation,
-                        )
-                        .await?;
-                        let value = source_view.payload().clone();
-                        let dependency = source_view.dependency().clone();
-                        self.recorder
-                            .ok_or(AgentFailure::CapabilityUnavailable)?
-                            .record(invocation.turn_id, invocation.call_id, dependency)?;
-                        Ok(value)
-                    }
-                    "life.logistics.read" => {
-                        let reader = self
-                            .remote_reader
-                            .ok_or(AgentFailure::CapabilityUnavailable)?;
-                        let source_view = read_context_source(
-                            reader,
-                            invocation.person_id,
-                            "life.logistics",
-                            floe_access::ATTENTION_ASSISTANT_CONSUMER,
-                            serde_json::json!({"schema_version": AGENT_VERSION}),
-                            invocation.deadline,
-                            &invocation.cancellation,
-                        )
-                        .await?;
-                        let value = source_view.payload().clone();
-                        let dependency = source_view.dependency().clone();
-                        self.recorder
-                            .ok_or(AgentFailure::CapabilityUnavailable)?
-                            .record(invocation.turn_id, invocation.call_id, dependency)?;
-                        Ok(value)
-                    }
-                    "people.identity.read" => serde_json::to_value(
-                        personal
-                            .people_view(invocation.deadline, &invocation.cancellation)
-                            .await?,
-                    ),
-                    "schedule.feasibility.read" => serde_json::to_value(
-                        personal
-                            .feasibility_view(invocation.deadline, &invocation.cancellation)
-                            .await?,
-                    ),
-                    "attention.coarse.read" => {
-                        if !matches!(self.model, Model::Foundation(_)) {
-                            return Err(AgentFailure::CapabilityUnavailable);
-                        }
-                        let attention =
-                            self.attention.ok_or(AgentFailure::CapabilityUnavailable)?;
-                        let recorder = self.recorder.ok_or(AgentFailure::CapabilityUnavailable)?;
-                        let (view, dependency) = attention
-                            .read(
-                                invocation.person_id,
-                                floe_access::ATTENTION_ASSISTANT_CONSUMER,
-                                invocation.call_id,
-                                invocation.turn_id,
-                                invocation.deadline,
-                                &invocation.cancellation,
-                            )
-                            .await?;
-                        recorder.record(invocation.turn_id, invocation.call_id, dependency)?;
-                        serde_json::to_value(view)
-                    }
-                    "wellbeing.derived.read" => serde_json::to_value(
-                        personal
-                            .wellbeing_view(invocation.deadline, &invocation.cancellation)
-                            .await?,
-                    ),
-                    _ => unreachable!(),
-                }
-            }
-            _ => return Err(AgentFailure::CapabilityDenied),
-        }
-        .map_err(|_| AgentFailure::InvalidInput)?;
-        serde_json::to_string(&output).map_err(|_| AgentFailure::InvalidInput)
-    }
-}
-
-fn read_capability(id: &str) -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        schema_version: AGENT_VERSION,
-        id: id.into(),
-        version: "1.0.0".into(),
-        read_only: true,
-        output_data_class: DataClass::Personal,
-        input_schema: Some(serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        })),
-    }
-}
-
-fn default_communication_limit() -> usize {
-    25
 }
 
 pub(crate) use expert_dispatch::ConversationExperts;
@@ -1930,6 +1593,34 @@ mod tests {
                 .insert((person_id, vault_id), *key.as_bytes());
             Ok(())
         }
+    }
+
+    fn read_capability(id: &str) -> CapabilityDescriptor {
+        CapabilityDescriptor {
+            schema_version: AGENT_VERSION,
+            id: id.into(),
+            version: "1.0.0".into(),
+            read_only: true,
+            output_data_class: DataClass::Personal,
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })),
+        }
+    }
+
+    fn tool_scope() -> floe_execution::ExecutionScope {
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
+        )
     }
 
     fn attention_test_view() -> AttentionView {
@@ -2336,63 +2027,6 @@ mod tests {
         }
     }
 
-    struct DegradedFakeModel {
-        requests: Arc<Mutex<Vec<ModelRequest>>>,
-    }
-
-    impl ModelRunner for DegradedFakeModel {
-        fn placement(&self) -> ModelPlacement {
-            ModelPlacement::DeviceLocal
-        }
-
-        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-            let first = self.requests.lock().unwrap().is_empty();
-            self.requests.lock().unwrap().push(request);
-            Ok(ModelResponse {
-                replay: None,
-                schema_version: AGENT_VERSION,
-                output: if first {
-                    vec![ModelStep::Call {
-                        capability_id: "schedule.feasibility.read".into(),
-                        input: "{}".into(),
-                    }]
-                } else {
-                    vec![ModelStep::Answer {
-                        text: "The schedule source is unavailable, so I cannot assess feasibility."
-                            .into(),
-                    }]
-                },
-                used_tokens: 1,
-                cost_micros: 0,
-            })
-        }
-    }
-
-    struct FailingFeasibilityReader;
-
-    impl PersonalFeasibilityReaderApi for FailingFeasibilityReader {
-        fn read<'a>(
-            &'a self,
-            _: PersonId,
-            _: &'a str,
-            _: Uuid,
-            _: tokio::time::Instant,
-            _: &'a Cancellation,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            (FeasibilityView, floe_context_contract::ContextDependency),
-                            AgentFailure,
-                        >,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async { Err(AgentFailure::AccessReviewRequired) })
-        }
-    }
-
     const COMMITMENTS_AGENT_ID: &str = BuiltinExpertKind::Commitments.package_id();
     const COMMUNICATION_AGENT_ID: &str = BuiltinExpertKind::Communication.package_id();
     const WORK_CONTEXT_AGENT_ID: &str = BuiltinExpertKind::WorkContext.package_id();
@@ -2400,119 +2034,6 @@ mod tests {
     const RELATIONSHIPS_AGENT_ID: &str = BuiltinExpertKind::Relationships.package_id();
     const FOCUS_AGENT_ID: &str = BuiltinExpertKind::FocusAttention.package_id();
     const WELLBEING_AGENT_ID: &str = BuiltinExpertKind::Wellbeing.package_id();
-
-    #[tokio::test]
-    async fn governed_conversation_degrades_after_feasibility_read_failure() {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let person_id = PersonId::new();
-        let vault =
-            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
-                .await
-                .unwrap();
-        let session = vault.create_session().await.unwrap();
-        let local_context = LocalContextHost::default();
-        let model = Model::Foundation(FoundationModelRunner::encrypted());
-        let policy = policy(&model, None);
-        let liveness = personal_grants::PersonalDependencyLiveness {
-            local_context: &local_context,
-            person_id,
-            device_id: "test-device",
-        };
-        let store = vault.governed_general_store_with_liveness(session.id, &liveness);
-        let resolver = personal_grants::PersonalDependencyResolver {
-            vault: &vault,
-            local_context: &local_context,
-            person_id,
-            device_id: "test-device",
-        };
-        let governed_model = DegradedFakeModel {
-            requests: Arc::new(Mutex::new(vec![])),
-        };
-        let governed_runner = GovernedModel {
-            model: &governed_model,
-            store: &store,
-            resolver: &resolver,
-        };
-        let feasibility_reader = FailingFeasibilityReader;
-        let recorder = StoreResultRecorder { store: &store };
-        let capabilities = ConversationCapabilities {
-            model: &model,
-            policy: &policy,
-            local_context: &local_context,
-            attention: None,
-            people_reader: None,
-            feasibility_reader: Some(&feasibility_reader),
-            wellbeing_reader: None,
-            recorder: Some(&recorder),
-            remote_reader: None,
-        };
-        let runtime = AgentRuntime {
-            store: &store,
-            model: &governed_runner,
-            capabilities: &capabilities,
-            policy: &policy,
-            budget: AgentBudget::default(),
-        };
-        let command = AgentCommand {
-            schema_version: AGENT_VERSION,
-            person_id,
-            session_id: session.id,
-            expected_revision: 0,
-            text: "Can I fit this into my schedule?".into(),
-        };
-
-        let completed = runtime
-            .run_turn(
-                command,
-                AgentContext {
-                    projection_version: 1,
-                    persona: None,
-                    optional_context_issues: vec![],
-                    memories: vec![],
-                    evidence: vec![],
-                },
-                Cancellation::default(),
-                |_| {},
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            completed.last_outcome,
-            Some(floe_conversation::AgentOutcome::Completed)
-        );
-        assert!(completed.messages.iter().any(|message| matches!(
-            message,
-            AgentMessage::Capability {
-                capability_id,
-                result: Err(AgentFailure::AccessReviewRequired),
-                ..
-            } if capability_id == "schedule.feasibility.read"
-        )));
-        assert!(!completed.messages.iter().any(|message| matches!(
-            message,
-            AgentMessage::Capability {
-                result: Err(AgentFailure::PolicyDenied),
-                ..
-            }
-        )));
-        assert!(
-            completed
-                .messages
-                .iter()
-                .any(|message| matches!(message, AgentMessage::Assistant { .. }))
-        );
-        let requests = governed_model.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
-        let (_, current_turn) = requests[1].model_conversation();
-        assert!(current_turn.iter().any(|entry| matches!(
-            entry,
-            floe_agent_contract::ModelConversationEntry::ToolExchange { result, .. }
-                if result.issue.as_ref().is_some_and(|issue| issue.failure
-                    == AgentFailure::AccessReviewRequired)
-        )));
-    }
 
     fn test_expert_cards() -> Vec<AgentCard> {
         [
@@ -2599,7 +2120,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             wellbeing_reader: None,
             recorder: None,
             remote_reader: None,
@@ -2778,32 +2298,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn device_model_has_no_implicit_cross_device_personal_view_route() {
-        let model = Model::new(None).unwrap();
-        let policy = policy(&model, None);
-        let result = PersonalViewSource {
-            model: &model,
-            source_client: None,
-            policy: &policy,
-            person_id: PersonId::new(),
-            people_reader: None,
-            feasibility_reader: None,
-            wellbeing_reader: None,
-            remote_reader: None,
-            recorder: None,
-            dependency_turn_id: Uuid::nil(),
-            dependency_result_id: Uuid::nil(),
-            consumer_name: "assistant",
-        }
-        .attention_view(
-            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-            &floe_execution::Cancellation::default(),
-        )
-        .await;
-        assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
-    }
-
-    #[tokio::test]
     async fn encrypted_attention_admission_model_and_final_cas_are_fenced() {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
@@ -2891,35 +2385,25 @@ mod tests {
             device_id: "test-device",
         };
         let recorder = StoreResultRecorder { store: &store };
-        let capabilities = ConversationCapabilities {
-            model: &model,
-            policy: &policy,
-            local_context: &local_context,
-            attention: Some(&reader),
-            people_reader: None,
-            feasibility_reader: None,
-            wellbeing_reader: None,
-            recorder: Some(&recorder),
-            remote_reader: None,
-        };
         let turn_id = Uuid::new_v4();
         let call_id = Uuid::new_v4();
-        let capability_output = capabilities
-            .invoke(CapabilityInvocation {
-                usage: floe_conversation::turn::UsageLedger::default(),
-                schema_version: AGENT_VERSION,
+        // What the legacy session-CAS half below needs: an attention read
+        // whose dependency the recorder bound to this turn and call.
+        let (attention_view, attention_dependency) = reader
+            .read(
                 person_id,
-                turn_id,
+                floe_access::ATTENTION_ASSISTANT_CONSUMER,
                 call_id,
-                session_id: session.id,
-                capability_id: "attention.coarse.read".into(),
-                input: "{}".into(),
-                max_output_bytes: 8 * 1024,
-                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
-                cancellation: Cancellation::default(),
-            })
+                turn_id,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                &Cancellation::default(),
+            )
             .await
             .unwrap();
+        recorder
+            .record(turn_id, call_id, attention_dependency)
+            .unwrap();
+        let capability_output = serde_json::to_string(&attention_view).unwrap();
         assert!(capability_output.contains("attention.coarse"));
 
         let mut admitted = session.clone();
@@ -2968,7 +2452,7 @@ mod tests {
                 evidence: vec![],
             },
             messages: admitted.messages.clone(),
-            capabilities: capabilities.descriptors(person_id),
+            capabilities: vec![read_capability("attention.coarse.read")],
             active_agents: vec![],
             remaining_tokens: 1_000,
             remaining_cost_micros: 1_000,
@@ -3089,7 +2573,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             wellbeing_reader: None,
             recorder: None,
             remote_reader: None,
@@ -3127,66 +2610,6 @@ mod tests {
         assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
     }
 
-    #[tokio::test]
-    async fn device_model_reads_person_bound_local_context() {
-        let model = Model::new(None).unwrap();
-        let policy = policy(&model, None);
-        let local_context = LocalContextHost::default();
-        let person_id = PersonId::new();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        local_context
-            .execute(
-                person_id,
-                LocalContextCommand::Publish {
-                    device_id: "mac-local".into(),
-                    view_id: "attention.coarse".into(),
-                    view: serde_json::json!({
-                        "schema_version": AGENT_VERSION,
-                        "view_id": "attention.coarse",
-                        "source_handle": "attention:macos_local",
-                        "observed_at_unix_ms": now - 1,
-                        "expires_at_unix_ms": now + 60_000,
-                        "state": "focused",
-                        "confidence_millis": 750,
-                        "evidence_handles": ["activity:coarse"]
-                    }),
-                },
-                None,
-            )
-            .unwrap();
-        let capabilities = ConversationCapabilities {
-            model: &model,
-            policy: &policy,
-            local_context: &local_context,
-            attention: None,
-            people_reader: None,
-            feasibility_reader: None,
-            wellbeing_reader: None,
-            recorder: None,
-            remote_reader: None,
-        };
-
-        let result = capabilities
-            .invoke(CapabilityInvocation {
-                usage: floe_conversation::turn::UsageLedger::default(),
-                schema_version: AGENT_VERSION,
-                call_id: uuid::Uuid::new_v4(),
-                person_id,
-                session_id: uuid::Uuid::new_v4(),
-                turn_id: uuid::Uuid::new_v4(),
-                capability_id: "attention.coarse.read".into(),
-                input: "{}".into(),
-                max_output_bytes: 65_536,
-                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-                cancellation: floe_execution::Cancellation::default(),
-            })
-            .await;
-        assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
-    }
-
     #[test]
     fn server_route_exposes_only_bounded_context_observe_capabilities() {
         let model = Model::new(Some(RemoteTurnRoute {
@@ -3204,21 +2627,15 @@ mod tests {
         .unwrap();
         let policy = policy(&model, None);
         let local_context = LocalContextHost::default();
-        let capabilities = ConversationCapabilities {
-            model: &model,
-            policy: &policy,
-            local_context: &local_context,
-            attention: None,
-            people_reader: None,
-            feasibility_reader: None,
-            wellbeing_reader: None,
-            recorder: None,
-            remote_reader: None,
-        };
-        let descriptors = capabilities.descriptors(PersonId::new());
-        assert_eq!(descriptors.len(), 7);
+        // Canonical Manager tools come from Context, identically for the
+        // device and server model choices: availability never depends on
+        // model route or host consent.
+        let device_catalog = floe_context::manager_tool_descriptors();
+        let server_catalog = floe_context::manager_tool_descriptors();
+        assert_eq!(device_catalog, server_catalog);
+        assert_eq!(device_catalog.len(), 7);
         assert_eq!(
-            descriptors
+            device_catalog
                 .iter()
                 .map(|descriptor| descriptor.id.as_str())
                 .collect::<Vec<_>>(),
@@ -3232,12 +2649,16 @@ mod tests {
                 "life.logistics.read"
             ]
         );
-        for descriptor in &descriptors {
-            assert!(descriptor.read_only);
-            assert_eq!(descriptor.output_data_class, DataClass::Personal);
-            let schema = descriptor.input_schema.as_ref().unwrap();
+        for descriptor in &device_catalog {
+            descriptor.validate().unwrap();
+            assert_eq!(
+                descriptor.definition_revision,
+                floe_context::MANAGER_TOOL_DEFINITION_REVISION
+            );
+            let schema: serde_json::Value =
+                serde_json::from_str(&descriptor.input_schema).unwrap();
             assert_eq!(schema["additionalProperties"], false);
-            assert!(schema.to_string().len() < 1024);
+            assert!(descriptor.input_schema.len() < 1024);
         }
         let context = AgentContext {
             projection_version: 1,
@@ -3254,7 +2675,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
@@ -3296,7 +2716,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
@@ -3333,8 +2752,238 @@ mod tests {
 
     #[tokio::test]
     async fn mail_capability_rejects_authority_escalation_before_io() {
-        let model = Model::new(Some(RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
+        let local_context = LocalContextHost::default();
+        // No remote reader: IO is impossible, so an unknown `authority` field
+        // must fail input validation rather than reach any transport.
+        let tools = floe_context::ContextToolService::new(
+            person_id,
+            "test-device",
+            floe_vault::VaultGrantRecords::new(&vault),
+            personal_grants::native_driver(&local_context),
+            None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
+        )
+        .unwrap();
+        let result = floe_agent_contract::ToolPort::invoke(
+            &tools,
+            floe_agent_contract::ToolCall {
+                call_id: uuid::Uuid::new_v4(),
+                invocation_key: floe_agent_contract::InvocationKey::new(),
+                tool_id: "mail.communication.read".into(),
+                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                input: r#"{"query":"reply","authority":"send"}"#.into(),
+            },
+            &tool_scope(),
+        )
+        .await;
+        assert_eq!(result, Err(AgentFailure::InvalidInput));
+    }
+
+    #[tokio::test]
+    async fn context_tool_service_requires_reviewed_personal_grants() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
+        let local_context = LocalContextHost::default();
+        // A fresh vault holds no reviewed grants: every personal tool fails
+        // closed without consulting any model route.
+        let tools = floe_context::ContextToolService::new(
+            person_id,
+            "test-device",
+            floe_vault::VaultGrantRecords::new(&vault),
+            personal_grants::native_driver(&local_context),
+            None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
+        )
+        .unwrap();
+        let scope = tool_scope();
+        for tool_id in [
+            "people.identity.read",
+            "schedule.feasibility.read",
+            "attention.coarse.read",
+            "wellbeing.derived.read",
+        ] {
+            let result = floe_agent_contract::ToolPort::invoke(
+                &tools,
+                floe_agent_contract::ToolCall {
+                    call_id: uuid::Uuid::new_v4(),
+                    invocation_key: floe_agent_contract::InvocationKey::new(),
+                    tool_id: tool_id.into(),
+                    definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                    input: "{}".into(),
+                },
+                &scope,
+            )
+            .await;
+            assert_eq!(result, Err(AgentFailure::AccessReviewRequired), "{tool_id}");
+        }
+        for (tool_id, input) in [
+            ("mail.communication.read", r#"{"query":"x"}"#),
+            ("work.context.read", "{}"),
+            ("life.logistics.read", "{}"),
+        ] {
+            let result = floe_agent_contract::ToolPort::invoke(
+                &tools,
+                floe_agent_contract::ToolCall {
+                    call_id: uuid::Uuid::new_v4(),
+                    invocation_key: floe_agent_contract::InvocationKey::new(),
+                    tool_id: tool_id.into(),
+                    definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                    input: input.into(),
+                },
+                &scope,
+            )
+            .await;
+            assert_eq!(
+                result,
+                Err(AgentFailure::CapabilityUnavailable),
+                "{tool_id}"
+            );
+        }
+    }
+
+    struct StaticSourceReader {
+        payload: serde_json::Value,
+    }
+
+    impl floe_context::SourceReader for StaticSourceReader {
+        fn read<'a>(
+            &'a self,
+            request: &'a floe_context::SourceReadRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                let person_id = request.person_id();
+                let source = floe_context_contract::GrantSourceBinding::try_new(
+                    person_id,
+                    floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+                    floe_context_contract::ConnectorId::try_new("connector").unwrap(),
+                    floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
+                    floe_context_contract::SourceAuthority::new(),
+                )
+                .unwrap();
+                let now = chrono::Utc::now();
+                let consumer = request.consumer().clone();
+                let processing =
+                    floe_context_contract::ProcessingRestriction::ApprovedRecipient {
+                        recipient: "gateway-local".into(),
+                        categories: vec![floe_context_contract::GrantDataCategory::Metadata],
+                    };
+                let dependency = floe_context_contract::ContextDependency::try_new(
+                    person_id,
+                    floe_context_contract::GrantId::new(),
+                    floe_context_contract::GrantAuthority::new(),
+                    source,
+                    vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+                    vec![floe_context_contract::GrantDataCategory::Metadata],
+                    floe_context_contract::GrantOperation::Read,
+                    request.purpose(),
+                    consumer.clone(),
+                    processing.clone(),
+                    floe_context_contract::ConsumerPolicyAuthority::new(),
+                    uuid::Uuid::new_v4(),
+                    request.query_fingerprint().to_vec(),
+                    uuid::Uuid::new_v4(),
+                    request.process_incarnation_id(),
+                    now - chrono::Duration::minutes(1),
+                    now + chrono::Duration::minutes(5),
+                )
+                .unwrap();
+                let scope = floe_access::GrantScope::try_new(
+                    vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+                    vec![floe_context_contract::GrantDataCategory::Metadata],
+                    vec![floe_context_contract::GrantOperation::Read],
+                    vec![request.purpose()],
+                    vec![consumer],
+                    processing,
+                )
+                .unwrap();
+                Ok(floe_context::SourceRead::new(
+                    request.source().clone(),
+                    self.payload.clone(),
+                    dependency,
+                    scope,
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn context_tool_service_admits_remote_observations_with_direct_coverage() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
+        let local_context = LocalContextHost::default();
+        let remote = StaticSourceReader {
+            payload: serde_json::json!({"hits": ["m1"]}),
+        };
+        let tools = floe_context::ContextToolService::new(
+            person_id,
+            "test-device",
+            floe_vault::VaultGrantRecords::new(&vault),
+            personal_grants::native_driver(&local_context),
+            Some(remote),
+        )
+        .unwrap();
+        let scope = tool_scope();
+        for (tool_id, input) in [
+            ("mail.communication.read", r#"{"query":"invoice"}"#),
+            ("work.context.read", "{}"),
+            ("life.logistics.read", "{}"),
+        ] {
+            let call = floe_agent_contract::ToolCall {
+                call_id: uuid::Uuid::new_v4(),
+                invocation_key: floe_agent_contract::InvocationKey::new(),
+                tool_id: tool_id.into(),
+                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                input: input.into(),
+            };
+            let result =
+                floe_agent_contract::ToolPort::invoke(&tools, call.clone(), &scope)
+                    .await
+                    .unwrap();
+            assert_eq!(result.call_id, call.call_id);
+            assert!(result.text.contains("m1"), "{tool_id}: {}", result.text);
+            assert!(result.artifacts.is_empty());
+            // Direct coverage from the service: no recorder side channel.
+            match &result.coverage {
+                floe_agent_contract::DependencyCoverage::Dependent { dependencies } => {
+                    assert_eq!(dependencies.len(), 1);
+                    assert_eq!(dependencies[0].person_id(), person_id);
+                    assert!(matches!(
+                        dependencies[0].processing(),
+                        floe_context_contract::ProcessingRestriction::ApprovedRecipient { .. }
+                    ));
+                }
+                coverage => panic!("{tool_id} must return dependent coverage: {coverage:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_remote_dependencies_are_rejected_before_io() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
+        let source_client = ServerSourceClient::new(
+            floe_inference::RemoteRoute {
                 base_url: "http://127.0.0.1:1".into(),
                 bearer_token: "daily_route_token_that_is_long_enough".into(),
                 purpose: "everyday_assistance".into(),
@@ -3343,38 +2992,142 @@ mod tests {
                 recipient: None,
                 pairing: None,
             },
-            calendar_connections: vec![],
-        }))
+            vec![],
+        )
         .unwrap();
-        let policy = policy(&model, None);
-        let local_context = LocalContextHost::default();
-        let capabilities = ConversationCapabilities {
-            model: &model,
-            policy: &policy,
-            local_context: &local_context,
-            attention: None,
-            people_reader: None,
-            feasibility_reader: None,
-            recorder: None,
-            remote_reader: None,
-            wellbeing_reader: None,
+        let reader = remote_views::RemoteViewReader::new(
+            &vault,
+            &source_client,
+            person_id,
+            "client",
+            "test-device",
+        );
+        let resolver = remote_views::RemoteDependencyResolver { reader: &reader };
+        let source = floe_context_contract::GrantSourceBinding::try_new(
+            person_id,
+            floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+            floe_context_contract::ConnectorId::try_new("gmail").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
+            floe_context_contract::SourceAuthority::new(),
+        )
+        .unwrap();
+        let now = chrono::Utc::now();
+        let expired = floe_context_contract::ContextDependency::try_new(
+            person_id,
+            floe_context_contract::GrantId::new(),
+            floe_context_contract::GrantAuthority::new(),
+            source,
+            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+            vec![floe_context_contract::GrantDataCategory::Metadata],
+            floe_context_contract::GrantOperation::Read,
+            floe_context_contract::GrantPurpose::Assistant,
+            floe_context_contract::GrantConsumer::builtin("assistant").unwrap(),
+            floe_context_contract::ProcessingRestriction::ApprovedRecipient {
+                recipient: "gateway-local".into(),
+                categories: vec![floe_context_contract::GrantDataCategory::Metadata],
+            },
+            floe_context_contract::ConsumerPolicyAuthority::new(),
+            uuid::Uuid::new_v4(),
+            b"fingerprint".to_vec(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            now - chrono::Duration::minutes(10),
+            now - chrono::Duration::minutes(1),
+        )
+        .unwrap();
+        let authorization = floe_access::DependencyAuthorization {
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+            cancellation: Cancellation::default(),
         };
-        let result = capabilities
-            .invoke(CapabilityInvocation {
-                usage: floe_conversation::turn::UsageLedger::default(),
-                schema_version: AGENT_VERSION,
-                call_id: uuid::Uuid::new_v4(),
-                person_id: PersonId::new(),
-                session_id: uuid::Uuid::new_v4(),
-                turn_id: uuid::Uuid::new_v4(),
-                capability_id: "mail.communication.read".into(),
-                input: r#"{"query":"reply","authority":"send"}"#.into(),
-                max_output_bytes: 65_536,
-                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-                cancellation: floe_execution::Cancellation::default(),
-            })
-            .await;
-        assert_eq!(result, Err(AgentFailure::InvalidInput));
+        assert_eq!(
+            floe_access::DependencyResolver::authorize(&resolver, &expired, &authorization).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_root_projection_composes_vault_evidence_and_session_classes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
+        let session = vault.create_session().await.unwrap();
+        let local_context = LocalContextHost::default();
+        // The exact root composition shape: vault evidence plus the composite
+        // Context dependency authority the model fence uses.
+        let personal_resolver = personal_grants::PersonalDependencyResolver {
+            vault: &vault,
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let resolver = CompositeDependencyResolver {
+            personal: &personal_resolver,
+            remote: None,
+        };
+        let projector = floe_conversation::ConversationModelProjection::new(
+            floe_vault::ContextEvidenceReader::new(&vault, session.id),
+            resolver,
+            session.id,
+            AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            vec![DataClass::Personal],
+            vec![],
+        )
+        .unwrap();
+        let projection = floe_agent_contract::ModelProjectionPort::project(
+            &projector,
+            floe_agent_contract::ModelProjectionRequest {
+                principal: person_id.to_string(),
+                role: floe_agent_contract::RoleSpec {
+                    role_id: "manager".into(),
+                    instructions: "Answer.".into(),
+                    output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
+                },
+                conversation: floe_agent_contract::ModelConversation {
+                    history: vec![],
+                    current_turn: vec![floe_agent_contract::ModelConversationEntry::User {
+                        message_id: uuid::Uuid::new_v4(),
+                        text: "hello".into(),
+                    }],
+                },
+                catalog: floe_agent_contract::AllowedCatalog {
+                    cards: vec![],
+                    tools: floe_context::manager_tool_descriptors(),
+                    revision: 1,
+                },
+                max_output_bytes: 4096,
+                correction: None,
+            },
+            &tool_scope(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            projection.envelope.scoped_instructions.purpose,
+            floe_inference::CANONICAL_MODEL_PURPOSE
+        );
+        assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
+        assert_eq!(
+            projection.coverage,
+            floe_agent_contract::DependencyCoverage::Independent
+        );
+        assert_eq!(
+            projection
+                .envelope
+                .scoped_instructions
+                .available_capabilities
+                .len(),
+            7
+        );
     }
 
     #[tokio::test]
@@ -3502,7 +3255,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             wellbeing_reader: None,
@@ -3734,7 +3486,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             wellbeing_reader: None,
@@ -3943,7 +3694,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             wellbeing_reader: None,
@@ -4220,7 +3970,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,
@@ -4295,7 +4044,6 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
-            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             wellbeing_reader: None,

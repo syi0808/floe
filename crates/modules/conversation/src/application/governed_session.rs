@@ -263,7 +263,6 @@ impl<'a, Repository: GovernedSessionRepository> GovernedSessionStore<'a, Reposit
 
 fn authorization(request: &ModelRequest) -> DependencyAuthorization {
     DependencyAuthorization {
-        allowed_placements: request.policy.allowed_placements.clone(),
         deadline: request.deadline,
         cancellation: request.cancellation.clone(),
     }

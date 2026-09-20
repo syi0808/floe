@@ -62,7 +62,6 @@ impl<Keys: VaultKeyProvider> DependencyResolver for PersonalDependencyResolver<'
                 self.person_id,
                 self.device_id,
                 dependency,
-                &request.allowed_placements,
                 request.deadline,
                 &request.cancellation,
             )

@@ -6,10 +6,10 @@ use std::{
 use floe_agent_contract::{
     AgentMessage, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
     ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
-    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelConversationEntry,
-    ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep,
-    ModelUsage, ProjectionRef, RoleSpec, RuntimeContext, ScopedInstructions, TaskReceipt, ToolCall,
-    ToolDescriptor, ToolPort, ToolResult,
+    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelConversation,
+    ModelConversationEntry, ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
+    ModelResponse, ModelStep, ModelUsage, ProjectionRef, RoleSpec, RuntimeContext,
+    ScopedInstructions, TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
 use floe_agent_contract::prompts::{
     PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
@@ -392,14 +392,12 @@ struct TestProjector;
 
 static PROJECTOR: TestProjector = TestProjector;
 
-impl ModelProjectionPort for TestProjector {
-    fn project<'a>(
-        &'a self,
-        request: ModelProjectionRequest,
-        _: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
-        request.validate().unwrap();
-        let envelope = ContextEnvelope {
+fn authorized_test_projection(
+    request: &ModelProjectionRequest,
+    conversation: ModelConversation,
+    coverage: DependencyCoverage,
+) -> AuthorizedModelProjection {
+    let envelope = ContextEnvelope {
             schema_version: floe_agent_contract::AGENT_VERSION,
             stable_instructions: PromptAssembly {
                 schema_version: floe_agent_contract::AGENT_VERSION,
@@ -438,7 +436,7 @@ impl ModelProjectionPort for TestProjector {
                 optional_context_issues: vec![],
                 evidence: vec![],
             },
-            conversation: request.conversation.clone(),
+            conversation,
             runtime: RuntimeContext {
                 max_output_bytes: request.max_output_bytes,
             },
@@ -449,14 +447,29 @@ impl ModelProjectionPort for TestProjector {
                 agent_cards: vec![],
             },
         };
+        AuthorizedModelProjection {
+            projection_ref: ProjectionRef::new(),
+            projection_revision: 1,
+            envelope,
+            coverage,
+            input_data_classes: vec![DataClass::Synthetic],
+        }
+}
+
+impl ModelProjectionPort for TestProjector {
+    fn project<'a>(
+        &'a self,
+        request: ModelProjectionRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
+        request.validate().unwrap();
+        let conversation = request.conversation.clone();
         Box::pin(async move {
-            Ok(AuthorizedModelProjection {
-                projection_ref: ProjectionRef::new(),
-                projection_revision: 1,
-                envelope,
-                coverage: DependencyCoverage::Independent,
-                input_data_classes: vec![DataClass::Synthetic],
-            })
+            Ok(authorized_test_projection(
+                &request,
+                conversation,
+                DependencyCoverage::Independent,
+            ))
         })
     }
 }
@@ -1436,4 +1449,387 @@ async fn continuation_profile_mismatch_fails_closed() {
         service.run_turn(mismatched, ports(&model)).await,
         Err(AgentFailure::StorageUnavailable)
     );
+}
+
+fn history_dependency() -> floe_agent_contract::ContextDependency {
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+    let person = floe_kernel::PersonId::new();
+    let source = GrantSourceBinding::try_new(
+        person,
+        ConnectionId::try_new("connection").unwrap(),
+        ConnectorId::try_new("connector").unwrap(),
+        ExecutionOwnerId::try_new("owner").unwrap(),
+        SourceAuthority::new(),
+    )
+    .unwrap();
+    let now = chrono::Utc::now();
+    floe_agent_contract::ContextDependency::try_new(
+        person,
+        GrantId::new(),
+        GrantAuthority::new(),
+        source,
+        vec![ResourceHandle::try_new("resource").unwrap()],
+        vec![GrantDataCategory::Metadata],
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        GrantConsumer::builtin("assistant").unwrap(),
+        ProcessingRestriction::LocalOnly,
+        ConsumerPolicyAuthority::new(),
+        Uuid::new_v4(),
+        b"fingerprint".to_vec(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        now - chrono::Duration::minutes(1),
+        now + chrono::Duration::minutes(5),
+    )
+    .unwrap()
+}
+
+/// Committed history coverage plus a revocation switch, shared with the
+/// filtering projector below.
+#[derive(Clone)]
+struct HistoryEvidence {
+    coverage: Arc<Mutex<HashMap<Uuid, DependencyCoverage>>>,
+    revoked: Arc<std::sync::atomic::AtomicBool>,
+    shown: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl floe_context::EvidenceReader for HistoryEvidence {
+    fn read_turn_coverage(
+        &self,
+        _session_id: Uuid,
+        turn_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<DependencyCoverage, AgentFailure>> + Send {
+        let coverage = self
+            .coverage
+            .lock()
+            .unwrap()
+            .get(&turn_id)
+            .cloned()
+            .unwrap_or(DependencyCoverage::Unknown);
+        async move { Ok(coverage) }
+    }
+}
+
+impl floe_context::DependencyResolver for HistoryEvidence {
+    fn authorize<'a>(
+        &'a self,
+        _dependency: &'a floe_agent_contract::ContextDependency,
+        _request: &'a floe_context::DependencyAuthorization,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
+        let revoked = self.revoked.load(std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            if revoked {
+                Err(AgentFailure::PolicyDenied)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+/// A projector that filters typed history through Context decisions and folds
+/// the reauthorized history dependencies into its projection coverage: the
+/// shape the canonical projector takes in 2-B.3.
+struct FilteringProjector {
+    evidence: HistoryEvidence,
+    session_id: Uuid,
+}
+
+impl ModelProjectionPort for FilteringProjector {
+    fn project<'a>(
+        &'a self,
+        request: ModelProjectionRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>> {
+        request.validate().unwrap();
+        let evidence = self.evidence.clone();
+        let session_id = self.session_id;
+        let authorization = floe_context::DependencyAuthorization {
+            deadline: scope.deadline(),
+            cancellation: scope.cancellation().clone(),
+        };
+        Box::pin(async move {
+            let projected = crate::project_model_conversation_history(
+                &evidence,
+                session_id,
+                &request.conversation,
+                Some(&evidence),
+                &authorization,
+            )
+            .await?;
+            let mut coverage = DependencyCoverage::Independent;
+            for dependency in &projected.authorized_history_dependencies {
+                coverage = coverage
+                    .merge(&DependencyCoverage::dependent(dependency.clone()).map_err(|_| {
+                        AgentFailure::InvalidModelOutput
+                    })?)
+                    .map_err(|_| AgentFailure::InvalidModelOutput)?;
+            }
+            let shown = projected
+                .conversation
+                .history
+                .iter()
+                .map(|entry| match entry {
+                    ModelConversationEntry::User { text, .. } => format!("user:{text}"),
+                    ModelConversationEntry::Preamble { text, .. } => {
+                        format!("preamble:{text}")
+                    }
+                    ModelConversationEntry::Assistant { text, .. } => {
+                        format!("assistant:{text}")
+                    }
+                    ModelConversationEntry::ToolExchange { result, .. } => {
+                        format!("tool:{}", result.text)
+                    }
+                    ModelConversationEntry::DelegationExchange { receipt, .. } => {
+                        format!("delegation:{}", receipt.task_id.as_uuid())
+                    }
+                })
+                .collect::<Vec<_>>();
+            evidence.shown.lock().unwrap().push(shown);
+            Ok(authorized_test_projection(
+                &request,
+                projected.conversation,
+                coverage,
+            ))
+        })
+    }
+}
+
+struct DependentTool {
+    coverage: DependencyCoverage,
+}
+
+impl ToolPort for DependentTool {
+    fn invoke<'a>(
+        &'a self,
+        call: ToolCall,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        let coverage = self.coverage.clone();
+        Box::pin(async move {
+            Ok(ToolResult {
+                call_id: call.call_id,
+                text: "source observation".into(),
+                artifacts: vec![],
+                coverage,
+                issue: None,
+            })
+        })
+    }
+}
+
+struct ToolThenAnswer;
+
+impl ModelPort for ToolThenAnswer {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        Box::pin(async move {
+            let settled = request
+                .projection
+                .envelope
+                .conversation
+                .current_turn
+                .iter()
+                .any(|entry| matches!(entry, ModelConversationEntry::ToolExchange { .. }));
+            let steps = if settled {
+                vec![ModelStep::Answer {
+                    text: "answered from the source".into(),
+                    artifacts: vec![],
+                }]
+            } else {
+                vec![ModelStep::CallTool {
+                    tool_id: "lookup".into(),
+                    definition_revision: 1,
+                    input: "{}".into(),
+                }]
+            };
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            })
+        })
+    }
+}
+
+fn lookup_catalog() -> AllowedCatalog {
+    AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "lookup".into(),
+            definition_revision: 1,
+            description: "lookup".into(),
+            input_schema: "{}".into(),
+            output_data_class: "derived".into(),
+        }],
+        revision: 1,
+    }
+}
+
+fn coverage_has(
+    coverage: &DependencyCoverage,
+    dependency: &floe_agent_contract::ContextDependency,
+) -> bool {
+    match coverage {
+        DependencyCoverage::Dependent { dependencies } => dependencies.contains(dependency),
+        DependencyCoverage::Independent | DependencyCoverage::Unknown => false,
+    }
+}
+
+#[tokio::test]
+async fn retained_history_answer_commits_its_dependency_until_revocation() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let held = history_dependency();
+    let evidence = HistoryEvidence {
+        coverage: Arc::new(Mutex::new(HashMap::new())),
+        revoked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        shown: Arc::new(Mutex::new(Vec::new())),
+    };
+    let projector = FilteringProjector {
+        evidence: evidence.clone(),
+        session_id,
+    };
+    let validator = Validator;
+    let tool_model = ToolThenAnswer;
+    let answer_model = AnswerModel::default();
+    let tools = DependentTool {
+        coverage: DependencyCoverage::dependent(held.clone()).unwrap(),
+    };
+    let no_delegation = NoDelegation;
+
+    // Turn 1 reads the source and answers: the terminal coverage commits it.
+    let mut first = request(CommandId::new(), session_id, 0, "what does the source say?");
+    first.allowed_catalog = lookup_catalog();
+    let first_receipt = service
+        .run_turn(
+            first,
+            ConversationPorts {
+                projection: &projector,
+                model: &tool_model,
+                tools: &tools,
+                delegation: &no_delegation,
+                validator: &validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_receipt.state, RunState::Completed);
+    let stored = repository
+        .load_run(first_receipt.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let committed = stored.receipt.coverage.clone();
+    assert!(coverage_has(&committed, &held));
+    // The committed transcript coverage becomes the evidence the next turn
+    // reauthorizes against.
+    for message in &stored.transcript {
+        evidence
+            .coverage
+            .lock()
+            .unwrap()
+            .insert(message.message_id, message.coverage.clone());
+    }
+
+    // Turn 2 runs no new tool call: the answer still commits the retained
+    // history dependency, and the model saw the derived history text.
+    evidence.shown.lock().unwrap().clear();
+    let second = request(
+        CommandId::new(),
+        session_id,
+        first_receipt.session_revision,
+        "and then?",
+    );
+    let second_receipt = service
+        .run_turn(
+            second,
+            ConversationPorts {
+                projection: &projector,
+                model: &answer_model,
+                tools: &tools,
+                delegation: &no_delegation,
+                validator: &validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_receipt.state, RunState::Completed);
+    let stored = repository
+        .load_run(second_receipt.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(coverage_has(&stored.receipt.coverage, &held));
+    let shown = evidence.shown.lock().unwrap();
+    let last = shown.last().unwrap();
+    assert!(last.iter().any(|entry| entry.starts_with("user:")));
+    assert!(
+        last.iter()
+            .any(|entry| entry == "assistant:answered from the source"),
+        "retained derived history must reach the model: {last:?}"
+    );
+    drop(shown);
+
+    // Revocation drops the derived history while the Person's own words stay,
+    // and the next answer no longer commits the revoked dependency.
+    evidence
+        .revoked
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    evidence.shown.lock().unwrap().clear();
+    for message in &stored.transcript {
+        evidence
+            .coverage
+            .lock()
+            .unwrap()
+            .insert(message.message_id, message.coverage.clone());
+    }
+    let third = request(
+        CommandId::new(),
+        session_id,
+        second_receipt.session_revision,
+        "once more?",
+    );
+    let third_receipt = service
+        .run_turn(
+            third,
+            ConversationPorts {
+                projection: &projector,
+                model: &answer_model,
+                tools: &tools,
+                delegation: &no_delegation,
+                validator: &validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(third_receipt.state, RunState::Completed);
+    let stored = repository
+        .load_run(third_receipt.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!coverage_has(&stored.receipt.coverage, &held));
+    assert_eq!(stored.receipt.coverage, DependencyCoverage::Independent);
+    let shown = evidence.shown.lock().unwrap();
+    let last = shown.last().unwrap();
+    assert!(
+        last.iter().all(|entry| entry.starts_with("user:")),
+        "revoked derived history must not reach the model: {last:?}"
+    );
+    assert!(!last.is_empty());
 }

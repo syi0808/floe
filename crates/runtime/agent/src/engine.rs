@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use floe_agent_contract::{
-    AgentFailure, AllowedCatalog, BatchCursor, DelegationPort, DelegationRequest, EngineRequest,
-    EngineStep, ExecutionJournal, InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT,
-    ModelConversation, ModelConversationEntry, ModelCorrection, ModelPort, ModelProjectionPort,
-    ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision,
-    PinnedToolRevision, ProjectionRef, ReplayReceipt, TaskId, TaskReceipt, ToolCall, ToolPort,
-    ToolResult, ValidatedModelBatch,
+    AgentFailure, AllowedCatalog, AuthorizedModelProjection, BatchCursor, DelegationPort,
+    DelegationRequest, DependencyCoverage, EngineRequest, EngineStep, ExecutionJournal,
+    InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT, ModelConversation,
+    ModelConversationEntry, ModelCorrection, ModelPort, ModelProjectionPort, ModelProjectionRequest,
+    ModelRequest, ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision, PinnedToolRevision,
+    ReplayReceipt, TaskId, TaskReceipt, ToolCall, ToolPort, ToolResult, ValidatedModelBatch,
 };
 use uuid::Uuid;
 
@@ -71,6 +71,10 @@ impl Default for EngineConfig {
 pub struct EngineReport {
     pub steps: Vec<EngineStep>,
     pub output: Option<String>,
+    /// The projection coverage of the validated batch that produced the
+    /// final answer, carried durably through that batch. `None` when no
+    /// answer committed.
+    pub answering_projection_coverage: Option<DependencyCoverage>,
     pub iterations: u32,
     pub attempt_ids: Vec<Uuid>,
     pub execution_id: Uuid,
@@ -289,6 +293,7 @@ impl Drive<'_> {
         Ok(EngineReport {
             steps: drive.steps,
             output: None,
+            answering_projection_coverage: None,
             iterations: drive.completed_iterations,
             attempt_ids: drive.attempts,
             execution_id: drive.execution_id,
@@ -313,10 +318,15 @@ struct ActiveDrive<'a> {
 }
 
 impl ActiveDrive<'_> {
-    fn report(&self, output: Option<String>) -> EngineReport {
+    fn report(
+        &self,
+        output: Option<String>,
+        answering_projection_coverage: Option<DependencyCoverage>,
+    ) -> EngineReport {
         EngineReport {
             steps: self.steps.clone(),
             output,
+            answering_projection_coverage,
             iterations: self.completed_iterations + 1,
             attempt_ids: self.attempts.clone(),
             execution_id: self.execution_id,
@@ -398,7 +408,7 @@ impl ActiveDrive<'_> {
                     self.request.scope.cancellation(),
                 ));
             }
-            let model_projection_ref = projection.projection_ref;
+            let model_projection = projection.clone();
             let model_request = ModelRequest {
                 attempt_id,
                 principal: self.request.principal.clone(),
@@ -441,7 +451,7 @@ impl ActiveDrive<'_> {
                 }
             };
             self.record_model_result(attempt_id, response.usage).await?;
-            match self.validated_response(attempt_id, model_projection_ref, &response) {
+            match self.validated_response(attempt_id, &model_projection, &response) {
                 Ok(validated) => return Ok(validated),
                 Err(failure) => {
                     if is_correctable(&failure) && correction.is_none() {
@@ -459,7 +469,7 @@ impl ActiveDrive<'_> {
     fn validated_response(
         &self,
         attempt_id: Uuid,
-        projection_ref: ProjectionRef,
+        projection: &AuthorizedModelProjection,
         response: &ModelResponse,
     ) -> Result<(ValidatedModelBatch, Vec<Option<String>>), AgentFailure> {
         if response.attempt_id != attempt_id || response.steps.is_empty() {
@@ -491,12 +501,13 @@ impl ActiveDrive<'_> {
             ValidatedModelBatch {
                 execution_id: self.execution_id,
                 attempt_id,
-                projection_ref,
+                projection_ref: projection.projection_ref,
                 batch_id: Uuid::new_v4(),
                 steps: response.steps.clone(),
                 catalog_revision: self.request.allowed_catalog.revision,
                 tool_revisions,
                 agent_revisions,
+                projection_coverage: projection.coverage.clone(),
             },
             corrections,
         ))
@@ -558,7 +569,13 @@ impl ActiveDrive<'_> {
                         text: text.clone(),
                         artifacts: artifacts.clone(),
                     });
-                    return Ok(Some(self.report(Some(text.clone()))));
+                    // The answering coverage is the persisted batch's own:
+                    // an answer executed from a resumed batch commits the
+                    // same coverage it was validated under.
+                    return Ok(Some(self.report(
+                        Some(text.clone()),
+                        Some(batch.projection_coverage.clone()),
+                    )));
                 }
                 ModelStep::CallTool {
                     tool_id,
@@ -2132,6 +2149,7 @@ mod tests {
                 definition_revision: 1,
             }],
             agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
         };
         batch.validate(1024).unwrap();
         let tools = Tools {
@@ -2207,6 +2225,193 @@ mod tests {
             intent.call_id,
             stable_call_id(execution_id, batch.batch_id, 0)
         );
+    }
+
+    fn history_dependency() -> floe_context_contract::ContextDependency {
+        use floe_context_contract::{
+            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+            GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        };
+        let person = floe_context_contract::PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person,
+            ConnectionId::try_new("connection").unwrap(),
+            ConnectorId::try_new("connector").unwrap(),
+            ExecutionOwnerId::try_new("owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let now = chrono::Utc::now();
+        floe_context_contract::ContextDependency::try_new(
+            person,
+            GrantId::new(),
+            GrantAuthority::new(),
+            source,
+            vec![ResourceHandle::try_new("resource").unwrap()],
+            vec![GrantDataCategory::Metadata],
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("assistant").unwrap(),
+            ProcessingRestriction::LocalOnly,
+            ConsumerPolicyAuthority::new(),
+            Uuid::new_v4(),
+            b"fingerprint".to_vec(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(5),
+        )
+        .unwrap()
+    }
+
+    struct DependentProjector {
+        coverage: DependencyCoverage,
+    }
+
+    impl ModelProjectionPort for DependentProjector {
+        fn project<'a>(
+            &'a self,
+            request: ModelProjectionRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<AuthorizedModelProjection, AgentFailure>>
+        {
+            request.validate().unwrap();
+            let envelope = test_envelope(
+                request.conversation.clone(),
+                request.correction.clone(),
+                request.max_output_bytes,
+            );
+            let coverage = self.coverage.clone();
+            Box::pin(async move {
+                Ok(AuthorizedModelProjection {
+                    projection_ref: ProjectionRef::new(),
+                    projection_revision: 1,
+                    envelope,
+                    coverage,
+                    input_data_classes: vec![DataClass::Synthetic],
+                })
+            })
+        }
+    }
+
+    struct AnswerOnly;
+
+    impl ModelPort for AnswerOnly {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            Box::pin(async move {
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![ModelStep::Answer {
+                        text: "done".into(),
+                        artifacts: vec![],
+                    }],
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn answering_projection_coverage_flows_from_batch_to_report() {
+        let dependency = history_dependency();
+        let coverage = DependencyCoverage::dependent(dependency).unwrap();
+        let projection = DependentProjector {
+            coverage: coverage.clone(),
+        };
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                EnginePorts {
+                    projection: &projection,
+                    model: &AnswerOnly,
+                    tools: &tools,
+                    delegation: &Delegations,
+                    journal: &journal,
+                    validator: &Validator,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(report.answering_projection_coverage, Some(coverage.clone()));
+        let journaled = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+                _ => None,
+            })
+            .expect("answer batch is journaled before execution");
+        assert_eq!(journaled.projection_coverage, coverage);
+    }
+
+    #[tokio::test]
+    async fn resumed_answer_batch_commits_persisted_projection_coverage_without_model_recall() {
+        let dependency = history_dependency();
+        let coverage = DependencyCoverage::dependent(dependency).unwrap();
+        let execution_id = Uuid::new_v4();
+        let batch = ValidatedModelBatch {
+            execution_id,
+            attempt_id: Uuid::new_v4(),
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Answer {
+                text: "resumed".into(),
+                artifacts: vec![],
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+            projection_coverage: coverage.clone(),
+        };
+        batch.validate(1024).unwrap();
+        struct MustNotGenerate;
+        impl ModelPort for MustNotGenerate {
+            fn generate<'a>(
+                &'a self,
+                _: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                panic!("resumed answer must not recall the model")
+            }
+        }
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, _) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let mut engine_request = request(scope());
+        engine_request.resume = Some(EngineResumeState {
+            validated_batch: batch.clone(),
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 0,
+            },
+        });
+        let report = Engine::default()
+            .drive(
+                engine_request,
+                ports(&projection, &MustNotGenerate, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("resumed"));
+        assert_eq!(report.answering_projection_coverage, Some(coverage));
+        assert_eq!(report.execution_id, execution_id);
     }
 
     #[tokio::test]

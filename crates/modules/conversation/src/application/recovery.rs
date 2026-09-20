@@ -822,6 +822,7 @@ mod tests {
                 definition_revision: 3,
             }],
             agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
         }
     }
 
@@ -903,6 +904,7 @@ mod tests {
                 agent_id: "expert-a".into(),
                 definition_revision: 2,
             }],
+            projection_coverage: DependencyCoverage::Independent,
         };
         let batch_id = batch.batch_id;
         let prefix = vec![
@@ -1089,6 +1091,7 @@ mod tests {
                 agent_id: "expert-a".into(),
                 definition_revision: 2,
             }],
+            projection_coverage: DependencyCoverage::Independent,
         };
         let request = delegation_request_for(
             &admitted,
@@ -1237,6 +1240,127 @@ mod tests {
         );
         assert_eq!(snapshot.model_conversation.current_turn.len(), 1);
         assert_eq!(snapshot.completed_iterations, 0);
+    }
+
+    fn history_dependency() -> floe_agent_contract::ContextDependency {
+        use floe_context_contract::{
+            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+            GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+            GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+        };
+        let person = floe_kernel::PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person,
+            ConnectionId::try_new("connection").unwrap(),
+            ConnectorId::try_new("connector").unwrap(),
+            ExecutionOwnerId::try_new("owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let now = chrono::Utc::now();
+        floe_agent_contract::ContextDependency::try_new(
+            person,
+            GrantId::new(),
+            GrantAuthority::new(),
+            source,
+            vec![ResourceHandle::try_new("resource").unwrap()],
+            vec![GrantDataCategory::Metadata],
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("assistant").unwrap(),
+            ProcessingRestriction::LocalOnly,
+            ConsumerPolicyAuthority::new(),
+            Uuid::new_v4(),
+            b"fingerprint".to_vec(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(5),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn crashed_answer_batch_preserves_exact_projection_coverage() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let coverage =
+            DependencyCoverage::dependent(history_dependency()).unwrap();
+        let mut model_batch = answer_batch(attempt_id, Uuid::new_v4(), ProjectionRef::new());
+        model_batch.projection_coverage = coverage.clone();
+        // Crash after the batch/cursor ack, before the answer commits: the
+        // pending batch must carry the exact answering projection coverage.
+        let snapshot = project_continuation(
+            &admitted,
+            &entries(vec![
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: model_batch.projection_ref,
+                },
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                },
+                JournalEvent::ValidatedBatch {
+                    batch: model_batch.clone(),
+                },
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: model_batch.batch_id,
+                        next_step_index: 0,
+                    },
+                },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(snapshot.pending_batch.as_ref(), Some(&model_batch));
+        assert_eq!(
+            snapshot
+                .pending_batch
+                .as_ref()
+                .map(|batch| &batch.projection_coverage),
+            Some(&coverage)
+        );
+        assert_eq!(
+            snapshot.batch_cursor,
+            Some(BatchCursor {
+                batch_id: model_batch.batch_id,
+                next_step_index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_projection_coverage_is_storage_fault() {
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let mut model_batch = answer_batch(attempt_id, Uuid::new_v4(), ProjectionRef::new());
+        model_batch.projection_coverage = DependencyCoverage::Dependent {
+            dependencies: vec![],
+        };
+        assert!(matches!(
+            project_continuation(
+                &admitted,
+                &entries(vec![
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        projection_ref: model_batch.projection_ref,
+                    },
+                    JournalEvent::ModelResult {
+                        attempt_id,
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    },
+                    JournalEvent::ValidatedBatch { batch: model_batch },
+                ]),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
     }
 
     #[test]
@@ -1745,6 +1869,7 @@ mod tests {
             catalog_revision: 1,
             tool_revisions: vec![],
             agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
         };
         let request = delegation_request_for(
             &admitted,
@@ -2153,6 +2278,7 @@ mod tests {
             catalog_revision: 1,
             tool_revisions: vec![],
             agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
         }
     }
 

@@ -191,11 +191,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 local_context: &self.local_context,
                 device_id: &staged.request.device_id,
             };
-            let feasibility_reader = PersonalFeasibilityReader {
-                vault: &self.vault,
-                local_context: &self.local_context,
-                device_id: &staged.request.device_id,
-            };
             let wellbeing_reader = PersonalWellbeingReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
@@ -227,7 +222,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 local_context: &self.local_context,
                 attention: Some(&attention_reader),
                 people_reader: Some(&people_reader),
-                feasibility_reader: Some(&feasibility_reader),
                 wellbeing_reader: Some(&wellbeing_reader),
                 recorder: Some(&recorder),
                 remote_reader: remote_reader
@@ -333,7 +327,6 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) local_context: &'model LocalContextHost,
     pub(super) attention: Option<&'model dyn super::PersonalAttentionReaderApi>,
     pub(super) people_reader: Option<&'model dyn super::PersonalPeopleReaderApi>,
-    pub(super) feasibility_reader: Option<&'model dyn super::PersonalFeasibilityReaderApi>,
     pub(super) wellbeing_reader: Option<&'model dyn super::PersonalWellbeingReaderApi>,
     pub(super) recorder: Option<&'model dyn super::ResultRecorder>,
     pub(super) remote_reader: Option<&'model dyn floe_context::SourceReader>,
@@ -360,7 +353,6 @@ impl<'model> ConversationExperts<'model> {
             policy: self.policy,
             person_id: request.person_id,
             people_reader: self.people_reader,
-            feasibility_reader: self.feasibility_reader,
             wellbeing_reader: self.wellbeing_reader,
             remote_reader: self.remote_reader,
             recorder: self.recorder,

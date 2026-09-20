@@ -13,7 +13,7 @@ use floe_access::{
     admit_remote_view_source, remote_dependency_binding_matches, remote_dependency_live,
     remote_dependency_resource, remote_dependency_source_admits, remote_view_source,
 };
-use floe_agent_contract::{AgentFailure, BoxFuture, ModelPlacement, PersonId};
+use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_context_contract::{ContextDependency, GrantConsumer, GrantScope, GrantSourceBinding};
 use serde_json::Value;
 use uuid::Uuid;
@@ -144,9 +144,13 @@ pub async fn read_remote_view(
 
 /// Whether a recorded remote dependency may still be relied on.
 ///
-/// The whole re-admission runs here: the observation is still live, the run is
-/// still remote-only, the grant still names the resource, the producer's current
-/// descriptor still admits the source, and the binding still matches.
+/// The whole re-admission runs here: the observation is still live, the grant
+/// still names the resource, the producer's current descriptor still admits the
+/// source, and the binding still matches.
+///
+/// Route-neutral: the model route is never consulted here. Whether a
+/// reauthorized dependency may reach a Device or External model target is
+/// decided by Access model dispatch.
 pub async fn authorize_remote_dependency(
     store: &impl RemoteGrantStore,
     transport: &impl RemoteGrantTransport,
@@ -156,10 +160,6 @@ pub async fn authorize_remote_dependency(
     authorization: &DependencyAuthorization,
 ) -> Result<(), AgentFailure> {
     remote_dependency_live(dependency, person_id, Utc::now())?;
-    // A remote dependency may only be re-shown to a run that is itself remote.
-    if authorization.allowed_placements != [ModelPlacement::Remote] {
-        return Err(AgentFailure::PolicyDenied);
-    }
     if pairing.person_id != person_id.to_string() {
         return Err(AgentFailure::PolicyDenied);
     }

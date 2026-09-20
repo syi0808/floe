@@ -3,7 +3,7 @@ use std::future::Future;
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AllowedCatalog, AuthorizedModelProjection, DelegationRequest,
+    AgentFailure, AllowedCatalog, AuthorizedModelProjection, DelegationRequest, DependencyCoverage,
     ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ProjectionRef, ReplayReceipt,
     TaskReceipt, ToolCall, ToolResult,
 };
@@ -20,7 +20,10 @@ pub enum JournalAck {
 /// One validated model batch: every step below was identity-, bound-, and
 /// schema-checked before anything was dispatched. The pinned revisions record
 /// what the batch was validated against, so a resume can fail closed when the
-/// current catalog no longer carries them.
+/// current catalog no longer carries them. The projection coverage is the exact
+/// coverage of the authorized projection the answering model saw, so a batch
+/// resumed after a crash commits the same dependency it was validated under
+/// without re-projecting history.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValidatedModelBatch {
@@ -32,6 +35,7 @@ pub struct ValidatedModelBatch {
     pub catalog_revision: u64,
     pub tool_revisions: Vec<PinnedToolRevision>,
     pub agent_revisions: Vec<PinnedAgentRevision>,
+    pub projection_coverage: DependencyCoverage,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -81,6 +85,7 @@ impl ValidatedModelBatch {
             })
             || has_duplicate_tool_pins(&self.tool_revisions)
             || has_duplicate_agent_pins(&self.agent_revisions)
+            || self.projection_coverage.validate().is_err()
             || serde_json::to_vec(&self.steps)
                 .map(|encoded| encoded.len() > maximum_bytes)
                 .unwrap_or(true)

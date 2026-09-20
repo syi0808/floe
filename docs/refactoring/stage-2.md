@@ -23,7 +23,7 @@ Detailed work is split into the execution plans linked below. This overview owns
     - [x] cross-run pending batch → child resume lineage
     - [x] freeze 2-B.1 after the lineage P0 closes
   - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
-  - [ ] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
+  - [x] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
   - [ ] **2-B.4 — App production cutover**
   - [ ] **2-B.5 — Integrated 2-B hardening**
 - [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-B.3 — Canonical Context projection and Tool vertical slice.**
+**Active: 2-B.4 — App production cutover.**
 
-2-B.1 and 2-B.2 are complete. The current work is to make history/source reauthorization route-neutral, replace `TransitionalModelProjection` with the canonical Conversation/Context projector, bind answering projection coverage durably to validated batches, and replace the root `LegacyToolPort → ConversationCapabilities` path with `ContextToolService` returning direct coverage.
+2-B.1, 2-B.2 and 2-B.3 are complete. The current work is the App production cutover: remove General Conversation pre-turn `HostInferenceRoutes.resolve()`, remove model-execution use of `ConversationTurnRequest.remote_route`, remove the App `Model`/`RootModel`/`GovernedModel` policy path and App model consent/routing decisions, wire canonical projection/model/tools with a temporary delegation bridge, and delete legacy General Conversation conversion helpers after caller count reaches 0.
 
-Use [the 2-B.3 execution plan](stage-2/2-b3.md) as the authoritative task document. Do not start 2-B.4 before the 2-B.3 exit gates are green.
+2-B.4 is a separate change set; it was not started with 2-B.3.
 
 ## Target internal architecture
 

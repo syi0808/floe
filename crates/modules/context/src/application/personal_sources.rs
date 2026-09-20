@@ -16,7 +16,7 @@ use floe_access::{
     SourceAuthority, active_read_grant, grant_unchanged, subject_unchanged,
     valid_subject_fingerprint,
 };
-use floe_agent_contract::{AgentFailure, ModelPlacement, PersonId};
+use floe_agent_contract::{AgentFailure, PersonId};
 use floe_execution::Cancellation;
 use tokio::time::Instant;
 
@@ -265,6 +265,46 @@ pub async fn read_people(
         query_fingerprint,
     )?;
     Ok((view, dependency))
+}
+
+/// Read the people the Manager may show, under the Person's reviewed grant.
+///
+/// The Manager helper owns the whole selection: the one grant that admits the
+/// read, the handles it admits, and the subject it was reviewed against. No
+/// caller performs its own handle lookup.
+pub async fn read_manager_people(
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    consumer_name: &str,
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<(PeopleView, ContextDependency), AgentFailure> {
+    let grant = floe_access::people_read_grant(
+        &records.grants().await?,
+        person_id,
+        device_id,
+        consumer_name,
+    )?;
+    let selected_handles = records.selected_handles(grant.id()).await?;
+    if selected_handles.is_empty() {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    let subject = records.reviewed_subject(grant.id()).await?;
+    read_people(
+        records,
+        driver,
+        person_id,
+        device_id,
+        grant.source().clone(),
+        &selected_handles,
+        &subject,
+        consumer_name,
+        deadline,
+        cancellation,
+    )
+    .await
 }
 
 /// Read whether the Person can still make the event they asked about.
@@ -652,14 +692,16 @@ pub fn personal_dependency_holds(
 /// has to still be the grant it was recorded under, reviewed against the same
 /// device subject, with the same consumer policy — and for attention, against
 /// the device that would answer right now.
-#[allow(clippy::too_many_arguments)]
+///
+/// Route-neutral: model placement is never consulted here. Whether a
+/// reauthorized dependency may reach a Device or External model target is
+/// decided by Access model dispatch.
 pub async fn authorize_personal_dependency(
     records: &impl PersonalGrantRecords,
     driver: &impl PersonalSourceDriver,
     person_id: PersonId,
     device_id: &str,
     dependency: &ContextDependency,
-    placements: &[ModelPlacement],
     deadline: Instant,
     cancellation: &Cancellation,
 ) -> Result<(), AgentFailure> {
@@ -667,9 +709,8 @@ pub async fn authorize_personal_dependency(
         dependency.source().connector().as_str(),
         "contacts.apple" | "contacts.android"
     ) {
-        if placements != [ModelPlacement::DeviceLocal]
-            || dependency.source().connection_id().as_str()
-                != contacts_connection(dependency.source().connector().as_str())
+        if dependency.source().connection_id().as_str()
+            != contacts_connection(dependency.source().connector().as_str())
             || dependency.source().execution_owner().as_str()
                 != contacts_execution_owner(dependency.source().connector().as_str(), device_id)
             || dependency.operation() != GrantOperation::Read
@@ -727,8 +768,7 @@ pub async fn authorize_personal_dependency(
         return Ok(());
     }
     if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
-        if placements != [ModelPlacement::DeviceLocal]
-            || dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
+        if dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
             || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
             || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
@@ -781,8 +821,7 @@ pub async fn authorize_personal_dependency(
         return Ok(());
     }
     if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
-        if placements != [ModelPlacement::DeviceLocal]
-            || dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
+        if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
             || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
             || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
@@ -834,8 +873,7 @@ pub async fn authorize_personal_dependency(
         }
         return Ok(());
     }
-    if placements != [ModelPlacement::DeviceLocal]
-        || dependency.person_id() != person_id
+    if dependency.person_id() != person_id
         || dependency.source().person_id() != person_id
         || dependency.source().connector().as_str() != ATTENTION_CONNECTOR
         || dependency.source().connection_id().as_str() != ATTENTION_CONNECTION
@@ -1031,6 +1069,13 @@ mod tests {
                 .position(|held| held.id() == grant)
                 .map(|index| self.queries[index].clone());
             Box::pin(async move { query.ok_or(AgentFailure::NotFound) })
+        }
+
+        fn selected_handles<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>> {
+            Box::pin(async { Ok(vec![]) })
         }
     }
 

@@ -953,6 +953,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             definition_revision: 1,
         }],
         agent_revisions: vec![],
+        projection_coverage: DependencyCoverage::Independent,
     };
     let call = ToolCall {
         call_id: floe_agent_runtime::stable_call_id(
@@ -1095,6 +1096,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             definition_revision: 1,
         }],
         agent_revisions: vec![],
+        projection_coverage: DependencyCoverage::Independent,
     };
     let second_call = ToolCall {
         call_id: floe_agent_runtime::stable_call_id(
@@ -1341,6 +1343,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
         catalog_revision: 1,
         tool_revisions: vec![],
         agent_revisions: vec![],
+        projection_coverage: DependencyCoverage::Independent,
     };
     for (kind, event) in [
         (
@@ -1539,6 +1542,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
         catalog_revision: 1,
         tool_revisions: vec![],
         agent_revisions: vec![],
+        projection_coverage: DependencyCoverage::Independent,
     };
     for (kind, event) in [
         (
@@ -1632,6 +1636,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
         catalog_revision: 1,
         tool_revisions: vec![],
         agent_revisions: vec![],
+        projection_coverage: DependencyCoverage::Independent,
     };
     assert_ne!(other.batch_id, batch.batch_id);
     for (kind, event) in [

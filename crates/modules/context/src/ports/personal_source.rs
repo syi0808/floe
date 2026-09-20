@@ -33,6 +33,12 @@ pub trait PersonalGrantRecords: Sync {
         &'a self,
         grant: GrantId,
     ) -> BoxFuture<'a, Result<FeasibilityGrantQuery, AgentFailure>>;
+
+    /// The contact handles a people grant admits reading.
+    fn selected_handles<'a>(
+        &'a self,
+        grant: GrantId,
+    ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>>;
 }
 
 /// Which of the Person's own domains a read asks for.

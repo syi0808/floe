@@ -1,5 +1,5 @@
 use chrono::Utc;
-use floe_context_contract::{DataClass, DependencyCoverage, ModelPlacement, ProcessingRestriction};
+use floe_context_contract::{DataClass, DependencyCoverage, ProcessingRestriction};
 use floe_kernel::AgentFailure;
 
 use crate::ports::dependency_authorization::{DependencyAuthorization, DependencyResolver};
@@ -128,13 +128,13 @@ where
         DependencyCoverage::Unknown | DependencyCoverage::Independent => Ok(()),
         DependencyCoverage::Dependent { dependencies } => {
             let authorization = DependencyAuthorization {
-                allowed_placements: vec![ModelPlacement::DeviceLocal],
                 deadline: request.deadline,
                 cancellation: request.cancellation.clone(),
             };
             for dependency in dependencies {
                 check_dependency_identity(request, dependency)?;
                 resolver.authorize(dependency, &authorization).await?;
+                check_device_processing(dependency)?;
             }
             Ok(())
         }
@@ -159,7 +159,6 @@ where
         DependencyCoverage::Independent => Ok(()),
         DependencyCoverage::Dependent { dependencies } => {
             let authorization = DependencyAuthorization {
-                allowed_placements: vec![ModelPlacement::Remote],
                 deadline: request.deadline,
                 cancellation: request.cancellation.clone(),
             };
@@ -181,6 +180,18 @@ fn check_dependency_identity(
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(())
+}
+
+/// A Device target admits only device-local processing: reauthorization is
+/// route-neutral, so dispatch itself denies anything approved for an external
+/// recipient.
+fn check_device_processing(
+    dependency: &floe_context_contract::ContextDependency,
+) -> Result<(), AgentFailure> {
+    match dependency.processing() {
+        ProcessingRestriction::LocalOnly => Ok(()),
+        ProcessingRestriction::ApprovedRecipient { .. } => Err(AgentFailure::PolicyDenied),
+    }
 }
 
 fn check_processing_restriction(
@@ -226,15 +237,19 @@ mod tests {
 
     struct TestResolver {
         live: AtomicBool,
-        seen: std::sync::Mutex<Vec<Vec<ModelPlacement>>>,
+        calls: std::sync::atomic::AtomicUsize,
     }
 
     impl TestResolver {
         fn live() -> Self {
             Self {
                 live: AtomicBool::new(true),
-                seen: std::sync::Mutex::new(Vec::new()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
             }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
         }
 
         fn revoke(&self) {
@@ -246,17 +261,16 @@ mod tests {
         fn authorize<'a>(
             &'a self,
             _dependency: &'a ContextDependency,
-            request: &'a DependencyAuthorization,
+            _request: &'a DependencyAuthorization,
         ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>
         {
             Box::pin(async move {
                 if !self.live.load(Ordering::SeqCst) {
                     return Err(AgentFailure::PolicyDenied);
                 }
-                self.seen
-                    .lock()
-                    .unwrap()
-                    .push(request.allowed_placements.clone());
+                // Route-neutral: the resolver learns the deadline window only,
+                // never the Device/External target being dispatched to.
+                self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             })
         }
@@ -375,7 +389,7 @@ mod tests {
         admit_consume_revalidate(request, &resolver, &authority)
             .await
             .unwrap();
-        assert!(resolver.seen.lock().unwrap().is_empty());
+        assert_eq!(resolver.calls(), 0);
     }
 
     #[tokio::test]
@@ -395,13 +409,41 @@ mod tests {
         admit_consume_revalidate(request, &resolver, &authority)
             .await
             .unwrap();
+        // Admit, consume and post-response revalidation each reauthorize.
+        assert_eq!(resolver.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn device_local_only_dependency_is_accepted() {
+        let person_id = person();
+        let resolver = TestResolver::live();
+        let authority = TestAuthority::live();
+        let mut request = base_request(person_id, ModelDispatchTarget::Device);
+        request.coverage = DependencyCoverage::dependent(dependency(
+            person_id,
+            ProcessingRestriction::LocalOnly,
+            vec![GrantDataCategory::Metadata],
+        ))
+        .unwrap();
+        admit_consume_revalidate(request, &resolver, &authority)
+            .await
+            .unwrap();
+        assert_eq!(resolver.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn device_approved_recipient_dependency_is_denied() {
+        let person_id = person();
+        let resolver = TestResolver::live();
+        let authority = TestAuthority::live();
+        let mut request = base_request(person_id, ModelDispatchTarget::Device);
+        request.coverage =
+            DependencyCoverage::dependent(approved_dependency(person_id, "gateway-local")).unwrap();
         assert_eq!(
-            resolver.seen.lock().unwrap().as_slice(),
-            &[
-                vec![ModelPlacement::Remote],
-                vec![ModelPlacement::Remote],
-                vec![ModelPlacement::Remote],
-            ]
+            admit_model_dispatch(request, &resolver, &authority)
+                .await
+                .err(),
+            Some(AgentFailure::PolicyDenied)
         );
     }
 

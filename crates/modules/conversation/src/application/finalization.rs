@@ -4,7 +4,7 @@ use floe_agent_contract::{
     AllowedCatalog, DependencyCoverage, EngineRequest, EngineStep, ModelConversation,
     ModelConversationEntry, RoleSpec,
 };
-use floe_agent_runtime::{Engine, EnginePorts};
+use floe_agent_runtime::{Engine, EnginePorts, EngineReport};
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, RunId};
 
@@ -136,14 +136,20 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
     let Ok(report) = report else {
         return Ok(FinalizationOutcome::AttemptedWithoutReply);
     };
-    let Some(output) = report.output else {
+    let EngineReport {
+        steps,
+        output,
+        answering_projection_coverage,
+        ..
+    } = report;
+    let Some(output) = output else {
         return Ok(FinalizationOutcome::AttemptedWithoutReply);
     };
-    let coverage = finalization_coverage(&usable, &report.steps)?;
+    let coverage = finalization_coverage(&usable, answering_projection_coverage, &steps)?;
     Ok(FinalizationOutcome::Replied(RunTerminal {
         state: RunState::Failed,
         output: Some(output),
-        steps: report.steps,
+        steps,
         coverage,
         issue: Some(issue),
     }))
@@ -214,9 +220,13 @@ fn exchange_barrier(entry: &ModelConversationEntry) -> Option<AgentFailure> {
 
 fn finalization_coverage(
     exchanges: &[ModelConversationEntry],
+    answering: Option<DependencyCoverage>,
     steps: &[EngineStep],
 ) -> Result<DependencyCoverage, AgentFailure> {
-    let mut coverage = DependencyCoverage::Independent;
+    // Same base as a completed run: the coverage of the projection the
+    // answering model saw. Finalization only shows Independent observations,
+    // so this is Independent in practice, but the rule stays explicit.
+    let mut coverage = answering.ok_or(AgentFailure::InvalidModelOutput)?;
     for entry in exchanges {
         let (exchange_coverage, artifacts) = match entry {
             ModelConversationEntry::ToolExchange { result, .. } => {

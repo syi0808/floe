@@ -46,6 +46,13 @@ impl<Keys: VaultKeyProvider> PersonalGrantRecords for VaultGrantRecords<'_, Keys
     ) -> BoxFuture<'a, Result<floe_access::FeasibilityGrantQuery, AgentFailure>> {
         Box::pin(async move { self.vault.personal_feasibility_query(grant).await })
     }
+
+    fn selected_handles<'a>(
+        &'a self,
+        grant: floe_access::GrantId,
+    ) -> BoxFuture<'a, Result<Vec<String>, AgentFailure>> {
+        Box::pin(async move { self.vault.personal_grant_selected_handles(grant).await })
+    }
 }
 
 /// Where a reviewed personal grant is committed.
