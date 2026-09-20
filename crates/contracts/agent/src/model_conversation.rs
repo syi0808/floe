@@ -121,6 +121,7 @@ fn validate_delegation_exchange(
     {
         return Err(AgentFailure::InvalidInput);
     }
+    request.execution_context.validate()?;
     receipt.snapshot.validate(MAX_OUTPUT_BYTES)?;
     if receipt.snapshot.task_id != request.task_id
         || receipt.snapshot.parent_run_id != request.parent_run_id

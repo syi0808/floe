@@ -59,12 +59,42 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         .unwrap()
         .unwrap()
         .source_authority;
-    let worker = Worker::with_core(
+    // The mock answers both the root model and the delegated Schedule
+    // endpoint; the endpoint reads it from its injected fixture store.
+    let (mock, server) = answer_server(vec![
+        floe_conversation::ModelStep::Answer {
+            text: "Hello!".into(),
+        },
+        floe_conversation::ModelStep::Delegate {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
+                .package_id()
+                .into(),
+            message: "Read my calendar".into(),
+            context_refs: vec![],
+        },
+        floe_conversation::ModelStep::Call {
+            capability_id: "schedule.find_free_windows".into(),
+            input: serde_json::json!({
+                "minimum_minutes": 60,
+                "range_start_unix_ms": chrono::Utc::now().timestamp_millis(),
+                "range_end_unix_ms": chrono::Utc::now().timestamp_millis() + 7_200_000,
+            })
+            .to_string(),
+        },
+        floe_conversation::ModelStep::Answer {
+            text: "Your calendar is clear.".into(),
+        },
+        floe_conversation::ModelStep::Answer {
+            text: "Your calendar is clear.".into(),
+        },
+    ]);
+    let worker = Worker::with_core_and_endpoint_store(
         directory.path().join("vaults"),
         Keys::default(),
         core.clone(),
         Arc::new(LocalContextHost::default()),
         Arc::new(crate::events::AppEventBuffer::default()),
+        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "iphone"))),
     )
     .unwrap();
     assert!(
@@ -208,33 +238,6 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     );
     assert_eq!(session.failure, None);
     let session = session.session.unwrap();
-    let (mock, server) = answer_server(vec![
-        floe_conversation::ModelStep::Answer {
-            text: "Hello!".into(),
-        },
-        floe_conversation::ModelStep::Delegate {
-            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
-                .package_id()
-                .into(),
-            message: "Read my calendar".into(),
-            context_refs: vec![],
-        },
-        floe_conversation::ModelStep::Call {
-            capability_id: "schedule.find_free_windows".into(),
-            input: serde_json::json!({
-                "minimum_minutes": 60,
-                "range_start_unix_ms": chrono::Utc::now().timestamp_millis(),
-                "range_end_unix_ms": chrono::Utc::now().timestamp_millis() + 7_200_000,
-            })
-            .to_string(),
-        },
-        floe_conversation::ModelStep::Answer {
-            text: "Your calendar is clear.".into(),
-        },
-        floe_conversation::ModelStep::Answer {
-            text: "Your calendar is clear.".into(),
-        },
-    ]);
     let run = |session: &AgentSession, text: &str| {
         perform(
             &worker,
@@ -326,12 +329,40 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
             chrono::Utc::now(),
         ))
         .unwrap();
-    let worker = Worker::with_core(
+    let now = chrono::Utc::now().timestamp_millis();
+    // The mock answers both the root model and the delegated Schedule
+    // endpoint; the endpoint reads it from its injected fixture store.
+    let (mock, server) = answer_server(vec![
+        floe_conversation::ModelStep::Delegate {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
+                .package_id()
+                .into(),
+            message: "Find an open hour".into(),
+            context_refs: vec![],
+        },
+        floe_conversation::ModelStep::Call {
+            capability_id: "schedule.find_free_windows".into(),
+            input: serde_json::json!({
+                "minimum_minutes": 60,
+                "range_start_unix_ms": now,
+                "range_end_unix_ms": now + 7_200_000,
+            })
+            .to_string(),
+        },
+        floe_conversation::ModelStep::Answer {
+            text: "The fixture calendar has an open hour.".into(),
+        },
+        floe_conversation::ModelStep::Answer {
+            text: "You have an open hour.".into(),
+        },
+    ]);
+    let worker = Worker::with_core_and_endpoint_store(
         root.clone(),
         keys.clone(),
         Arc::clone(&core),
         Arc::new(LocalContextHost::default()),
         Arc::new(crate::events::AppEventBuffer::default()),
+        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "mac-local"))),
     )
     .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
@@ -384,31 +415,6 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     )
     .session
     .unwrap();
-    let now = chrono::Utc::now().timestamp_millis();
-    let (mock, server) = answer_server(vec![
-        floe_conversation::ModelStep::Delegate {
-            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
-                .package_id()
-                .into(),
-            message: "Find an open hour".into(),
-            context_refs: vec![],
-        },
-        floe_conversation::ModelStep::Call {
-            capability_id: "schedule.find_free_windows".into(),
-            input: serde_json::json!({
-                "minimum_minutes": 60,
-                "range_start_unix_ms": now,
-                "range_end_unix_ms": now + 7_200_000,
-            })
-            .to_string(),
-        },
-        floe_conversation::ModelStep::Answer {
-            text: "The fixture calendar has an open hour.".into(),
-        },
-        floe_conversation::ModelStep::Answer {
-            text: "You have an open hour.".into(),
-        },
-    ]);
     let result = perform(
         &worker,
         person,
@@ -1412,7 +1418,15 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     let root = directory.path().join("vaults");
     let keys = Keys::default();
     let person = PersonId::new();
-    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    // The mock answers both the root model and the delegated builtin
+    // endpoint; the endpoint reads it from its injected fixture store.
+    let (mock, server) = commitments_denial_server();
+    let worker = Worker::new_with_endpoint_store(
+        root.clone(),
+        keys.clone(),
+        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "mac-local"))),
+    )
+    .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
     install_builtin_mail_setup(&worker, &root, person, &keys);
     let session = perform(
@@ -1424,7 +1438,6 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     )
     .session
     .unwrap();
-    let (mock, server) = commitments_denial_server();
     let result = perform(
         &worker,
         person,
@@ -2794,5 +2807,461 @@ fn local_only_root_turn_starts_with_no_remote_connection() {
             reason: AgentFailure::ModelUnavailable,
         }),
         "session: {session:?}"
+    );
+}
+
+struct DirectEndpointFixture {
+    _directory: tempfile::TempDir,
+    runtime: tokio::runtime::Runtime,
+    core: Arc<FloeCore>,
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    local_context: Arc<LocalContextHost>,
+    person: PersonId,
+}
+
+fn direct_endpoint_fixture() -> DirectEndpointFixture {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let core = Arc::new(runtime.block_on(FloeCore::open(":memory:")).unwrap());
+    let vault = Arc::new(
+        runtime
+            .block_on(EncryptedAgentVault::create(&root, person, keys.clone()))
+            .unwrap(),
+    );
+    DirectEndpointFixture {
+        _directory: directory,
+        runtime,
+        core,
+        vault,
+        local_context: Arc::new(LocalContextHost::default()),
+        person,
+    }
+}
+
+fn direct_invocation(
+    principal: &str,
+    parent_run_id: Uuid,
+    agent_id: &str,
+    device_id: &str,
+    message: &str,
+) -> (
+    floe_agent_contract::EndpointInvocation,
+    floe_execution::ExecutionScope,
+) {
+    use floe_agent_contract::{
+        DelegationExecutionContext, DelegationRequest, EndpointInvocation, InvocationKey, TaskId,
+        delegation_request_digest,
+    };
+    let task_id = TaskId::new();
+    let request = DelegationRequest {
+        task_id,
+        parent_run_id: Some(parent_run_id),
+        principal: principal.into(),
+        invocation_key: InvocationKey::new(),
+        selected_agent_id: agent_id.into(),
+        selected_definition_revision: 1,
+        message: message.into(),
+        context_refs: vec![],
+        execution_context: DelegationExecutionContext {
+            session_id: Uuid::new_v4(),
+            device_id: device_id.into(),
+            agent_context: floe_agent_contract::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            max_output_bytes: 16 * 1024,
+        },
+    };
+    let request_digest = delegation_request_digest(&request);
+    let ledger = floe_execution::budget::BudgetLedger::new(
+        floe_execution::budget::BudgetConfig::new(50_000, 100_000),
+        Default::default(),
+    );
+    let root = floe_execution::ExecutionScope::root(
+        floe_execution::Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        ledger.work_lease(),
+        floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+    );
+    let scope = root.child_scope(root.deadline(), 20_000, 50_000, Some(task_id));
+    (EndpointInvocation {
+        request,
+        request_digest,
+    }, scope)
+}
+
+fn fixture_saved_connection(person: PersonId, device: &str) -> floe_inference::SavedServerConnection {
+    floe_inference::SavedServerConnection {
+        base_url: "http://127.0.0.1:9".into(),
+        token: "t".repeat(32),
+        client_id: "test-client".into(),
+        person_id: person.to_string(),
+        device_id: device.into(),
+        allow_external: false,
+        external_recipients: vec![],
+    }
+}
+
+#[test]
+fn builtin_endpoint_denies_forged_principal_without_touching_state() {
+    // 2-C C4: a forged principal fails closed before any store read.
+    let fixture = direct_endpoint_fixture();
+    let endpoint = BuiltinExpertEndpoint::new(
+        Arc::clone(&fixture.core),
+        Arc::clone(&fixture.vault),
+        Arc::clone(&fixture.local_context),
+        EndpointConnectionStore::fixture(None),
+    );
+    let (invocation, scope) = direct_invocation(
+        "person:foreign",
+        Uuid::new_v4(),
+        floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        "mac-local",
+        "Review my commitments",
+    );
+    let result = fixture.runtime.block_on(floe_agent_contract::AgentEndpoint::execute(
+        &endpoint,
+        invocation,
+        &scope,
+    ));
+    assert_eq!(result.err(), Some(AgentFailure::CapabilityDenied));
+}
+
+#[test]
+fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
+    // 2-C C4: with run-id staging gone, two Tasks under the same parent Run
+    // reach admission independently; both fail on the forged device with the
+    // same policy denial, never a staging Conflict.
+    let fixture = direct_endpoint_fixture();
+    let endpoint = BuiltinExpertEndpoint::new(
+        Arc::clone(&fixture.core),
+        Arc::clone(&fixture.vault),
+        Arc::clone(&fixture.local_context),
+        EndpointConnectionStore::fixture(Some(fixture_saved_connection(
+            fixture.person,
+            "mac-local",
+        ))),
+    );
+    let parent_run_id = Uuid::new_v4();
+    let agent_id = floe_experts_builtin::BuiltinExpertKind::Commitments.package_id();
+    let (first, first_scope) = direct_invocation(
+        &fixture.person.to_string(),
+        parent_run_id,
+        agent_id,
+        "foreign-device",
+        "Review my commitments",
+    );
+    let (second, second_scope) = direct_invocation(
+        &fixture.person.to_string(),
+        parent_run_id,
+        agent_id,
+        "foreign-device",
+        "Review my commitments",
+    );
+    assert_ne!(
+        first.request.task_id, second.request.task_id,
+        "two distinct Tasks share one parent Run"
+    );
+    let (first_result, second_result) =
+        fixture.runtime.block_on(async {
+            tokio::join!(
+                floe_agent_contract::AgentEndpoint::execute(&endpoint, first, &first_scope),
+                floe_agent_contract::AgentEndpoint::execute(&endpoint, second, &second_scope),
+            )
+        });
+    assert_eq!(first_result.err(), Some(AgentFailure::PolicyDenied));
+    assert_eq!(second_result.err(), Some(AgentFailure::PolicyDenied));
+}
+
+#[test]
+fn schedule_endpoint_denies_foreign_principal() {
+    // 2-C C5: a forged principal fails closed before any setup read.
+    let fixture = direct_endpoint_fixture();
+    let endpoint = ScheduleEndpoint::new(
+        Arc::clone(&fixture.core),
+        Arc::clone(&fixture.vault),
+        Arc::clone(&fixture.local_context),
+        EndpointConnectionStore::fixture(None),
+    );
+    let (invocation, scope) = direct_invocation(
+        "person:foreign",
+        Uuid::new_v4(),
+        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+        "mac-local",
+        "Read my calendar",
+    );
+    let result = fixture.runtime.block_on(floe_agent_contract::AgentEndpoint::execute(
+        &endpoint,
+        invocation,
+        &scope,
+    ));
+    assert_eq!(result.err(), Some(AgentFailure::CapabilityDenied));
+}
+
+#[test]
+fn schedule_endpoint_requires_review_for_foreign_device() {
+    // 2-C C5: exact setup authority still enforced — a device with no bound
+    // setup never silently reads another device's calendar.
+    let fixture = direct_endpoint_fixture();
+    let setup_id = Uuid::new_v4();
+    let setup = fixture
+        .runtime
+        .block_on(fixture.vault.install_calendar_expert(
+            CalendarExpertSetup {
+                instance_id: fixture.vault.registry_instance_id(),
+                expected_revision: 0,
+                setup_id,
+                provider: floe_context_contract::CalendarProvider::Fixture,
+                device_id: "mac-local".into(),
+                calendar_ids: vec!["fixture-calendar".into()],
+                connection_scope: floe_context_contract::CalendarScope::Selected,
+                connection_revision: 1,
+                source_authority: None,
+                reviewed_native_subject_fingerprint: None,
+            },
+            &crate::vault_host::schedule_packaging(),
+            floe_execution::Cancellation::default(),
+        ))
+        .unwrap()
+        .setup;
+    for target in [
+        RegistryConfigurationTarget::Installation {
+            id: setup.tool_installation_id,
+            enabled: true,
+        },
+        RegistryConfigurationTarget::Installation {
+            id: setup.expert_installation_id,
+            enabled: true,
+        },
+        RegistryConfigurationTarget::Assignment {
+            id: setup.tool_assignment_id,
+            enabled: true,
+        },
+        RegistryConfigurationTarget::Assignment {
+            id: setup.expert_assignment_id,
+            enabled: true,
+        },
+        RegistryConfigurationTarget::CalendarView {
+            id: setup.view_handle,
+            enabled: true,
+        },
+    ] {
+        let registry = fixture
+            .runtime
+            .block_on(fixture.vault.registry_overview())
+            .unwrap()
+            .unwrap();
+        fixture
+            .runtime
+            .block_on(fixture.vault.configure_registry(
+                RegistryConfiguration {
+                    instance_id: registry.instance_id,
+                    expected_revision: registry.revision,
+                    target,
+                },
+                floe_execution::Cancellation::default(),
+            ))
+            .unwrap();
+    }
+    let endpoint = ScheduleEndpoint::new(
+        Arc::clone(&fixture.core),
+        Arc::clone(&fixture.vault),
+        Arc::clone(&fixture.local_context),
+        EndpointConnectionStore::fixture(None),
+    );
+    let (invocation, scope) = direct_invocation(
+        &fixture.person.to_string(),
+        Uuid::new_v4(),
+        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+        "foreign-device",
+        "Read my calendar",
+    );
+    let result = fixture.runtime.block_on(floe_agent_contract::AgentEndpoint::execute(
+        &endpoint,
+        invocation,
+        &scope,
+    ));
+    assert_eq!(result.err(), Some(AgentFailure::AccessReviewRequired));
+}
+
+#[test]
+fn schedule_plans_from_the_delegation_message_not_the_root_prompt() {
+    // 2-C C5: the Manager delegation message is the Expert assignment. The
+    // root prompt never mentions focus, but the delegation message is the
+    // focus shortcut with two calendars — planning must refuse, proving the
+    // message (not the root prompt) drove the plan.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let core = Arc::new(
+        runtime
+            .block_on(FloeCore::open(directory.path().join("core.db")))
+            .unwrap(),
+    );
+    let setup_id = Uuid::new_v4();
+    runtime
+        .block_on(core.set_calendar_scope(
+            person,
+            setup_id.to_string(),
+            1,
+            "mac-local".into(),
+            floe_context_contract::CalendarProvider::Fixture,
+            vec![
+                floe_day::CalendarSelection {
+                    calendar_id: "fixture-one".into(),
+                    calendar_name: "One".into(),
+                },
+                floe_day::CalendarSelection {
+                    calendar_id: "fixture-two".into(),
+                    calendar_name: "Two".into(),
+                },
+            ],
+            floe_context_contract::CalendarScope::Selected,
+        ))
+        .unwrap();
+    // The mock answers the root model only: the expert never reaches its
+    // model because planning refuses first.
+    let (mock, server) = answer_server(vec![
+        floe_conversation::ModelStep::Delegate {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
+                .package_id()
+                .into(),
+            message: floe_experts_builtin::schedule::FOCUS_REQUEST.into(),
+            context_refs: vec![],
+        },
+        floe_conversation::ModelStep::Answer {
+            text: "The calendar request could not be planned.".into(),
+        },
+    ]);
+    let worker = Worker::with_core_and_endpoint_store(
+        root.clone(),
+        keys.clone(),
+        Arc::clone(&core),
+        Arc::new(LocalContextHost::default()),
+        Arc::new(crate::events::AppEventBuffer::default()),
+        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "mac-local"))),
+    )
+    .unwrap();
+    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
+    let empty = perform(
+        &worker,
+        person,
+        WorkerAction::CalendarExperts { setup: None },
+    )
+    .calendar_experts
+    .unwrap();
+    let installed = perform(
+        &worker,
+        person,
+        WorkerAction::CalendarExperts {
+            setup: Some(Box::new(CalendarExpertSetup {
+                instance_id: empty.registry.instance_id,
+                expected_revision: empty.registry.revision,
+                setup_id,
+                provider: floe_context_contract::CalendarProvider::Fixture,
+                device_id: "mac-local".into(),
+                calendar_ids: vec!["fixture-one".into(), "fixture-two".into()],
+                connection_scope: floe_context_contract::CalendarScope::Selected,
+                connection_revision: 2,
+                source_authority: None,
+                reviewed_native_subject_fingerprint: None,
+            })),
+        },
+    )
+    .calendar_experts
+    .unwrap();
+    let enabled = perform(
+        &worker,
+        person,
+        WorkerAction::CalendarAccess {
+            change: Box::new(CalendarAccessConfiguration {
+                instance_id: installed.registry.instance_id,
+                expected_revision: installed.registry.revision,
+                setup_id,
+                change: CalendarAccessChange::SetEnabled { enabled: true },
+            }),
+        },
+    );
+    assert_eq!(enabled.failure, None);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let result = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationTurn {
+            request: Box::new(
+                ConversationTurnRequest::new(
+                    session.id,
+                    session.revision,
+                    "What is on my calendar today".into(),
+                    "mac-local".into(),
+                    ProfileSelection::Explicit("server-model".into()),
+                    false,
+                    None,
+                )
+                .with_fixed_saved_connection_for_test(Some(saved_server_connection(
+                    &mock, person, "mac-local",
+                ))),
+            ),
+        },
+    );
+    assert_eq!(result.failure, None, "result: {result:?}");
+    let session = result.session.unwrap();
+    assert_eq!(
+        session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Completed),
+        "session: {session:?}"
+    );
+    let task_id = session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            AgentMessage::Delegation { task, .. }
+                if task.state == floe_experts::A2ATaskState::Failed
+                    && task.failure == Some(AgentFailure::CapabilityUnavailable) =>
+            {
+                Some(task.id)
+            }
+            _ => None,
+        })
+        .expect("focus refusal from the delegation message");
+    assert_eq!(server.join().unwrap().len(), 2);
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+    let reopened = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let task = runtime
+        .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(task_id).unwrap()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.snapshot.state,
+        floe_agent_contract::TaskState::Failed
+    );
+    assert_eq!(
+        task.snapshot.issue,
+        Some(AgentFailure::CapabilityUnavailable)
     );
 }

@@ -4,8 +4,8 @@ use uuid::Uuid;
 use floe_execution::ExecutionScope;
 
 use crate::{
-    AgentCard, AgentFailure, Artifact, AuthorizedModelProjection, InvocationKey, ModelConversation,
-    ToolResult,
+    AgentCard, AgentFailure, Artifact, AuthorizedModelProjection, DelegationExecutionContext,
+    InvocationKey, ModelConversation, ToolResult,
 };
 
 /// Role-specific instructions only: never the rendered behavior kernel, persona,
@@ -129,6 +129,10 @@ pub struct EngineRequest {
     pub max_output_bytes: usize,
     pub replay: Vec<crate::ReplayReceipt>,
     pub resume: Option<EngineResumeState>,
+    /// The explicit host context delegate steps execute under, supplied by
+    /// the Conversation owner. Required when a validated batch contains a
+    /// Delegate step; absent otherwise.
+    pub delegation_context: Option<DelegationExecutionContext>,
 }
 
 impl EngineRequest {
@@ -164,6 +168,9 @@ impl EngineRequest {
             .try_for_each(AgentDefinition::validate)?;
         if let Some(resume) = &self.resume {
             resume.validate(self.max_output_bytes)?;
+        }
+        if let Some(context) = &self.delegation_context {
+            context.validate()?;
         }
         Ok(())
     }

@@ -70,8 +70,6 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     conversation_repository: &'a std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     run_cancellations: &'a std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     task_coordinator: &'a floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
-    schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
-    builtin_expert_endpoint: &'a expert_dispatch::BuiltinExpertEndpoint<Keys>,
     /// The Run this turn continues, as Conversation admitted it.
     mode: floe_conversation::TurnMode,
     /// The data classes of the admitted Session, carried to the canonical
@@ -83,8 +81,6 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     vault: &EncryptedAgentVault<Keys>,
     local_context: &LocalContextHost,
     task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
-    schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
-    builtin_expert_endpoint: &expert_dispatch::BuiltinExpertEndpoint<Keys>,
     conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     person_id: PersonId,
@@ -126,8 +122,6 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         conversation_repository,
         run_cancellations,
         task_coordinator,
-        schedule_endpoint,
-        builtin_expert_endpoint,
         mode: prepared.mode,
         session_data_classes: prepared.session.data_classes.clone(),
     };
@@ -256,8 +250,8 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         // prepared once from the admitted saved connection; the recipient
         // authority re-reads the current saved-connection store on every
         // Access check, bound to the verified person/device. No pre-turn
-        // route exists; staged legacy Expert hosts prepare their own
-        // compatibility behind the delegation bridge below.
+        // route exists; delegated legacy Expert endpoints prepare their own
+        // compatibility from the explicit invocation when they run.
         let provider = crate::inference_routes::HostInferenceRoutes::root_model_provider(
             &person_id.to_string(),
             &request.device_id,
@@ -293,17 +287,22 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             remote_reader.as_ref(),
         )?;
         let tool_port = &tool_service;
-        let delegation_port = engine_ports::LegacyDelegationPort {
-            task_coordinator: inputs.task_coordinator,
-            schedule_endpoint: inputs.schedule_endpoint,
-            builtin_expert_endpoint: inputs.builtin_expert_endpoint,
-            turn_request: request,
-            context: &context,
-            session_id,
-            max_output_bytes: budget.max_output_bytes,
-        };
+        // Canonical root delegation: TaskCoordinator serves as the
+        // DelegationPort directly. The Directory resolves the endpoint, and
+        // the invocation carries the explicit execution context; App holds
+        // no run-id endpoint authority.
+        let delegation_port = inputs.task_coordinator;
         let retry_of = request.retry_of;
         let profile = request.profile.clone();
+        // The explicit delegation host context, forwarded through
+        // Conversation to the Engine without interpretation. Runtime-only:
+        // never part of the canonical turn intent or request identity.
+        let delegation_context = floe_agent_contract::DelegationExecutionContext {
+            session_id,
+            device_id: request.device_id.clone(),
+            agent_context: context.clone(),
+            max_output_bytes: budget.max_output_bytes,
+        };
         let receipt = service
             .run_turn_observed(
                 floe_conversation::TurnRequest {
@@ -319,12 +318,13 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     replay: vec![],
                     deadline,
                     cancellation,
+                    delegation_context: Some(delegation_context),
                 },
                 floe_conversation::ConversationPorts {
                     projection: &projection_port,
                     model: &model_service,
                     tools: tool_port,
-                    delegation: &delegation_port,
+                    delegation: delegation_port,
                     validator: &engine_ports::ManagerPayloadValidator,
                 },
                 on_admitted,
@@ -443,7 +443,7 @@ mod tests {
     };
 
     use crate::LocalContextCommand;
-    // Staged Expert compatibility under test: the legacy Expert model, policy
+    // Legacy Expert compatibility under test: the legacy Expert model, policy
     // and source host the delegated endpoints prepare.
     use super::expert_compat::{
         Model, PersonalAttentionReader, PersonalAttentionReaderApi, ResultRecorder,
@@ -1032,7 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn schedule_delegation_uses_registered_task_runner() {
-        let model = staged_expert_model("http://127.0.0.1:1");
+        let model = legacy_expert_model("http://127.0.0.1:1");
         let policy = policy(&model);
         let context = AgentContext {
             projection_version: 1,
@@ -1196,9 +1196,9 @@ mod tests {
         }
     }
 
-    /// A staged legacy Expert Server model, admitted for a fixture caller.
+    /// A legacy Expert Server model, admitted for a fixture caller.
     /// The caller identity only has to be self-consistent here.
-    fn staged_expert_model(base_url: &str) -> Model {
+    fn legacy_expert_model(base_url: &str) -> Model {
         let person_id = PersonId::new();
         Model::for_stored_connection(
             Some(saved_server_connection(base_url, person_id, "test-device")),
@@ -1208,7 +1208,7 @@ mod tests {
         .unwrap()
     }
 
-    fn staged_source_client(base_url: &str) -> ServerSourceClient {
+    fn legacy_source_client(base_url: &str) -> ServerSourceClient {
         let person_id = PersonId::new();
         ServerSourceClient::prepare(
             Some(saved_server_connection(base_url, person_id, "test-device")),
@@ -1240,8 +1240,8 @@ mod tests {
     }
 
     #[test]
-    fn stored_server_connection_selects_server_model_for_staged_experts() {
-        let model = staged_expert_model("http://127.0.0.1:8431");
+    fn stored_server_connection_selects_server_model_for_legacy_experts() {
+        let model = legacy_expert_model("http://127.0.0.1:8431");
         assert!(matches!(model, Model::Server(_)));
     }
 
@@ -1502,7 +1502,7 @@ mod tests {
 
     #[tokio::test]
     async fn remote_expert_requires_an_admitted_reader() {
-        let model = staged_expert_model("http://127.0.0.1:1");
+        let model = legacy_expert_model("http://127.0.0.1:1");
         let policy = policy(&model);
         let context = AgentContext {
             projection_version: 1,
@@ -1559,8 +1559,8 @@ mod tests {
     }
 
     #[test]
-    fn staged_server_model_exposes_only_bounded_context_observe_capabilities() {
-        let model = staged_expert_model("http://127.0.0.1:8431");
+    fn legacy_server_model_exposes_only_bounded_context_observe_capabilities() {
+        let model = legacy_expert_model("http://127.0.0.1:8431");
         let policy = policy(&model);
         let local_context = LocalContextHost::default();
         // Canonical Manager tools come from Context, identically for the
@@ -1918,7 +1918,7 @@ mod tests {
             EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
                 .await
                 .unwrap();
-        let source_client = staged_source_client("http://127.0.0.1:1");
+        let source_client = legacy_source_client("http://127.0.0.1:1");
         let reader = remote_views::RemoteViewReader::new(
             &vault,
             &source_client,
@@ -2158,7 +2158,7 @@ mod tests {
             )
             .await;
         });
-        let model = staged_expert_model(&format!("http://{address}"));
+        let model = legacy_expert_model(&format!("http://{address}"));
         let source_client = ServerSourceClient::prepare(
             Some(saved_server_connection(
                 &format!("http://{address}"),
@@ -2372,7 +2372,7 @@ mod tests {
             )
             .await;
         });
-        let model = staged_expert_model(&format!("http://{address}"));
+        let model = legacy_expert_model(&format!("http://{address}"));
         let source_client = ServerSourceClient::prepare(
             Some(saved_server_connection(
                 &format!("http://{address}"),
@@ -2608,8 +2608,8 @@ mod tests {
                 .await;
             }
         });
-        let model = staged_expert_model(&format!("http://{address}"));
-        let source_client = staged_source_client(&format!("http://{address}"));
+        let model = legacy_expert_model(&format!("http://{address}"));
+        let source_client = legacy_source_client(&format!("http://{address}"));
         let person_id = PersonId::new();
         let policy = policy(&model);
         let remote_reader = match &model {
@@ -2882,7 +2882,7 @@ mod tests {
                 .await;
             }
         });
-        let model = staged_expert_model(&format!("http://{address}"));
+        let model = legacy_expert_model(&format!("http://{address}"));
         let policy = policy(&model);
         let context = AgentContext {
             projection_version: 1,
@@ -2944,7 +2944,7 @@ mod tests {
 
     #[tokio::test]
     async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
-        let model = staged_expert_model("http://127.0.0.1:1");
+        let model = legacy_expert_model("http://127.0.0.1:1");
         let policy = policy(&model);
         let context = AgentContext {
             projection_version: 1,

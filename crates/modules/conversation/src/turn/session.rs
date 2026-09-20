@@ -475,7 +475,9 @@ pub fn context_manifest(
 /// the current turn only, preambles never cross). Identity fields the old path
 /// never recorded are derived deterministically from the call or task id, and
 /// coverage the old message never carried reads as unknown: these entries are
-/// model input only, never journaled or replayed.
+/// model input only, never journaled or replayed. The legacy path never
+/// recorded an execution context either, so delegation history carries a
+/// synthetic marker context that is never executed or replayed.
 fn model_entries(
     message: &AgentMessage,
     include_capability: bool,
@@ -548,6 +550,13 @@ fn legacy_delegation_exchange(
         .and_then(|message| message.text().ok())
         .unwrap_or_default()
         .to_owned();
+    // Synthetic marker context for pre-2-C history: deterministic, valid, and
+    // never executed. The old path recorded no session/device/host state.
+    let session_id = if task.id.is_nil() {
+        Uuid::new_v5(&Uuid::NAMESPACE_OID, task.agent_id.as_bytes())
+    } else {
+        task.id
+    };
     ModelConversationEntry::DelegationExchange {
         request: DelegationRequest {
             task_id,
@@ -559,6 +568,18 @@ fn legacy_delegation_exchange(
             selected_definition_revision: 1,
             message,
             context_refs: vec![],
+            execution_context: floe_agent_contract::DelegationExecutionContext {
+                session_id,
+                device_id: "legacy-history".into(),
+                agent_context: floe_agent_contract::AgentContext {
+                    projection_version: 1,
+                    persona: None,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+            },
         },
         receipt: TaskReceipt {
             task_id,

@@ -316,6 +316,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             max_output_bytes: self.config.max_output_bytes,
             replay: continuation_replay,
             resume,
+            delegation_context: request.delegation_context,
         };
         let result = self
             .engine
@@ -767,6 +768,7 @@ mod tests {
             catalog_revision: 1,
             tool_revisions: vec![],
             agent_revisions: vec![],
+            delegation_context: None,
         }
     }
 
@@ -873,6 +875,62 @@ mod tests {
                 &JournalLineage::ResumeClaimed {
                     batch: same_id,
                     cursor: cursor_at(&parent_batch, 1),
+                },
+                None,
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn child_resume_must_match_parent_delegation_context() {
+        // 2-C C2: cross-run exact batch takeover preserves the delegation
+        // binding, and a context mismatch fails closed.
+        let mut parent_batch = tool_batch();
+        parent_batch.steps = vec![floe_agent_contract::ModelStep::Delegate {
+            agent_id: "expert-a".into(),
+            definition_revision: 2,
+            message: "summarize".into(),
+            context_refs: vec![],
+        }];
+        let bound = floe_agent_contract::DelegationExecutionContext {
+            session_id: Uuid::new_v4(),
+            device_id: "test-device".into(),
+            agent_context: floe_agent_contract::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+        };
+        parent_batch.delegation_context = Some(bound.clone());
+        let parent_cursor = cursor_at(&parent_batch, 0);
+        let carried = Some((parent_batch.clone(), parent_cursor.clone()));
+        let live = Some((parent_batch.clone(), cursor_at(&parent_batch, 1)));
+        let taken = reconcile_resume_lineage(
+            carried.clone(),
+            &JournalLineage::ResumeClaimed {
+                batch: parent_batch.clone(),
+                cursor: parent_cursor,
+            },
+            live,
+        )
+        .unwrap()
+        .expect("exact takeover carries live state");
+        assert_eq!(taken.0.delegation_context, Some(bound.clone()));
+        // Same batch id, same steps, different bound device: no takeover.
+        let mut changed = parent_batch.clone();
+        let mut context = bound.clone();
+        context.device_id = "changed-device".into();
+        changed.delegation_context = Some(context);
+        assert!(matches!(
+            reconcile_resume_lineage(
+                carried,
+                &JournalLineage::ResumeClaimed {
+                    batch: changed,
+                    cursor: cursor_at(&parent_batch, 0),
                 },
                 None,
             ),

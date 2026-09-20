@@ -497,6 +497,22 @@ impl ActiveDrive<'_> {
         }
         let (tool_revisions, agent_revisions) =
             pin_revisions(&response.steps, &self.request.allowed_catalog);
+        // A delegating batch binds the exact execution context before anything
+        // is dispatched; batches without a Delegate step persist none.
+        let delegation_context = if response
+            .steps
+            .iter()
+            .any(|step| matches!(step, ModelStep::Delegate { .. }))
+        {
+            Some(
+                self.request
+                    .delegation_context
+                    .clone()
+                    .ok_or(AgentFailure::InvalidInput)?,
+            )
+        } else {
+            None
+        };
         Ok((
             ValidatedModelBatch {
                 execution_id: self.execution_id,
@@ -508,6 +524,7 @@ impl ActiveDrive<'_> {
                 tool_revisions,
                 agent_revisions,
                 projection_coverage: projection.coverage.clone(),
+                delegation_context,
             },
             corrections,
         ))
@@ -808,6 +825,13 @@ impl ActiveDrive<'_> {
             ordinal,
             InvocationKind::Delegation,
         );
+        // The batch-bound context is authoritative: resumed execution reuses
+        // the stored binding even when the resuming host state differs, and a
+        // delegating batch without one is corrupt durable state.
+        let execution_context = batch
+            .delegation_context
+            .clone()
+            .ok_or(AgentFailure::StorageUnavailable)?;
         let delegation = DelegationRequest {
             task_id: stable_task_id(self.execution_id, batch.batch_id, ordinal),
             parent_run_id: self.request.scope.root_run_id().map(|id| id.as_uuid()),
@@ -817,6 +841,7 @@ impl ActiveDrive<'_> {
             selected_definition_revision: definition_revision,
             message: message.to_owned(),
             context_refs: context_refs.to_owned(),
+            execution_context,
         };
         if !self.seen_invocations.insert(delegation.invocation_key) {
             return Err(AgentFailure::Conflict);
@@ -1242,7 +1267,7 @@ fn verify_task_replay(
             .iter()
             .all(|artifact| artifact.coverage.validate().is_ok())
         && receipt.task_coverage.validate().is_ok()
-        && receipt.input_digest == input_digest(&request.message))
+        && receipt.input_digest == floe_agent_contract::delegation_request_digest(request))
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)
 }
@@ -1273,7 +1298,7 @@ fn verify_resumed_task_replay(
             .iter()
             .all(|artifact| artifact.coverage.validate().is_ok())
         && receipt.task_coverage.validate().is_ok()
-        && receipt.input_digest == input_digest(&request.message))
+        && receipt.input_digest == floe_agent_contract::delegation_request_digest(request))
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)
 }
@@ -1841,6 +1866,21 @@ mod tests {
         }
     }
 
+    fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
+        floe_agent_contract::DelegationExecutionContext {
+            session_id: Uuid::new_v4(),
+            device_id: "test-device".into(),
+            agent_context: floe_agent_contract::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            max_output_bytes: 1024,
+        }
+    }
+
     fn request(scope: ExecutionScope) -> EngineRequest {
         EngineRequest {
             principal: "person:test".into(),
@@ -1875,6 +1915,7 @@ mod tests {
             max_output_bytes: 1024,
             replay: vec![],
             resume: None,
+            delegation_context: Some(delegation_context()),
         }
     }
 
@@ -2150,6 +2191,7 @@ mod tests {
             }],
             agent_revisions: vec![],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
         };
         batch.validate(1024).unwrap();
         let tools = Tools {
@@ -2376,6 +2418,7 @@ mod tests {
             tool_revisions: vec![],
             agent_revisions: vec![],
             projection_coverage: coverage.clone(),
+            delegation_context: None,
         };
         batch.validate(1024).unwrap();
         struct MustNotGenerate;
@@ -3625,6 +3668,7 @@ mod tests {
             }],
             agent_revisions: vec![],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
         };
         batch.validate(1024).unwrap();
         let tools = Tools {
@@ -3821,5 +3865,391 @@ mod tests {
             .await;
         assert_eq!(result.err(), Some(AgentFailure::Stalled));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 3);
+    }
+
+    struct CapturingDelegations {
+        calls: Arc<AtomicUsize>,
+        requests: Arc<Mutex<Vec<DelegationRequest>>>,
+    }
+
+    impl DelegationPort for CapturingDelegations {
+        fn delegate<'a>(
+            &'a self,
+            request: DelegationRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.requests.lock().unwrap().push(request.clone());
+            Box::pin(async move {
+                Ok(TaskReceipt {
+                    task_id: request.task_id,
+                    snapshot: floe_agent_contract::TaskSnapshot {
+                        task_id: request.task_id,
+                        parent_run_id: request.parent_run_id,
+                        principal: request.principal.clone(),
+                        agent_id: request.selected_agent_id.clone(),
+                        definition_revision: request.selected_definition_revision,
+                        state: floe_agent_contract::TaskState::Completed,
+                        result: Some("expert done".into()),
+                        artifacts: vec![],
+                        coverage: DependencyCoverage::Independent,
+                        issue: None,
+                    },
+                    replay: None,
+                })
+            })
+        }
+    }
+
+    struct AnswerAlways;
+
+    impl ModelPort for AnswerAlways {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            Box::pin(async move {
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![answer("done")],
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                })
+            })
+        }
+    }
+
+    fn expert_catalog() -> Vec<AgentDefinition> {
+        vec![AgentDefinition {
+            card: agent_card("expert-a"),
+            definition_revision: 1,
+        }]
+    }
+
+    fn delegation_batch(
+        execution_context: floe_agent_contract::DelegationExecutionContext,
+    ) -> ValidatedModelBatch {
+        ValidatedModelBatch {
+            execution_id: Uuid::new_v4(),
+            attempt_id: Uuid::new_v4(),
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![delegation()],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![PinnedAgentRevision {
+                agent_id: "expert-a".into(),
+                definition_revision: 1,
+            }],
+            projection_coverage: DependencyCoverage::Independent,
+            delegation_context: Some(execution_context),
+        }
+    }
+
+    #[tokio::test]
+    async fn delegating_batch_binds_request_context_and_journals_exact_intent() {
+        // 2-C C2: a fresh Delegate batch captures the EngineRequest context,
+        // and the DelegationIntent journals that exact binding.
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let delegations = CapturingDelegations {
+            calls: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(Mutex::new(vec![])),
+        };
+        let model = ScriptedModel {
+            steps: vec![delegation()],
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let mut engine_request = request(scope());
+        engine_request.allowed_catalog.cards = expert_catalog();
+        let bound = engine_request.delegation_context.clone().unwrap();
+        let report = Engine::default()
+            .drive(
+                engine_request,
+                EnginePorts {
+                    projection: &projection,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &delegations,
+                    journal: &journal,
+                    validator: &Validator,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output, None);
+        assert_eq!(delegations.calls.load(Ordering::SeqCst), 3);
+        let events = events.lock().unwrap();
+        let batches = events
+            .iter()
+            .filter_map(|event| match event {
+                JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(batches.len(), 3);
+        for batch in &batches {
+            assert_eq!(batch.delegation_context, Some(bound.clone()));
+        }
+        let intents = events
+            .iter()
+            .filter_map(|event| match event {
+                JournalEvent::DelegationIntent { request } => Some(request.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(intents.len(), 3);
+        for intent in &intents {
+            assert_eq!(intent.execution_context, bound);
+        }
+        for dispatched in delegations.requests.lock().unwrap().iter() {
+            assert_eq!(dispatched.execution_context, bound);
+        }
+    }
+
+    #[tokio::test]
+    async fn delegating_batch_without_context_fails_before_dispatch() {
+        // 2-C C2: a Delegate step with no EngineRequest context fails closed
+        // before anything is journaled or dispatched.
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let delegations = CapturingDelegations {
+            calls: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(Mutex::new(vec![])),
+        };
+        let model = ScriptedModel {
+            steps: vec![delegation()],
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let mut engine_request = request(scope());
+        engine_request.allowed_catalog.cards = expert_catalog();
+        engine_request.delegation_context = None;
+        let result = Engine::default()
+            .drive(
+                engine_request,
+                EnginePorts {
+                    projection: &projection,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &delegations,
+                    journal: &journal,
+                    validator: &Validator,
+                },
+            )
+            .await;
+        assert_eq!(result.err(), Some(AgentFailure::InvalidInput));
+        assert_eq!(delegations.calls.load(Ordering::SeqCst), 0);
+        assert!(
+            events.lock().unwrap().iter().all(|event| !matches!(
+                event,
+                JournalEvent::ValidatedBatch { .. } | JournalEvent::DelegationIntent { .. }
+            )),
+            "no batch or intent journals without a context"
+        );
+    }
+
+    #[tokio::test]
+    async fn resumed_delegation_reuses_batch_context_not_request_context() {
+        // 2-C C2: crash after ValidatedBatch before DelegationIntent resumes
+        // with the stored binding even when the resuming host differs.
+        let stored = delegation_context();
+        let mut resuming = delegation_context();
+        resuming.device_id = "changed-device".into();
+        resuming.session_id = Uuid::new_v4();
+        assert_ne!(stored, resuming);
+        let batch = delegation_batch(stored.clone());
+        batch.validate(1024).unwrap();
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let delegations = CapturingDelegations {
+            calls: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(Mutex::new(vec![])),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let mut engine_request = request(scope());
+        engine_request.allowed_catalog.cards = expert_catalog();
+        engine_request.delegation_context = Some(resuming);
+        engine_request.resume = Some(EngineResumeState {
+            validated_batch: batch.clone(),
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 0,
+            },
+        });
+        let report = Engine::default()
+            .drive(
+                engine_request,
+                EnginePorts {
+                    projection: &projection,
+                    model: &AnswerAlways,
+                    tools: &tools,
+                    delegation: &delegations,
+                    journal: &journal,
+                    validator: &Validator,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(delegations.calls.load(Ordering::SeqCst), 1);
+        let dispatched = delegations.requests.lock().unwrap();
+        assert_eq!(dispatched.len(), 1);
+        assert_eq!(dispatched[0].execution_context, stored);
+        let intent = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::DelegationIntent { request } => Some(request.clone()),
+                _ => None,
+            })
+            .expect("resumed delegation journals its intent");
+        assert_eq!(intent.execution_context, stored);
+        assert_eq!(intent.task_id, stable_task_id(batch.execution_id, batch.batch_id, 0));
+        assert_eq!(
+            intent.invocation_key,
+            stable_invocation_key(
+                batch.execution_id,
+                batch.batch_id,
+                0,
+                InvocationKind::Delegation
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn delegation_replay_requires_the_exact_request_digest() {
+        // 2-C C2: same TaskId with a changed device/session context cannot
+        // replay; the exact digest reuses without redispatch.
+        let stored = delegation_context();
+        let batch = delegation_batch(stored.clone());
+        batch.validate(1024).unwrap();
+        let task_id = stable_task_id(batch.execution_id, batch.batch_id, 0);
+        let invocation_key = stable_invocation_key(
+            batch.execution_id,
+            batch.batch_id,
+            0,
+            InvocationKind::Delegation,
+        );
+        let live_request = DelegationRequest {
+            task_id,
+            parent_run_id: None,
+            principal: "person:test".into(),
+            invocation_key,
+            selected_agent_id: "expert-a".into(),
+            selected_definition_revision: 1,
+            message: "summarize".into(),
+            context_refs: vec![],
+            execution_context: stored.clone(),
+        };
+        let receipt_for = |input_digest: [u8; 32]| ReplayReceipt {
+            principal: "person:test".into(),
+            run_id: None,
+            task_id: Some(task_id),
+            agent_id: Some("expert-a".into()),
+            tool_id: None,
+            definition_revision: 1,
+            input_digest,
+            invocation_key,
+            call_id: task_id.as_uuid(),
+            result: "expert done".into(),
+            task_result: Some("expert done".into()),
+            task_state: Some(floe_agent_contract::TaskState::Completed),
+            task_artifacts: vec![],
+            task_coverage: DependencyCoverage::Independent,
+            task_issue: None,
+            tool_artifacts: vec![],
+            tool_coverage: DependencyCoverage::Unknown,
+            tool_issue: None,
+        };
+        let drive_with = |replay: Vec<ReplayReceipt>| {
+            let tools = Tools {
+                calls: Arc::new(AtomicUsize::new(0)),
+            };
+            let delegations = CapturingDelegations {
+                calls: Arc::new(AtomicUsize::new(0)),
+                requests: Arc::new(Mutex::new(vec![])),
+            };
+            let (journal, _) = RecordingJournal::new();
+            let (projection, _) = Projector::new();
+            let mut engine_request = request(scope());
+            engine_request.allowed_catalog.cards = expert_catalog();
+            engine_request.replay = replay;
+            engine_request.resume = Some(EngineResumeState {
+                validated_batch: batch.clone(),
+                cursor: BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            });
+            let calls = Arc::clone(&delegations.calls);
+            async move {
+                let result = Engine::default()
+                    .drive(
+                        engine_request,
+                        EnginePorts {
+                            projection: &projection,
+                            model: &AnswerAlways,
+                            tools: &tools,
+                            delegation: &delegations,
+                            journal: &journal,
+                            validator: &Validator,
+                        },
+                    )
+                    .await;
+                (result, calls.load(Ordering::SeqCst))
+            }
+        };
+        let (result, calls) =
+            drive_with(vec![receipt_for(floe_agent_contract::delegation_request_digest(
+                &live_request,
+            ))])
+            .await;
+        assert_eq!(result.unwrap().output.as_deref(), Some("done"));
+        assert_eq!(calls, 0);
+        let mut changed = live_request.clone();
+        changed.execution_context.device_id = "changed-device".into();
+        changed.execution_context.session_id = Uuid::new_v4();
+        let (result, calls) =
+            drive_with(vec![receipt_for(floe_agent_contract::delegation_request_digest(
+                &changed,
+            ))])
+            .await;
+        assert_eq!(result.err(), Some(AgentFailure::InvalidInput));
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn stable_task_identity_derivation_is_unchanged() {
+        // 2-C C2: TaskId/InvocationKey/call-id derivation is byte-identical;
+        // the delegation convergence changes digests, never identity.
+        let execution_id =
+            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let batch_id = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        assert_eq!(
+            stable_task_id(execution_id, batch_id, 0).as_uuid().to_string(),
+            "f234d6b7-92e2-553d-ab9b-5cdec165c1ed"
+        );
+        assert_eq!(
+            stable_invocation_key(execution_id, batch_id, 0, InvocationKind::Delegation)
+                .as_uuid()
+                .to_string(),
+            "c0c246c7-ae43-5347-ae16-f00cb985ec22"
+        );
+        assert_eq!(
+            stable_call_id(execution_id, batch_id, 0).to_string(),
+            "3b9e0781-3bce-5ee2-85d4-46f99865974f"
+        );
     }
 }

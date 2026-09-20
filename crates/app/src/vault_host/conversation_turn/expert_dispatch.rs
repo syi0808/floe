@@ -6,16 +6,13 @@
 //! endpoints exist and which readers back the host port they use.
 
 use super::expert_compat::{
-    ConversationContextReader, ConversationContextReaderApi, ExpertModelHost, Model,
-    PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
-    PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
+    ConversationContextReader, ConversationContextReaderApi, EndpointConnectionStore,
+    ExpertModelHost, Model, PersonalAttentionReader, PersonalAttentionReaderApi,
+    PersonalPeopleReader, PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
     PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, policy, read_context_source,
 };
 use super::*;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::Arc;
 
 use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
 use floe_experts_builtin::{
@@ -76,21 +73,18 @@ pub(super) fn registered_experts<'turn, 'host>() -> floe_experts::ExpertDispatch
     table
 }
 
-#[derive(Clone)]
-pub(crate) struct BuiltinExpertEndpointContext {
-    pub request: crate::ConversationTurnRequest,
-    pub context: AgentContext,
-    pub session_id: Uuid,
-    pub max_output_bytes: usize,
-}
-
 /// The endpoint the delegating Run invokes for every registered builtin Expert
 /// that answers in process.
+///
+/// The invocation is self-sufficient: session, device, AgentContext, and the
+/// output bound arrive in its explicit execution context, and the
+/// saved-connection store is injected at construction. No run-id staging
+/// exists.
 pub(crate) struct BuiltinExpertEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
     local_context: Arc<LocalContextHost>,
-    contexts: Mutex<HashMap<Uuid, BuiltinExpertEndpointContext>>,
+    connections: EndpointConnectionStore,
 }
 
 impl<Keys> BuiltinExpertEndpoint<Keys> {
@@ -98,39 +92,14 @@ impl<Keys> BuiltinExpertEndpoint<Keys> {
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
         local_context: Arc<LocalContextHost>,
+        connections: EndpointConnectionStore,
     ) -> Self {
         Self {
             core,
             vault,
             local_context,
-            contexts: Mutex::new(HashMap::new()),
+            connections,
         }
-    }
-
-    pub(crate) fn stage(
-        &self,
-        run_id: Uuid,
-        context: BuiltinExpertEndpointContext,
-    ) -> Result<(), AgentFailure> {
-        if run_id.is_nil() || context.session_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mut contexts = self
-            .contexts
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        if contexts.len() >= 4 || contexts.insert(run_id, context).is_some() {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn clear(&self, run_id: Uuid) -> Result<(), AgentFailure> {
-        self.contexts
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-            .remove(&run_id);
-        Ok(())
     }
 }
 
@@ -141,38 +110,33 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
         scope: &'a floe_execution::ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
         Box::pin(async move {
+            let context = &invocation.request.execution_context;
+            context.validate()?;
             let run_id = invocation
                 .request
                 .parent_run_id
                 .ok_or(AgentFailure::InvalidInput)?;
-            let staged = self
-                .contexts
-                .lock()
-                .map_err(|_| AgentFailure::StorageUnavailable)?
-                .remove(&run_id)
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
             let registrations = registered_experts();
             if invocation.request.principal != self.vault.person_id().to_string()
                 || !registrations.is_registered(&invocation.request.selected_agent_id)
-                || staged.session_id != staged.request.session_id
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            // Staged legacy Expert compatibility, prepared here because an
-            // actual delegated endpoint runs: the stored credential is
-            // admitted for source and legacy model use. No pre-resolved
-            // route exists.
+            // Legacy Expert compatibility, prepared here because an actual
+            // delegated endpoint runs: the stored credential is loaded from
+            // the injected store and admitted for source and legacy model
+            // use. No pre-resolved route exists.
             let person_id = self.vault.person_id();
-            let stored = staged.request.stored_server_connection()?;
+            let stored = floe_inference::SavedConnectionStore::load(&self.connections)?;
             let source_client = ServerSourceClient::prepare(
                 stored.clone(),
                 &person_id.to_string(),
-                &staged.request.device_id,
+                &context.device_id,
             )?;
             let model = Model::for_stored_connection(
                 stored,
                 &person_id.to_string(),
-                &staged.request.device_id,
+                &context.device_id,
             )?;
             let remote_reader = match (&model, source_client.as_ref()) {
                 (Model::Server(_), Some(client)) => Some(remote_views::RemoteViewReader::new(
@@ -187,19 +151,19 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             let attention_reader = PersonalAttentionReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
-                device_id: &staged.request.device_id,
+                device_id: &context.device_id,
             };
             let people_reader = PersonalPeopleReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
-                device_id: &staged.request.device_id,
+                device_id: &context.device_id,
             };
             let wellbeing_reader = PersonalWellbeingReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
-                device_id: &staged.request.device_id,
+                device_id: &context.device_id,
             };
-            let governed_store = self.vault.governed_general_store(staged.session_id);
+            let governed_store = self.vault.governed_general_store(context.session_id);
             let recorder = StoreResultRecorder {
                 store: &governed_store,
             };
@@ -221,7 +185,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 model: &model,
                 source_client: source_client.as_ref(),
                 policy: &policy,
-                context: &staged.context,
+                context: &context.agent_context,
                 local_context: &self.local_context,
                 attention: Some(&attention_reader),
                 people_reader: Some(&people_reader),
@@ -243,7 +207,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                     usage: Default::default(),
                     schema_version: AGENT_VERSION,
                     person_id: self.vault.person_id(),
-                    session_id: staged.session_id,
+                    session_id: context.session_id,
                     parent_turn_id: run_id,
                     agent_id: invocation.request.selected_agent_id.clone(),
                     message: floe_experts::A2AMessage {
@@ -255,7 +219,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                             text: invocation.request.message.clone(),
                         }],
                     },
-                    max_output_bytes: staged.max_output_bytes,
+                    max_output_bytes: context.max_output_bytes,
                     deadline: scope.deadline(),
                     cancellation: scope.cancellation().clone(),
                 })
@@ -275,34 +239,6 @@ pub(super) trait ExpertTaskRunner: Send + Sync {
         &'a self,
         request: A2ASendMessageRequest,
     ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>>;
-}
-
-/// Test-only in-process runner: production delegation crosses the
-/// `LegacyDelegationPort` bridge instead.
-#[cfg(test)]
-pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
-    pub coordinator: &'a floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
-    pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
-    pub turn_request: &'a crate::ConversationTurnRequest,
-    pub context: &'a AgentContext,
-    pub recorder: Option<&'a dyn floe_experts::TaskCoverageRecorder>,
-}
-
-#[cfg(test)]
-impl<Keys: VaultKeyProvider + 'static> ExpertTaskRunner for RegisteredScheduleTaskRunner<'_, Keys> {
-    fn run<'a>(
-        &'a self,
-        request: A2ASendMessageRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>> {
-        Box::pin(schedule::run_registered(
-            self.endpoint,
-            self.coordinator,
-            request,
-            self.turn_request,
-            self.context,
-            self.recorder,
-        ))
-    }
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(

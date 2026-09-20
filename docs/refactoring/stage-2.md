@@ -26,18 +26,18 @@ Detailed work is split into the execution plans linked below. This overview owns
   - [x] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
   - [x] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
   - [x] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md) · [credential-seam P1](stage-2/2-b5-credential-seam.md) · [final credential-read P0](stage-2/2-b5-credential-read.md)
-- [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
+- [x] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
 - [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
 - [ ] **2-F — Stage 2 final validation** — [execution plan](stage-2/2-f.md)
 
 ## Current checkpoint
 
-**Active: 2-C — Delegation ownership convergence.**
+**Active: 2-D — Internal compatibility cleanup.**
 
-2-B is complete/frozen. The current work removes LegacyDelegationPort and App run-id → endpoint-context staging, makes delegation execution context explicit and durable, and cuts the root directly to Experts TaskCoordinator while preserving Task identity/replay/cancellation/settlement semantics.
+2-C is complete/frozen: LegacyDelegationPort and App run-id → endpoint-context staging are gone, delegation execution context is explicit and durable, and the root serves Experts TaskCoordinator directly while preserving Task identity/replay/cancellation/settlement semantics.
 
-Use [the 2-C execution plan](stage-2/2-c.md) as the authoritative task document. Do not start 2-D before the 2-C exit gates are green.
+Use [the 2-D execution plan](stage-2/2-d.md) as the authoritative task document.
 
 ## Target internal architecture
 
@@ -63,16 +63,16 @@ Engine
   → ToolResult { coverage, artifacts, issue }
 ~~~
 
-Delegation during 2-B may temporarily remain:
+Delegation after 2-C:
 
 ~~~text
 Engine
-  → LegacyDelegationPort
-  → Experts TaskCoordinator
-  → staged endpoint context
+  → Experts TaskCoordinator : DelegationPort
+  → Directory endpoint resolution
+  → EndpointInvocation { DelegationRequest + explicit execution context }
 ~~~
 
-2-C removes that final internal bridge.
+2-C removed the final internal bridge (LegacyDelegationPort and staged endpoint context).
 
 ## Stage-wide rules
 

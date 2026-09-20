@@ -185,6 +185,7 @@ pub async fn delegate_expert_task<Repository: crate::TaskRepository>(
     coordinator: &crate::TaskCoordinator<Repository>,
     request: &A2ASendMessageRequest,
     selected_definition_revision: u64,
+    execution_context: floe_agent_contract::DelegationExecutionContext,
 ) -> Result<floe_agent_contract::TaskReceipt, AgentFailure> {
     use floe_agent_contract::{DelegationPort, DelegationRequest, InvocationKey, TaskId};
     use floe_agent_contract::{RunId, TraceContext};
@@ -216,6 +217,7 @@ pub async fn delegate_expert_task<Repository: crate::TaskRepository>(
                 selected_definition_revision,
                 message: request.message.text()?.to_owned(),
                 context_refs: vec![],
+                execution_context,
             },
             &scope,
         )

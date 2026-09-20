@@ -53,15 +53,20 @@ The production Context Tool cutover belongs to Stage 2-B.3.
 Canonical ownership:
 
 ```text
-Manager Engine
-  -> Delegate step
-  -> Experts Task / endpoint dispatch
+App run_general_turn
+  -> DelegationExecutionContext (secret-free host context)
+  -> Conversation TurnRequest (runtime field, never identity)
+  -> Manager Engine
+  -> Delegate step + batch-bound exact context
+  -> TaskCoordinator : DelegationPort (direct; no bridge)
+  -> Directory endpoint resolution
+  -> EndpointInvocation { DelegationRequest, canonical request digest }
   -> isolated Expert runtime
   -> Task terminal result / Artifact
   -> Manager synthesis
 ```
 
-Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. Stage 2-C removes the remaining internal legacy delegation bridge and staged App endpoint context.
+Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: the root turn serves `TaskCoordinator` as its `DelegationPort` directly, and every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Delegated legacy Expert endpoints prepare their temporary model/source compatibility from a constructor-injected saved-connection store (host keychain in production, fixed fixture in tests), admitted per execution against the invocation principal and context device id.
 
 ## Consequential actions
 

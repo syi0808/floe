@@ -1,6 +1,6 @@
 use floe_agent_contract::{
-    AllowedCatalog, DelegationPort, ModelPort, ModelProjectionPort, ReplayReceipt, RoleSpec,
-    ToolPort,
+    AllowedCatalog, DelegationExecutionContext, DelegationPort, ModelPort, ModelProjectionPort,
+    ReplayReceipt, RoleSpec, ToolPort,
 };
 use floe_agent_runtime::FinalPayloadValidator;
 use floe_execution::{Cancellation, budget::BudgetConfig};
@@ -65,6 +65,10 @@ pub struct TurnRequest {
     pub replay: Vec<ReplayReceipt>,
     pub deadline: Instant,
     pub cancellation: Cancellation,
+    /// Runtime-only delegation host context, forwarded to the Engine without
+    /// interpretation. Never part of the canonical turn intent or request
+    /// identity, exactly like device/credential state.
+    pub delegation_context: Option<DelegationExecutionContext>,
 }
 
 impl TurnRequest {
@@ -83,6 +87,9 @@ impl TurnRequest {
         }
         crate::normalize_turn_text(&self.prompt)?;
         self.profile.validate()?;
+        if let Some(context) = &self.delegation_context {
+            context.validate()?;
+        }
         if let TurnMode::Continue(reference) = &self.mode {
             reference.validate()?;
         }

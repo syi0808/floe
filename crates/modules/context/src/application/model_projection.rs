@@ -617,6 +617,19 @@ mod tests {
                         selected_definition_revision: 2,
                         message: "summarize".into(),
                         context_refs: vec![],
+                        execution_context:
+                            floe_agent_contract::DelegationExecutionContext {
+                                session_id: Uuid::new_v4(),
+                                device_id: "test-device".into(),
+                                agent_context: floe_agent_contract::AgentContext {
+                                    projection_version: 1,
+                                    persona: None,
+                                    memories: vec![],
+                                    optional_context_issues: vec![],
+                                    evidence: vec![],
+                                },
+                                max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+                            },
                     },
                     receipt: TaskReceipt {
                         task_id,

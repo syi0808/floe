@@ -279,6 +279,21 @@ fn scope(run_id: RunId, task_id: Option<TaskId>) -> ExecutionScope {
     })
 }
 
+fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
+    floe_agent_contract::DelegationExecutionContext {
+        session_id: Uuid::new_v4(),
+        device_id: "test-device".into(),
+        agent_context: floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        max_output_bytes: 16 * 1024,
+    }
+}
+
 fn delegation(run_id: RunId, task_id: TaskId, agent_id: &str) -> DelegationRequest {
     DelegationRequest {
         task_id,
@@ -289,6 +304,7 @@ fn delegation(run_id: RunId, task_id: TaskId, agent_id: &str) -> DelegationReque
         selected_definition_revision: 1,
         message: "Summarize the relevant context".into(),
         context_refs: vec![],
+        execution_context: delegation_context(),
     }
 }
 
@@ -551,8 +567,7 @@ async fn restart_recovery_interrupts_only_an_orphaned_nonterminal_task() {
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let request = delegation(run_id, task_id, "floe.test.recovery");
-    let request_digest =
-        floe_agent_contract::input_digest(&serde_json::to_string(&request).unwrap());
+    let request_digest = floe_agent_contract::delegation_request_digest(&request);
     let submitted = TaskRecord {
         snapshot: TaskSnapshot {
             task_id,
@@ -916,6 +931,7 @@ fn manager_request(catalog: AllowedCatalog, scope: ExecutionScope) -> EngineRequ
         max_output_bytes: 16 * 1024,
         replay: vec![],
         resume: None,
+        delegation_context: Some(delegation_context()),
     }
 }
 
@@ -1131,4 +1147,212 @@ async fn stale_definition_revision_is_rejected_by_task_coordinator() {
         .unwrap();
     assert_eq!(receipt.snapshot.state, TaskState::Failed);
     assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+}
+
+#[tokio::test]
+async fn exact_duplicate_request_replays_without_endpoint_redispatch() {
+    // 2-C C3: same TaskId + same exact request returns the existing Task;
+    // the endpoint runs once.
+    let directory = Directory::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    register(
+        &directory,
+        "floe.test.replay",
+        Endpoint {
+            result: Ok("replay result"),
+            calls: Arc::clone(&calls),
+        },
+    )
+    .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let request = delegation(run_id, task_id, "floe.test.replay");
+    let task_scope = scope(run_id, Some(task_id));
+    let first = coordinator
+        .delegate(request.clone(), &task_scope)
+        .await
+        .unwrap();
+    assert_eq!(first.snapshot.state, TaskState::Completed);
+    let second = coordinator
+        .delegate(request, &task_scope)
+        .await
+        .unwrap();
+    assert_eq!(second.snapshot, first.snapshot);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn same_task_with_changed_execution_context_conflicts() {
+    // 2-C C3: the canonical request digest covers the execution context, so
+    // a changed device/session with the same TaskId conflicts instead of
+    // reusing the prior Task result.
+    let directory = Directory::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    register(
+        &directory,
+        "floe.test.context",
+        Endpoint {
+            result: Ok("context result"),
+            calls: Arc::clone(&calls),
+        },
+    )
+    .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let request = delegation(run_id, task_id, "floe.test.context");
+    let task_scope = scope(run_id, Some(task_id));
+    let first = coordinator
+        .delegate(request.clone(), &task_scope)
+        .await
+        .unwrap();
+    assert_eq!(first.snapshot.state, TaskState::Completed);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let mut changed = request.clone();
+    changed.execution_context.device_id = "changed-device".into();
+    changed.execution_context.session_id = Uuid::new_v4();
+    assert_eq!(
+        coordinator
+            .delegate(changed, &task_scope)
+            .await
+            .err(),
+        Some(AgentFailure::Conflict)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // The exact original still replays.
+    let replayed = coordinator
+        .delegate(request, &task_scope)
+        .await
+        .unwrap();
+    assert_eq!(replayed.snapshot, first.snapshot);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn denied_endpoint_produces_rejected_terminal_task() {
+    // 2-C C3: denied endpoints settle as typed Rejected Tasks, not thrown
+    // Manager failures.
+    for failure in [
+        AgentFailure::CapabilityDenied,
+        AgentFailure::PolicyDenied,
+        AgentFailure::ConsentRequired,
+    ] {
+        let directory = Directory::default();
+        register(
+            &directory,
+            "floe.test.denied",
+            Endpoint {
+                result: Err(failure),
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .unwrap();
+        let repository = Arc::new(MemoryTasks::default());
+        let (coordinator, _) = TaskCoordinator::activate(
+            directory,
+            Arc::clone(&repository),
+            "everyday-assistance",
+            16 * 1024,
+        )
+        .await
+        .unwrap();
+        let run_id = RunId::new();
+        let task_id = TaskId::new();
+        let receipt = coordinator
+            .delegate(
+                delegation(run_id, task_id, "floe.test.denied"),
+                &scope(run_id, Some(task_id)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.snapshot.state, TaskState::Rejected, "{failure:?}");
+        assert_eq!(receipt.snapshot.issue, Some(failure), "{failure:?}");
+        assert_eq!(receipt.snapshot.result, None);
+    }
+}
+
+struct DeadlineEndpoint;
+
+impl AgentEndpoint for DeadlineEndpoint {
+    fn execute<'a>(
+        &'a self,
+        invocation: EndpointInvocation,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
+        Box::pin(async move {
+            scope
+                .cancellation()
+                .cancel_with_reason(floe_agent_contract::CancelReason::Deadline);
+            Ok(ExpertReport {
+                task_id: invocation.request.task_id,
+                principal: invocation.request.principal,
+                agent_id: invocation.request.selected_agent_id,
+                definition_revision: invocation.request.selected_definition_revision,
+                result: "too late".into(),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                settlement: None,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn deadline_during_execution_produces_timed_out_terminal_task() {
+    // 2-C C3: a deadline observed while the endpoint runs settles a typed
+    // TimedOut Task.
+    let directory = Directory::default();
+    directory
+        .register(
+            DirectoryEntry {
+                definition: definition("floe.test.deadline", 1),
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec!["person-a".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(DeadlineEndpoint),
+        )
+        .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let receipt = coordinator
+        .delegate(
+            delegation(run_id, task_id, "floe.test.deadline"),
+            &scope(run_id, Some(task_id)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.snapshot.state, TaskState::TimedOut);
+    assert_eq!(
+        receipt.snapshot.issue,
+        Some(AgentFailure::DeadlineExceeded)
+    );
+    assert_eq!(receipt.snapshot.result, None);
 }

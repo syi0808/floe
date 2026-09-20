@@ -737,6 +737,21 @@ fn finalization_service(
     .unwrap()
 }
 
+fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
+    floe_agent_contract::DelegationExecutionContext {
+        session_id: Uuid::new_v4(),
+        device_id: "test-device".into(),
+        agent_context: floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        max_output_bytes: 16 * 1024,
+    }
+}
+
 fn request(
     command_id: CommandId,
     session_id: Uuid,
@@ -756,6 +771,7 @@ fn request(
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         cancellation: floe_execution::Cancellation::default(),
+        delegation_context: Some(delegation_context()),
     }
 }
 

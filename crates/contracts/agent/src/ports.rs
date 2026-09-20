@@ -3,9 +3,9 @@ use std::future::Future;
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AllowedCatalog, AuthorizedModelProjection, DelegationRequest, DependencyCoverage,
-    ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ProjectionRef, ReplayReceipt,
-    TaskReceipt, ToolCall, ToolResult,
+    AgentFailure, AllowedCatalog, AuthorizedModelProjection, DelegationExecutionContext,
+    DelegationRequest, DependencyCoverage, ModelProjectionRequest, ModelRequest, ModelResponse,
+    ModelStep, ProjectionRef, ReplayReceipt, TaskReceipt, ToolCall, ToolResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +36,12 @@ pub struct ValidatedModelBatch {
     pub tool_revisions: Vec<PinnedToolRevision>,
     pub agent_revisions: Vec<PinnedAgentRevision>,
     pub projection_coverage: DependencyCoverage,
+    /// The exact delegation execution context bound to this batch, present
+    /// exactly when the batch contains a Delegate step. Resumed execution
+    /// uses this stored binding, never a freshly assembled replacement, and
+    /// cross-run takeover equality covers it.
+    #[serde(default)]
+    pub delegation_context: Option<DelegationExecutionContext>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -91,6 +97,18 @@ impl ValidatedModelBatch {
                 .unwrap_or(true)
         {
             return Err(AgentFailure::InvalidInput);
+        }
+        match &self.delegation_context {
+            Some(context) => context.validate()?,
+            None => {
+                if self
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, ModelStep::Delegate { .. }))
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            }
         }
         Ok(())
     }

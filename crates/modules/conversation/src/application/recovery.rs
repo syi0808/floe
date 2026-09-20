@@ -399,6 +399,16 @@ fn project_entries(
                 {
                     return Err(AgentFailure::StorageUnavailable);
                 }
+                // The intent carries the exact context bound to the validated
+                // batch: a missing, malformed, or substituted context is
+                // journal corruption, never silently reconstructed.
+                request
+                    .execution_context
+                    .validate()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                if state.batch.delegation_context.as_ref() != Some(&request.execution_context) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 let expected_key = floe_agent_runtime::stable_invocation_key(
                     state.batch.execution_id,
                     state.batch.batch_id,
@@ -475,6 +485,7 @@ fn project_entries(
                     .result
                     .clone()
                     .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state));
+                let input_digest = floe_agent_contract::delegation_request_digest(&request);
                 exchanges.push(ModelConversationEntry::DelegationExchange {
                     request: request.clone(),
                     receipt: receipt.as_ref().clone(),
@@ -486,7 +497,7 @@ fn project_entries(
                     agent_id: Some(request.selected_agent_id),
                     tool_id: None,
                     definition_revision: request.selected_definition_revision,
-                    input_digest: input_digest(&request.message),
+                    input_digest,
                     invocation_key: request.invocation_key,
                     call_id: request.task_id.as_uuid(),
                     result: text,
@@ -809,7 +820,26 @@ mod tests {
         }
     }
 
+    fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
+        floe_agent_contract::DelegationExecutionContext {
+            session_id: Uuid::new_v4(),
+            device_id: "test-device".into(),
+            agent_context: floe_agent_contract::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+        }
+    }
+
     fn batch(attempt_id: Uuid, steps: Vec<ModelStep>) -> ValidatedModelBatch {
+        let delegation_context = steps
+            .iter()
+            .any(|step| matches!(step, ModelStep::Delegate { .. }))
+            .then(delegation_context);
         ValidatedModelBatch {
             execution_id: Uuid::new_v4(),
             attempt_id,
@@ -823,6 +853,7 @@ mod tests {
             }],
             agent_revisions: vec![],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context,
         }
     }
 
@@ -878,6 +909,10 @@ mod tests {
             selected_definition_revision: definition_revision,
             message: message.into(),
             context_refs,
+            execution_context: batch
+                .delegation_context
+                .clone()
+                .expect("delegation batch binds an execution context"),
         }
     }
 
@@ -905,6 +940,7 @@ mod tests {
                 definition_revision: 2,
             }],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context: Some(delegation_context()),
         };
         let batch_id = batch.batch_id;
         let prefix = vec![
@@ -1092,6 +1128,7 @@ mod tests {
                 definition_revision: 2,
             }],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context: Some(delegation_context()),
         };
         let request = delegation_request_for(
             &admitted,
@@ -1870,6 +1907,7 @@ mod tests {
             tool_revisions: vec![],
             agent_revisions: vec![],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context: Some(delegation_context()),
         };
         let request = delegation_request_for(
             &admitted,
@@ -2279,6 +2317,7 @@ mod tests {
             tool_revisions: vec![],
             agent_revisions: vec![],
             projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
         }
     }
 
@@ -2476,6 +2515,7 @@ mod tests {
             selected_definition_revision: 2,
             message: "summarize".into(),
             context_refs,
+            execution_context: delegation_context(),
         }
     }
 
@@ -3094,6 +3134,136 @@ mod tests {
                 if batch == &model_batch && cursor == &initial),
             "lineage must keep the original claim: {:?}",
             projected.lineage
+        );
+    }
+
+    fn completed_task_receipt(request: &DelegationRequest) -> TaskReceipt {
+        TaskReceipt {
+            task_id: request.task_id,
+            snapshot: TaskSnapshot {
+                task_id: request.task_id,
+                parent_run_id: request.parent_run_id,
+                principal: request.principal.clone(),
+                agent_id: request.selected_agent_id.clone(),
+                definition_revision: request.selected_definition_revision,
+                state: TaskState::Completed,
+                result: Some("summary".into()),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            },
+            replay: None,
+        }
+    }
+
+    #[test]
+    fn crash_after_batch_before_intent_preserves_exact_context() {
+        // 2-C C2: a ValidatedBatch with no DelegationIntent yet resumes with
+        // the exact bound context; nothing is replayed and nothing is lost.
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (batch, prefix) = pending_delegation_batch(&admitted, attempt_id, vec![]);
+        let bound = batch.delegation_context.clone().unwrap();
+        let snapshot = project_continuation(&admitted, &entries(prefix)).unwrap();
+        let pending = snapshot.pending_batch.expect("batch stays pending");
+        assert_eq!(pending, batch);
+        assert_eq!(pending.delegation_context, Some(bound));
+        assert_eq!(
+            snapshot.batch_cursor,
+            Some(BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 0,
+            })
+        );
+        assert!(snapshot.replay.is_empty());
+        assert!(snapshot.model_conversation.current_turn.is_empty());
+    }
+
+    #[test]
+    fn crash_after_intent_before_result_reuses_exact_context() {
+        // 2-C C2: an unsettled DelegationIntent keeps the pending batch
+        // authoritative with its exact context; the intent journals no replay.
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (batch, mut events) = pending_delegation_batch(&admitted, attempt_id, vec![]);
+        let bound = batch.delegation_context.clone().unwrap();
+        let request =
+            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", vec![]);
+        assert_eq!(request.execution_context, bound);
+        events.push(JournalEvent::DelegationIntent {
+            request: request.clone(),
+        });
+        let snapshot = project_continuation(&admitted, &entries(events)).unwrap();
+        let pending = snapshot.pending_batch.expect("batch stays pending");
+        assert_eq!(pending, batch);
+        assert_eq!(pending.delegation_context, Some(bound));
+        assert!(snapshot.replay.is_empty());
+    }
+
+    #[test]
+    fn intent_with_substituted_or_malformed_context_fails_closed() {
+        // 2-C C2: the intent must equal the batch-bound context exactly; a
+        // substituted or malformed context is journal corruption.
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (batch, prefix) = pending_delegation_batch(&admitted, attempt_id, vec![]);
+        let mut substituted =
+            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", vec![]);
+        substituted.execution_context.device_id = "changed-device".into();
+        substituted.execution_context.session_id = Uuid::new_v4();
+        let mut events = prefix.clone();
+        events.push(JournalEvent::DelegationIntent {
+            request: substituted,
+        });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        let mut malformed =
+            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", vec![]);
+        malformed.execution_context.session_id = Uuid::nil();
+        let mut events = prefix;
+        events.push(JournalEvent::DelegationIntent { request: malformed });
+        assert!(matches!(
+            project_continuation(&admitted, &entries(events)),
+            Err(AgentFailure::StorageUnavailable)
+        ));
+    }
+
+    #[test]
+    fn delegation_replay_receipt_covers_the_exact_request_digest() {
+        // 2-C C2: settled delegation replay carries the canonical request
+        // digest, so a changed host context can never match it.
+        let admitted = admitted();
+        let attempt_id = Uuid::new_v4();
+        let (batch, mut events) = pending_delegation_batch(&admitted, attempt_id, vec![]);
+        let request =
+            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", vec![]);
+        let receipt = completed_task_receipt(&request);
+        events.push(JournalEvent::DelegationIntent {
+            request: request.clone(),
+        });
+        events.push(JournalEvent::DelegationResult {
+            receipt: Box::new(receipt),
+        });
+        events.push(JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 1,
+            },
+        });
+        events.push(JournalEvent::Checkpoint { iteration: 1 });
+        let snapshot = project_continuation(&admitted, &entries(events)).unwrap();
+        assert_eq!(snapshot.replay.len(), 1);
+        assert_eq!(
+            snapshot.replay[0].input_digest,
+            floe_agent_contract::delegation_request_digest(&request)
+        );
+        let mut changed = request.clone();
+        changed.execution_context.device_id = "changed-device".into();
+        assert_ne!(
+            snapshot.replay[0].input_digest,
+            floe_agent_contract::delegation_request_digest(&changed)
         );
     }
 }

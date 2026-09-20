@@ -1,16 +1,7 @@
-use std::{
-    collections::HashMap,
-    future::Future,
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use floe_agent_contract::AgentFailure;
 use floe_experts_builtin::schedule;
-#[cfg(test)]
-use floe_experts_builtin::BuiltinExpertKind;
-#[cfg(test)]
-use floe_experts_builtin::schedule::SCHEDULE_DEFINITION_REVISION;
 
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
@@ -31,8 +22,6 @@ use floe_context_contract::CalendarProvider;
 use floe_day::CalendarTimelineGrant;
 use floe_day::{CalendarBatch, CalendarConnection, CalendarRecord};
 use floe_execution::ExecutionScope;
-#[cfg(test)]
-use floe_experts::TaskCoordinator;
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
 // BOUNDARY(stage-3): the Schedule Expert still reaches the provider adapter directly.
@@ -57,22 +46,20 @@ pub(in crate::vault_host) mod agent;
 
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 
-use super::super::expert_compat::{Model, external_transfer_consent};
-#[cfg(test)]
-use floe_vault::VaultTaskRepository;
+use super::super::expert_compat::{EndpointConnectionStore, Model, external_transfer_consent};
 
-#[derive(Clone)]
-pub(crate) struct ScheduleEndpointContext {
-    pub request: crate::ConversationTurnRequest,
-    pub context: floe_context::AgentContext,
-    pub max_output_bytes: usize,
-}
-
+/// The endpoint the delegating Run invokes for the Schedule Expert.
+///
+/// The invocation is self-sufficient: the Manager delegation message is the
+/// assignment, device/AgentContext/output-bound arrive in the explicit
+/// execution context, and the saved-connection store is injected at
+/// construction. No run-id staging exists, and the root user prompt is never
+/// consulted.
 pub(crate) struct ScheduleEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
     local_context: Arc<LocalContextHost>,
-    contexts: Mutex<HashMap<Uuid, ScheduleEndpointContext>>,
+    connections: EndpointConnectionStore,
 }
 
 impl<Keys> ScheduleEndpoint<Keys> {
@@ -80,39 +67,14 @@ impl<Keys> ScheduleEndpoint<Keys> {
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
         local_context: Arc<LocalContextHost>,
+        connections: EndpointConnectionStore,
     ) -> Self {
         Self {
             core,
             vault,
             local_context,
-            contexts: Mutex::new(HashMap::new()),
+            connections,
         }
-    }
-
-    pub(crate) fn stage(
-        &self,
-        run_id: Uuid,
-        context: ScheduleEndpointContext,
-    ) -> Result<(), AgentFailure> {
-        if run_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mut contexts = self
-            .contexts
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        if contexts.len() >= 4 || contexts.insert(run_id, context).is_some() {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn clear(&self, run_id: Uuid) -> Result<(), AgentFailure> {
-        self.contexts
-            .lock()
-            .map_err(|_| AgentFailure::StorageUnavailable)?
-            .remove(&run_id);
-        Ok(())
     }
 }
 
@@ -123,37 +85,30 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
         Box::pin(async move {
-            let run_id = invocation
-                .request
-                .parent_run_id
-                .ok_or(AgentFailure::InvalidInput)?;
-            let staged = self
-                .contexts
-                .lock()
-                .map_err(|_| AgentFailure::StorageUnavailable)?
-                .remove(&run_id)
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
-            if invocation.request.principal != self.vault.person_id().to_string()
-                || staged.request.device_id.trim().is_empty()
-            {
+            let context = &invocation.request.execution_context;
+            context.validate()?;
+            if invocation.request.principal != self.vault.person_id().to_string() {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let selected = select_active_setup(&self.vault, &staged.request.device_id).await?;
+            let selected = select_active_setup(&self.vault, &context.device_id).await?;
             if selected.ambiguous {
                 return Err(AgentFailure::AccessReviewRequired);
             }
-            // Staged Schedule compatibility, prepared here because an actual
-            // delegated endpoint runs: the stored credential is admitted for
-            // source and legacy model use. No pre-resolved route exists.
+            // Legacy Schedule compatibility, prepared here because an actual
+            // delegated endpoint runs: the stored credential is loaded from
+            // the injected store and admitted for source and legacy model
+            // use. No pre-resolved route exists.
             let person_id = self.vault.person_id();
-            let stored = staged.request.stored_server_connection()?;
+            let stored = floe_inference::SavedConnectionStore::load(&self.connections)?;
             let source_client = ServerSourceClient::prepare(
                 stored.clone(),
                 &person_id.to_string(),
-                &staged.request.device_id,
+                &context.device_id,
             )?;
+            // The Manager delegation message is the Expert assignment, never
+            // the root user prompt.
             let plan = schedule::plan_run(
-                &staged.request.text,
+                &invocation.request.message,
                 selected.binding.provider,
                 selected.binding.calendar_ids.len(),
                 source_client.is_some(),
@@ -163,13 +118,13 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             // The Expert decided where it may reason; the host only builds it.
             let model = match plan.reasoning {
                 schedule::ScheduleReasoning::OnDevice => {
-                    Model::for_stored_connection(None, &person_id.to_string(), &staged.request.device_id)?
+                    Model::for_stored_connection(None, &person_id.to_string(), &context.device_id)?
                 }
                 schedule::ScheduleReasoning::ConversationRoute => {
                     Model::for_stored_connection(
                         stored,
                         &person_id.to_string(),
-                        &staged.request.device_id,
+                        &context.device_id,
                     )?
                 }
             };
@@ -204,7 +159,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                 core: &self.core,
                 setup: &selected.setup,
                 binding: &selected.binding,
-                request_device_id: &staged.request.device_id,
+                request_device_id: &context.device_id,
                 calendar_catalog: calendar_catalog.as_deref(),
                 ambiguous: selected.ambiguous,
                 access: Access::new(
@@ -233,7 +188,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                     CalendarExpertEndpointRequest {
                         person_id: self.vault.person_id(),
                         usage: Default::default(),
-                        context: staged.context,
+                        context: context.agent_context.clone(),
                         policy: schedule::run_policy(
                             placement,
                             selected.binding.data_class(),
@@ -255,7 +210,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                         invocation_id: invocation.request.invocation_key.as_uuid(),
                         assignment: invocation.request.message.clone(),
                         propose_focus: plan.propose_focus,
-                        max_output_bytes: staged.max_output_bytes,
+                        max_output_bytes: context.max_output_bytes,
                         deadline: scope.deadline(),
                         cancellation: scope.cancellation().clone(),
                     },
@@ -353,40 +308,6 @@ async fn select_active_setup<Keys: VaultKeyProvider>(
         binding,
         ambiguous: selection.ambiguous,
     })
-}
-
-/// Test-only in-process dispatch: production delegation crosses the
-/// `LegacyDelegationPort` bridge into [`ScheduleEndpoint`] instead.
-#[cfg(test)]
-pub(crate) async fn run_registered<Keys: VaultKeyProvider + 'static>(
-    endpoint: &ScheduleEndpoint<Keys>,
-    coordinator: &TaskCoordinator<VaultTaskRepository<Keys>>,
-    request: floe_experts::A2ASendMessageRequest,
-    turn_request: &crate::ConversationTurnRequest,
-    context: &floe_context::AgentContext,
-    recorder: Option<&dyn floe_experts::TaskCoverageRecorder>,
-) -> Result<floe_experts::A2ATask, AgentFailure> {
-    let task_uuid = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
-    endpoint.stage(
-        request.parent_turn_id,
-        ScheduleEndpointContext {
-            request: turn_request.clone(),
-            context: context.clone(),
-            max_output_bytes: request.max_output_bytes,
-        },
-    )?;
-    let receipt =
-        floe_experts::delegate_expert_task(coordinator, &request, SCHEDULE_DEFINITION_REVISION)
-            .await;
-    let clear = endpoint.clear(request.parent_turn_id);
-    let receipt = receipt?;
-    clear?;
-    floe_experts::record_task_coverage(recorder, request.parent_turn_id, task_uuid, &receipt)?;
-    floe_experts::task_receipt_to_a2a(
-        request,
-        BuiltinExpertKind::Schedule.result_artifact_name(),
-        receipt,
-    )
 }
 
 struct BoundAccess<'host> {
@@ -2115,9 +2036,9 @@ mod tests {
     }
 
     #[test]
-    fn staged_schedule_model_never_consents_to_external_transfer() {
-        // No pre-resolved recipient exists anymore: staged legacy model calls
-        // run server-local only, so external transfer is never consented here.
+    fn legacy_schedule_model_never_consents_to_external_transfer() {
+        // No pre-resolved recipient exists anymore: legacy model calls run
+        // server-local only, so external transfer is never consented here.
         assert_eq!(
             external_transfer_consent(ModelPlacement::Remote),
             TransferConsent::NotGranted

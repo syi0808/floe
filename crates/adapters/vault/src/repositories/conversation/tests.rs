@@ -363,6 +363,21 @@ fn build_finalization_service(
     .unwrap()
 }
 
+fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
+    floe_agent_contract::DelegationExecutionContext {
+        session_id: Uuid::new_v4(),
+        device_id: "test-device".into(),
+        agent_context: floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        max_output_bytes: 16 * 1024,
+    }
+}
+
 fn request(
     command_id: floe_agent_contract::CommandId,
     session_id: Uuid,
@@ -381,6 +396,7 @@ fn request(
         replay: vec![],
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         cancellation,
+        delegation_context: Some(delegation_context()),
     }
 }
 
@@ -954,6 +970,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         }],
         agent_revisions: vec![],
         projection_coverage: DependencyCoverage::Independent,
+        delegation_context: None,
     };
     let call = ToolCall {
         call_id: floe_agent_runtime::stable_call_id(
@@ -1097,6 +1114,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         }],
         agent_revisions: vec![],
         projection_coverage: DependencyCoverage::Independent,
+        delegation_context: None,
     };
     let second_call = ToolCall {
         call_id: floe_agent_runtime::stable_call_id(
@@ -1344,6 +1362,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
         tool_revisions: vec![],
         agent_revisions: vec![],
         projection_coverage: DependencyCoverage::Independent,
+        delegation_context: None,
     };
     for (kind, event) in [
         (
@@ -1543,6 +1562,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
         tool_revisions: vec![],
         agent_revisions: vec![],
         projection_coverage: DependencyCoverage::Independent,
+        delegation_context: None,
     };
     for (kind, event) in [
         (
@@ -1637,6 +1657,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
         tool_revisions: vec![],
         agent_revisions: vec![],
         projection_coverage: DependencyCoverage::Independent,
+        delegation_context: None,
     };
     assert_ne!(other.batch_id, batch.batch_id);
     for (kind, event) in [

@@ -7,7 +7,7 @@ use std::{
 use floe_agent_contract::{
     AgentFailure, AllowedCatalog, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, EndpointInvocation, EndpointSettlement, TaskId, TaskReceipt, TaskSnapshot,
-    TaskState, input_digest,
+    TaskState, delegation_request_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -352,8 +352,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
         scope: &floe_agent_contract::ExecutionScope,
     ) -> Result<TaskReceipt, AgentFailure> {
         validate_request(&request, scope)?;
-        let encoded = serde_json::to_string(&request).map_err(|_| AgentFailure::InvalidInput)?;
-        let request_digest = input_digest(&encoded);
+        let request_digest = delegation_request_digest(&request);
         if let Some(record) = scope.run(self.repository.get(request.task_id)).await? {
             validate_replay(&request, request_digest, &record)?;
             validate_owned_record(&record, self.maximum_output_bytes)?;
@@ -654,6 +653,7 @@ fn validate_request(
     {
         return Err(AgentFailure::InvalidInput);
     }
+    request.execution_context.validate()?;
     Ok(())
 }
 

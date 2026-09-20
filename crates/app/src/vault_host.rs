@@ -193,7 +193,6 @@ struct OpenVault<Keys> {
     _recovered_conversation_runs: Vec<floe_vault::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     directory: Directory,
-    schedule_endpoint: Arc<conversation_turn::expert_dispatch::schedule::ScheduleEndpoint<Keys>>,
     builtin_expert_endpoint: Arc<conversation_turn::expert_dispatch::BuiltinExpertEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
 }
@@ -203,6 +202,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         vault: EncryptedAgentVault<Keys>,
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
+        endpoint_connections: conversation_turn::expert_compat::EndpointConnectionStore,
     ) -> Result<Self, AgentFailure> {
         let vault = Arc::new(vault);
         let conversation_activation = vault.activate_conversation_executor().await?;
@@ -214,6 +214,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 Arc::clone(&core),
                 Arc::clone(&vault),
                 Arc::clone(&local_context),
+                endpoint_connections.clone(),
             ),
         );
         let builtin_expert_endpoint = Arc::new(
@@ -221,6 +222,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 core,
                 Arc::clone(&vault),
                 local_context,
+                endpoint_connections,
             ),
         );
         let definition = conversation_turn::expert_dispatch::schedule::schedule_definition();
@@ -252,7 +254,6 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
             directory,
-            schedule_endpoint,
             builtin_expert_endpoint,
             _recovered_tasks: recovered_tasks,
         })
@@ -479,6 +480,45 @@ impl Worker {
         local_context: Arc<LocalContextHost>,
         app_events: Arc<crate::events::AppEventBuffer>,
     ) -> Result<Self, AgentFailure> {
+        Self::with_core_inner(
+            root,
+            keys,
+            core,
+            local_context,
+            app_events,
+            conversation_turn::expert_compat::EndpointConnectionStore::host_keychain(),
+        )
+    }
+
+    /// Test-only constructor with an injected endpoint credential store, so
+    /// delegated-endpoint tests never touch the host keychain slot.
+    #[cfg(test)]
+    fn with_core_and_endpoint_store<Keys: VaultKeyProvider + Clone + 'static>(
+        root: PathBuf,
+        keys: Keys,
+        core: Arc<FloeCore>,
+        local_context: Arc<LocalContextHost>,
+        app_events: Arc<crate::events::AppEventBuffer>,
+        endpoint_connections: conversation_turn::expert_compat::EndpointConnectionStore,
+    ) -> Result<Self, AgentFailure> {
+        Self::with_core_inner(
+            root,
+            keys,
+            core,
+            local_context,
+            app_events,
+            endpoint_connections,
+        )
+    }
+
+    fn with_core_inner<Keys: VaultKeyProvider + Clone + 'static>(
+        root: PathBuf,
+        keys: Keys,
+        core: Arc<FloeCore>,
+        local_context: Arc<LocalContextHost>,
+        app_events: Arc<crate::events::AppEventBuffer>,
+        endpoint_connections: conversation_turn::expert_compat::EndpointConnectionStore,
+    ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_IN_FLIGHT_VAULT_JOBS);
         let closing = Arc::new(AtomicBool::new(false));
         let run_cancellations = Arc::new(floe_conversation::RunCancellationRegistry::default());
@@ -688,7 +728,15 @@ impl Worker {
                             }
                             let result = match catch_unwind(AssertUnwindSafe(|| match &runtime {
                                 Ok(runtime) => runtime.block_on(diagnostics::instrument(
-                                    execute(&root, &keys, &core, &local_context, &mut vault, &job),
+                                    execute(
+                                        &root,
+                                        &keys,
+                                        &core,
+                                        &local_context,
+                                        &endpoint_connections,
+                                        &mut vault,
+                                        &job,
+                                    ),
                                     trace_context,
                                     "agent_job",
                                 )),
@@ -1209,6 +1257,7 @@ async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
     keys: &Keys,
     core: &Arc<FloeCore>,
     local_context: &Arc<LocalContextHost>,
+    endpoint_connections: &conversation_turn::expert_compat::EndpointConnectionStore,
     current: &mut Option<(PersonId, Arc<OpenVault<Keys>>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
@@ -1226,6 +1275,7 @@ async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
         keys,
         core,
         local_context,
+        endpoint_connections,
         current,
         job,
     ))
@@ -1279,8 +1329,6 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         vault,
         local_context,
         &vault.task_coordinator,
-        &vault.schedule_endpoint,
-        &vault.builtin_expert_endpoint,
         &vault.conversation_repository,
         &job.run_cancellations,
         job.person,
@@ -1343,6 +1391,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
     keys: &Keys,
     core: &Arc<FloeCore>,
     local_context: &Arc<LocalContextHost>,
+    endpoint_connections: &conversation_turn::expert_compat::EndpointConnectionStore,
     current: &mut Option<(PersonId, Arc<OpenVault<Keys>>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
@@ -1368,6 +1417,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 EncryptedAgentVault::create(root, job.person, keys.clone()).await?,
                 Arc::clone(core),
                 Arc::clone(local_context),
+                endpoint_connections.clone(),
             )
             .await?;
             *current = Some((job.person, Arc::new(vault)));
@@ -1381,6 +1431,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 EncryptedAgentVault::open(root, job.person, keys.clone()).await?,
                 Arc::clone(core),
                 Arc::clone(local_context),
+                endpoint_connections.clone(),
             )
             .await?;
             *current = Some((job.person, Arc::new(vault)));
@@ -2474,6 +2525,10 @@ mod tests {
     mod proposals;
     mod vault_registry;
 
+    use super::conversation_turn::expert_compat::EndpointConnectionStore;
+    use super::conversation_turn::expert_dispatch::BuiltinExpertEndpoint;
+    use super::conversation_turn::expert_dispatch::schedule::ScheduleEndpoint;
+
     impl Worker {
         fn new(root: PathBuf, keys: Keys) -> Result<Self, AgentFailure> {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -2487,6 +2542,26 @@ mod tests {
                 Arc::new(core),
                 Arc::new(LocalContextHost::default()),
                 Arc::new(crate::events::AppEventBuffer::default()),
+            )
+        }
+
+        fn new_with_endpoint_store(
+            root: PathBuf,
+            keys: Keys,
+            endpoint_connections: super::conversation_turn::expert_compat::EndpointConnectionStore,
+        ) -> Result<Self, AgentFailure> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let core = runtime.block_on(FloeCore::open(":memory:")).unwrap();
+            Self::with_core_and_endpoint_store(
+                root,
+                keys,
+                Arc::new(core),
+                Arc::new(LocalContextHost::default()),
+                Arc::new(crate::events::AppEventBuffer::default()),
+                endpoint_connections,
             )
         }
     }

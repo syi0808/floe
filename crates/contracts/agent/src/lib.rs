@@ -30,7 +30,9 @@ pub use capability::{
 };
 pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};
 pub use delegation::{
-    DelegationRequest, TaskReceipt, TaskSnapshot, TaskState, valid_context_refs,
+    DelegationExecutionContext, DelegationRequest, TaskReceipt, TaskSnapshot, TaskState,
+    delegation_request_digest, valid_context_refs, MAX_DELEGATION_DEVICE_ID_BYTES,
+    MAX_DELEGATION_EXECUTION_CONTEXT_BYTES,
 };
 pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,

@@ -1,11 +1,11 @@
-//! Staged legacy Expert model/source host compatibility.
+//! Legacy Expert model/source host compatibility.
 //!
-//! Temporary isolation behind `LegacyDelegationPort`, not a new architecture.
+//! Temporary isolation behind the delegated endpoints, not a new architecture.
 //! The root General Conversation turn never constructs these: root projection,
 //! model and tools are the canonical Conversation/Context/Engine/Inference
 //! owners. Only an actually delegated legacy Expert endpoint prepares its
-//! legacy model selection, policy and source fallback here, from the stored
-//! server credential. 2-C removes this bridge.
+//! legacy model selection, policy and source fallback here, from the injected
+//! saved-connection store. Stage 3-A removes this compatibility.
 
 use std::{future::Future, pin::Pin};
 
@@ -42,7 +42,7 @@ pub(super) fn policy(model: &Model) -> InferencePolicyDecision {
     }
 }
 
-/// The consent a staged legacy Expert model call stands under.
+/// The consent a legacy Expert model call stands under.
 ///
 /// No pre-resolved recipient exists anymore, so no external transfer is ever
 /// consented here: the legacy Server transport runs server-local only, and
@@ -51,13 +51,50 @@ pub(super) fn external_transfer_consent(placement: ModelPlacement) -> TransferCo
     floe_inference::external_transfer_consent(placement, None)
 }
 
+/// Where a delegated legacy Expert endpoint reads the saved server
+/// connection for its model/source compatibility: the host keychain slot in
+/// production, a fixed injected fixture in tests.
+///
+/// Constructor-injected per endpoint. The endpoint admits the loaded
+/// connection against the invocation principal and the execution-context
+/// device id on every execution; no credential ever travels in the
+/// delegation itself. Temporary legacy Expert transport support until
+/// Stage 3-A.
+#[derive(Clone)]
+pub(crate) enum EndpointConnectionStore {
+    HostKeychain(floe_provider_adapters::control::SavedServerConnectionStore),
+    #[cfg(test)]
+    Fixture(Option<floe_inference::SavedServerConnection>),
+}
+
+impl EndpointConnectionStore {
+    pub(crate) fn host_keychain() -> Self {
+        Self::HostKeychain(floe_provider_adapters::control::SavedServerConnectionStore)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(saved: Option<floe_inference::SavedServerConnection>) -> Self {
+        Self::Fixture(saved)
+    }
+}
+
+impl floe_inference::SavedConnectionStore for EndpointConnectionStore {
+    fn load(&self) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
+        match self {
+            Self::HostKeychain(store) => store.load(),
+            #[cfg(test)]
+            Self::Fixture(saved) => Ok(saved.clone()),
+        }
+    }
+}
+
 pub(crate) enum Model {
     Foundation(FoundationModelRunner),
     Server(ServerModelRunner),
 }
 
 impl Model {
-    /// Legacy staged-Expert model selection from the stored server
+    /// Legacy Expert model selection from the stored server
     /// credential: a stored connection means Server reasoning, absence means
     /// on-device Foundation. Pure: the candidate route is validated locally,
     /// never discovered over the network, so it can only run server-local.
