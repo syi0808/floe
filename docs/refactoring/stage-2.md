@@ -15,7 +15,7 @@ Detailed work is split into the execution plans linked below. This overview owns
 ## Progress
 
 - [x] **2-A — Compile and test ownership restoration** — [execution plan](stage-2/2-a.md)
-- [x] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
+- [ ] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
   - [x] **2-B.1 — Runtime contract and recovery foundation** — [final P0 plan](stage-2/2-b1.md)
     - [x] typed model conversation and authorized projection
     - [x] durable validated batches and stable execution/batch/ordinal identities
@@ -25,7 +25,7 @@ Detailed work is split into the execution plans linked below. This overview owns
   - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
   - [x] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
   - [x] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
-  - [x] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md) · [final credential-seam P1](stage-2/2-b5-credential-seam.md)
+  - [ ] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md) · [credential-seam P1](stage-2/2-b5-credential-seam.md) · [final credential-read P0](stage-2/2-b5-credential-read.md)
 - [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
 - [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
@@ -33,9 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-C — Delegation ownership convergence.**
+**Active: 2-B.5 final P0 — close public saved-credential read.**
 
-2-B is complete/frozen, including the final credential-seam P1. Use [the 2-C execution plan](stage-2/2-c.md) as the authoritative task document.
+The broad 2-B.5 audit and fixed-credential injection P1 are complete/frozen. The remaining blocker is narrower: public `ConversationTurnRequest::stored_server_connection()` can return the HostSlot `SavedServerConnection`, including its raw token, to an external Rust caller.
+
+Use [the final credential-read P0 plan](stage-2/2-b5-credential-read.md) as the authoritative task document. This is a narrow P0 reopen, not another 2-B deep audit. Do not start 2-C until it is green.
 
 ## Target internal architecture
 
