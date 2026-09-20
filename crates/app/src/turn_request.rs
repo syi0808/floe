@@ -129,8 +129,10 @@ impl ConversationTurnRequest {
     /// The saved server credential this turn may use: the injected fixed
     /// connection when one was supplied, else the host keychain slot. A local
     /// read only: no network, no route resolution, no model or source
-    /// discovery.
-    pub fn stored_server_connection(
+    /// discovery. Crate-internal: external callers express turn intent
+    /// through [`ConversationTurnRequest::new`] and must not read the saved
+    /// credential.
+    pub(crate) fn stored_server_connection(
         &self,
     ) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
         match self.saved_server_connection.clone() {

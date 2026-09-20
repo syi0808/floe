@@ -1,6 +1,6 @@
 # 2-B.5 Final P0 — Close Public Saved-Credential Read
 
-**Status: active — final 2-B blocker**
+**Status: complete**
 
 **Code baseline reviewed:** 526e9593ef670796acbd4141a882938b2779ca06
 
