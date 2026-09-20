@@ -6,10 +6,11 @@ use std::{
 use crate::control::authorization::{
     RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
 };
+use crate::control::PreparedServerSource;
 use floe_access::{RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation};
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_connections::CalendarConnectionRef;
+use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation};
 use floe_context::{
     AttentionView, CalendarContextView, CommunicationView, ConfirmedInteractionView, LogisticsView,
     MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
@@ -19,8 +20,8 @@ use floe_context::{
     validate_people_view, validate_wellbeing_view, validate_work_context_view,
 };
 use floe_execution::limits::{CallLimiter, CallLimits};
-use floe_inference::RemoteRoute;
-use reqwest::{Client, StatusCode, Url};
+use floe_inference::SavedServerConnection;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
 
@@ -43,12 +44,13 @@ pub struct AuthorizedViewRead<'a> {
     pub device_id: &'a str,
 }
 
+/// The paired server's source transport: reads and lazy catalog observation.
+///
+/// The client owns no model state. What the server offers as sources is
+/// observed lazily, only when a caller actually needs source enumeration, and
+/// projected by Connections; model profile discovery never shares this path.
 pub struct ServerSourceClient {
-    route: RemoteRoute,
-    /// The source catalog the paired server reported, kept beside the route
-    /// rather than inside it: a model route and a source catalog are different
-    /// admissions.
-    calendar_connections: Vec<CalendarConnectionRef>,
+    source: PreparedServerSource,
     source_calls: CallLimiter,
 }
 
@@ -87,46 +89,6 @@ fn valid_connection_id(value: &str) -> bool {
     })
 }
 
-fn validate_route(
-    route: &RemoteRoute,
-    calendar_connections: &[CalendarConnectionRef],
-) -> Result<(), AgentFailure> {
-    let address = Url::parse(&route.base_url).map_err(|_| AgentFailure::InvalidInput)?;
-    if address.scheme() != "http"
-        || address.host_str() != Some("127.0.0.1")
-        || address.path() != "/"
-        || address.query().is_some()
-        || address.fragment().is_some()
-        || address.port().is_none()
-        || route.bearer_token.len() < 32
-        || route.bearer_token.len() > 256
-        || !route
-            .bearer_token
-            .bytes()
-            .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
-        || route.purpose != "everyday_assistance"
-        || calendar_connections.len() > 2
-        || calendar_connections.iter().any(|connection| {
-            !matches!(
-                connection.connector_id.as_str(),
-                "calendar.google" | "calendar.microsoft"
-            ) || !valid_connection_id(&connection.connection_id)
-                || connection.connection_revision == 0
-        })
-        || calendar_connections
-            .iter()
-            .enumerate()
-            .any(|(index, connection)| {
-                calendar_connections[..index]
-                    .iter()
-                    .any(|candidate| candidate.connector_id == connection.connector_id)
-            })
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    Ok(())
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)
@@ -135,25 +97,51 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// A connector catalog exactly as the paired server reported it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedConnectorCatalog {
+    schema_version: u32,
+    person_id: String,
+    device_id: String,
+    connectors: Vec<serde_json::Value>,
+}
+
+/// Largest connector catalog the transport will read.
+const MAX_CATALOG_BYTES: usize = 65_536;
+
 impl ServerSourceClient {
-    pub fn new(
-        route: RemoteRoute,
-        calendar_connections: Vec<CalendarConnectionRef>,
-    ) -> Result<Self, AgentFailure> {
-        validate_route(&route, &calendar_connections)?;
-        Ok(Self {
-            route,
-            calendar_connections,
+    pub fn new(source: PreparedServerSource) -> Self {
+        Self {
+            source,
             source_calls: source_calls().clone(),
-        })
+        }
     }
 
-    pub fn calendar_connections(&self) -> &[CalendarConnectionRef] {
-        &self.calendar_connections
+    /// Prepare the source client for one verified caller from its saved
+    /// server connection, if it has one. Pure: no network, no model profile
+    /// discovery. Absence means local-only; a foreign or malformed stored
+    /// connection fails closed.
+    pub fn prepare(
+        saved: Option<SavedServerConnection>,
+        person_id: &str,
+        device_id: &str,
+    ) -> Result<Option<Self>, AgentFailure> {
+        saved
+            .map(|stored| {
+                PreparedServerSource::admit(stored, person_id, device_id).map(Self::new)
+            })
+            .transpose()
+    }
+
+    /// The prepared source this client reads through: endpoint, credential
+    /// and pairing identity. The credential stays inside the adapter.
+    pub fn source(&self) -> &PreparedServerSource {
+        &self.source
     }
 
     pub fn authorization_client(&self) -> Result<RemoteAuthorizationClient, AgentFailure> {
-        RemoteAuthorizationClient::new(&self.route)
+        RemoteAuthorizationClient::new(self.source.base_url(), self.source.bearer_token())
     }
 
     #[cfg(test)]
@@ -242,7 +230,7 @@ impl ServerSourceClient {
         let consumer = request.consumer;
         let read_path = format!("{}/read", request.path.trim_end_matches("/admit"));
         let release_path = format!("{}/release", request.path.trim_end_matches("/admit"));
-        let client = RemoteAuthorizationClient::new(&self.route)?;
+        let client = self.authorization_client()?;
         let query_bytes =
             serde_json::to_vec(&request.query).map_err(|_| AgentFailure::InvalidInput)?;
         let query_digest = sha256_hex(&query_bytes);
@@ -258,9 +246,8 @@ impl ServerSourceClient {
             || parts.consumer != consumer
             || parts.max_items != expected.max_items
             || parts.max_bytes != expected.max_bytes
-            || self.route.pairing.as_ref().is_some_and(|pairing| {
-                parts.client_id != pairing.client_id || parts.device_id != pairing.device_id
-            })
+            || parts.client_id != self.source.client_id()
+            || parts.device_id != self.source.device_id()
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -352,6 +339,89 @@ impl ServerSourceClient {
             validate_work_context_view,
         )
         .await
+    }
+
+    /// Observe the paired server's connector catalog, projected to the
+    /// connected calendar sources.
+    ///
+    /// Lazy and source-owned: called only when a caller actually needs source
+    /// enumeration, never during turn admission or model profile discovery.
+    /// Connections projects the observation; a catalog that names another
+    /// caller fails closed, and a malformed one reads as unavailable.
+    pub async fn observe_calendar_connections(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<Vec<CalendarConnectionRef>, AgentFailure> {
+        let catalog: ObservedConnectorCatalog = self
+            .authenticated_get("/v1/connectors", deadline, cancellation)
+            .await?;
+        if catalog.person_id != self.source.person_id()
+            || catalog.device_id != self.source.device_id()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        floe_connections::project_calendar_connections(
+            &ConnectorCatalogObservation {
+                schema_version: catalog.schema_version,
+                person_id: catalog.person_id,
+                device_id: catalog.device_id,
+                connectors: catalog.connectors,
+            },
+            self.source.person_id(),
+            self.source.device_id(),
+        )
+        .ok_or(AgentFailure::CapabilityUnavailable)
+    }
+
+    async fn authenticated_get<Response: DeserializeOwned>(
+        &self,
+        path: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<Response, AgentFailure> {
+        let _permit = self
+            .source_calls
+            .acquire(path.len(), deadline, cancellation)
+            .await?;
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if timeout.is_zero() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        let client = Client::builder()
+            .timeout(timeout.min(Duration::from_secs(10)))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        let send = client
+            .get(format!(
+                "{}{path}",
+                self.source.base_url().trim_end_matches('/')
+            ))
+            .bearer_auth(self.source.bearer_token())
+            .send();
+        let response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::CapabilityUnavailable })?,
+        };
+        match response.status() {
+            StatusCode::OK => {}
+            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
+            StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
+            _ => return Err(AgentFailure::CapabilityUnavailable),
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        if bytes.len() > MAX_CATALOG_BYTES {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)
     }
 
     pub async fn read_calendar_context_view(
@@ -515,9 +585,9 @@ impl ServerSourceClient {
         let send = client
             .post(format!(
                 "{}{path}",
-                self.route.base_url.trim_end_matches('/')
+                self.source.base_url().trim_end_matches('/')
             ))
-            .bearer_auth(&self.route.bearer_token)
+            .bearer_auth(self.source.bearer_token())
             .json(&input)
             .send();
         let response = tokio::select! {
@@ -569,8 +639,34 @@ mod tests {
     use crate::models::server::ServerModelRunner;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn route() -> RemoteRoute {
-        RemoteRoute {
+    const PERSON: &str = "00000000-0000-4000-8000-000000000001";
+    const DEVICE: &str = "local-device";
+
+    fn source(base_url: &str) -> PreparedServerSource {
+        PreparedServerSource::from_parts(
+            base_url,
+            "secret_token_value_that_is_long_enough",
+            "paired-client",
+            PERSON,
+            DEVICE,
+        )
+        .unwrap()
+    }
+
+    fn saved(base_url: &str) -> SavedServerConnection {
+        SavedServerConnection {
+            base_url: base_url.into(),
+            token: "secret_token_value_that_is_long_enough".into(),
+            client_id: "paired-client".into(),
+            person_id: PERSON.into(),
+            device_id: DEVICE.into(),
+            allow_external: false,
+            external_recipients: vec![],
+        }
+    }
+
+    fn model_route() -> floe_inference::RemoteRoute {
+        floe_inference::RemoteRoute {
             base_url: "http://127.0.0.1:8431".into(),
             bearer_token: "secret_token_value_that_is_long_enough".into(),
             purpose: "everyday_assistance".into(),
@@ -580,15 +676,17 @@ mod tests {
             pairing: None,
         }
     }
+
     #[tokio::test]
     async fn cancelled_queued_source_read_never_opens_a_provider_connection() {
         use std::{future::Future, task::Poll};
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
-        let mut route = route();
-        route.base_url = format!("http://{}", listener.local_addr().unwrap());
-        let mut runner = ServerSourceClient::new(route, vec![]).unwrap();
+        let mut runner = ServerSourceClient::new(source(&format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        )));
         runner.set_call_limiter(
             CallLimiter::new(CallLimits {
                 max_running: 1,
@@ -618,7 +716,7 @@ mod tests {
             matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
         assert!(!parent.is_cancelled());
-        let model = ServerModelRunner::new_model_only(self::route()).unwrap();
+        let model = ServerModelRunner::new_model_only(model_route()).unwrap();
         assert!(
             model
                 .model_call_limiter()
@@ -708,9 +806,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let mut route = route();
-        route.base_url = format!("http://{address}");
-        let model = ServerSourceClient::new(route, vec![]).unwrap();
+        let model = ServerSourceClient::new(source(&format!("http://{address}")));
         let view = model
             .read_communication_view(
                 "reply",
@@ -780,9 +876,7 @@ mod tests {
                     .await
                     .unwrap();
             });
-            let mut route = route();
-            route.base_url = format!("http://{address}");
-            let model = ServerSourceClient::new(route, vec![]).unwrap();
+            let model = ServerSourceClient::new(source(&format!("http://{address}")));
             if path.ends_with("work.context") {
                 model
                     .read_work_context_view(
@@ -805,65 +899,238 @@ mod tests {
     }
 
     #[test]
-    fn route_accepts_only_loopback_and_redacts_credentials() {
-        let valid = route();
-        assert!(ServerSourceClient::new(valid.clone(), vec![]).is_ok());
-        let rendered = format!("{valid:?}");
-        assert!(!rendered.contains(&valid.bearer_token));
-        assert!(rendered.contains("[REDACTED]"));
-
-        for invalid in [
-            "https://127.0.0.1:8431",
-            "http://localhost:8431",
-            "http://127.0.0.1:8431/path",
-            "http://192.168.1.2:8431",
-            "http://127.0.0.1",
-            "http://127.0.0.1:8431?query=true",
-            "http://127.0.0.1:8431#fragment",
-        ] {
-            let mut candidate = route();
-            candidate.base_url = invalid.into();
-            assert!(ServerSourceClient::new(candidate, vec![]).is_err());
-        }
-
-        for token in ["short".to_owned(), "x".repeat(257), " ".repeat(32)] {
-            let mut candidate = route();
-            candidate.bearer_token = token;
-            assert!(ServerSourceClient::new(candidate, vec![]).is_err());
-        }
-        let mut wrong_purpose = route();
-        wrong_purpose.purpose = "other".into();
-        assert!(ServerSourceClient::new(wrong_purpose, vec![]).is_err());
-
-        // A catalog entry the transport cannot read is refused with the route.
+    fn prepare_binds_saved_connection_without_network_or_model_state() {
+        // Absence is local-only, not an error.
         assert!(
-            ServerSourceClient::new(
-                route(),
-                vec![CalendarConnectionRef {
-                    connector_id: "invalid.connector".into(),
-                    connection_id: "invalid-connection".into(),
-                    connection_revision: 0,
-                }],
-            )
-            .is_err()
+            ServerSourceClient::prepare(None, PERSON, DEVICE)
+                .unwrap()
+                .is_none()
         );
+        let prepared = ServerSourceClient::prepare(Some(saved("http://127.0.0.1:8431")), PERSON, DEVICE)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.source().client_id(), "paired-client");
+        assert_eq!(prepared.source().person_id(), PERSON);
+        assert_eq!(prepared.source().device_id(), DEVICE);
+        // A foreign pairing fails closed instead of preparing a client.
+        assert_eq!(
+            ServerSourceClient::prepare(
+                Some(saved("http://127.0.0.1:8431")),
+                PERSON,
+                "other-device"
+            )
+            .err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        let mut malformed = saved("http://127.0.0.1:8431");
+        malformed.base_url = "http://not-loopback.invalid".into();
+        assert_eq!(
+            ServerSourceClient::prepare(Some(malformed), PERSON, DEVICE).err(),
+            Some(AgentFailure::InvalidInput)
+        );
+    }
 
-        for (connection_id, revision) in [
-            ("not-a-uuid", 1),
-            ("00000000-0000-3000-8000-000000000001", 1),
-            ("00000000-0000-4000-8000-000000000001", 0),
-        ] {
-            assert!(
-                ServerSourceClient::new(
-                    route(),
-                    vec![CalendarConnectionRef {
-                        connector_id: "calendar.google".into(),
-                        connection_id: connection_id.into(),
-                        connection_revision: revision,
-                    }],
+    #[tokio::test]
+    async fn source_reads_never_touch_model_or_catalog_discovery() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let server = tokio::spawn(async move {
+            for expected_path in ["/v1/views/work.context", "/v1/views/life.logistics"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let read = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                let path = request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default();
+                assert!(
+                    path != "/v1/inference-purposes" && path != "/v1/connectors",
+                    "source reads must never trigger discovery: {path}"
+                );
+                assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
+                let view = if expected_path.ends_with("work.context") {
+                    json!({
+                        "schema_version": 1,
+                        "view_id": "work.context",
+                        "source_handle": "work:fixture",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 299_999,
+                        "coverage_complete": true,
+                        "scope_handle": "workspace:fixture",
+                        "items": []
+                    })
+                } else {
+                    json!({
+                        "schema_version": 1,
+                        "view_id": "life.logistics",
+                        "source_handle": "logistics:fixture",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 299_999,
+                        "coverage_complete": true,
+                        "items": []
+                    })
+                };
+                let body = json!({"schema_version": 1, "view": view}).to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(), body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = ServerSourceClient::new(source(&format!("http://{address}")));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let cancellation = floe_execution::Cancellation::default();
+        client
+            .read_work_context_view(deadline, &cancellation)
+            .await
+            .unwrap();
+        client
+            .read_logistics_view(deadline, &cancellation)
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connector_catalog_is_observed_on_demand_and_projected_by_connections() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_token = source("http://127.0.0.1:9").bearer_token().to_owned();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let read = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET /v1/connectors HTTP/1.1\r\n"));
+            let expected = format!("authorization: bearer {expected_token}");
+            assert!(request.to_ascii_lowercase().contains(&expected));
+            let body = json!({
+                "schema_version": 1,
+                "person_id": PERSON,
+                "device_id": DEVICE,
+                "connectors": [
+                    {
+                        "id": "calendar.google",
+                        "status": "connected",
+                        "connection_id": "00000000-0000-4000-8000-000000000010",
+                        "connection_revision": 7,
+                    },
+                    {
+                        "id": "calendar.microsoft",
+                        "status": "disconnected",
+                        "connection_id": "00000000-0000-4000-8000-000000000011",
+                        "connection_revision": 3,
+                    },
+                    {
+                        "id": "mail.gmail",
+                        "status": "connected",
+                        "connection_id": "00000000-0000-4000-8000-000000000012",
+                        "connection_revision": 1,
+                    },
+                ],
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body
+                    )
+                    .as_bytes(),
                 )
-                .is_err()
+                .await
+                .unwrap();
+        });
+        let client = ServerSourceClient::new(source(&format!("http://{address}")));
+        let observed = client
+            .observe_calendar_connections(
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            observed,
+            vec![CalendarConnectionRef {
+                connector_id: "calendar.google".into(),
+                connection_id: "00000000-0000-4000-8000-000000000010".into(),
+                connection_revision: 7,
+            }]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connector_catalog_for_another_caller_or_malformed_fails_closed() {
+        for (body, expected) in [
+            (
+                json!({
+                    "schema_version": 1,
+                    "person_id": "00000000-0000-4000-8000-000000000099",
+                    "device_id": DEVICE,
+                    "connectors": [],
+                }),
+                AgentFailure::PolicyDenied,
+            ),
+            (
+                json!({
+                    "schema_version": 1,
+                    "person_id": PERSON,
+                    "device_id": DEVICE,
+                    "connectors": [
+                        {"id": "calendar.google", "status": "connected"},
+                    ],
+                }),
+                AgentFailure::CapabilityUnavailable,
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = body.to_string();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let read = socket.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..read])
+                        .starts_with("GET /v1/connectors HTTP/1.1\r\n")
+                );
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(), body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let client = ServerSourceClient::new(source(&format!("http://{address}")));
+            assert_eq!(
+                client
+                    .observe_calendar_connections(
+                        tokio::time::Instant::now() + Duration::from_secs(5),
+                        &floe_execution::Cancellation::default(),
+                    )
+                    .await,
+                Err(expected)
             );
+            server.await.unwrap();
         }
     }
 }

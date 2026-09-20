@@ -615,6 +615,15 @@ fn remote_route(route: &AgentRemoteRouteDto) -> RemoteTurnRoute {
 fn conversation_turn_request(
     request: &AgentConversationTurnRequestDto,
 ) -> WireResult<ConversationTurnRequest> {
+    // The legacy route field can no longer reach execution: turns admit the
+    // stored credential after admission instead. Reject it deterministically
+    // so a stale caller fails loudly instead of silently changing meaning.
+    if request.remote_route.is_some() {
+        return Err(invalid(
+            "request.remote_route",
+            "remote_route is no longer accepted for conversation turns",
+        ));
+    }
     Ok(ConversationTurnRequest {
         session_id: parse_uuid(&request.session_id, "request.session_id")?,
         expected_revision: request.expected_revision,
@@ -634,9 +643,8 @@ fn conversation_turn_request(
                     .ok_or_else(|| invalid("request.retry_of", "must be a Run id"))
             })
             .transpose()?,
-        remote_route: request.remote_route.as_ref().map(remote_route),
         // The product boundary supplies no saved server connection yet; the
-        // canonical root provider consults the host keychain slot instead.
+        // canonical owners consult the host keychain slot instead.
         saved_server_connection: None,
     })
 }
@@ -1337,6 +1345,45 @@ mod tests {
         .expect("an unparseable candidate id is rejected on the wire");
         assert_eq!(error.code, ErrorCodeDto::Validation);
         assert_eq!(error.field.as_deref(), Some("action.candidate_id"));
+    }
+
+    #[test]
+    fn conversation_turn_rejects_a_legacy_remote_route() {
+        let request = AgentConversationTurnRequestDto {
+            session_id: Uuid::new_v4().to_string(),
+            expected_revision: 0,
+            text: "Hello".into(),
+            device_id: "mac-local".into(),
+            profile: AppProfileSelectionDto::Explicit {
+                profile_id: "server-model".into(),
+            },
+            continuation: false,
+            retry_of: None,
+            remote_route: Some(AgentRemoteRouteDto {
+                base_url: "http://127.0.0.1:9".into(),
+                bearer_token: "must-not-reach-execution".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                recipient: None,
+                calendar_connections: vec![],
+                pairing: None,
+            }),
+        };
+        // An arbitrary endpoint/bearer through the legacy field is rejected
+        // deterministically: it can never influence model/source execution.
+        let error = conversation_turn_request(&request)
+            .err()
+            .expect("a legacy route is rejected deterministically");
+        assert_eq!(error.code, ErrorCodeDto::Validation);
+        assert_eq!(error.field.as_deref(), Some("request.remote_route"));
+
+        let accepted = conversation_turn_request(&AgentConversationTurnRequestDto {
+            remote_route: None,
+            ..request
+        })
+        .expect("a turn without a route converts");
+        assert!(accepted.saved_server_connection.is_none());
     }
 
     #[test]

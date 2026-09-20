@@ -991,3 +991,144 @@ fn disabled_or_stale_endpoint_is_not_dispatchable() {
         Err(AgentFailure::CapabilityDenied)
     ));
 }
+
+#[tokio::test]
+async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placement_filter() {
+    let directory = Directory::default();
+    let mut remote_only = definition("floe.test.remote-only", 3);
+    remote_only.card.supported_placements = vec![ModelPlacement::Remote];
+    directory
+        .register(
+            DirectoryEntry {
+                definition: remote_only,
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec!["person-a".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(Endpoint {
+                result: Ok("remote-only result"),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        )
+        .unwrap();
+    register(
+        &directory,
+        "floe.test.local",
+        Endpoint {
+            result: Ok("local result"),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    )
+    .unwrap();
+    directory
+        .register(
+            DirectoryEntry {
+                definition: definition("floe.test.disabled", 1),
+                reviewed: true,
+                enabled: false,
+                admitted_principals: vec!["person-a".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(Endpoint {
+                result: Ok("disabled result"),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        )
+        .unwrap();
+    directory
+        .register(
+            DirectoryEntry {
+                definition: definition("floe.test.unreviewed", 1),
+                reviewed: false,
+                enabled: true,
+                admitted_principals: vec!["person-a".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(Endpoint {
+                result: Ok("unreviewed result"),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        )
+        .unwrap();
+    directory
+        .register(
+            DirectoryEntry {
+                definition: definition("floe.test.other-principal", 1),
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec!["person-b".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(Endpoint {
+                result: Ok("other-principal result"),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        )
+        .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+
+    let catalog = coordinator.catalog("person-a").unwrap();
+    let listed: Vec<(&str, u64)> = catalog
+        .cards
+        .iter()
+        .map(|entry| (entry.card.id.as_str(), entry.definition_revision))
+        .collect();
+    // Both admitted entries appear with their registered revisions, including
+    // the Remote-only card: model placement never filters the root catalog.
+    assert_eq!(
+        listed,
+        vec![("floe.test.local", 1), ("floe.test.remote-only", 3)]
+    );
+    // Disabled, unreviewed and wrong-principal entries never appear.
+    assert_eq!(coordinator.catalog("person-b").unwrap().cards.len(), 1);
+    assert!(
+        coordinator
+            .catalog("person-b")
+            .unwrap()
+            .cards
+            .iter()
+            .all(|entry| entry.card.id == "floe.test.other-principal")
+    );
+}
+
+#[tokio::test]
+async fn stale_definition_revision_is_rejected_by_task_coordinator() {
+    let directory = Directory::default();
+    register(
+        &directory,
+        "floe.test.versioned",
+        Endpoint {
+            result: Ok("versioned result"),
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    )
+    .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let mut request = delegation(run_id, task_id, "floe.test.versioned");
+    request.selected_definition_revision = 99;
+    let receipt = coordinator
+        .delegate(request, &scope(run_id, Some(task_id)))
+        .await
+        .unwrap();
+    assert_eq!(receipt.snapshot.state, TaskState::Failed);
+    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+}

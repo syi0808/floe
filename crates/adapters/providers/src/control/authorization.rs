@@ -343,26 +343,29 @@ pub struct RemoteViewAuthorizationRequest<'value> {
 }
 
 impl RemoteAuthorizationClient {
-    pub fn new(route: &RemoteRoute) -> Result<Self, AgentFailure> {
-        let address = Url::parse(&route.base_url).map_err(|_| AgentFailure::InvalidInput)?;
+    /// Speak to one loopback server under its bearer credential.
+    ///
+    /// Transport only: the caller (a prepared source or a route-supplied
+    /// outer operation) owns identity binding and authorization.
+    pub fn new(base_url: &str, bearer_token: &str) -> Result<Self, AgentFailure> {
+        let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
         if address.scheme() != "http"
             || address.host_str() != Some("127.0.0.1")
             || address.path() != "/"
             || address.query().is_some()
             || address.fragment().is_some()
             || address.port().is_none()
-            || route.bearer_token.len() < 32
-            || route.bearer_token.len() > 256
-            || !route
-                .bearer_token
+            || bearer_token.len() < 32
+            || bearer_token.len() > 256
+            || !bearer_token
                 .bytes()
                 .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
         {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(Self {
-            base_url: route.base_url.trim_end_matches('/').to_owned(),
-            bearer_token: route.bearer_token.clone(),
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            bearer_token: bearer_token.to_owned(),
         })
     }
 
@@ -1143,6 +1146,11 @@ mod tests {
         }
     }
 
+    fn authorization_client(address: std::net::SocketAddr) -> RemoteAuthorizationClient {
+        let route = route(address);
+        RemoteAuthorizationClient::new(&route.base_url, &route.bearer_token).unwrap()
+    }
+
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
 
@@ -1201,7 +1209,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let client = authorization_client(address);
         let identity = client
             .producer_identity(
                 tokio::time::Instant::now() + Duration::from_secs(5),
@@ -1340,7 +1348,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let client = authorization_client(address);
         assert_eq!(
             client
                 .producer_identity(
@@ -1379,7 +1387,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let client = authorization_client(address);
         assert_eq!(
             client
                 .producer_identity(
@@ -1402,7 +1410,7 @@ mod tests {
             let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
             tokio::time::sleep(Duration::from_secs(5)).await;
         });
-        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let client = authorization_client(address);
         let cancellation = floe_execution::Cancellation::default();
         let request_client = client.clone();
         let request_cancellation = cancellation.clone();
@@ -1500,7 +1508,7 @@ mod tests {
                     .unwrap();
             }
         });
-        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let client = authorization_client(address);
         assert_eq!(
             client
                 .enroll(
@@ -1566,7 +1574,7 @@ mod tests {
                     .unwrap();
             }
         });
-        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let client = authorization_client(address);
         let owner = RemoteOwnerPublicKey {
             key_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(),
             public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
@@ -1669,7 +1677,7 @@ pub struct RemoteAuthorityEndpoint<'a, Keys> {
 impl<'a, Keys: RemoteAuthorizationKeys> RemoteAuthorityEndpoint<'a, Keys> {
     pub fn new(route: &RemoteRoute, keys: Option<&'a Keys>) -> Result<Self, AgentFailure> {
         Ok(Self {
-            client: RemoteAuthorizationClient::new(route)?,
+            client: RemoteAuthorizationClient::new(&route.base_url, &route.bearer_token)?,
             keys,
         })
     }

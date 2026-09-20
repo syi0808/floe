@@ -5,9 +5,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use floe_agent_contract::{AgentFailure, ModelPlacement};
+use floe_agent_contract::AgentFailure;
+use floe_experts_builtin::schedule;
+#[cfg(test)]
 use floe_experts_builtin::BuiltinExpertKind;
-use floe_experts_builtin::schedule::{self, SCHEDULE_DEFINITION_REVISION};
+#[cfg(test)]
+use floe_experts_builtin::schedule::SCHEDULE_DEFINITION_REVISION;
 
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAccessStamp,
@@ -28,6 +31,7 @@ use floe_context_contract::CalendarProvider;
 use floe_day::CalendarTimelineGrant;
 use floe_day::{CalendarBatch, CalendarConnection, CalendarRecord};
 use floe_execution::ExecutionScope;
+#[cfg(test)]
 use floe_experts::TaskCoordinator;
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
@@ -44,7 +48,8 @@ use floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess;
 use uuid::Uuid;
 
 use crate::local_context::LocalContextHost;
-use floe_provider_adapters::models::{FoundationModelRunner, ServerModelRunner};
+use floe_connections::CalendarConnectionRef;
+use floe_provider_adapters::sources::ServerSourceClient;
 
 // The legacy calendar turn's own request type is named by the host regressions
 // that still cover that path; the module stays inside the vault host.
@@ -52,7 +57,8 @@ pub(in crate::vault_host) mod agent;
 
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 
-use super::external_transfer_consent;
+use super::super::expert_compat::{Model, external_transfer_consent};
+#[cfg(test)]
 use floe_vault::VaultTaskRepository;
 
 #[derive(Clone)]
@@ -110,32 +116,6 @@ impl<Keys> ScheduleEndpoint<Keys> {
     }
 }
 
-pub(crate) async fn eligible_card<Keys: VaultKeyProvider>(
-    vault: &EncryptedAgentVault<Keys>,
-    device_id: &str,
-) -> Result<Option<floe_experts::AgentCard>, AgentFailure> {
-    let selected = match select_active_setup(vault, device_id).await {
-        Ok(selected) => selected,
-        Err(AgentFailure::CapabilityDenied) => return Ok(None),
-        Err(failure) => return Err(failure),
-    };
-    if selected.ambiguous {
-        return Ok(None);
-    }
-    let card = schedule_definition().card;
-    Ok(Some(floe_experts::AgentCard {
-        schema_version: floe_kernel::AGENT_VERSION,
-        protocol_version: floe_experts::A2A_PROTOCOL_VERSION.into(),
-        id: card.id,
-        version: card.version,
-        name: card.name,
-        description: card.description,
-        domain_tags: card.domain_tags,
-        skills: card.skills,
-        supported_placements: card.supported_placements,
-    }))
-}
-
 impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> {
     fn execute<'a>(
         &'a self,
@@ -162,33 +142,62 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             if selected.ambiguous {
                 return Err(AgentFailure::AccessReviewRequired);
             }
+            // Staged Schedule compatibility, prepared here because an actual
+            // delegated endpoint runs: the stored credential is admitted for
+            // source and legacy model use. No pre-resolved route exists.
+            let person_id = self.vault.person_id();
+            let stored = staged.request.stored_server_connection()?;
+            let source_client = ServerSourceClient::prepare(
+                stored.clone(),
+                &person_id.to_string(),
+                &staged.request.device_id,
+            )?;
             let plan = schedule::plan_run(
                 &staged.request.text,
                 selected.binding.provider,
                 selected.binding.calendar_ids.len(),
-                staged.request.remote_route.is_some(),
+                source_client.is_some(),
                 chrono::Local::now(),
                 chrono::Utc::now(),
             )?;
             // The Expert decided where it may reason; the host only builds it.
             let model = match plan.reasoning {
                 schedule::ScheduleReasoning::OnDevice => {
-                    Model::Foundation(FoundationModelRunner::encrypted())
+                    Model::for_stored_connection(None, &person_id.to_string(), &staged.request.device_id)?
                 }
                 schedule::ScheduleReasoning::ConversationRoute => {
-                    Model::conversation(staged.request.remote_route.clone())?
+                    Model::for_stored_connection(
+                        stored,
+                        &person_id.to_string(),
+                        &staged.request.device_id,
+                    )?
                 }
             };
-            let remote_backend = match staged.request.remote_route.as_ref() {
-                Some(route) if plan.acquire_remotely => Some(VaultRemoteCalendarBackend::new(
+            let remote_backend = match source_client.as_ref() {
+                Some(client) if plan.acquire_remotely => Some(VaultRemoteCalendarBackend::new(
                     &self.vault,
                     &self.core,
-                    route,
-                    self.vault.person_id(),
+                    client,
+                    person_id,
                     selected.binding.provider,
                     selected.binding.calendar_ids.clone(),
                     selected.binding.connection_revision,
                 )?),
+                _ => None,
+            };
+            // Source enumeration happens here, only when this provider needs
+            // the catalog cross-check during validation.
+            let calendar_catalog = match (&source_client, selected.binding.provider) {
+                (Some(client), CalendarProvider::Google | CalendarProvider::Microsoft) => {
+                    Some(
+                        client
+                            .observe_calendar_connections(
+                                scope.deadline(),
+                                scope.cancellation(),
+                            )
+                            .await?,
+                    )
+                }
                 _ => None,
             };
             let access = BoundAccess {
@@ -196,7 +205,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                 setup: &selected.setup,
                 binding: &selected.binding,
                 request_device_id: &staged.request.device_id,
-                remote_route: staged.request.remote_route.as_ref(),
+                calendar_catalog: calendar_catalog.as_deref(),
                 ambiguous: selected.ambiguous,
                 access: Access::new(
                     self.vault.person_id(),
@@ -228,10 +237,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                         policy: schedule::run_policy(
                             placement,
                             selected.binding.data_class(),
-                            external_transfer_consent(
-                                placement,
-                                staged.request.remote_route.as_ref(),
-                            ),
+                            external_transfer_consent(placement),
                         ),
                         grant: CalendarTimelineGrant {
                             person_id: self.vault.person_id(),
@@ -349,6 +355,9 @@ async fn select_active_setup<Keys: VaultKeyProvider>(
     })
 }
 
+/// Test-only in-process dispatch: production delegation crosses the
+/// `LegacyDelegationPort` bridge into [`ScheduleEndpoint`] instead.
+#[cfg(test)]
 pub(crate) async fn run_registered<Keys: VaultKeyProvider + 'static>(
     endpoint: &ScheduleEndpoint<Keys>,
     coordinator: &TaskCoordinator<VaultTaskRepository<Keys>>,
@@ -385,7 +394,7 @@ struct BoundAccess<'host> {
     setup: &'host floe_experts::CalendarExpertSetupReceipt,
     binding: &'host floe_experts::CalendarViewBinding,
     request_device_id: &'host str,
-    remote_route: Option<&'host crate::RemoteTurnRoute>,
+    calendar_catalog: Option<&'host [CalendarConnectionRef]>,
     ambiguous: bool,
     access: Access<'host>,
 }
@@ -409,7 +418,7 @@ impl BoundAccess<'_> {
             self.binding,
             &connection,
             self.request_device_id,
-            self.remote_route,
+            self.calendar_catalog,
         )?;
         Ok(())
     }
@@ -465,7 +474,7 @@ fn validate_active_connection(
     binding: &floe_experts::CalendarViewBinding,
     connection: &CalendarConnection,
     request_device_id: &str,
-    remote_route: Option<&crate::RemoteTurnRoute>,
+    calendar_catalog: Option<&[CalendarConnectionRef]>,
 ) -> Result<(), AgentFailure> {
     let calendar_ids: Vec<_> = connection
         .calendars
@@ -518,17 +527,16 @@ fn validate_active_connection(
         CalendarProvider::Microsoft => Some("calendar.microsoft"),
         CalendarProvider::Fixture | CalendarProvider::EventKit | CalendarProvider::Android => None,
     };
-    match (connector_id, remote_route) {
-        (Some(connector_id), Some(route)) => {
-            let candidates: Vec<_> = route
-                .calendar_connections
+    match (connector_id, calendar_catalog) {
+        (Some(connector_id), Some(catalog)) => {
+            let candidates: Vec<_> = catalog
                 .iter()
                 .filter(|candidate| candidate.connector_id == connector_id)
                 .collect();
             if !matches!(candidates.as_slice(), [candidate]
                     if candidate.connection_id == connection.connection_id
                         && candidate.connection_revision == connection.revision)
-                || route.calendar_connections.iter().any(|candidate| {
+                || catalog.iter().any(|candidate| {
                     candidate.connector_id != connector_id
                         && candidate.connection_id == connection.connection_id
                 })
@@ -971,28 +979,29 @@ impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
     fn new(
         vault: &'host floe_vault::EncryptedAgentVault<Keys>,
         core: &'host crate::FloeCore,
-        route: &crate::RemoteTurnRoute,
+        source: &ServerSourceClient,
         person_id: PersonId,
         provider: CalendarProvider,
         calendar_ids: Vec<String>,
         connection_revision: u64,
     ) -> Result<Self, AgentFailure> {
-        let pairing = route
-            .pairing()
-            .cloned()
-            .ok_or(AgentFailure::CapabilityDenied)?;
-        if pairing.person_id != person_id.to_string() || pairing.device_id.is_empty() {
+        let prepared = source.source();
+        if prepared.person_id() != person_id.to_string() || prepared.device_id().is_empty() {
             return Err(AgentFailure::CapabilityDenied);
         }
         Ok(Self {
             vault,
             core,
-            client: RemoteAuthorizationClient::new(&route.route)?,
+            client: source.authorization_client()?,
             person_id,
             provider,
             calendar_ids,
             connection_revision,
-            pairing,
+            pairing: floe_inference::RoutePairing {
+                client_id: prepared.client_id().to_owned(),
+                person_id: prepared.person_id().to_owned(),
+                device_id: prepared.device_id().to_owned(),
+            },
         })
     }
 
@@ -1456,46 +1465,13 @@ impl CalendarSource for FixtureAccess {
     }
 }
 
-enum Model {
-    Foundation(FoundationModelRunner),
-    Server(ServerModelRunner),
-}
-
-impl Model {
-    fn conversation(remote_route: Option<crate::RemoteTurnRoute>) -> Result<Self, AgentFailure> {
-        match remote_route {
-            Some(route) => ServerModelRunner::new_model_only(route.route).map(Self::Server),
-            None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
-        }
-    }
-}
-
-impl floe_inference::ModelTransport for Model {
-    fn placement(&self) -> ModelPlacement {
-        match self {
-            Self::Foundation(model) => model.placement(),
-            Self::Server(model) => model.placement(),
-        }
-    }
-
-    async fn generate(
-        &self,
-        request: floe_inference::ModelTransportRequest,
-    ) -> Result<floe_inference::ModelTransportResponse, AgentFailure> {
-        match self {
-            Self::Foundation(model) => model.generate(request).await,
-            Self::Server(model) => model.generate(request).await,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::FloeCore;
     use crate::local_context::{CalendarObservationPublication, LocalContextCommand};
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use floe_agent_contract::TransferConsent;
+    use floe_agent_contract::{ModelPlacement, TransferConsent};
     use floe_context_contract::CalendarScope;
     use floe_context_contract::{
         ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation,
@@ -1933,23 +1909,15 @@ mod tests {
         (setup, binding, connection)
     }
 
-    fn remote_route(connector_id: &str, connection: &CalendarConnection) -> crate::RemoteTurnRoute {
-        crate::RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: "http://127.0.0.1:8080/".into(),
-                bearer_token: "a".repeat(32),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: None,
-            },
-            calendar_connections: vec![floe_connections::CalendarConnectionRef {
-                connector_id: connector_id.into(),
-                connection_id: connection.connection_id.clone(),
-                connection_revision: connection.revision,
-            }],
-        }
+    fn observed_catalog(
+        connector_id: &str,
+        connection: &CalendarConnection,
+    ) -> Vec<CalendarConnectionRef> {
+        vec![CalendarConnectionRef {
+            connector_id: connector_id.into(),
+            connection_id: connection.connection_id.clone(),
+            connection_revision: connection.revision,
+        }]
     }
 
     #[tokio::test]
@@ -2081,26 +2049,20 @@ mod tests {
                     request_time,
                 )
             });
-            let route = crate::RemoteTurnRoute {
-                route: floe_inference::RemoteRoute {
-                    base_url: format!("http://127.0.0.1:{}/", address.port()),
-                    bearer_token: "fixture-token-that-is-long-enough".into(),
-                    purpose: "everyday_assistance".into(),
-                    external: false,
-                    allow_external: false,
-                    recipient: None,
-                    pairing: Some(floe_inference::RoutePairing {
-                        client_id: "fixture-client".into(),
-                        person_id: person_id.to_string(),
-                        device_id: "device-a".into(),
-                    }),
-                },
-                calendar_connections: vec![],
-            };
+            let source = ServerSourceClient::new(
+                floe_provider_adapters::control::PreparedServerSource::from_parts(
+                    &format!("http://127.0.0.1:{}/", address.port()),
+                    "fixture-token-that-is-long-enough",
+                    "fixture-client",
+                    &person_id.to_string(),
+                    "device-a",
+                )
+                .unwrap(),
+            );
             let backend = VaultRemoteCalendarBackend::new(
                 &vault,
                 &core,
-                &route,
+                &source,
                 person_id,
                 provider,
                 vec!["primary".into()],
@@ -2153,24 +2115,15 @@ mod tests {
     }
 
     #[test]
-    fn schedule_model_uses_current_external_transfer_consent() {
-        let (_, _, connection) = active_identity(CalendarProvider::EventKit);
-        let mut route = remote_route("calendar.google", &connection);
-        route.route.external = true;
-        route.route.allow_external = true;
-
+    fn staged_schedule_model_never_consents_to_external_transfer() {
+        // No pre-resolved recipient exists anymore: staged legacy model calls
+        // run server-local only, so external transfer is never consented here.
         assert_eq!(
-            external_transfer_consent(ModelPlacement::Remote, Some(&route)),
-            TransferConsent::Granted
-        );
-        assert_eq!(
-            external_transfer_consent(ModelPlacement::DeviceLocal, Some(&route)),
+            external_transfer_consent(ModelPlacement::Remote),
             TransferConsent::NotGranted
         );
-
-        route.route.allow_external = false;
         assert_eq!(
-            external_transfer_consent(ModelPlacement::Remote, Some(&route)),
+            external_transfer_consent(ModelPlacement::DeviceLocal),
             TransferConsent::NotGranted
         );
     }
@@ -2304,17 +2257,21 @@ mod tests {
                 .unwrap();
             setup.source_authority = Some(connection.source_authority);
             binding.source_authority = Some(connection.source_authority);
-            let mut route = remote_route("calendar.google", &connection);
-            route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
-            route
-                .calendar_connections
-                .push(floe_connections::CalendarConnectionRef {
-                    connector_id: "calendar.microsoft".into(),
-                    connection_id: Uuid::new_v4().to_string(),
-                    connection_revision: 12,
-                });
+            let mut catalog = observed_catalog("calendar.google", &connection);
+            catalog[0].connection_id = Uuid::new_v4().to_string();
+            catalog.push(floe_connections::CalendarConnectionRef {
+                connector_id: "calendar.microsoft".into(),
+                connection_id: Uuid::new_v4().to_string(),
+                connection_revision: 12,
+            });
             assert_eq!(
-                validate_active_connection(&setup, &binding, &connection, "device-a", Some(&route),),
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(catalog.as_slice()),
+                ),
                 Ok(())
             );
 
@@ -2344,7 +2301,12 @@ mod tests {
                     Some(&connection),
                 )
                 .unwrap();
-            let model = Model::conversation(Some(route)).unwrap();
+            let model = Model::for_stored_connection(
+                None,
+                &setup.person_id.to_string(),
+                "device-a",
+            )
+            .unwrap();
             let access = Access::new(
                 setup.person_id,
                 provider,
@@ -2380,13 +2342,19 @@ mod tests {
             (CalendarProvider::Microsoft, "calendar.microsoft"),
         ] {
             let (setup, binding, connection) = active_identity(provider);
-            let route = remote_route(connector_id, &connection);
+            let catalog = observed_catalog(connector_id, &connection);
             assert_eq!(
-                validate_active_connection(&setup, &binding, &connection, "device-a", Some(&route),),
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(catalog.as_slice()),
+                ),
                 Ok(())
             );
-            let mut multi_provider_route = route.clone();
-            multi_provider_route.calendar_connections.push(
+            let mut multi_provider_catalog = catalog.clone();
+            multi_provider_catalog.push(
                 floe_connections::CalendarConnectionRef {
                     connector_id: match provider {
                         CalendarProvider::Google => "calendar.microsoft".into(),
@@ -2403,37 +2371,37 @@ mod tests {
                     &binding,
                     &connection,
                     "device-a",
-                    Some(&multi_provider_route),
+                    Some(multi_provider_catalog.as_slice()),
                 ),
                 Ok(())
             );
 
-            let mut stale_route = route.clone();
-            stale_route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
+            let mut stale_catalog = catalog.clone();
+            stale_catalog[0].connection_id = Uuid::new_v4().to_string();
             assert_eq!(
                 validate_active_connection(
                     &setup,
                     &binding,
                     &connection,
                     "device-a",
-                    Some(&stale_route),
+                    Some(stale_catalog.as_slice()),
                 ),
                 Err(AgentFailure::StaleContext)
             );
-            let mut stale_route = route.clone();
-            stale_route.calendar_connections[0].connection_revision += 1;
+            let mut stale_catalog = catalog.clone();
+            stale_catalog[0].connection_revision += 1;
             assert_eq!(
                 validate_active_connection(
                     &setup,
                     &binding,
                     &connection,
                     "device-a",
-                    Some(&stale_route),
+                    Some(stale_catalog.as_slice()),
                 ),
                 Err(AgentFailure::StaleContext)
             );
-            let mut relabelled_route = route.clone();
-            relabelled_route.calendar_connections[0].connector_id = match provider {
+            let mut relabelled_catalog = catalog.clone();
+            relabelled_catalog[0].connector_id = match provider {
                 CalendarProvider::Google => "calendar.microsoft".into(),
                 CalendarProvider::Microsoft => "calendar.google".into(),
                 _ => unreachable!(),
@@ -2444,21 +2412,19 @@ mod tests {
                     &binding,
                     &connection,
                     "device-a",
-                    Some(&relabelled_route),
+                    Some(relabelled_catalog.as_slice()),
                 ),
                 Err(AgentFailure::StaleContext)
             );
-            let mut duplicate_route = route.clone();
-            duplicate_route
-                .calendar_connections
-                .push(route.calendar_connections[0].clone());
+            let mut duplicate_catalog = catalog.clone();
+            duplicate_catalog.push(catalog[0].clone());
             assert_eq!(
                 validate_active_connection(
                     &setup,
                     &binding,
                     &connection,
                     "device-a",
-                    Some(&duplicate_route),
+                    Some(duplicate_catalog.as_slice()),
                 ),
                 Err(AgentFailure::StaleContext)
             );

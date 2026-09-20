@@ -7,7 +7,9 @@
 
 use std::{future::Future, pin::Pin};
 
-use floe_access::{DependencyAuthorization, DependencyLiveness, DependencyResolver};
+use floe_access::{DependencyAuthorization, DependencyResolver};
+#[cfg(test)]
+use floe_access::DependencyLiveness;
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::ContextDependency;
 use floe_kernel::PersonId;
@@ -23,6 +25,9 @@ pub(crate) struct PersonalDependencyResolver<'a, Keys: VaultKeyProvider> {
     pub(crate) device_id: &'a str,
 }
 
+/// Test-only liveness: the canonical turn validates dependencies through
+/// its resolver instead.
+#[cfg(test)]
 pub(crate) struct PersonalDependencyLiveness<'a> {
     pub(crate) local_context: &'a LocalContextHost,
     pub(crate) person_id: PersonId,
@@ -38,6 +43,7 @@ pub(crate) fn native_driver(local_context: &LocalContextHost) -> NativePersonalD
     }
 }
 
+#[cfg(test)]
 impl DependencyLiveness for PersonalDependencyLiveness<'_> {
     fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure> {
         floe_context::personal_dependency_holds(

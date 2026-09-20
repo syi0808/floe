@@ -5,6 +5,12 @@
 //! registered for it in `floe-experts-builtin`; this file only decides which
 //! endpoints exist and which readers back the host port they use.
 
+use super::expert_compat::{
+    ConversationContextReader, ConversationContextReaderApi, ExpertModelHost, Model,
+    PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
+    PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
+    PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, policy, read_context_source,
+};
 use super::*;
 use std::{
     collections::HashMap,
@@ -152,33 +158,30 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let source_client = staged
-                .request
-                .remote_route
-                .as_ref()
-                .map(|route| {
-                    ServerSourceClient::new(route.route.clone(), route.calendar_connections.clone())
-                })
-                .transpose()?;
-            let model = Model::new(staged.request.remote_route.clone())?;
-            let remote_reader = match (&model, staged.request.remote_route.as_ref()) {
-                (Model::Server(_), Some(route)) => {
-                    let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-                    if pairing.person_id != self.vault.person_id().to_string()
-                        || pairing.device_id != staged.request.device_id
-                    {
-                        return Err(AgentFailure::PolicyDenied);
-                    }
-                    Some(remote_views::RemoteViewReader::new(
-                        &self.vault,
-                        source_client
-                            .as_ref()
-                            .ok_or(AgentFailure::CapabilityUnavailable)?,
-                        self.vault.person_id(),
-                        &pairing.client_id,
-                        &pairing.device_id,
-                    ))
-                }
+            // Staged legacy Expert compatibility, prepared here because an
+            // actual delegated endpoint runs: the stored credential is
+            // admitted for source and legacy model use. No pre-resolved
+            // route exists.
+            let person_id = self.vault.person_id();
+            let stored = staged.request.stored_server_connection()?;
+            let source_client = ServerSourceClient::prepare(
+                stored.clone(),
+                &person_id.to_string(),
+                &staged.request.device_id,
+            )?;
+            let model = Model::for_stored_connection(
+                stored,
+                &person_id.to_string(),
+                &staged.request.device_id,
+            )?;
+            let remote_reader = match (&model, source_client.as_ref()) {
+                (Model::Server(_), Some(client)) => Some(remote_views::RemoteViewReader::new(
+                    &self.vault,
+                    client,
+                    person_id,
+                    client.source().client_id(),
+                    client.source().device_id(),
+                )),
                 _ => None,
             };
             let attention_reader = PersonalAttentionReader {
@@ -205,7 +208,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 vault: &self.vault,
                 person_id: self.vault.person_id(),
             };
-            let policy = super::policy(&model, staged.request.remote_route.as_ref());
+            let policy = policy(&model);
             let cards = self.vault.enabled_expert_cards().await?;
             let grants = floe_experts::SourceGrants::new(Some(
                 self.vault
@@ -274,6 +277,9 @@ pub(super) trait ExpertTaskRunner: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>>;
 }
 
+/// Test-only in-process runner: production delegation crosses the
+/// `LegacyDelegationPort` bridge instead.
+#[cfg(test)]
 pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
     pub coordinator: &'a floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
     pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
@@ -282,6 +288,7 @@ pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
     pub recorder: Option<&'a dyn floe_experts::TaskCoverageRecorder>,
 }
 
+#[cfg(test)]
 impl<Keys: VaultKeyProvider + 'static> ExpertTaskRunner for RegisteredScheduleTaskRunner<'_, Keys> {
     fn run<'a>(
         &'a self,
@@ -325,12 +332,12 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
     pub(super) local_context: &'model LocalContextHost,
-    pub(super) attention: Option<&'model dyn super::PersonalAttentionReaderApi>,
-    pub(super) people_reader: Option<&'model dyn super::PersonalPeopleReaderApi>,
-    pub(super) wellbeing_reader: Option<&'model dyn super::PersonalWellbeingReaderApi>,
-    pub(super) recorder: Option<&'model dyn super::ResultRecorder>,
+    pub(super) attention: Option<&'model dyn PersonalAttentionReaderApi>,
+    pub(super) people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
+    pub(super) wellbeing_reader: Option<&'model dyn PersonalWellbeingReaderApi>,
+    pub(super) recorder: Option<&'model dyn ResultRecorder>,
     pub(super) remote_reader: Option<&'model dyn floe_context::SourceReader>,
-    pub(super) context_reader: Option<&'model dyn super::ConversationContextReaderApi>,
+    pub(super) context_reader: Option<&'model dyn ConversationContextReaderApi>,
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
     /// What each Expert may read, as the registry decided it.
@@ -371,11 +378,11 @@ impl<'model> ConversationExperts<'model> {
 /// model here for exactly as long as that message runs.
 pub(super) struct DelegatedMessageExperts<'turn, 'model> {
     experts: &'turn ConversationExperts<'model>,
-    model: super::ExpertModelHost<'turn, Model>,
+    model: ExpertModelHost<'turn, Model>,
 }
 
 impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model> {
-    type Model = super::ExpertModelHost<'turn, Model>;
+    type Model = ExpertModelHost<'turn, Model>;
     type SourceRead = floe_context::SourceView<serde_json::Value>;
 
     fn model(&self) -> &Self::Model {
@@ -410,7 +417,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         query: serde_json::Value,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::SourceView<serde_json::Value>> {
         Box::pin(async move {
-            super::read_context_source(
+            read_context_source(
                 self.experts
                     .remote_reader
                     .ok_or(AgentFailure::CapabilityUnavailable)?,
@@ -603,7 +610,7 @@ impl InProcessAgent for ConversationExperts<'_> {
         // This message's attempts are charged to the ledger it carries.
         let host = DelegatedMessageExperts {
             experts: self,
-            model: super::ExpertModelHost {
+            model: ExpertModelHost {
                 model: self.model,
                 usage: request.usage.clone(),
             },

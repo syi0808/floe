@@ -231,7 +231,7 @@ impl FloeCore {
         };
         let assignments = floe_experts::RegistryAssignments::new(&registry);
         // This run's model attempts are charged to the ledger it carries.
-        let reasoner = crate::vault_host::conversation_turn::ExpertModelHost {
+        let reasoner = crate::vault_host::conversation_turn::expert_compat::ExpertModelHost {
             model,
             usage: request.usage,
         };
@@ -1199,7 +1199,7 @@ impl<
         self.validate().await?;
         let assignments = floe_experts::RegistryAssignments::new(&self.registry);
         // This message's model attempts are charged to the ledger it carries.
-        let model = super::super::super::ExpertModelHost {
+        let model = super::super::super::expert_compat::ExpertModelHost {
             model: self.model,
             usage: request.usage.clone(),
         };

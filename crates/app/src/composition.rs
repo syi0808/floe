@@ -5,10 +5,7 @@ use std::sync::Arc;
 
 use tokio::runtime::{Builder, Runtime};
 
-use crate::{
-    AppHost, FloeCore, HostError, HostServices, agent_run, inference_routes, local_context,
-    vault_host,
-};
+use crate::{AppHost, FloeCore, HostError, HostServices, agent_run, local_context, vault_host};
 
 pub struct AppComposition {
     pub(crate) runtime: Runtime,
@@ -17,8 +14,6 @@ pub struct AppComposition {
     pub(crate) local_context: Arc<local_context::LocalContextHost>,
     #[cfg(unix)]
     pub(crate) agent_vault: vault_host::VaultBridge,
-    #[cfg(unix)]
-    pub(crate) inference_routes: inference_routes::HostInferenceRoutes,
 }
 
 impl HostServices for AppComposition {
@@ -53,10 +48,9 @@ impl crate::ConversationCommands for AppComposition {
                 },
             )
             .map_err(service_failure)?;
-        let remote_route = self
-            .runtime
-            .block_on(self.inference_routes.resolve(caller))
-            .map_err(service_failure)?;
+        // Turn admission performs no model/source discovery: the command
+        // carries intent only, and the canonical owners admit the stored
+        // credential after admission. A failed paired server never blocks this.
         let retry_of = request
             .retry_of
             .map(|run_id| {
@@ -76,9 +70,8 @@ impl crate::ConversationCommands for AppComposition {
                     profile: request.profile,
                     continuation: precheck.continuation,
                     retry_of,
-                    remote_route,
-                    // The canonical root provider consults the host keychain
-                    // slot when the product supplies no saved connection.
+                    // The canonical owners consult the host keychain slot
+                    // when the product supplies no saved connection.
                     saved_server_connection: None,
                 },
             )
@@ -199,8 +192,6 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         local_context: local_context.clone(),
         #[cfg(unix)]
         agent_vault: vault_host::VaultBridge::new(path, core, local_context),
-        #[cfg(unix)]
-        inference_routes: crate::HostInferenceRoutes,
     };
     match identity {
         Some(identity) => AppHost::bootstrap_claim(services, identity).map_err(AppOpenError::Host),

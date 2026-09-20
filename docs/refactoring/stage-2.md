@@ -24,7 +24,7 @@ Detailed work is split into the execution plans linked below. This overview owns
     - [x] freeze 2-B.1 after the lineage P0 closes
   - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
   - [x] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
-  - [ ] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
+  - [x] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
   - [ ] **2-B.5 — Integrated 2-B hardening**
 - [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
@@ -33,11 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-B.4 — App production cutover.**
+**Active: 2-B.5 — Integrated 2-B hardening.**
 
-2-B.1, 2-B.2 and 2-B.3 are complete. The current work removes General Conversation pre-turn model/source discovery, removes ConversationTurnRequest.remote_route, splits source transport from Inference RemoteRoute, moves root Expert catalog discovery to Experts, removes eager App Model/policy wiring, and deletes zero-caller General Conversation compatibility while retaining only LegacyDelegationPort until 2-C.
+2-B.1 through 2-B.4 are complete. General Conversation pre-turn model/source discovery is removed, ConversationTurnRequest.remote_route is gone, source transport is split from Inference RemoteRoute, the root Expert catalog comes from Experts, eager App Model/policy wiring is removed, and zero-caller General Conversation compatibility is deleted with only LegacyDelegationPort retained until 2-C.
 
-Use [the 2-B.4 execution plan](stage-2/2-b4.md) as the authoritative task document. Do not start 2-B.5 before the 2-B.4 exit gates are green.
+2-B.5 has no execution plan document yet. Do not start 2-B.5 implementation from this overview; wait for its plan.
 
 ## Target internal architecture
 

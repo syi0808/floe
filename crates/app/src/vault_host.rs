@@ -23,7 +23,7 @@ use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
 use crate::{
     CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
     ConversationSessionOperation, ConversationTurnRequest, FixtureOperation, RemoteGrantOverview,
-    RemoteTurnRoute, VaultState, WorkerAction, WorkerOperation, WorkerResult,
+    VaultState, WorkerAction, WorkerOperation, WorkerResult,
 };
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use floe_context_contract::CalendarProvider;
@@ -1239,12 +1239,28 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     job: &Job,
     request: &ConversationTurnRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
+    // Paired-server evidence for builtin Expert setup: the stored
+    // credential admitted for this caller, or nothing. Availability evidence
+    // only; the canonical owners fail closed on their own when they actually
+    // use the credential.
+    let paired_server = request
+        .stored_server_connection()
+        .ok()
+        .flatten()
+        .is_some_and(|stored| {
+            floe_provider_adapters::control::PreparedServerSource::admit(
+                stored,
+                &job.person.to_string(),
+                &request.device_id,
+            )
+            .is_ok()
+        });
     let refreshed = Box::pin(ensure_builtin_experts(
         vault,
         core,
         local_context,
         job.person,
-        request.remote_route.as_ref(),
+        paired_server,
         job.cancellation.clone(),
         floe_experts::BuiltinExpertRefresh::ExistingOnly,
     ))
@@ -1260,7 +1276,6 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     }
     vault.sync_expert_directory().await?;
     let session = match Box::pin(conversation_turn::run(
-        core,
         vault,
         local_context,
         &vault.task_coordinator,
@@ -1594,7 +1609,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         core,
                         local_context,
                         job.person,
-                        None,
+                        false,
                         job.cancellation.clone(),
                         floe_experts::BuiltinExpertRefresh::InstallIfAbsent,
                     )
@@ -2012,10 +2027,15 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let person_text = job.person.to_string();
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?.clone();
-            let source_client = floe_provider_adapters::sources::ServerSourceClient::new(
-                route.route.clone(),
-                route.calendar_connections.clone(),
+            let prepared = floe_provider_adapters::control::PreparedServerSource::from_parts(
+                &route.route.base_url,
+                &route.route.bearer_token,
+                &pairing.client_id,
+                &pairing.person_id,
+                &pairing.device_id,
             )?;
+            let source_client =
+                floe_provider_adapters::sources::ServerSourceClient::new(prepared);
             let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
                 &source_client,
                 vault.vault.as_ref(),
@@ -2066,10 +2086,15 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let person_text = job.person.to_string();
             let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?.clone();
-            let source_client = floe_provider_adapters::sources::ServerSourceClient::new(
-                route.route.clone(),
-                route.calendar_connections.clone(),
+            let prepared = floe_provider_adapters::control::PreparedServerSource::from_parts(
+                &route.route.base_url,
+                &route.route.bearer_token,
+                &pairing.client_id,
+                &pairing.person_id,
+                &pairing.device_id,
             )?;
+            let source_client =
+                floe_provider_adapters::sources::ServerSourceClient::new(prepared);
             let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
                 &source_client,
                 vault.vault.as_ref(),
@@ -2242,7 +2267,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     core: &FloeCore,
     local_context: &LocalContextHost,
     person_id: PersonId,
-    remote_route: Option<&RemoteTurnRoute>,
+    paired_server: bool,
     cancellation: Cancellation,
     when: floe_experts::BuiltinExpertRefresh,
 ) -> Result<(), AgentFailure> {
@@ -2253,7 +2278,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
             specs: builtin_setup_specs(),
             cancellation,
         },
-        builtin_source_bindings(core, person_id, remote_route).await,
+        builtin_source_bindings(core, person_id, paired_server).await,
         BuiltinExpertKind::BUILTIN_SETUP.len(),
         when,
     )
@@ -2268,14 +2293,13 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
 async fn builtin_source_bindings(
     core: &FloeCore,
     person_id: PersonId,
-    remote_route: Option<&RemoteTurnRoute>,
+    paired_server: bool,
 ) -> Vec<BuiltinSourceBinding> {
-    let paired_server =
-        if remote_route.is_some_and(|route| !route.route.external || route.route.allow_external) {
-            BuiltinSourceEvidence::Serving
-        } else {
-            BuiltinSourceEvidence::Absent
-        };
+    let paired_server = if paired_server {
+        BuiltinSourceEvidence::Serving
+    } else {
+        BuiltinSourceEvidence::Absent
+    };
     let calendar = core
         .calendar_connector_snapshot(
             person_id,
@@ -2428,6 +2452,7 @@ mod tests {
     // These regressions drive the worker the way the binding does, so the
     // fixtures they stand up are stated on the binding's wire.
     use crate::AgentFixturePrompt;
+    use crate::RemoteTurnRoute;
     use floe_protocol::*;
     use floe_vault::VaultKey;
     use ring::signature::{self, Ed25519KeyPair, KeyPair};

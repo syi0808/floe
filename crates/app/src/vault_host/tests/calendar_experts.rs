@@ -208,7 +208,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     );
     assert_eq!(session.failure, None);
     let session = session.session.unwrap();
-    let (mut route, server) = answer_server(vec![
+    let (mock, server) = answer_server(vec![
         floe_conversation::ModelStep::Answer {
             text: "Hello!".into(),
         },
@@ -235,11 +235,6 @@ fn native_grants_capture_authority_only_on_explicit_review() {
             text: "Your calendar is clear.".into(),
         },
     ]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "calendar-expert-test".into(),
-        person_id: person.to_string(),
-        device_id: "iphone".into(),
-    });
     let run = |session: &AgentSession, text: &str| {
         perform(
             &worker,
@@ -253,8 +248,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     profile: ProfileSelection::Explicit("server-model".into()),
                     continuation: false,
                     retry_of: None,
-                    saved_server_connection: Some(saved_server_connection(&route, person, "iphone")),
-                    remote_route: Some(route.clone()),
+                    saved_server_connection: Some(saved_server_connection(&mock, person, "iphone")),
                 }),
             },
         )
@@ -392,7 +386,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     .session
     .unwrap();
     let now = chrono::Utc::now().timestamp_millis();
-    let (mut route, server) = answer_server(vec![
+    let (mock, server) = answer_server(vec![
         floe_conversation::ModelStep::Delegate {
             agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
                 .package_id()
@@ -416,11 +410,6 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
             text: "You have an open hour.".into(),
         },
     ]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "calendar-expert-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let result = perform(
         &worker,
         person,
@@ -433,8 +422,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-                remote_route: Some(route),
+                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
             }),
         },
     );
@@ -488,14 +476,9 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     )
     .session
     .unwrap();
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-replay-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let action = || WorkerAction::ConversationTurn {
         request: Box::new(ConversationTurnRequest {
             session_id: session.id,
@@ -505,8 +488,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             profile: ProfileSelection::Explicit("server-model".into()),
             continuation: false,
             retry_of: None,
-            saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-            remote_route: Some(route.clone()),
+            saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
         }),
     };
     let request_id = Uuid::new_v4();
@@ -591,7 +573,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
     )
     .session
     .unwrap();
-    let (mut route, server) = answer_server(vec![
+    let (mock, server) = answer_server(vec![
         floe_conversation::ModelStep::Answer {
             text: "First durable answer".into(),
         },
@@ -599,11 +581,6 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             text: "Second durable answer".into(),
         },
     ]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-release-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let first_id = Uuid::new_v4();
     worker
         .request(
@@ -619,8 +596,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-                        remote_route: Some(route.clone()),
+                        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
                     }),
                 }),
             },
@@ -645,8 +621,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-                        remote_route: Some(route),
+                        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
                     }),
                 }),
             },
@@ -731,13 +706,8 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     )
     .session
     .unwrap();
-    let (mut route, entered, release, server) = blocking_answer_server();
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-concurrency-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
-    let competing_route = route.clone();
+    let (mock, entered, release, server) = blocking_answer_server();
+    let competing_mock = mock.clone();
     let conversation_id = Uuid::new_v4();
     worker
         .request(
@@ -753,8 +723,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-                        remote_route: Some(route),
+                        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
                     }),
                 }),
             },
@@ -789,8 +758,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&competing_route, person, "mac-local")),
-                        remote_route: Some(competing_route),
+                        saved_server_connection: Some(saved_server_connection(&competing_mock, person, "mac-local")),
                     }),
                 }),
             },
@@ -911,12 +879,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     )
     .session
     .unwrap();
-    let (mut route, entered, release, server) = blocking_answer_server();
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-cancel-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
+    let (mock, entered, release, server) = blocking_answer_server();
     let request_id = Uuid::new_v4();
     let request = || ConversationTurnRequest {
         session_id: session.id,
@@ -926,8 +889,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-        remote_route: Some(route.clone()),
+        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
     };
     let admitted = worker
         .start_conversation(
@@ -1060,14 +1022,9 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
     )
     .session
     .unwrap();
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-identity-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
     let request = || ConversationTurnRequest {
@@ -1078,8 +1035,7 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-        remote_route: Some(route.clone()),
+        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
     };
     let admitted = worker
         .start_conversation(person, command_id, request())
@@ -1115,14 +1071,9 @@ fn same_request_id_with_different_profile_conflicts() {
     )
     .session
     .unwrap();
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-identity-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
     let request = || ConversationTurnRequest {
@@ -1133,8 +1084,7 @@ fn same_request_id_with_different_profile_conflicts() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-        remote_route: Some(route.clone()),
+        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
     };
     worker
         .start_conversation(person, command_id, request())
@@ -1168,14 +1118,9 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
     )
     .session
     .unwrap();
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-identity-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
     let request = || ConversationTurnRequest {
@@ -1186,8 +1131,7 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-        remote_route: Some(route.clone()),
+        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
     };
     worker
         .start_conversation(person, command_id, request())
@@ -1207,7 +1151,7 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
 }
 
 #[test]
-fn same_request_id_with_route_refresh_only_replays_without_redispatch() {
+fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
@@ -1221,21 +1165,10 @@ fn same_request_id_with_route_refresh_only_replays_without_redispatch() {
     )
     .session
     .unwrap();
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-identity-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
-    let (mut refreshed, idle) = answer_server(vec![]);
-    refreshed.route.bearer_token = "b".repeat(32);
-    refreshed.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-identity-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
+    let (refreshed_mock, idle) = answer_server(vec![]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
     let request = || ConversationTurnRequest {
@@ -1246,14 +1179,19 @@ fn same_request_id_with_route_refresh_only_replays_without_redispatch() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-        remote_route: Some(route.clone()),
+        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
     };
     let admitted = worker
         .start_conversation(person, command_id, request())
         .unwrap();
     let mut refreshed_request = request();
-    refreshed_request.remote_route = Some(refreshed);
+    // A refreshed stored connection (a different mock server) is runtime
+    // state, not command identity: the duplicate still replays.
+    refreshed_request.saved_server_connection = Some(saved_server_connection(
+        &refreshed_mock,
+        person,
+        "mac-local",
+    ));
     assert_eq!(
         worker
             .start_conversation(person, command_id, refreshed_request)
@@ -1315,14 +1253,9 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     );
     assert_eq!(resumed.failure, None);
     assert_eq!(resumed.session.unwrap().id, session.id);
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "General answer without experts".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-without-builtins-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let result = perform(
         &worker,
         person,
@@ -1335,8 +1268,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-                remote_route: Some(route),
+                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
             }),
         },
     );
@@ -1424,14 +1356,9 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
 
     let worker = Worker::new(root, keys).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
-    let (mut route, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
         text: "Continued once".into(),
     }]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "conversation-continuation-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let action = || WorkerAction::ConversationTurn {
         request: Box::new(ConversationTurnRequest {
             session_id: session.id,
@@ -1441,8 +1368,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             profile: ProfileSelection::Explicit("server-model".into()),
             continuation: true,
             retry_of: None,
-            saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-            remote_route: Some(route.clone()),
+            saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
         }),
     };
     let request_id = Uuid::new_v4();
@@ -1511,12 +1437,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     )
     .session
     .unwrap();
-    let (mut route, server) = commitments_denial_server();
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "commitments-expert-test".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
+    let (mock, server) = commitments_denial_server();
     let result = perform(
         &worker,
         person,
@@ -1529,8 +1450,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&route, person, "mac-local")),
-                remote_route: Some(route),
+                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
             }),
         },
     );
@@ -1640,7 +1560,7 @@ fn production_builtin_setup_installs_through_vault_and_grants_sources() {
     );
 }
 
-fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHandle<Vec<String>>) {
+fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1773,42 +1693,36 @@ fn commitments_denial_server() -> (crate::RemoteTurnRoute, std::thread::JoinHand
         requests
     });
     (
-        crate::RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: format!("http://{address}"),
-                bearer_token: "a".repeat(32),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: None,
-            },
-            calendar_connections: vec![],
+        MockServer {
+            base_url: format!("http://{address}"),
+            token: "a".repeat(32),
         },
         server,
     )
 }
 
-/// Saved server connection matching a mock route, for the canonical root
-/// provider. The provider admits it against the verified caller; the turn's
-/// pre-resolved route still serves legacy source/Expert paths only.
+/// A mock paired server: endpoint and credential only. Tests admit it through
+/// the stored-credential path; no route is ever pre-resolved for a turn.
+#[derive(Clone)]
+struct MockServer {
+    base_url: String,
+    token: String,
+}
+
+/// Saved server connection matching a mock server. The canonical owners admit
+/// it against the verified caller after admission.
 fn saved_server_connection(
-    route: &crate::RemoteTurnRoute,
+    mock: &MockServer,
     person: PersonId,
     device: &str,
 ) -> floe_inference::SavedServerConnection {
     floe_inference::SavedServerConnection {
-        base_url: route.route.base_url.clone(),
-        token: route.route.bearer_token.clone(),
-        client_id: route
-            .route
-            .pairing
-            .as_ref()
-            .map(|pairing| pairing.client_id.clone())
-            .unwrap_or_else(|| "test-client".into()),
+        base_url: mock.base_url.clone(),
+        token: mock.token.clone(),
+        client_id: "test-client".into(),
         person_id: person.to_string(),
         device_id: device.into(),
-        allow_external: route.route.allow_external,
+        allow_external: false,
         external_recipients: vec![],
     }
 }
@@ -1829,7 +1743,7 @@ fn canonical_inventory_body() -> String {
 
 fn answer_server(
     steps: Vec<floe_conversation::ModelStep>,
-) -> (crate::RemoteTurnRoute, std::thread::JoinHandle<Vec<String>>) {
+) -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1930,24 +1844,16 @@ fn answer_server(
         requests
     });
     (
-        crate::RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: format!("http://{address}"),
-                bearer_token: "a".repeat(32),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: None,
-            },
-            calendar_connections: vec![],
+        MockServer {
+            base_url: format!("http://{address}"),
+            token: "a".repeat(32),
         },
         server,
     )
 }
 
 fn blocking_answer_server() -> (
-    crate::RemoteTurnRoute,
+    MockServer,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     std::thread::JoinHandle<()>,
@@ -2042,17 +1948,9 @@ fn blocking_answer_server() -> (
         );
     });
     (
-        crate::RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: format!("http://{address}"),
-                bearer_token: "a".repeat(32),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: None,
-            },
-            calendar_connections: vec![],
+        MockServer {
+            base_url: format!("http://{address}"),
+            token: "a".repeat(32),
         },
         entered,
         release,
@@ -2076,7 +1974,7 @@ fn observing_server(
     inventory: serde_json::Value,
     agent_script: Vec<serde_json::Value>,
 ) -> (
-    crate::RemoteTurnRoute,
+    MockServer,
     Arc<std::sync::atomic::AtomicUsize>,
     Arc<std::sync::atomic::AtomicUsize>,
     Arc<AtomicBool>,
@@ -2181,17 +2079,9 @@ fn observing_server(
         }
     });
     (
-        crate::RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: format!("http://{address}"),
-                bearer_token: "a".repeat(32),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: None,
-            },
-            calendar_connections: vec![],
+        MockServer {
+            base_url: format!("http://{address}"),
+            token: "a".repeat(32),
         },
         purposes,
         agent_posts,
@@ -2235,13 +2125,8 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
     )
     .session
     .unwrap();
-    let (mut route, purposes, agent_posts, done, server) =
+    let (mock, purposes, agent_posts, done, server) =
         observing_server(server_local_inventory(), canonical_answer_script("Canonical hello."));
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "canonical-proof".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let request_id = Uuid::new_v4();
     worker
         .request(
@@ -2258,9 +2143,8 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
                         continuation: false,
                         retry_of: None,
                         saved_server_connection: Some(saved_server_connection(
-                            &route, person, "mac-local",
+                            &mock, person, "mac-local",
                         )),
-                        remote_route: Some(route),
                     }),
                 }),
             },
@@ -2303,13 +2187,8 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
     )
     .session
     .unwrap();
-    let (mut route, purposes, agent_posts, done, server) =
+    let (mock, purposes, agent_posts, done, server) =
         observing_server(server_local_inventory(), vec![]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "canonical-explicit".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let request_id = Uuid::new_v4();
     worker
         .request(
@@ -2326,9 +2205,8 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
                         continuation: false,
                         retry_of: None,
                         saved_server_connection: Some(saved_server_connection(
-                            &route, person, "mac-local",
+                            &mock, person, "mac-local",
                         )),
-                        remote_route: Some(route),
                     }),
                 }),
             },
@@ -2379,13 +2257,8 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
             }
         }
     });
-    let (mut route, purposes, agent_posts, done, server) =
+    let (mock, purposes, agent_posts, done, server) =
         observing_server(inventory, vec![]);
-    route.route.pairing = Some(floe_inference::RoutePairing {
-        client_id: "canonical-external".into(),
-        person_id: person.to_string(),
-        device_id: "mac-local".into(),
-    });
     let request_id = Uuid::new_v4();
     worker
         .request(
@@ -2405,9 +2278,8 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
                         // use, so the exact-recipient fence must deny before
                         // any transport handoff.
                         saved_server_connection: Some(saved_server_connection(
-                            &route, person, "mac-local",
+                            &mock, person, "mac-local",
                         )),
-                        remote_route: Some(route),
                     }),
                 }),
             },
@@ -2668,4 +2540,298 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         },
     );
     assert_eq!(retry.calendar_experts.unwrap().registry.revision, 1);
+}
+
+/// Mock that records every request path while serving canonical discovery and
+/// scripted model answers. Nothing is pre-resolved: any catalog observation
+/// here would be a loud failure, and the recorded paths prove the turn only
+/// contacts post-admission discovery and transport.
+fn recording_answer_server(
+    steps: Vec<floe_conversation::ModelStep>,
+) -> (
+    MockServer,
+    Arc<Mutex<Vec<String>>>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let server_paths = Arc::clone(&paths);
+    let server = std::thread::spawn(move || {
+        let mut steps = steps.into_iter().peekable();
+        loop {
+            if steps.peek().is_none() {
+                return;
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![];
+            let (headers, body) = loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break (headers.to_string(), body.to_string());
+                    }
+                }
+            };
+            let path = headers
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            server_paths.lock().unwrap().push(path.clone());
+            if path == "/v1/inference-purposes" {
+                let inventory = canonical_inventory_body();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            inventory.len(),
+                            inventory
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                continue;
+            }
+            assert_eq!(path, "/v1/agent", "unexpected request: {headers}");
+            let step = steps.next().expect("scripted steps peeked Some");
+            let _ = body;
+            let output = serde_json::json!({"output": [step], "used_tokens": 10});
+            let response = serde_json::json!({
+                "schema_version": 1, "purpose": "everyday_assistance", "trace_id": "a".repeat(32),
+                "routing": { "placement": "server_local", "external_transfer": false, "replay_source": "a".repeat(64) },
+                "output": output.to_string(),
+            }).to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).unwrap();
+        }
+    });
+    (
+        MockServer {
+            base_url: format!("http://{address}"),
+            token: "a".repeat(32),
+        },
+        paths,
+        server,
+    )
+}
+
+#[test]
+fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mock, paths, server) =
+        recording_answer_server(vec![floe_conversation::ModelStep::Answer {
+            text: "Hello.".into(),
+        }]);
+    let result = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationTurn {
+            request: Box::new(ConversationTurnRequest {
+                session_id: session.id,
+                expected_revision: session.revision,
+                text: "Hello".into(),
+                device_id: "mac-local".into(),
+                profile: ProfileSelection::Explicit("server-model".into()),
+                continuation: false,
+                retry_of: None,
+                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+            }),
+        },
+    );
+    assert_eq!(result.failure, None, "result: {result:?}");
+    server.join().unwrap();
+    let paths = paths.lock().unwrap();
+    // Canonical discovery runs (after admission), transport runs, and the
+    // connector catalog is never observed for a plain turn.
+    assert!(paths.iter().any(|path| path == "/v1/inference-purposes"));
+    assert!(paths.iter().any(|path| path == "/v1/agent"));
+    assert!(
+        paths
+            .iter()
+            .all(|path| path == "/v1/inference-purposes" || path == "/v1/agent"),
+        "paths: {paths:?}"
+    );
+}
+
+#[test]
+fn unavailable_saved_server_does_not_prevent_conversation_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    // A loopback address with no listener: connecting fails, and the paired
+    // server never answers.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", dead.local_addr().unwrap());
+    drop(dead);
+    let request_id = Uuid::new_v4();
+    let request = ConversationTurnRequest {
+        session_id: session.id,
+        expected_revision: session.revision,
+        text: "Hello".into(),
+        device_id: "mac-local".into(),
+        profile: ProfileSelection::Explicit("server-model".into()),
+        continuation: false,
+        retry_of: None,
+        saved_server_connection: Some(floe_inference::SavedServerConnection {
+            base_url,
+            token: "d".repeat(32),
+            client_id: "test-client".into(),
+            person_id: person.to_string(),
+            device_id: "mac-local".into(),
+            allow_external: false,
+            external_recipients: vec![],
+        }),
+    };
+    // Admission succeeds even though the saved server is unreachable: no
+    // pre-turn discovery gates the Run.
+    let admission = worker.start_conversation(
+        person,
+        floe_kernel::CommandId::from_uuid(request_id).unwrap(),
+        request,
+    );
+    assert!(admission.is_ok(), "admission: {admission:?}");
+    let finished = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(finished.failure, None, "finished: {finished:?}");
+    let session = finished.session.unwrap();
+    // The dead server observes no profiles, so the explicit server profile
+    // matches nothing after admission: a clean model-unavailable halt, not an
+    // admission failure and not a hang.
+    assert_eq!(
+        session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Halted {
+            reason: AgentFailure::ModelUnavailable,
+        }),
+        "session: {session:?}"
+    );
+}
+
+#[test]
+fn local_only_root_turn_starts_with_no_remote_connection() {
+    // Hermetic absent credential, mirroring the FLOE_NATIVE_FIXTURE_CHILD
+    // pattern: the parent re-execs this exact test with an empty keychain
+    // view, so the result never depends on ambient keychain state (a test
+    // binary the OS has not authorized for the slot can block on an access
+    // prompt instead of reading it). The child name below must match this
+    // test; the "1 passed" guard fails loudly if it ever drifts.
+    if std::env::var_os("FLOE_TEST_EMPTY_KEYCHAIN").is_none() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "vault_host::tests::calendar_experts::local_only_root_turn_starts_with_no_remote_connection",
+                "--nocapture",
+            ])
+            .env("FLOE_TEST_EMPTY_KEYCHAIN", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child.status.success() && stdout.contains("1 passed"),
+            "child failed: status={} stdout={stdout} stderr={}",
+            child.status,
+            String::from_utf8_lossy(&child.stderr)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let request_id = Uuid::new_v4();
+    // No stored credential anywhere: the turn is admitted local-only.
+    let admission = worker.start_conversation(
+        person,
+        floe_kernel::CommandId::from_uuid(request_id).unwrap(),
+        ConversationTurnRequest {
+            session_id: session.id,
+            expected_revision: session.revision,
+            text: "Hello".into(),
+            device_id: "mac-local".into(),
+            profile: ProfileSelection::Explicit("server-model".into()),
+            continuation: false,
+            retry_of: None,
+            saved_server_connection: None,
+        },
+    );
+    assert!(admission.is_ok(), "admission: {admission:?}");
+    let finished = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(finished.failure, None, "finished: {finished:?}");
+    let session = finished.session.unwrap();
+    // Local-only observes no server profiles, so the explicit server profile
+    // matches nothing after admission: a clean model-unavailable halt,
+    // identical on every machine regardless of ambient keychain state.
+    assert_eq!(
+        session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Halted {
+            reason: AgentFailure::ModelUnavailable,
+        }),
+        "session: {session:?}"
+    );
 }

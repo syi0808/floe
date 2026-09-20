@@ -5,9 +5,9 @@ use std::{
 };
 
 use floe_agent_contract::{
-    AgentFailure, BoxFuture, DelegationPort, DelegationRequest, DependencyCoverage,
-    EndpointInvocation, EndpointSettlement, TaskId, TaskReceipt, TaskSnapshot, TaskState,
-    input_digest,
+    AgentFailure, AllowedCatalog, BoxFuture, DelegationPort, DelegationRequest,
+    DependencyCoverage, EndpointInvocation, EndpointSettlement, TaskId, TaskReceipt, TaskSnapshot,
+    TaskState, input_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -245,6 +245,17 @@ impl<Repository> TaskCoordinator<Repository> {
 }
 
 impl<Repository: TaskRepository> TaskCoordinator<Repository> {
+    /// The Experts-owned catalog: cards admitted for this principal under the
+    /// coordinator's purpose, with the definition revisions the Directory
+    /// registered. Eligibility is the Directory's judgment alone; model
+    /// placement never filters it.
+    pub fn catalog(&self, principal: &str) -> Result<AllowedCatalog, AgentFailure> {
+        self.directory.list_cards(DirectoryQuery {
+            principal,
+            purpose: &self.purpose,
+        })
+    }
+
     pub async fn get_task(
         &self,
         principal: &str,
