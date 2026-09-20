@@ -33,9 +33,11 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**2-C — Delegation ownership convergence.**
+**Active: 2-C — Delegation ownership convergence.**
 
-2-B and 2-B.5 are complete/frozen, including the broad audit, the fixed-credential injection P1, and the final public saved-credential read P0 ([plan](stage-2/2-b5-credential-read.md)). Continue with the [2-C execution plan](stage-2/2-c.md).
+2-B is complete/frozen. The current work removes LegacyDelegationPort and App run-id → endpoint-context staging, makes delegation execution context explicit and durable, and cuts the root directly to Experts TaskCoordinator while preserving Task identity/replay/cancellation/settlement semantics.
+
+Use [the 2-C execution plan](stage-2/2-c.md) as the authoritative task document. Do not start 2-D before the 2-C exit gates are green.
 
 ## Target internal architecture
 
