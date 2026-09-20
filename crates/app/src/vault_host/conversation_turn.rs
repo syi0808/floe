@@ -261,12 +261,12 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let provider = crate::inference_routes::HostInferenceRoutes::root_model_provider(
             &person_id.to_string(),
             &request.device_id,
-            request.saved_server_connection.clone(),
+            request.saved_connection_source(),
         )?;
         let authority = crate::inference_routes::root_recipient_authority(
             &person_id.to_string(),
             &request.device_id,
-            request.saved_server_connection.clone(),
+            request.saved_connection_source(),
         );
         let model_service =
             floe_inference::InferenceService::new(provider, resolver, authority);

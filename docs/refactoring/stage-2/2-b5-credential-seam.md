@@ -1,6 +1,6 @@
 # 2-B.5 Final P1 — Production-Safe Saved Connection Injection
 
-**Status: active — final 2-B blocker**
+**Status: complete**
 
 **Code baseline reviewed:** `16f7374461a2c4bc12e440f62f8107bc8a3f035f`
 

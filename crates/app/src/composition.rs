@@ -57,24 +57,21 @@ impl crate::ConversationCommands for AppComposition {
                 floe_kernel::RunId::from_uuid(run_id).ok_or(crate::ServiceError::InvalidInput)
             })
             .transpose()?;
+        // Turn admission performs no credential selection: the production
+        // constructor always binds the host keychain slot, and the canonical
+        // owners admit the stored credential after admission.
+        let turn = crate::ConversationTurnRequest::new(
+            request.session_id,
+            request.expected_revision,
+            request.text,
+            caller.device_id().to_owned(),
+            request.profile,
+            precheck.continuation,
+            retry_of,
+        );
         let receipt = self
             .agent_vault
-            .start_conversation(
-                person,
-                command_id,
-                crate::ConversationTurnRequest {
-                    session_id: request.session_id,
-                    expected_revision: request.expected_revision,
-                    text: request.text,
-                    device_id: caller.device_id().to_owned(),
-                    profile: request.profile,
-                    continuation: precheck.continuation,
-                    retry_of,
-                    // The canonical owners consult the host keychain slot;
-                    // the product supplies no saved connection.
-                    saved_server_connection: crate::TurnSavedConnection::HostSlot,
-                },
-            )
+            .start_conversation(person, command_id, turn)
             .map_err(service_failure)?;
         Ok(crate::CommandReceipt {
             command_id: receipt.command_id.as_uuid(),

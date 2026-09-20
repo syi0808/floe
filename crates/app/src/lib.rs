@@ -89,7 +89,7 @@ pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
     ConversationCommands, ProfileSelection, ServiceError, StartTurn, TurnMode,
 };
-pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute, TurnSavedConnection};
+pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute};
 #[cfg(unix)]
 pub use vault_host::{ConversationQuery, VaultBridge, VaultRequestFailure};
 pub use worker::{

@@ -624,29 +624,31 @@ fn conversation_turn_request(
             "remote_route is no longer accepted for conversation turns",
         ));
     }
-    Ok(ConversationTurnRequest {
-        session_id: parse_uuid(&request.session_id, "request.session_id")?,
-        expected_revision: request.expected_revision,
-        text: request.text.clone(),
-        device_id: request.device_id.clone(),
-        profile: match &request.profile {
-            AppProfileSelectionDto::Auto => floe_app::ProfileSelection::Auto,
-            AppProfileSelectionDto::Explicit { profile_id } => {
-                floe_app::ProfileSelection::Explicit(profile_id.clone())
-            }
-        },
-        continuation: request.continuation,
-        retry_of: request
-            .retry_of
-            .map(|run_id| {
-                floe_app::RunId::from_uuid(run_id)
-                    .ok_or_else(|| invalid("request.retry_of", "must be a Run id"))
-            })
-            .transpose()?,
-        // The product boundary supplies no saved server connection yet; the
-        // canonical owners consult the host keychain slot instead.
-        saved_server_connection: floe_app::TurnSavedConnection::HostSlot,
-    })
+    let profile = match &request.profile {
+        AppProfileSelectionDto::Auto => floe_app::ProfileSelection::Auto,
+        AppProfileSelectionDto::Explicit { profile_id } => {
+            floe_app::ProfileSelection::Explicit(profile_id.clone())
+        }
+    };
+    let retry_of = request
+        .retry_of
+        .map(|run_id| {
+            floe_app::RunId::from_uuid(run_id)
+                .ok_or_else(|| invalid("request.retry_of", "must be a Run id"))
+        })
+        .transpose()?;
+    // The production constructor always binds the host keychain slot: the
+    // product boundary supplies no saved server connection, and the FFI
+    // caller cannot name a credential source.
+    Ok(ConversationTurnRequest::new(
+        parse_uuid(&request.session_id, "request.session_id")?,
+        request.expected_revision,
+        request.text.clone(),
+        request.device_id.clone(),
+        profile,
+        request.continuation,
+        retry_of,
+    ))
 }
 
 fn producer_identity_dto(identity: &RemoteProducerIdentity) -> RemoteProducerIdentityDto {
@@ -1378,15 +1380,15 @@ mod tests {
         assert_eq!(error.code, ErrorCodeDto::Validation);
         assert_eq!(error.field.as_deref(), Some("request.remote_route"));
 
-        let accepted = conversation_turn_request(&AgentConversationTurnRequestDto {
+        conversation_turn_request(&AgentConversationTurnRequestDto {
             remote_route: None,
             ..request
         })
         .expect("a turn without a route converts");
-        assert!(matches!(
-            accepted.saved_server_connection,
-            floe_app::TurnSavedConnection::HostSlot
-        ));
+        // The credential source is not nameable from FFI: conversion can only
+        // produce the production constructor shape, which always binds the
+        // host slot. That binding is asserted inside the App crate, where the
+        // private source is visible.
     }
 
     #[test]

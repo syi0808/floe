@@ -5,6 +5,8 @@
 //! provider adapters. This type only supplies the verified caller identity and
 //! the concrete ports. Nothing here resolves a route before admission.
 
+use crate::turn_request::SavedConnectionSource;
+
 #[derive(Clone, Copy, Default)]
 pub struct HostInferenceRoutes;
 
@@ -15,22 +17,27 @@ pub struct HostInferenceRoutes;
 /// (`HostSlot`) re-reads the host keychain slot. A test-only injected
 /// connection (`Fixed`) is re-read from a fixed store with the same
 /// per-check shape.
-pub fn root_recipient_authority(
+///
+/// Crate-internal: the credential-source type is not part of the public turn
+/// contract.
+pub(crate) fn root_recipient_authority(
     person_id: &str,
     device_id: &str,
-    saved: crate::TurnSavedConnection,
+    saved: SavedConnectionSource,
 ) -> floe_provider_adapters::control::SavedConnectionRecipientAuthority<
     floe_provider_adapters::control::CurrentSavedConnectionStore,
 > {
     use floe_provider_adapters::control::{
-        CurrentSavedConnectionStore, FixedSavedConnectionStore, SavedConnectionRecipientAuthority,
-        SavedServerConnectionStore,
+        CurrentSavedConnectionStore, SavedConnectionRecipientAuthority, SavedServerConnectionStore,
     };
+    #[cfg(test)]
+    use floe_provider_adapters::control::FixedSavedConnectionStore;
     let store = match saved {
-        crate::TurnSavedConnection::Fixed(saved) => {
+        #[cfg(test)]
+        SavedConnectionSource::Fixed(saved) => {
             CurrentSavedConnectionStore::Fixed(FixedSavedConnectionStore::fixed(saved))
         }
-        crate::TurnSavedConnection::HostSlot => {
+        SavedConnectionSource::HostSlot => {
             CurrentSavedConnectionStore::Keychain(SavedServerConnectionStore)
         }
     };
@@ -40,24 +47,28 @@ pub fn root_recipient_authority(
 impl HostInferenceRoutes {
     /// Canonical root model provider from verified caller identity.
     ///
-    /// The server leg comes only from the saved connection the product
-    /// supplied for this turn, or else the host keychain slot, admitted
-    /// against this person/device after admission. No pre-resolved route
-    /// exists to consult for model selection.
-    pub fn root_model_provider(
+    /// The server leg comes only from the saved connection admitted for this
+    /// turn, or else the host keychain slot, admitted against this
+    /// person/device after admission. No pre-resolved route exists to consult
+    /// for model selection.
+    ///
+    /// Crate-internal: the credential-source type is not part of the public
+    /// turn contract.
+    pub(crate) fn root_model_provider(
         person_id: &str,
         device_id: &str,
-        saved: crate::TurnSavedConnection,
+        saved: SavedConnectionSource,
     ) -> Result<
         floe_provider_adapters::models::RootModelProvider,
         floe_agent_contract::AgentFailure,
     > {
         let stored = match saved {
-            crate::TurnSavedConnection::Fixed(stored) => stored,
+            #[cfg(test)]
+            SavedConnectionSource::Fixed(stored) => stored,
             // No keychain item is device-only, not an error. A keychain
             // failure that is not "absent" fails closed like route
             // resolution does.
-            crate::TurnSavedConnection::HostSlot => {
+            SavedConnectionSource::HostSlot => {
                 floe_provider_adapters::control::load_saved_connection()?
             }
         };

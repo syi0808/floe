@@ -5,7 +5,7 @@ use floe_experts::{
     RegistryConfigurationTarget,
 };
 
-use crate::{ConversationSessionOperation, ConversationTurnRequest, TurnSavedConnection};
+use crate::{ConversationSessionOperation, ConversationTurnRequest};
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
@@ -240,16 +240,15 @@ fn native_grants_capture_authority_only_on_explicit_review() {
             &worker,
             person,
             WorkerAction::ConversationTurn {
-                request: Box::new(ConversationTurnRequest {
-                    session_id: session.id,
-                    expected_revision: session.revision,
-                    text: text.into(),
-                    device_id: "iphone".into(),
-                    profile: ProfileSelection::Explicit("server-model".into()),
-                    continuation: false,
-                    retry_of: None,
-                    saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "iphone"))),
-                }),
+                request: Box::new(ConversationTurnRequest::new(
+                    session.id,
+                    session.revision,
+                    text.into(),
+                    "iphone".into(),
+                    ProfileSelection::Explicit("server-model".into()),
+                    false,
+                    None,
+                ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "iphone")))),
             },
         )
     };
@@ -414,16 +413,15 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: Box::new(ConversationTurnRequest {
-                session_id: session.id,
-                expected_revision: session.revision,
-                text: "Find an open hour".into(),
-                device_id: "mac-local".into(),
-                profile: ProfileSelection::Explicit("server-model".into()),
-                continuation: false,
-                retry_of: None,
-                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-            }),
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "Find an open hour".into(),
+                "mac-local".into(),
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -480,16 +478,15 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         text: "One durable answer".into(),
     }]);
     let action = || WorkerAction::ConversationTurn {
-        request: Box::new(ConversationTurnRequest {
-            session_id: session.id,
-            expected_revision: session.revision,
-            text: "Answer once".into(),
-            device_id: "mac-local".into(),
-            profile: ProfileSelection::Explicit("server-model".into()),
-            continuation: false,
-            retry_of: None,
-            saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-        }),
+        request: Box::new(ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Answer once".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
     };
     let request_id = Uuid::new_v4();
     worker
@@ -588,16 +585,15 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             first_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: session.revision,
-                        text: "Answer first".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("server-model".into()),
-                        continuation: false,
-                        retry_of: None,
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-                    }),
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Answer first".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
                 }),
             },
         )
@@ -613,16 +609,15 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
             second_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: first_session.revision,
-                        text: "Answer second".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("server-model".into()),
-                        continuation: false,
-                        retry_of: None,
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-                    }),
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        first_session.revision,
+                        "Answer second".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
                 }),
             },
         )
@@ -715,16 +710,15 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             conversation_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: session.revision,
-                        text: "Wait for the model".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("server-model".into()),
-                        continuation: false,
-                        retry_of: None,
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-                    }),
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Wait for the model".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
                 }),
             },
         )
@@ -750,16 +744,15 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
             competing_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: session.revision,
-                        text: "Compete for the same session".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("server-model".into()),
-                        continuation: false,
-                        retry_of: None,
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&competing_mock, person, "mac-local"))),
-                    }),
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Compete for the same session".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&competing_mock, person, "mac-local")))),
                 }),
             },
         )
@@ -881,16 +874,15 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     .unwrap();
     let (mock, entered, release, server) = blocking_answer_server();
     let request_id = Uuid::new_v4();
-    let request = || ConversationTurnRequest {
-        session_id: session.id,
-        expected_revision: session.revision,
-        text: "Cancel this run".into(),
-        device_id: "mac-local".into(),
-        profile: ProfileSelection::Explicit("server-model".into()),
-        continuation: false,
-        retry_of: None,
-        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-    };
+    let request = || ConversationTurnRequest::new(
+        session.id,
+        session.revision,
+        "Cancel this run".into(),
+        "mac-local".into(),
+        ProfileSelection::Explicit("server-model".into()),
+        false,
+        None,
+    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
     let admitted = worker
         .start_conversation(
             person,
@@ -1027,16 +1019,15 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
     }]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest {
-        session_id: session.id,
-        expected_revision: session.revision,
-        text: "Answer once".into(),
-        device_id: "mac-local".into(),
-        profile: ProfileSelection::Explicit("server-model".into()),
-        continuation: false,
-        retry_of: None,
-        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-    };
+    let request = || ConversationTurnRequest::new(
+        session.id,
+        session.revision,
+        "Answer once".into(),
+        "mac-local".into(),
+        ProfileSelection::Explicit("server-model".into()),
+        false,
+        None,
+    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
     let admitted = worker
         .start_conversation(person, command_id, request())
         .unwrap();
@@ -1076,16 +1067,15 @@ fn same_request_id_with_different_profile_conflicts() {
     }]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest {
-        session_id: session.id,
-        expected_revision: session.revision,
-        text: "Answer once".into(),
-        device_id: "mac-local".into(),
-        profile: ProfileSelection::Explicit("server-model".into()),
-        continuation: false,
-        retry_of: None,
-        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-    };
+    let request = || ConversationTurnRequest::new(
+        session.id,
+        session.revision,
+        "Answer once".into(),
+        "mac-local".into(),
+        ProfileSelection::Explicit("server-model".into()),
+        false,
+        None,
+    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .start_conversation(person, command_id, request())
         .unwrap();
@@ -1123,16 +1113,15 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
     }]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest {
-        session_id: session.id,
-        expected_revision: session.revision,
-        text: "Answer once".into(),
-        device_id: "mac-local".into(),
-        profile: ProfileSelection::Explicit("server-model".into()),
-        continuation: false,
-        retry_of: None,
-        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-    };
+    let request = || ConversationTurnRequest::new(
+        session.id,
+        session.revision,
+        "Answer once".into(),
+        "mac-local".into(),
+        ProfileSelection::Explicit("server-model".into()),
+        false,
+        None,
+    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .start_conversation(person, command_id, request())
         .unwrap();
@@ -1171,25 +1160,27 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
     let (refreshed_mock, idle) = answer_server(vec![]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest {
-        session_id: session.id,
-        expected_revision: session.revision,
-        text: "Answer once".into(),
-        device_id: "mac-local".into(),
-        profile: ProfileSelection::Explicit("server-model".into()),
-        continuation: false,
-        retry_of: None,
-        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-    };
+    let request = || ConversationTurnRequest::new(
+        session.id,
+        session.revision,
+        "Answer once".into(),
+        "mac-local".into(),
+        ProfileSelection::Explicit("server-model".into()),
+        false,
+        None,
+    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
     let admitted = worker
         .start_conversation(person, command_id, request())
         .unwrap();
     let mut refreshed_request = request();
     // A refreshed stored connection (a different mock server) is runtime
     // state, not command identity: the duplicate still replays.
-    refreshed_request.saved_server_connection = TurnSavedConnection::Fixed(Some(
-        saved_server_connection(&refreshed_mock, person, "mac-local"),
-    ));
+    refreshed_request =
+        refreshed_request.with_fixed_saved_connection_for_test(Some(saved_server_connection(
+            &refreshed_mock,
+            person,
+            "mac-local",
+        )));
     assert_eq!(
         worker
             .start_conversation(person, command_id, refreshed_request)
@@ -1258,16 +1249,15 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: Box::new(ConversationTurnRequest {
-                session_id: session.id,
-                expected_revision: session.revision,
-                text: "Answer without expert setup".into(),
-                device_id: "mac-local".into(),
-                profile: ProfileSelection::Explicit("server-model".into()),
-                continuation: false,
-                retry_of: None,
-                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-            }),
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "Answer without expert setup".into(),
+                "mac-local".into(),
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
         },
     );
     assert_eq!(result.failure, None, "general turn: {result:?}");
@@ -1358,16 +1348,15 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         text: "Continued once".into(),
     }]);
     let action = || WorkerAction::ConversationTurn {
-        request: Box::new(ConversationTurnRequest {
-            session_id: session.id,
-            expected_revision: session.revision + 2,
-            text: "Finish after the deadline".into(),
-            device_id: "mac-local".into(),
-            profile: ProfileSelection::Explicit("server-model".into()),
-            continuation: true,
-            retry_of: None,
-            saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-        }),
+        request: Box::new(ConversationTurnRequest::new(
+            session.id,
+            session.revision + 2,
+            "Finish after the deadline".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            true,
+            None,
+        ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
     };
     let request_id = Uuid::new_v4();
     worker
@@ -1440,16 +1429,15 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: Box::new(ConversationTurnRequest {
-                session_id: session.id,
-                expected_revision: session.revision,
-                text: "Review my commitments".into(),
-                device_id: "mac-local".into(),
-                profile: ProfileSelection::Explicit("server-model".into()),
-                continuation: false,
-                retry_of: None,
-                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-            }),
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "Review my commitments".into(),
+                "mac-local".into(),
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -2132,18 +2120,17 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
             request_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: session.revision,
-                        text: "Hello".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("server-model".into()),
-                        continuation: false,
-                        retry_of: None,
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Hello".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(
                             &mock, person, "mac-local",
-                        ))),
-                    }),
+                        )))),
                 }),
             },
         )
@@ -2194,18 +2181,17 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
             request_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: session.revision,
-                        text: "Hello".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("no-such-profile".into()),
-                        continuation: false,
-                        retry_of: None,
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Hello".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("no-such-profile".into()),
+                        false,
+                        None,
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(
                             &mock, person, "mac-local",
-                        ))),
-                    }),
+                        )))),
                 }),
             },
         )
@@ -2264,21 +2250,20 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
             request_id,
             WorkerOperation::Submit {
                 action: Box::new(WorkerAction::ConversationTurn {
-                    request: Box::new(ConversationTurnRequest {
-                        session_id: session.id,
-                        expected_revision: session.revision,
-                        text: "Hello".into(),
-                        device_id: "mac-local".into(),
-                        profile: ProfileSelection::Explicit("server-model".into()),
-                        continuation: false,
-                        retry_of: None,
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Hello".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
                         // The saved connection never consented to external
                         // use, so the exact-recipient fence must deny before
                         // any transport handoff.
-                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(
+                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(
                             &mock, person, "mac-local",
-                        ))),
-                    }),
+                        )))),
                 }),
             },
         )
@@ -2667,16 +2652,15 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: Box::new(ConversationTurnRequest {
-                session_id: session.id,
-                expected_revision: session.revision,
-                text: "Hello".into(),
-                device_id: "mac-local".into(),
-                profile: ProfileSelection::Explicit("server-model".into()),
-                continuation: false,
-                retry_of: None,
-                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
-            }),
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "Hello".into(),
+                "mac-local".into(),
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -2715,15 +2699,15 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
     let base_url = format!("http://{}", dead.local_addr().unwrap());
     drop(dead);
     let request_id = Uuid::new_v4();
-    let request = ConversationTurnRequest {
-        session_id: session.id,
-        expected_revision: session.revision,
-        text: "Hello".into(),
-        device_id: "mac-local".into(),
-        profile: ProfileSelection::Explicit("server-model".into()),
-        continuation: false,
-        retry_of: None,
-        saved_server_connection: TurnSavedConnection::Fixed(Some(
+    let request = ConversationTurnRequest::new(
+        session.id,
+        session.revision,
+        "Hello".into(),
+        "mac-local".into(),
+        ProfileSelection::Explicit("server-model".into()),
+        false,
+        None,
+    ).with_fixed_saved_connection_for_test(Some(
             floe_inference::SavedServerConnection {
                 base_url,
                 token: "d".repeat(32),
@@ -2733,8 +2717,7 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
                 allow_external: false,
                 external_recipients: vec![],
             },
-        )),
-    };
+        ));
     // Admission succeeds even though the saved server is unreachable: no
     // pre-turn discovery gates the Run.
     let admission = worker.start_conversation(
@@ -2785,16 +2768,15 @@ fn local_only_root_turn_starts_with_no_remote_connection() {
     let admission = worker.start_conversation(
         person,
         floe_kernel::CommandId::from_uuid(request_id).unwrap(),
-        ConversationTurnRequest {
-            session_id: session.id,
-            expected_revision: session.revision,
-            text: "Hello".into(),
-            device_id: "mac-local".into(),
-            profile: ProfileSelection::Explicit("server-model".into()),
-            continuation: false,
-            retry_of: None,
-            saved_server_connection: TurnSavedConnection::Fixed(None),
-        },
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Hello".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        ).with_fixed_saved_connection_for_test(None),
     );
     assert!(admission.is_ok(), "admission: {admission:?}");
     let finished = wait(&worker, person, request_id);
