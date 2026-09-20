@@ -25,7 +25,7 @@ Detailed work is split into the execution plans linked below. This overview owns
   - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
   - [x] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
   - [x] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
-  - [ ] **2-B.5 — Integrated 2-B hardening**
+  - [ ] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md)
 - [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
 - [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
@@ -35,9 +35,9 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 **Active: 2-B.5 — Integrated 2-B hardening.**
 
-2-B.1 through 2-B.4 are complete. General Conversation pre-turn model/source discovery is removed, ConversationTurnRequest.remote_route is gone, source transport is split from Inference RemoteRoute, the root Expert catalog comes from Experts, eager App Model/policy wiring is removed, and zero-caller General Conversation compatibility is deleted with only LegacyDelegationPort retained until 2-C.
+2-B.1 through 2-B.4 are complete. This is the one deliberate deep audit of the complete General Conversation canonical runtime across Security/Authority/Provenance, Recovery/Replay/Identity, Accounting/Finalization, and Ownership/Secret boundaries. Fix P0 and bounded canonical-path P1 findings only; defer cleanup/public-surface P2 items to 2-D/2-E/Stage 3.
 
-2-B.5 has no execution plan document yet. Do not start 2-B.5 implementation from this overview; wait for its plan.
+Use [the 2-B.5 execution plan](stage-2/2-b5.md) as the authoritative task document. When it closes, mark 2-B complete and move to 2-C. Do not start 2-C in the same change set.
 
 ## Target internal architecture
 
