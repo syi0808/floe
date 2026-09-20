@@ -5,7 +5,7 @@ use floe_experts::{
     RegistryConfigurationTarget,
 };
 
-use crate::{ConversationSessionOperation, ConversationTurnRequest};
+use crate::{ConversationSessionOperation, ConversationTurnRequest, TurnSavedConnection};
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
@@ -248,7 +248,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     profile: ProfileSelection::Explicit("server-model".into()),
                     continuation: false,
                     retry_of: None,
-                    saved_server_connection: Some(saved_server_connection(&mock, person, "iphone")),
+                    saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "iphone"))),
                 }),
             },
         )
@@ -422,7 +422,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
             }),
         },
     );
@@ -488,7 +488,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             profile: ProfileSelection::Explicit("server-model".into()),
             continuation: false,
             retry_of: None,
-            saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+            saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
         }),
     };
     let request_id = Uuid::new_v4();
@@ -596,7 +596,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
                     }),
                 }),
             },
@@ -621,7 +621,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
                     }),
                 }),
             },
@@ -723,7 +723,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
                     }),
                 }),
             },
@@ -758,7 +758,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(&competing_mock, person, "mac-local")),
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&competing_mock, person, "mac-local"))),
                     }),
                 }),
             },
@@ -889,7 +889,7 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
     };
     let admitted = worker
         .start_conversation(
@@ -1035,7 +1035,7 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
     };
     let admitted = worker
         .start_conversation(person, command_id, request())
@@ -1084,7 +1084,7 @@ fn same_request_id_with_different_profile_conflicts() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
     };
     worker
         .start_conversation(person, command_id, request())
@@ -1131,7 +1131,7 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
     };
     worker
         .start_conversation(person, command_id, request())
@@ -1179,7 +1179,7 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
     };
     let admitted = worker
         .start_conversation(person, command_id, request())
@@ -1187,10 +1187,8 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
     let mut refreshed_request = request();
     // A refreshed stored connection (a different mock server) is runtime
     // state, not command identity: the duplicate still replays.
-    refreshed_request.saved_server_connection = Some(saved_server_connection(
-        &refreshed_mock,
-        person,
-        "mac-local",
+    refreshed_request.saved_server_connection = TurnSavedConnection::Fixed(Some(
+        saved_server_connection(&refreshed_mock, person, "mac-local"),
     ));
     assert_eq!(
         worker
@@ -1268,7 +1266,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
             }),
         },
     );
@@ -1368,7 +1366,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             profile: ProfileSelection::Explicit("server-model".into()),
             continuation: true,
             retry_of: None,
-            saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+            saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
         }),
     };
     let request_id = Uuid::new_v4();
@@ -1450,7 +1448,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
             }),
         },
     );
@@ -2142,9 +2140,9 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
                         profile: ProfileSelection::Explicit("server-model".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(
                             &mock, person, "mac-local",
-                        )),
+                        ))),
                     }),
                 }),
             },
@@ -2204,9 +2202,9 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
                         profile: ProfileSelection::Explicit("no-such-profile".into()),
                         continuation: false,
                         retry_of: None,
-                        saved_server_connection: Some(saved_server_connection(
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(
                             &mock, person, "mac-local",
-                        )),
+                        ))),
                     }),
                 }),
             },
@@ -2277,9 +2275,9 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
                         // The saved connection never consented to external
                         // use, so the exact-recipient fence must deny before
                         // any transport handoff.
-                        saved_server_connection: Some(saved_server_connection(
+                        saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(
                             &mock, person, "mac-local",
-                        )),
+                        ))),
                     }),
                 }),
             },
@@ -2677,7 +2675,7 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
                 profile: ProfileSelection::Explicit("server-model".into()),
                 continuation: false,
                 retry_of: None,
-                saved_server_connection: Some(saved_server_connection(&mock, person, "mac-local")),
+                saved_server_connection: TurnSavedConnection::Fixed(Some(saved_server_connection(&mock, person, "mac-local"))),
             }),
         },
     );
@@ -2725,15 +2723,17 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
         profile: ProfileSelection::Explicit("server-model".into()),
         continuation: false,
         retry_of: None,
-        saved_server_connection: Some(floe_inference::SavedServerConnection {
-            base_url,
-            token: "d".repeat(32),
-            client_id: "test-client".into(),
-            person_id: person.to_string(),
-            device_id: "mac-local".into(),
-            allow_external: false,
-            external_recipients: vec![],
-        }),
+        saved_server_connection: TurnSavedConnection::Fixed(Some(
+            floe_inference::SavedServerConnection {
+                base_url,
+                token: "d".repeat(32),
+                client_id: "test-client".into(),
+                person_id: person.to_string(),
+                device_id: "mac-local".into(),
+                allow_external: false,
+                external_recipients: vec![],
+            },
+        )),
     };
     // Admission succeeds even though the saved server is unreachable: no
     // pre-turn discovery gates the Run.
@@ -2763,31 +2763,10 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
 
 #[test]
 fn local_only_root_turn_starts_with_no_remote_connection() {
-    // Hermetic absent credential, mirroring the FLOE_NATIVE_FIXTURE_CHILD
-    // pattern: the parent re-execs this exact test with an empty keychain
-    // view, so the result never depends on ambient keychain state (a test
-    // binary the OS has not authorized for the slot can block on an access
-    // prompt instead of reading it). The child name below must match this
-    // test; the "1 passed" guard fails loudly if it ever drifts.
-    if std::env::var_os("FLOE_TEST_EMPTY_KEYCHAIN").is_none() {
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "vault_host::tests::calendar_experts::local_only_root_turn_starts_with_no_remote_connection",
-                "--nocapture",
-            ])
-            .env("FLOE_TEST_EMPTY_KEYCHAIN", "1")
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&child.stdout);
-        assert!(
-            child.status.success() && stdout.contains("1 passed"),
-            "child failed: status={} stdout={stdout} stderr={}",
-            child.status,
-            String::from_utf8_lossy(&child.stderr)
-        );
-        return;
-    }
+    // Hermetic absent credential through the injected fixed store: the turn
+    // never reads the host keychain slot, so the result cannot depend on
+    // ambient keychain state (a test binary the OS has not authorized for
+    // the slot can block on an access prompt instead of reading it).
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
@@ -2814,7 +2793,7 @@ fn local_only_root_turn_starts_with_no_remote_connection() {
             profile: ProfileSelection::Explicit("server-model".into()),
             continuation: false,
             retry_of: None,
-            saved_server_connection: None,
+            saved_server_connection: TurnSavedConnection::Fixed(None),
         },
     );
     assert!(admission.is_ok(), "admission: {admission:?}");

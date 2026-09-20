@@ -40,6 +40,19 @@ impl RemoteTurnRoute {
     }
 }
 
+/// Where the canonical owners read the saved server connection for one turn.
+///
+/// Production always uses [`TurnSavedConnection::HostSlot`]: the host keychain
+/// slot, re-read on every check. Tests inject
+/// [`TurnSavedConnection::Fixed`] instead — including a fixed absence — so no
+/// test depends on ambient keychain state and no test convention can change
+/// production credential lookup.
+#[derive(Clone)]
+pub enum TurnSavedConnection {
+    HostSlot,
+    Fixed(Option<floe_inference::SavedServerConnection>),
+}
+
 #[derive(Clone)]
 pub struct ConversationTurnRequest {
     /// What the command is, in Conversation's own terms. The worker compares
@@ -55,15 +68,15 @@ pub struct ConversationTurnRequest {
     /// Runtime-only inputs. Neither the asking device nor the stored
     /// credential is part of the command identity.
     pub device_id: String,
-    /// Product-supplied saved server connection, if any. The canonical model
-    /// and source owners admit it against the verified caller identity after
-    /// admission. When absent, the host keychain slot is consulted. Like any
-    /// credential, it is excluded from the command identity.
-    pub saved_server_connection: Option<floe_inference::SavedServerConnection>,
+    /// Where the canonical model and source owners read the saved server
+    /// connection: the host keychain slot in production, a fixed injected
+    /// store in tests. Like any credential, it is excluded from the command
+    /// identity.
+    pub saved_server_connection: TurnSavedConnection,
 }
 
 impl ConversationTurnRequest {
-    /// The saved server credential this turn may use: the product-injected
+    /// The saved server credential this turn may use: the injected fixed
     /// connection when one was supplied, else the host keychain slot. A local
     /// read only: no network, no route resolution, no model or source
     /// discovery.
@@ -71,8 +84,10 @@ impl ConversationTurnRequest {
         &self,
     ) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
         match self.saved_server_connection.clone() {
-            Some(stored) => Ok(Some(stored)),
-            None => floe_provider_adapters::control::load_saved_connection(),
+            TurnSavedConnection::Fixed(stored) => Ok(stored),
+            TurnSavedConnection::HostSlot => {
+                floe_provider_adapters::control::load_saved_connection()
+            }
         }
     }
 }

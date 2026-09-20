@@ -3601,4 +3601,225 @@ mod tests {
         assert_eq!(snapshot.unknown_cost_micros, 0);
         assert_eq!(snapshot.usage.tokens, 0);
     }
+
+    #[tokio::test]
+    async fn resume_with_stale_pinned_revision_dispatches_nothing() {
+        // 2-B.5 C1: a resumed batch pinned `lookup` at revision 1, but the
+        // resuming catalog carries revision 2: resume must fail closed before
+        // any Tool/Task dispatch, and must not fall back to fresh planning.
+        let execution_id = Uuid::new_v4();
+        let batch = ValidatedModelBatch {
+            execution_id,
+            attempt_id: Uuid::new_v4(),
+            projection_ref: ProjectionRef::new(),
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::CallTool {
+                tool_id: "lookup".into(),
+                definition_revision: 1,
+                input: "{}".into(),
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![PinnedToolRevision {
+                tool_id: "lookup".into(),
+                definition_revision: 1,
+            }],
+            agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
+        };
+        batch.validate(1024).unwrap();
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        struct CountingModel {
+            calls: Arc<AtomicUsize>,
+        }
+        impl ModelPort for CountingModel {
+            fn generate<'a>(
+                &'a self,
+                request: ModelRequest,
+                _: &'a ExecutionScope,
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![ModelStep::Answer {
+                            text: "fresh".into(),
+                            artifacts: vec![],
+                        }],
+                        usage: ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    })
+                })
+            }
+        }
+        let model = CountingModel {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let mut engine_request = request(scope());
+        engine_request.allowed_catalog.tools[0].definition_revision = 2;
+        let batch_id = batch.batch_id;
+        engine_request.resume = Some(EngineResumeState {
+            validated_batch: batch,
+            cursor: BatchCursor {
+                batch_id,
+                next_step_index: 0,
+            },
+        });
+        let result = Engine::default()
+            .drive(
+                engine_request,
+                ports(&projection, &model, &tools, &journal, &Validator),
+            )
+            .await;
+        assert_eq!(result.err(), Some(AgentFailure::Conflict));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "stale resume journals nothing"
+        );
+    }
+
+    struct DeniedTools {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ToolPort for DeniedTools {
+        fn invoke<'a>(
+            &'a self,
+            call: ToolCall,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let _ = call;
+                Err(AgentFailure::CapabilityDenied)
+            })
+        }
+    }
+
+    struct ToolThenAnswer {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ModelPort for ToolThenAnswer {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let steps = if has_tool_exchange(&request) || call > 0 {
+                    vec![ModelStep::Answer {
+                        text: "done".into(),
+                        artifacts: vec![],
+                    }]
+                } else {
+                    vec![ModelStep::CallTool {
+                        tool_id: "lookup".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }]
+                };
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps,
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_tool_becomes_a_typed_observation_not_an_empty_success() {
+        // 2-B.5 B5: a denied source read is a bounded Tool observation with a
+        // denial issue and Unknown coverage — never an empty success.
+        let tools = DeniedTools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let model = ToolThenAnswer {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &model, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        let result = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|event| match event {
+                JournalEvent::ToolResult { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .expect("denied tool journals one observation");
+        assert!(
+            !result.text.trim().is_empty(),
+            "denial observation carries text"
+        );
+        assert_eq!(result.coverage, DependencyCoverage::Unknown);
+        let issue = result.issue.expect("denial observation carries its issue");
+        assert_eq!(issue.failure, AgentFailure::CapabilityDenied);
+        assert!(issue.retryable);
+    }
+
+    struct AlwaysTool;
+
+    impl ModelPort for AlwaysTool {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            Box::pin(async move {
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![ModelStep::CallTool {
+                        tool_id: "lookup".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }],
+                    usage: ModelUsage {
+                        tokens: 1,
+                        cost_micros: 1,
+                    },
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_tool_denials_stall_without_answer() {
+        // 2-B.5 B5: three consecutive denied observations stall the drive
+        // instead of looping or answering from nothing.
+        let tools = DeniedTools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, _) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let result = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &AlwaysTool, &tools, &journal, &Validator),
+            )
+            .await;
+        assert_eq!(result.err(), Some(AgentFailure::Stalled));
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 3);
+    }
 }

@@ -645,7 +645,7 @@ fn conversation_turn_request(
             .transpose()?,
         // The product boundary supplies no saved server connection yet; the
         // canonical owners consult the host keychain slot instead.
-        saved_server_connection: None,
+        saved_server_connection: floe_app::TurnSavedConnection::HostSlot,
     })
 }
 
@@ -1383,7 +1383,10 @@ mod tests {
             ..request
         })
         .expect("a turn without a route converts");
-        assert!(accepted.saved_server_connection.is_none());
+        assert!(matches!(
+            accepted.saved_server_connection,
+            floe_app::TurnSavedConnection::HostSlot
+        ));
     }
 
     #[test]

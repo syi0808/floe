@@ -2998,4 +2998,622 @@ mod tests {
             .await;
         assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
     }
+
+    // 2-B.5 B2/B4: revoke through the real CompositeDependencyResolver path.
+    //
+    // The attention connector is device-local, so the composite routes it to
+    // the vault-backed personal resolver: a grant that is reviewed, read,
+    // then disabled exercises projection-time authorize, dispatch-time
+    // reauthorization, and history reauthorization with no fakes.
+
+    #[derive(Clone)]
+    struct B2DeviceTransport {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl floe_inference::PreparedModelTransport for B2DeviceTransport {
+        async fn generate(
+            &self,
+            _request: floe_inference::CanonicalModelRequest,
+        ) -> Result<floe_inference::CanonicalModelResponse, AgentFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(floe_inference::CanonicalModelResponse {
+                output: vec![floe_agent_contract::ModelStep::Answer {
+                    text: "done".into(),
+                    artifacts: vec![],
+                }],
+                used_tokens: 10,
+                cost_micros: 5,
+            })
+        }
+    }
+
+    struct B2DeviceProvider {
+        transport: B2DeviceTransport,
+    }
+
+    impl floe_inference::ModelProvider for B2DeviceProvider {
+        type Prepared = B2DeviceTransport;
+
+        async fn observe_profiles(
+            &self,
+        ) -> Vec<floe_inference::PreparedModelProfile<Self::Prepared>> {
+            vec![floe_inference::PreparedModelProfile {
+                profile: floe_inference::ModelProfile {
+                    id: "device".into(),
+                    purpose: floe_inference::ModelPurpose::new(
+                        floe_inference::CANONICAL_MODEL_PURPOSE,
+                    )
+                    .unwrap(),
+                    consumer: floe_inference::ModelConsumer::new(
+                        floe_inference::CANONICAL_MODEL_CONSUMER,
+                    )
+                    .unwrap(),
+                    execution_location: floe_inference::ExecutionLocation::Device,
+                    data_recipient: floe_inference::DataRecipient::Device,
+                    capabilities: floe_inference::ModelCapabilities(vec![]),
+                    available: true,
+                },
+                transport: self.transport.clone(),
+            }]
+        }
+    }
+
+    struct B2AllowAuthority;
+
+    impl floe_access::ModelDispatchRecipientAuthority for B2AllowAuthority {
+        fn check_recipient(&self, _recipient: &str) -> Result<(), AgentFailure> {
+            Ok(())
+        }
+    }
+
+    struct B2Attention {
+        _root: tempfile::TempDir,
+        vault: EncryptedAgentVault<AttentionTestKeys>,
+        local_context: Arc<LocalContextHost>,
+        stop: Arc<AtomicBool>,
+        person_id: PersonId,
+    }
+
+    impl B2Attention {
+        async fn reviewed() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let person_id = PersonId::new();
+            let vault =
+                EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                    .await
+                    .unwrap();
+            let local_context = Arc::new(LocalContextHost::default());
+            let host_epoch = "attention-b2-host".to_owned();
+            local_context
+                .execute(
+                    person_id,
+                    LocalContextCommand::RegisterAttentionHost {
+                        host_epoch: host_epoch.clone(),
+                    },
+                    None,
+                )
+                .unwrap();
+            let subject = "a".repeat(64);
+            let stop = Arc::new(AtomicBool::new(false));
+            tokio::spawn(drive_attention_host(
+                local_context.clone(),
+                person_id,
+                host_epoch,
+                subject.clone(),
+                stop.clone(),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ));
+            let inspected = floe_access::apply_personal_access(
+                &vault,
+                &personal_grants::native_driver(&local_context),
+                person_id,
+                floe_access::PersonalAccessConfiguration {
+                    connector: floe_access::ATTENTION_CONNECTOR.into(),
+                    device_id: "test-device".into(),
+                    change: floe_access::PersonalAccessChange::Inspect,
+                },
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(inspected.native_subject_fingerprint, Some(subject.clone()));
+            let reviewed = floe_access::apply_personal_access(
+                &vault,
+                &personal_grants::native_driver(&local_context),
+                person_id,
+                floe_access::PersonalAccessConfiguration {
+                    connector: floe_access::ATTENTION_CONNECTOR.into(),
+                    device_id: "test-device".into(),
+                    change: floe_access::PersonalAccessChange::Review {
+                        expected_native_subject_fingerprint: subject,
+                        consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
+                        feasibility_query: None,
+                        expected_grant_id: None,
+                        expected_grant_authority: None,
+                    },
+                },
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(reviewed.state, floe_access::PersonalAccessState::Active);
+            Self {
+                _root: root,
+                vault,
+                local_context,
+                stop,
+                person_id,
+            }
+        }
+
+        async fn disable(&self) {
+            let overview = floe_access::apply_personal_access(
+                &self.vault,
+                &personal_grants::native_driver(&self.local_context),
+                self.person_id,
+                floe_access::PersonalAccessConfiguration {
+                    connector: floe_access::ATTENTION_CONNECTOR.into(),
+                    device_id: "test-device".into(),
+                    change: floe_access::PersonalAccessChange::SetEnabled { enabled: false },
+                },
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(overview.state, floe_access::PersonalAccessState::Paused);
+        }
+
+        /// The canonical attention read through vault grants and the device
+        /// driver: the dependency it returns is currently authorized.
+        async fn attention_exchange(
+            &self,
+        ) -> (
+            floe_agent_contract::ToolCall,
+            floe_agent_contract::ToolResult,
+        ) {
+            let tools = floe_context::ContextToolService::new(
+                self.person_id,
+                "test-device",
+                floe_vault::VaultGrantRecords::new(&self.vault),
+                personal_grants::native_driver(&self.local_context),
+                None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
+            )
+            .unwrap();
+            let call = floe_agent_contract::ToolCall {
+                call_id: Uuid::new_v4(),
+                invocation_key: floe_agent_contract::InvocationKey::new(),
+                tool_id: "attention.coarse.read".into(),
+                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                input: "{}".into(),
+            };
+            let result = floe_agent_contract::ToolPort::invoke(&tools, call.clone(), &tool_scope())
+                .await
+                .unwrap();
+            assert!(
+                matches!(
+                    result.coverage,
+                    floe_agent_contract::DependencyCoverage::Dependent { .. }
+                ),
+                "attention read must carry direct coverage: {:?}",
+                result.coverage
+            );
+            (call, result)
+        }
+
+        fn shutdown(&self) {
+            self.stop.store(true, Ordering::Release);
+        }
+    }
+
+    fn b2_scope() -> (
+        floe_execution::budget::BudgetLedger,
+        floe_execution::ExecutionScope,
+    ) {
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100_000, 10_000_000),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+        );
+        (ledger, scope)
+    }
+
+    async fn b2_project(
+        fixture: &B2Attention,
+        session_id: Uuid,
+        history: Vec<floe_agent_contract::ModelConversationEntry>,
+        current_turn: Vec<floe_agent_contract::ModelConversationEntry>,
+    ) -> floe_agent_contract::AuthorizedModelProjection {
+        let personal = personal_grants::PersonalDependencyResolver {
+            vault: &fixture.vault,
+            local_context: &fixture.local_context,
+            person_id: fixture.person_id,
+            device_id: "test-device",
+        };
+        let resolver = CompositeDependencyResolver {
+            personal: &personal,
+            remote: None,
+        };
+        let projector = floe_conversation::ConversationModelProjection::new(
+            floe_vault::ContextEvidenceReader::new(&fixture.vault, session_id),
+            resolver,
+            session_id,
+            floe_agent_contract::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            vec![DataClass::Personal],
+            vec![],
+        )
+        .unwrap();
+        floe_agent_contract::ModelProjectionPort::project(
+            &projector,
+            floe_agent_contract::ModelProjectionRequest {
+                principal: fixture.person_id.to_string(),
+                role: floe_agent_contract::RoleSpec {
+                    role_id: "manager".into(),
+                    instructions: "Answer.".into(),
+                    output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
+                },
+                conversation: floe_agent_contract::ModelConversation {
+                    history,
+                    current_turn,
+                },
+                catalog: floe_agent_contract::AllowedCatalog {
+                    cards: vec![],
+                    tools: floe_context::manager_tool_descriptors(),
+                    revision: 1,
+                },
+                max_output_bytes: 4096,
+                correction: None,
+            },
+            &tool_scope(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn revoke_after_projection_denies_dispatch_before_provider_handoff() {
+        let fixture = B2Attention::reviewed().await;
+        let (call, result) = fixture.attention_exchange().await;
+        let dependency = match result.coverage.clone() {
+            floe_agent_contract::DependencyCoverage::Dependent { dependencies } => {
+                assert_eq!(dependencies.len(), 1);
+                dependencies.into_iter().next().unwrap()
+            }
+            coverage => panic!("attention read must be dependent: {coverage:?}"),
+        };
+        let session = fixture.vault.create_session().await.unwrap();
+        // Projection succeeds with dependency D: the live exchange folds into
+        // the authorized coverage.
+        let projection = b2_project(
+            &fixture,
+            session.id,
+            vec![],
+            vec![
+                floe_agent_contract::ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: "how am I doing?".into(),
+                },
+                floe_agent_contract::ModelConversationEntry::ToolExchange {
+                    call,
+                    result,
+                },
+            ],
+        )
+        .await;
+        assert_eq!(
+            projection.coverage,
+            floe_agent_contract::DependencyCoverage::dependent(dependency.clone()).unwrap()
+        );
+        // The dispatch fence admits while the grant is live.
+        let personal = personal_grants::PersonalDependencyResolver {
+            vault: &fixture.vault,
+            local_context: &fixture.local_context,
+            person_id: fixture.person_id,
+            device_id: "test-device",
+        };
+        let resolver = CompositeDependencyResolver {
+            personal: &personal,
+            remote: None,
+        };
+        let dispatch = || floe_access::ModelDispatchRequest {
+            person_id: fixture.person_id,
+            projection_ref: Uuid::new_v4(),
+            projection_revision: 1,
+            coverage: floe_agent_contract::DependencyCoverage::dependent(dependency.clone())
+                .unwrap(),
+            input_data_classes: vec![DataClass::Personal],
+            purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+            consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+            target: floe_access::ModelDispatchTarget::Device,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: Cancellation::default(),
+        };
+        let authority = B2AllowAuthority;
+        let permit = floe_access::admit_model_dispatch(dispatch(), &resolver, &authority)
+            .await
+            .unwrap();
+        // Authority for D changes after projection but before handoff.
+        fixture.disable().await;
+        // The consume fence reauthorizes D and denies: the provider receives
+        // no unauthorized projection.
+        assert_eq!(
+            floe_access::consume_model_dispatch(permit).await.err(),
+            Some(AgentFailure::AccessReviewRequired)
+        );
+        // End to end through InferenceService: dispatch denies, the provider
+        // is never posted, and nothing is charged.
+        let transport = B2DeviceTransport {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let provider = B2DeviceProvider {
+            transport: transport.clone(),
+        };
+        let service = floe_inference::InferenceService::new(provider, resolver, authority);
+        let (ledger, scope) = b2_scope();
+        assert_eq!(
+            floe_agent_contract::ModelPort::generate(
+                &service,
+                    floe_agent_contract::ModelRequest {
+                        attempt_id: Uuid::new_v4(),
+                        principal: fixture.person_id.to_string(),
+                        projection,
+                        catalog: floe_agent_contract::AllowedCatalog::default(),
+                        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+                        consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+                        preferred_profile_id: None,
+                        replay: vec![],
+                    },
+                    &scope,
+                )
+                .await
+                .err(),
+            Some(AgentFailure::AccessReviewRequired)
+        );
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.settled.tokens, 0);
+        assert_eq!(snapshot.settled.cost_micros, 0);
+        assert_eq!(snapshot.settled.attempts, 0);
+        assert_eq!(snapshot.unknown_tokens, 0);
+        fixture.shutdown();
+    }
+
+    /// Revokes the attention grant after the consume fence's authorization
+    /// succeeds, so post-response revalidation observes revoked authority.
+    struct RevokeAfterConsume<'a> {
+        inner: CompositeDependencyResolver<'a>,
+        vault: &'a EncryptedAgentVault<AttentionTestKeys>,
+        local_context: &'a LocalContextHost,
+        person_id: PersonId,
+        calls: AtomicUsize,
+    }
+
+    impl floe_access::DependencyResolver for RevokeAfterConsume<'_> {
+        fn authorize<'a>(
+            &'a self,
+            dependency: &'a floe_context_contract::ContextDependency,
+            request: &'a floe_access::DependencyAuthorization,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+            Box::pin(async move {
+                let result =
+                    floe_access::DependencyResolver::authorize(&self.inner, dependency, request)
+                        .await;
+                // Admit (1st) and consume (2nd) observe live authority; revoke
+                // before the post-response revalidation (3rd).
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                    result.as_ref().unwrap();
+                    floe_access::apply_personal_access(
+                        self.vault,
+                        &personal_grants::native_driver(self.local_context),
+                        self.person_id,
+                        floe_access::PersonalAccessConfiguration {
+                            connector: floe_access::ATTENTION_CONNECTOR.into(),
+                            device_id: "test-device".into(),
+                            change: floe_access::PersonalAccessChange::SetEnabled { enabled: false },
+                        },
+                        Cancellation::default(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                result
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_after_handoff_suppresses_response_but_keeps_charge() {
+        let fixture = B2Attention::reviewed().await;
+        let (call, result) = fixture.attention_exchange().await;
+        let session = fixture.vault.create_session().await.unwrap();
+        let projection = b2_project(
+            &fixture,
+            session.id,
+            vec![],
+            vec![
+                floe_agent_contract::ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: "how am I doing?".into(),
+                },
+                floe_agent_contract::ModelConversationEntry::ToolExchange {
+                    call,
+                    result,
+                },
+            ],
+        )
+        .await;
+        let personal = personal_grants::PersonalDependencyResolver {
+            vault: &fixture.vault,
+            local_context: &fixture.local_context,
+            person_id: fixture.person_id,
+            device_id: "test-device",
+        };
+        let revoking = RevokeAfterConsume {
+            inner: CompositeDependencyResolver {
+                personal: &personal,
+                remote: None,
+            },
+            vault: &fixture.vault,
+            local_context: &fixture.local_context,
+            person_id: fixture.person_id,
+            calls: AtomicUsize::new(0),
+        };
+        let transport = B2DeviceTransport {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let provider = B2DeviceProvider {
+            transport: transport.clone(),
+        };
+        let service =
+            floe_inference::InferenceService::new(provider, revoking, B2AllowAuthority);
+        let (ledger, scope) = b2_scope();
+        // Admit and consume succeed; the grant is revoked mid-flight; the
+        // post-response revalidation denies and suppresses the content.
+        assert_eq!(
+            floe_agent_contract::ModelPort::generate(
+                &service,
+                    floe_agent_contract::ModelRequest {
+                        attempt_id: Uuid::new_v4(),
+                        principal: fixture.person_id.to_string(),
+                        projection,
+                        catalog: floe_agent_contract::AllowedCatalog::default(),
+                        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+                        consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+                        preferred_profile_id: None,
+                        replay: vec![],
+                    },
+                    &scope,
+                )
+                .await
+                .err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.settled.tokens, 10);
+        assert_eq!(snapshot.settled.cost_micros, 5);
+        assert_eq!(snapshot.settled.attempts, 1);
+        fixture.shutdown();
+    }
+
+    #[tokio::test]
+    async fn revoked_history_is_dropped_from_the_next_projection() {
+        let fixture = B2Attention::reviewed().await;
+        let (_, result) = fixture.attention_exchange().await;
+        let coverage = result.coverage.clone();
+        assert!(matches!(
+            coverage,
+            floe_agent_contract::DependencyCoverage::Dependent { .. }
+        ));
+        // Complete a turn whose answer depends on source-backed coverage and
+        // persist the terminal coverage under the turn id.
+        fixture
+            .vault
+            .activate_conversation_executor()
+            .await
+            .unwrap();
+        let session = fixture.vault.create_session().await.unwrap();
+        let run_id = floe_kernel::RunId::new();
+        fixture
+            .vault
+            .admit_conversation_turn(floe_vault::VaultConversationAdmissionRequest {
+                run_id,
+                command_id: floe_agent_contract::CommandId::new(),
+                session_id: session.id,
+                person_id: fixture.person_id,
+                expected_session_revision: 0,
+                request_digest: [7; 32],
+                text: "how am I doing?".into(),
+                continuation: None,
+                retry_of: None,
+                profile: floe_conversation::ProfileSelection::Auto,
+            })
+            .await
+            .unwrap();
+        fixture
+            .vault
+            .finish_conversation_run(
+                run_id,
+                1,
+                floe_vault::VaultConversationTerminal {
+                    state: floe_vault::VaultConversationRunState::Completed,
+                    output: Some("you are focused".into()),
+                    coverage: coverage.clone(),
+                    issue: None,
+                    appended_messages: vec![AgentMessage::Assistant {
+                        turn_id: run_id.as_uuid(),
+                        text: "you are focused".into(),
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let stored = fixture
+            .vault
+            .load(fixture.person_id, session.id)
+            .await
+            .unwrap();
+        assert_eq!(stored.messages.len(), 2);
+        // The terminal coverage persisted under the committed turn id.
+        let reader = floe_vault::ContextEvidenceReader::new(&fixture.vault, session.id);
+        assert_eq!(
+            floe_context::EvidenceReader::read_turn_coverage(
+                &reader,
+                session.id,
+                run_id.as_uuid(),
+            )
+                .await
+                .unwrap(),
+            coverage
+        );
+        let history = || {
+            vec![
+                floe_agent_contract::ModelConversationEntry::User {
+                    message_id: run_id.as_uuid(),
+                    text: "how am I doing?".into(),
+                },
+                floe_agent_contract::ModelConversationEntry::Assistant {
+                    message_id: run_id.as_uuid(),
+                    text: "you are focused".into(),
+                },
+            ]
+        };
+        let current_turn = || {
+            vec![floe_agent_contract::ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "and now?".into(),
+            }]
+        };
+        // Fresh authorized derived history is retained with its dependency.
+        let projection = b2_project(&fixture, session.id, history(), current_turn()).await;
+        assert_eq!(projection.envelope.conversation.history.len(), 2);
+        assert_eq!(projection.coverage, coverage);
+        // Revoke the source, then project again: the derived answer is
+        // dropped, the Person's own text remains, and no dependency survives.
+        fixture.disable().await;
+        let projection = b2_project(&fixture, session.id, history(), current_turn()).await;
+        assert_eq!(projection.envelope.conversation.history.len(), 1);
+        assert!(matches!(
+            projection.envelope.conversation.history[0],
+            floe_agent_contract::ModelConversationEntry::User { .. }
+        ));
+        assert_eq!(
+            projection.coverage,
+            floe_agent_contract::DependencyCoverage::Independent
+        );
+        fixture.shutdown();
+    }
 }

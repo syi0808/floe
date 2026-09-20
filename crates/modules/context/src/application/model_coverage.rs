@@ -29,8 +29,11 @@ pub struct TurnCoverageDecision {
 /// Decide, per turn, what a history projection may keep.
 ///
 /// A turn with no recorded coverage is `Unknown`, and `Unknown` never authorizes
-/// anything; a dependency that fails re-admission with `PolicyDenied` denies its
-/// turn rather than failing the read.
+/// anything; a dependency that fails re-admission with `PolicyDenied` or
+/// `AccessReviewRequired` denies its turn rather than failing the read. A
+/// revoked, paused, or never-reviewed grant no longer authorizes showing the
+/// derived content, but the turn itself can still proceed without it.
+/// Cancellation, deadlines, and infrastructure failures still fail the read.
 pub async fn project_history(
     reader: &impl EvidenceReader,
     session_id: Uuid,
@@ -54,7 +57,9 @@ pub async fn project_history(
             match resolver {
                 Some(resolver) => match resolver.authorize(&dependency, authorization).await {
                     Ok(()) => Ok(true),
-                    Err(AgentFailure::PolicyDenied) => Ok(false),
+                    Err(
+                        AgentFailure::PolicyDenied | AgentFailure::AccessReviewRequired,
+                    ) => Ok(false),
                     Err(error) => Err(error),
                 },
                 None => Ok(false),
@@ -204,6 +209,21 @@ mod tests {
         }
     }
 
+    struct NeedsReview;
+
+    impl DependencyResolver for NeedsReview {
+        fn authorize<'a>(
+            &'a self,
+            _dependency: &'a ContextDependency,
+            _request: &'a DependencyAuthorization,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+        {
+            // A paused, revoked, or never-reviewed personal grant no longer
+            // authorizes its derived history.
+            Box::pin(async move { Err(AgentFailure::AccessReviewRequired) })
+        }
+    }
+
     #[tokio::test]
     async fn one_route_neutral_authorization_reauthorizes_personal_and_remote() {
         let person = PersonId::new();
@@ -240,6 +260,25 @@ mod tests {
 
         let decisions =
             project_history(&reader, session_id, [turn_id], Some(&DenyAll), &authorization())
+                .await
+                .unwrap();
+
+        let decision = decisions.get(&turn_id).unwrap();
+        assert!(!decision.retain_derived);
+        assert!(decision.authorized_dependencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_required_denies_its_turn_without_failing_projection() {
+        let person = PersonId::new();
+        let coverage =
+            DependencyCoverage::dependent(personal_dependency(person)).unwrap();
+        let reader = StaticReader { coverage };
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+
+        let decisions =
+            project_history(&reader, session_id, [turn_id], Some(&NeedsReview), &authorization())
                 .await
                 .unwrap();
 

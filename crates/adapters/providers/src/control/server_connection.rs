@@ -184,15 +184,9 @@ impl PreparedServerSource {
 }
 
 pub fn load_saved_connection() -> Result<Option<SavedServerConnection>, AgentFailure> {
-    // Test-only hermeticity seam, mirroring the FLOE_NATIVE_FIXTURE_CHILD
-    // pattern: a test binary the OS has not authorized for the slot can block
-    // on an access prompt instead of reading it, so a test that needs a
-    // deterministically absent credential re-execs itself with this variable
-    // rather than depending on ambient keychain state. Production never sets
-    // it, and no test that needs a real credential sets it either.
-    if std::env::var_os("FLOE_TEST_EMPTY_KEYCHAIN").is_some() {
-        return Ok(None);
-    }
+    // No test seam: production credential lookup is unconditional. Tests that
+    // need a deterministically absent credential inject a fixed store through
+    // the turn request instead of reading this slot at all.
     let secret = floe_native::read_generic_password(
         SERVER_CREDENTIAL_SERVICE,
         SERVER_CREDENTIAL_ACCOUNT,

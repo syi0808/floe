@@ -92,12 +92,22 @@ where
         // Explicit: exactly one candidate, never silently falls back.
         // Auto: ranked local-first candidates with same-rank ambiguity denied.
         let mut last_failure: Option<AgentFailure> = None;
+        let before = scope.budget().snapshot();
         for candidate in candidates {
             match self
                 .attempt_candidate(&request, scope, person_id, candidate)
                 .await
             {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    // The Engine journals exactly what this response reports,
+                    // so report the aggregate this call consumed: earlier
+                    // dispatched candidates keep their unknown/known charge in
+                    // the scope, and only the aggregate survives a restart.
+                    // Without fallback the delta is the winner's actual usage.
+                    let after = scope.budget().snapshot();
+                    let usage = aggregate_usage(&before, &after);
+                    return Ok(ModelResponse { usage, ..response });
+                }
                 Err(failure) => {
                     // Explicit never falls back; Auto falls back only on
                     // transport failure, never on admission denial.
@@ -226,6 +236,30 @@ fn dispatch_target(profile: &ModelProfile) -> Result<ModelDispatchTarget, AgentF
                 recipient: recipient.clone(),
             })
         }
+    }
+}
+
+/// Durable usage for one generate call from the scope budget delta.
+///
+/// Tokens fold settled and unknown estimates together; cost folds settled
+/// and unknown cost together. This mirrors the Engine's failed-attempt fold:
+/// the two must agree, because the Engine journals this response and the
+/// scope already holds every candidate's charge.
+fn aggregate_usage(
+    before: &floe_execution::budget::BudgetSnapshot,
+    after: &floe_execution::budget::BudgetSnapshot,
+) -> ModelUsage {
+    let tokens = after.usage.tokens.saturating_sub(before.usage.tokens);
+    let settled_cost = after
+        .settled
+        .cost_micros
+        .saturating_sub(before.settled.cost_micros);
+    let unknown_cost = after
+        .unknown_cost_micros
+        .saturating_sub(before.unknown_cost_micros);
+    ModelUsage {
+        tokens,
+        cost_micros: settled_cost.saturating_add(unknown_cost),
     }
 }
 
@@ -879,6 +913,44 @@ mod tests {
         // Unknown estimate is charged, not zero.
         assert!(snapshot.unknown_tokens > 0 || snapshot.settled.tokens > 0);
         assert_eq!(transport.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn auto_fallback_reports_aggregate_usage_for_journaling() {
+        let person = PersonId::new();
+        let failing = Arc::new(TestTransport::failing(AgentFailure::ServerModelUnavailable));
+        let succeeding = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (device_profile("device", true), Arc::clone(&failing)),
+                (external_profile("server", "ext", true), Arc::clone(&succeeding)),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &person.to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (ledger, scope) = scope();
+        let response = service.generate(request, &scope).await.unwrap();
+        assert_eq!(failing.calls(), 1);
+        assert_eq!(succeeding.calls(), 1);
+        // The device attempt charged one unknown estimate (allowance-capped);
+        // the server attempt settled its actual usage. The ledger holds both.
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.settled.tokens, 10);
+        assert_eq!(snapshot.settled.cost_micros, 5);
+        assert_eq!(snapshot.settled.attempts, 1);
+        assert_eq!(snapshot.unknown_tokens, 4_096);
+        assert_eq!(snapshot.unknown_cost_micros, 1_000_000);
+        // The Engine journals exactly what the response reports, so the
+        // response must carry the aggregate the call consumed — never only
+        // the winning candidate. Otherwise a restart resurrects the failed
+        // candidate's charge.
+        assert_eq!(response.usage.tokens, 4_096 + 10);
+        assert_eq!(response.usage.cost_micros, 1_000_000 + 5);
     }
 
     #[tokio::test]

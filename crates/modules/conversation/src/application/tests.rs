@@ -15,7 +15,10 @@ use floe_agent_contract::prompts::{
     PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_agent_runtime::FinalPayloadValidator;
-use floe_execution::{ExecutionScope, budget::BudgetConfig};
+use floe_execution::{
+    ExecutionScope,
+    budget::{BudgetAttempt, BudgetConfig},
+};
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
@@ -714,6 +717,7 @@ fn service(repository: Arc<MemoryRepository>) -> ConversationService<MemoryRepos
 
 fn finalization_service(
     repository: Arc<MemoryRepository>,
+    max_iterations: u32,
 ) -> ConversationService<MemoryRepository> {
     ConversationService::new(
         repository,
@@ -724,7 +728,7 @@ fn finalization_service(
                 output_contract: "User-facing text.".into(),
             },
             purpose: "test-purpose".into(),
-            max_iterations: 1,
+            max_iterations,
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
             budget: BudgetConfig::new(8_192, 100).with_finalization_reserve(1_024, 10),
@@ -1238,7 +1242,7 @@ async fn t29_finalization_is_bounded_and_accounted() {
     let repository = Arc::new(MemoryRepository::default());
     let session_id = Uuid::new_v4();
     repository.add_session(session_id, "person-a");
-    let service = finalization_service(Arc::clone(&repository));
+    let service = finalization_service(Arc::clone(&repository), 1);
     let model = FinalizationModel::default();
     let tools = CountingTool {
         calls: Default::default(),
@@ -1294,9 +1298,9 @@ async fn t29_finalization_is_bounded_and_accounted() {
         .unwrap()
         .budget()
         .snapshot();
-    // The Engine no longer settles model usage into the ledger; the journal
-    // below still records every attempt's usage, and settlement ownership
-    // moves to InferenceService with the 2-B.4 accounting tests.
+    // The Engine never settles model usage into the ledger; InferenceService
+    // owns settlement, so this non-settling fake leaves the ledger at zero
+    // while the journal below still records every attempt's reported usage.
     assert_eq!(budget.settled.attempts, 0);
     assert_eq!(budget.settled.tokens, 0);
     assert_eq!(budget.settled.cost_micros, 0);
@@ -1329,12 +1333,158 @@ async fn t29_finalization_is_bounded_and_accounted() {
     );
 }
 
+struct SettlingFinalizationModel {
+    calls: std::sync::atomic::AtomicUsize,
+    scopes: Mutex<Vec<ExecutionScope>>,
+}
+
+impl ModelPort for SettlingFinalizationModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            // Mirror the settling owner's discipline: one budget attempt per
+            // model call, dispatched, then settled for its actual usage.
+            let mut tokens = scope.budget().max_tokens().min(4_096);
+            let mut cost = scope.budget().max_cost_micros().min(1_000_000);
+            let mut attempt = scope.budget().begin(&mut tokens, &mut cost).unwrap();
+            attempt.mark_dispatched();
+            let tool_batch = |tokens: u64, cost: u64| ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: vec![ModelStep::CallTool {
+                    tool_id: "lookup".into(),
+                    definition_revision: 1,
+                    input: "{}".into(),
+                }],
+                usage: ModelUsage {
+                    tokens,
+                    cost_micros: cost,
+                },
+            };
+            if call == 0 {
+                // First work attempt: full per-attempt allowance.
+                assert_eq!(tokens, 4_096);
+                attempt.settle(4_096, 10).unwrap();
+                Ok(tool_batch(4_096, 10))
+            } else if call == 1 {
+                // Second work attempt: the allowance clamps to the remaining
+                // work partition (8_192 - 1_024 - 4_096), proving work cannot
+                // consume the reserve.
+                assert_eq!(tokens, 3_072);
+                attempt.settle(3_072, 10).unwrap();
+                Ok(tool_batch(3_072, 10))
+            } else {
+                assert_eq!(call, 2);
+                assert_eq!(scope.budget().max_tokens(), 1_024);
+                assert_eq!(tokens, 1_024);
+                self.scopes.lock().unwrap().push(scope.clone());
+                attempt.settle(100, 3).unwrap();
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![ModelStep::Answer {
+                        text: "The lookup succeeded, but the full request did not complete."
+                            .into(),
+                        artifacts: vec![],
+                    }],
+                    usage: ModelUsage {
+                        tokens: 100,
+                        cost_micros: 3,
+                    },
+                })
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn finalization_reserve_is_settled_once_not_double_charged() {
+    // 2-B.5 D5: with a settling model, the work attempt settles once from
+    // the work partition, the finalization attempt settles once from the
+    // reserve, and the ledger total equals the journaled total exactly.
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = finalization_service(Arc::clone(&repository), 2);
+    let model = SettlingFinalizationModel {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        scopes: Mutex::new(Vec::new()),
+    };
+    let tools = CountingTool {
+        calls: Default::default(),
+        failure: None,
+    };
+    let delegation = CountingDelegation::default();
+    let mut turn = request(CommandId::new(), session_id, 0, "look this up");
+    turn.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "lookup".into(),
+            definition_revision: 1,
+            description: "Read a stable value.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "public".into(),
+        }],
+        revision: 1,
+    };
+
+    let receipt = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                projection: &PROJECTOR,
+                model: &model,
+                tools: &tools,
+                delegation: &delegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::Stalled));
+    assert!(receipt.output.is_some());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    // The journal records each attempt's usage exactly once.
+    let events = repository.journal.events.lock().unwrap();
+    let usage = events
+        .iter()
+        .filter_map(|event| match event {
+            JournalEvent::ModelResult { usage, .. } => Some(*usage),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(usage.len(), 3);
+    let journaled_tokens = usage.iter().map(|usage| usage.tokens).sum::<u64>();
+    let journaled_cost = usage.iter().map(|usage| usage.cost_micros).sum::<u64>();
+    assert_eq!(journaled_tokens, 4_096 + 3_072 + 100);
+    assert_eq!(journaled_cost, 10 + 10 + 3);
+    drop(events);
+    // The ledger settled the same total exactly once: work (4_096/10 and
+    // 3_072/10) plus one finalization attempt (100/3). A second
+    // finalization settlement, or work dipping into the reserve, changes
+    // these totals.
+    let scopes = model.scopes.lock().unwrap();
+    assert_eq!(scopes.len(), 1);
+    let snapshot = scopes[0].budget().snapshot();
+    assert_eq!(snapshot.settled.attempts, 3);
+    assert_eq!(snapshot.settled.tokens, journaled_tokens);
+    assert_eq!(snapshot.settled.cost_micros, journaled_cost);
+    assert_eq!(snapshot.unknown_tokens, 0);
+    assert_eq!(snapshot.unknown_cost_micros, 0);
+    assert_eq!(snapshot.reserved_tokens, 0);
+}
+
 #[tokio::test]
 async fn consent_exhaustion_does_not_start_finalization() {
     let repository = Arc::new(MemoryRepository::default());
     let session_id = Uuid::new_v4();
     repository.add_session(session_id, "person-a");
-    let service = finalization_service(repository);
+    let service = finalization_service(repository, 1);
     let model = FinalizationModel::default();
     let tools = CountingTool {
         calls: Default::default(),

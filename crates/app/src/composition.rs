@@ -70,9 +70,9 @@ impl crate::ConversationCommands for AppComposition {
                     profile: request.profile,
                     continuation: precheck.continuation,
                     retry_of,
-                    // The canonical owners consult the host keychain slot
-                    // when the product supplies no saved connection.
-                    saved_server_connection: None,
+                    // The canonical owners consult the host keychain slot;
+                    // the product supplies no saved connection.
+                    saved_server_connection: crate::TurnSavedConnection::HostSlot,
                 },
             )
             .map_err(service_failure)?;

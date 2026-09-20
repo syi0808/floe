@@ -15,7 +15,7 @@ Detailed work is split into the execution plans linked below. This overview owns
 ## Progress
 
 - [x] **2-A — Compile and test ownership restoration** — [execution plan](stage-2/2-a.md)
-- [ ] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
+- [x] **2-B — General Conversation canonical runtime cutover** — [execution plan](stage-2/2-b.md)
   - [x] **2-B.1 — Runtime contract and recovery foundation** — [final P0 plan](stage-2/2-b1.md)
     - [x] typed model conversation and authorized projection
     - [x] durable validated batches and stable execution/batch/ordinal identities
@@ -25,7 +25,7 @@ Detailed work is split into the execution plans linked below. This overview owns
   - [x] **2-B.2 — Canonical Model vertical slice** — [execution plan](stage-2/2-b2.md) · [final current-authority P0](stage-2/2-b2-current-authority.md)
   - [x] **2-B.3 — Canonical Context projection and Tool vertical slice** — [execution plan](stage-2/2-b3.md)
   - [x] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
-  - [ ] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md)
+  - [x] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md)
 - [ ] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
 - [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
@@ -33,11 +33,16 @@ Detailed work is split into the execution plans linked below. This overview owns
 
 ## Current checkpoint
 
-**Active: 2-B.5 — Integrated 2-B hardening.**
+**Active: 2-C — Delegation ownership convergence.**
 
-2-B.1 through 2-B.4 are complete. This is the one deliberate deep audit of the complete General Conversation canonical runtime across Security/Authority/Provenance, Recovery/Replay/Identity, Accounting/Finalization, and Ownership/Secret boundaries. Fix P0 and bounded canonical-path P1 findings only; defer cleanup/public-surface P2 items to 2-D/2-E/Stage 3.
+2-B is complete and frozen, including the 2-B.5 integrated hardening audit.
+The General Conversation canonical runtime now runs on canonical
+Conversation/Context/Engine/Inference/Access/Provider owners with audited
+Security/Authority/Provenance, Recovery/Replay/Identity,
+Accounting/Finalization, and Ownership/Secret boundaries.
 
-Use [the 2-B.5 execution plan](stage-2/2-b5.md) as the authoritative task document. When it closes, mark 2-B complete and move to 2-C. Do not start 2-C in the same change set.
+Use [the 2-C execution plan](stage-2/2-c.md) as the authoritative task
+document. 2-C was not started in the 2-B.5 change set.
 
 ## Target internal architecture
 

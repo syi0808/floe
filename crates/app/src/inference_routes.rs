@@ -12,12 +12,13 @@ pub struct HostInferenceRoutes;
 ///
 /// Every recipient check reloads the current saved connection bound to the
 /// verified caller; no recipient list is copied at construction. Production
-/// (`None`) re-reads the host keychain slot. A test-only injected connection
-/// (`Some`) is re-read from a fixed store with the same per-check shape.
+/// (`HostSlot`) re-reads the host keychain slot. A test-only injected
+/// connection (`Fixed`) is re-read from a fixed store with the same
+/// per-check shape.
 pub fn root_recipient_authority(
     person_id: &str,
     device_id: &str,
-    saved: Option<floe_inference::SavedServerConnection>,
+    saved: crate::TurnSavedConnection,
 ) -> floe_provider_adapters::control::SavedConnectionRecipientAuthority<
     floe_provider_adapters::control::CurrentSavedConnectionStore,
 > {
@@ -26,10 +27,12 @@ pub fn root_recipient_authority(
         SavedServerConnectionStore,
     };
     let store = match saved {
-        Some(saved) => {
-            CurrentSavedConnectionStore::Fixed(FixedSavedConnectionStore::fixed(Some(saved)))
+        crate::TurnSavedConnection::Fixed(saved) => {
+            CurrentSavedConnectionStore::Fixed(FixedSavedConnectionStore::fixed(saved))
         }
-        None => CurrentSavedConnectionStore::Keychain(SavedServerConnectionStore),
+        crate::TurnSavedConnection::HostSlot => {
+            CurrentSavedConnectionStore::Keychain(SavedServerConnectionStore)
+        }
     };
     SavedConnectionRecipientAuthority::new(store, person_id.to_owned(), device_id.to_owned())
 }
@@ -44,17 +47,19 @@ impl HostInferenceRoutes {
     pub fn root_model_provider(
         person_id: &str,
         device_id: &str,
-        saved: Option<floe_inference::SavedServerConnection>,
+        saved: crate::TurnSavedConnection,
     ) -> Result<
         floe_provider_adapters::models::RootModelProvider,
         floe_agent_contract::AgentFailure,
     > {
         let stored = match saved {
-            Some(stored) => Some(stored),
+            crate::TurnSavedConnection::Fixed(stored) => stored,
             // No keychain item is device-only, not an error. A keychain
             // failure that is not "absent" fails closed like route
             // resolution does.
-            None => floe_provider_adapters::control::load_saved_connection()?,
+            crate::TurnSavedConnection::HostSlot => {
+                floe_provider_adapters::control::load_saved_connection()?
+            }
         };
         floe_provider_adapters::models::RootModelProvider::for_saved_connection(
             stored, person_id, device_id,
