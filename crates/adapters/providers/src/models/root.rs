@@ -35,16 +35,6 @@ impl RootModelProvider {
             server,
         })
     }
-
-    /// Exact external recipients the admitted server connection consented to.
-    /// Empty when no server connection was admitted or external use was not
-    /// consented; the App recipient authority reports this without secrets.
-    pub fn consented_external_recipients(&self) -> Vec<String> {
-        self.server
-            .as_ref()
-            .map(|server| server.consented_external_recipients().to_vec())
-            .unwrap_or_default()
-    }
 }
 
 /// Opaque prepared capability: the profile facts are public, the transport
@@ -119,10 +109,9 @@ mod tests {
 
     #[test]
     fn saved_connection_is_bound_to_verified_caller_identity() {
-        // No saved connection: device-only, no consented recipients.
+        // No saved connection: device-only.
         let device_only = RootModelProvider::for_saved_connection(None, PERSON, DEVICE).unwrap();
         assert!(device_only.server.is_none());
-        assert!(device_only.consented_external_recipients().is_empty());
 
         // Foreign identity fails closed instead of downgrading silently.
         assert!(RootModelProvider::for_saved_connection(
@@ -138,24 +127,19 @@ mod tests {
         )
         .is_err());
 
-        // Matching identity admits the server and reports consent.
+        // Matching identity admits the server.
         let admitted =
             RootModelProvider::for_saved_connection(Some(saved()), PERSON, DEVICE).unwrap();
         assert!(admitted.server.is_some());
-        assert_eq!(
-            admitted.consented_external_recipients(),
-            vec!["partner.example".to_string()]
-        );
     }
 
     #[test]
-    fn device_only_connection_reports_no_external_recipients() {
+    fn device_only_connection_still_admits_server() {
         let mut local = saved();
         local.allow_external = false;
         local.external_recipients = vec![];
         let admitted =
             RootModelProvider::for_saved_connection(Some(local), PERSON, DEVICE).unwrap();
         assert!(admitted.server.is_some());
-        assert!(admitted.consented_external_recipients().is_empty());
     }
 }

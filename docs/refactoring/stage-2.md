@@ -27,17 +27,17 @@ Detailed work is split into the execution plans linked below. This overview owns
   - [x] **2-B.4 — App production cutover** — [execution plan](stage-2/2-b4.md)
   - [x] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md) · [credential-seam P1](stage-2/2-b5-credential-seam.md) · [final credential-read P0](stage-2/2-b5-credential-read.md)
 - [x] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
-- [ ] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
+- [x] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
 - [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
 - [ ] **2-F — Stage 2 final validation** — [execution plan](stage-2/2-f.md)
 
 ## Current checkpoint
 
-**Active: 2-D — Internal compatibility cleanup.**
+**Active: 2-E — Internal public-surface closure.**
 
-2-C is complete/frozen: LegacyDelegationPort and App run-id → endpoint-context staging are gone, delegation execution context is explicit and durable, and the root serves Experts TaskCoordinator directly while preserving Task identity/replay/cancellation/settlement semantics.
+2-D is complete/frozen: zero-production-caller internal compatibility is gone (`delegate_expert_task`, the pre-turn remote route resolver chain, recipient-snapshot accessors, single-attempt Conversation bridges, caller-less `TransportModelRunner::transport()`), with no renamed-equivalent wrappers; delegated Expert/Schedule compatibility stays for Stage 3-A and outer FFI/Flutter/remote-route compatibility stays for Stage 3.
 
-Use [the 2-D execution plan](stage-2/2-d.md) as the authoritative task document.
+Use [the 2-E execution plan](stage-2/2-e.md) as the authoritative task document.
 
 ## Target internal architecture
 

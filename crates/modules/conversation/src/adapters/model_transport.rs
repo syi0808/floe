@@ -18,10 +18,6 @@ impl<Transport> TransportModelRunner<Transport> {
     pub fn new(transport: Transport) -> Self {
         Self { transport }
     }
-
-    pub fn transport(&self) -> &Transport {
-        &self.transport
-    }
 }
 
 /// The immutable input one attempt is dispatched with.

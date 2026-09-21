@@ -192,50 +192,6 @@ pub fn candidate_route(connection: &RemoteModelConnection) -> Result<RemoteRoute
     Ok(candidate)
 }
 
-/// Decide the final route from the purpose the server reported. Consent for an
-/// external recipient is required here and is never inferred from the server.
-pub fn plan_remote_route(
-    connection: &RemoteModelConnection,
-    candidate: RemoteRoute,
-    availability: &PurposeAvailability,
-) -> Result<RemoteRoute, AgentFailure> {
-    if !availability.available {
-        return Err(AgentFailure::ServerModelUnavailable);
-    }
-    let (external, recipient) = match (
-        availability.placement.as_deref(),
-        availability.requires_external_consent,
-        availability.recipient.as_deref(),
-    ) {
-        (Some("server_local"), false, None) => (false, None),
-        (Some("external"), true, Some(recipient)) if valid_external_recipient(recipient) => {
-            (true, Some(recipient.to_owned()))
-        }
-        _ => return Err(AgentFailure::ServerModelInvalidOutput),
-    };
-    let allow_external = if let Some(recipient) = recipient.as_deref() {
-        if !connection.allow_external
-            || !connection
-                .external_recipients
-                .iter()
-                .any(|allowed| allowed == recipient)
-        {
-            return Err(AgentFailure::ConsentRequired);
-        }
-        true
-    } else {
-        false
-    };
-    let route = RemoteRoute {
-        external,
-        allow_external,
-        recipient,
-        ..candidate
-    };
-    ModelRouteConfig::from_route(&route)?.admit()?;
-    Ok(route)
-}
-
 pub fn valid_external_recipient(value: &str) -> bool {
     !value.is_empty()
         && value.trim() == value

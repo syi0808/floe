@@ -31,8 +31,7 @@ pub use calendar_access::{
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
 pub use dispatch::{
     ExpertDispatchTable, ExpertRun, TaskCoverageRecorder, admit_expert_message,
-    completed_expert_task, delegate_expert_task, expert_report, record_task_coverage,
-    task_receipt_to_a2a,
+    completed_expert_task, expert_report, record_task_coverage, task_receipt_to_a2a,
 };
 /// What one Expert is asked to do and what it answers are contract values; what
 /// this module adds is the registry that admits an invocation and records it.

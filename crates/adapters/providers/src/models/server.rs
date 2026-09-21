@@ -9,9 +9,8 @@ use floe_agent_contract::{
     AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, ModelPlacement, SessionProtection,
     valid_context_refs,
 };
-use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation};
 use floe_execution::limits::{CallLimiter, CallLimits};
-use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute};
+use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteRoute};
 use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -50,15 +49,6 @@ impl ObservedPurpose {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ObservedConnectorCatalog {
-    schema_version: u32,
-    person_id: String,
-    device_id: String,
-    connectors: Vec<serde_json::Value>,
-}
-
 fn model_calls() -> &'static CallLimiter {
     static LIMIT: OnceLock<CallLimiter> = OnceLock::new();
     LIMIT.get_or_init(provider_call_limit)
@@ -72,87 +62,6 @@ fn provider_call_limit() -> CallLimiter {
         max_total_context_bytes: 12 * 65_536,
     })
     .expect("valid static provider limits")
-}
-
-/// The paired local server, as Inference's route resolver port.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RemoteModelRouteResolver;
-
-impl floe_inference::RemoteRouteResolver<ResolvedRemoteConnection> for RemoteModelRouteResolver {
-    fn resolve<'a>(
-        &'a self,
-        connection: &'a RemoteModelConnection,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ResolvedRemoteConnection, AgentFailure>> {
-        Box::pin(resolve_remote_model_route(connection))
-    }
-}
-
-/// What one resolution observed: the route Inference decided, and — separately —
-/// the source catalog Connections projected. They travel together only because
-/// one HTTP round trip produced both; nothing merges them.
-pub struct ResolvedRemoteConnection {
-    pub route: RemoteRoute,
-    pub calendar_connections: Vec<CalendarConnectionRef>,
-}
-
-/// Fetch the facts the local server reports, then let Inference decide the route
-/// and Connections project the connector catalog. No policy is decided here.
-pub async fn resolve_remote_model_route(
-    connection: &RemoteModelConnection,
-) -> Result<ResolvedRemoteConnection, AgentFailure> {
-    let candidate = floe_inference::candidate_route(connection)?;
-
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(8))
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()
-        .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-    let inventory: PurposeInventory = authenticated_json(
-        &client,
-        &candidate.base_url,
-        "/v1/inference-purposes",
-        &candidate.bearer_token,
-    )
-    .await?;
-    if inventory.schema_version != 1 {
-        return Err(AgentFailure::ServerModelInvalidOutput);
-    }
-    let availability = inventory
-        .purposes
-        .into_iter()
-        .find(|(name, _)| name == floe_inference::EVERYDAY_ASSISTANCE_PURPOSE)
-        .map(|(_, purpose)| purpose.into_availability())
-        .ok_or(AgentFailure::ServerModelInvalidOutput)?;
-    let planned = floe_inference::plan_remote_route(connection, candidate, &availability)?;
-
-    let catalog: Option<ObservedConnectorCatalog> = authenticated_json(
-        &client,
-        &planned.base_url,
-        "/v1/connectors",
-        &planned.bearer_token,
-    )
-    .await
-    .ok();
-    let calendar_connections = catalog
-        .and_then(|catalog| {
-            floe_connections::project_calendar_connections(
-                &ConnectorCatalogObservation {
-                    schema_version: catalog.schema_version,
-                    person_id: catalog.person_id,
-                    device_id: catalog.device_id,
-                    connectors: catalog.connectors,
-                },
-                &connection.person_id,
-                &connection.device_id,
-            )
-        })
-        .unwrap_or_default();
-    Ok(ResolvedRemoteConnection {
-        route: planned,
-        calendar_connections,
-    })
 }
 
 /// Canonical model profile observation: saved private connection
@@ -225,7 +134,6 @@ pub struct ServerModelProvider {
     base_url: String,
     bearer_token: String,
     allow_external: bool,
-    external_recipients: Vec<String>,
 }
 
 impl ServerModelProvider {
@@ -237,13 +145,14 @@ impl ServerModelProvider {
             base_url,
             bearer_token,
             allow_external: false,
-            external_recipients: Vec::new(),
         })
     }
 
     /// Build from a saved connection already admitted against the verified
     /// caller. Secrets stay in this adapter; only non-secret profile facts
-    /// ever leave through `observe_profiles`.
+    /// ever leave through `observe_profiles`. Recipient authority is always
+    /// re-read from the saved connection store at Access-check time; this
+    /// provider keeps no recipient snapshot.
     pub fn for_connection(
         connection: &floe_inference::RemoteModelConnection,
     ) -> Result<Self, AgentFailure> {
@@ -253,19 +162,8 @@ impl ServerModelProvider {
         )?;
         Ok(Self {
             allow_external: connection.allow_external,
-            external_recipients: connection.external_recipients.clone(),
             ..provider
         })
-    }
-
-    /// Exact external recipients the admitted connection consented to, if any.
-    /// The App recipient authority reports this list without credentials.
-    pub fn consented_external_recipients(&self) -> &[String] {
-        if self.allow_external {
-            &self.external_recipients
-        } else {
-            &[]
-        }
     }
 }
 
@@ -1436,118 +1334,6 @@ mod tests {
             }
         });
         (address, server)
-    }
-
-    fn connection(base_url: String) -> RemoteModelConnection {
-        RemoteModelConnection {
-            base_url,
-            bearer_token: "a".repeat(32),
-            client_id: "paired-client".into(),
-            person_id: "00000000-0000-4000-8000-000000000001".into(),
-            device_id: "local-device".into(),
-            allow_external: false,
-            external_recipients: vec![],
-        }
-    }
-
-    #[tokio::test]
-    async fn host_route_snapshot_uses_server_authority_and_scoped_catalog() {
-        let connection_id = uuid::Uuid::new_v4();
-        let (base_url, server) = inventory_server(vec![
-            (
-                "/v1/inference-purposes",
-                json!({
-                    "schema_version": 1,
-                    "purposes": {
-                        "everyday_assistance": {
-                            "available": true,
-                            "requires_external_consent": false,
-                            "placement": "server_local"
-                        }
-                    }
-                }),
-            ),
-            (
-                "/v1/connectors",
-                json!({
-                    "schema_version": 1,
-                    "person_id": "00000000-0000-4000-8000-000000000001",
-                    "device_id": "local-device",
-                    "connectors": [{
-                        "id": "calendar.google",
-                        "status": "connected",
-                        "connection_id": connection_id,
-                        "connection_revision": 4
-                    }]
-                }),
-            ),
-        ])
-        .await;
-        let route = resolve_remote_model_route(&connection(base_url))
-            .await
-            .unwrap();
-        assert!(!route.route.external);
-        assert!(!route.route.allow_external);
-        assert_eq!(route.route.recipient, None);
-        assert_eq!(route.calendar_connections.len(), 1);
-        assert_eq!(
-            route.calendar_connections[0].connection_id,
-            connection_id.to_string()
-        );
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn external_route_requires_saved_consent_for_exact_recipient() {
-        let (base_url, server) = inventory_server(vec![(
-            "/v1/inference-purposes",
-            json!({
-                "schema_version": 1,
-                "purposes": {
-                    "everyday_assistance": {
-                        "available": true,
-                        "requires_external_consent": true,
-                        "placement": "external",
-                        "recipient": "model.example"
-                    }
-                }
-            }),
-        )])
-        .await;
-        assert!(matches!(
-            resolve_remote_model_route(&connection(base_url)).await,
-            Err(AgentFailure::ConsentRequired)
-        ));
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn optional_catalog_failure_does_not_remove_the_model_route() {
-        let (base_url, server) = inventory_server(vec![
-            (
-                "/v1/inference-purposes",
-                json!({
-                    "schema_version": 1,
-                    "purposes": {
-                        "everyday_assistance": {
-                            "available": true,
-                            "requires_external_consent": false,
-                            "placement": "server_local"
-                        }
-                    }
-                }),
-            ),
-            (
-                "/v1/connectors",
-                json!({"schema_version": 1, "person_id": "wrong", "device_id": "wrong", "connectors": []}),
-            ),
-        ])
-        .await;
-        let route = resolve_remote_model_route(&connection(base_url))
-            .await
-            .unwrap();
-        assert!(route.calendar_connections.is_empty());
-        server.await.unwrap();
     }
 
     #[tokio::test]

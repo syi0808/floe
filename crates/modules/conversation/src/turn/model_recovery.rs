@@ -1,62 +1,6 @@
 use crate::{AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep};
 use floe_agent_contract::AgentFailure;
 
-/// One legacy model attempt with no correction retry.
-///
-/// Calls `ModelRunner::generate` exactly once, enforces deadline/cancellation,
-/// and applies the legacy structural validation. It performs no second model
-/// call, no usage-ledger accounting, and no attempt journaling: the caller owns
-/// the budget attempt. The transitional General Conversation bridge
-/// (`LegacyModelPort`) binds that attempt to the scope budget; removed when
-/// InferenceService implements ModelPort.
-pub async fn generate_once<Model: ModelRunner>(
-    model: &Model,
-    request: ModelRequest,
-) -> Result<ModelResponse, AgentFailure> {
-    let validators = validate_generate_once_request(&request)?;
-    dispatch_generate_once(model, request, &validators).await
-}
-
-/// Legacy request preflight before any budget dispatch fence: validator
-/// compilation, AgentCard validation, cancellation and deadline. A failure
-/// here never reached the provider, so the caller must not mark the budget
-/// attempt dispatched.
-pub fn validate_generate_once_request(
-    request: &ModelRequest,
-) -> Result<Vec<Option<jsonschema::Validator>>, AgentFailure> {
-    let validators = legacy_validators(request)?;
-    for card in &request.active_agents {
-        card.validate()?;
-    }
-    if request.cancellation.is_cancelled() {
-        return Err(AgentFailure::Cancelled);
-    }
-    if request.deadline <= tokio::time::Instant::now() {
-        return Err(AgentFailure::DeadlineExceeded);
-    }
-    Ok(validators)
-}
-
-/// Provider handoff and structural validation for a preflighted request.
-/// Call only after the budget attempt is marked dispatched: every failure
-/// from here ran past the dispatch fence, including a provider error and a
-/// response that fails structural validation after a successful call.
-pub async fn dispatch_generate_once<Model: ModelRunner>(
-    model: &Model,
-    request: ModelRequest,
-    validators: &[Option<jsonschema::Validator>],
-) -> Result<ModelResponse, AgentFailure> {
-    let result = tokio::select! {
-        biased;
-        _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
-        _ = tokio::time::sleep_until(request.deadline) => Err(AgentFailure::DeadlineExceeded),
-        result = model.generate(request.clone()) => result,
-    };
-    let response = result?;
-    validate_legacy_response(&request, validators, &response)?;
-    Ok(response)
-}
-
 pub async fn generate_with_recovery<Model: ModelRunner>(
     model: &Model,
     mut request: ModelRequest,
@@ -176,10 +120,10 @@ fn legacy_validators(
         .collect()
 }
 
-/// Structural validation shared by the retrying legacy path and the
-/// single-attempt transitional bridge: budget caps, batch shape, replay
-/// linkage, and per-step checks. The caller's accounting (if any) settles
-/// before this runs, so a response that fails here still consumed its attempt.
+/// Structural validation for the retrying legacy path used by delegated
+/// Expert/Schedule turns until Stage 3-A: budget caps, batch shape, replay
+/// linkage, and per-step checks. The caller's accounting settles before this
+/// runs, so a response that fails here still consumed its attempt.
 fn validate_legacy_response(
     request: &ModelRequest,
     validators: &[Option<jsonschema::Validator>],

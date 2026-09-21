@@ -177,53 +177,6 @@ pub trait TaskCoverageRecorder: Send + Sync {
     ) -> Result<(), AgentFailure>;
 }
 
-/// Delegate one admitted A2A message to the Task path as a child run.
-///
-/// The child gets its own bounded scope under the caller's cancellation and
-/// deadline; the Expert behind the agent id never chooses its own budget.
-pub async fn delegate_expert_task<Repository: crate::TaskRepository>(
-    coordinator: &crate::TaskCoordinator<Repository>,
-    request: &A2ASendMessageRequest,
-    selected_definition_revision: u64,
-    execution_context: floe_agent_contract::DelegationExecutionContext,
-) -> Result<floe_agent_contract::TaskReceipt, AgentFailure> {
-    use floe_agent_contract::{DelegationPort, DelegationRequest, InvocationKey, TaskId};
-    use floe_agent_contract::{RunId, TraceContext};
-    use floe_execution::{
-        ExecutionScope,
-        budget::{BudgetConfig, BudgetLedger},
-    };
-
-    let task_uuid = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
-    let task_id = TaskId::from_uuid(task_uuid).ok_or(AgentFailure::InvalidInput)?;
-    let run_id = RunId::from_uuid(request.parent_turn_id).ok_or(AgentFailure::InvalidInput)?;
-    let ledger = BudgetLedger::new(BudgetConfig::new(50_000, 100_000), Default::default());
-    let root_scope = ExecutionScope::root(
-        request.cancellation.clone(),
-        request.deadline,
-        ledger.work_lease(),
-        TraceContext::new(request.message.message_id).with_run_id(run_id),
-    );
-    let scope = root_scope.child_scope(request.deadline, 40_960, 50_000, Some(task_id));
-    coordinator
-        .delegate(
-            DelegationRequest {
-                task_id,
-                parent_run_id: Some(request.parent_turn_id),
-                principal: request.person_id.to_string(),
-                invocation_key: InvocationKey::from_uuid(task_uuid)
-                    .ok_or(AgentFailure::InvalidInput)?,
-                selected_agent_id: request.agent_id.clone(),
-                selected_definition_revision,
-                message: request.message.text()?.to_owned(),
-                context_refs: vec![],
-                execution_context,
-            },
-            &scope,
-        )
-        .await
-}
-
 /// Record the coverage a delegated Task reported, so the caller's own result
 /// carries the same provenance.
 pub fn record_task_coverage(

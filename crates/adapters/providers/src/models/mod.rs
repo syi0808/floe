@@ -12,7 +12,4 @@ pub use foundation::{
 };
 pub use root::{PreparedRootTransport, RootModelProvider};
 pub use learner::FoundationLearnerTransport;
-pub use server::{
-    PreparedServerTransport, RemoteModelRouteResolver, ResolvedRemoteConnection, ServerModelProvider,
-    ServerModelRunner, resolve_remote_model_route,
-};
+pub use server::{PreparedServerTransport, ServerModelProvider, ServerModelRunner};
