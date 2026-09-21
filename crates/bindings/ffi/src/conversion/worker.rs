@@ -9,7 +9,7 @@ use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
     CalendarProposalInspection, CalendarSubjectPreview, CalendarSubjectRequest,
     ContactsAccessChange, ContactsAccessConfiguration, ConversationSessionOperation,
-    ConversationTurnRequest, FeasibilityGrantQuery, FixtureOperation, GrantState,
+    FeasibilityGrantQuery, FixtureOperation, GrantState,
     MemoryReviewDecision, MemoryReviewResult, PairingIssuer, PairingStatus, PersonId,
     PersonalAccessChange, PersonalAccessConfiguration, ProcessingRestriction,
     RemoteCalendarGrantPreview, RemoteEnrollmentStatus, RemoteOwnerPublicKey,
@@ -612,45 +612,6 @@ fn remote_route(route: &AgentRemoteRouteDto) -> RemoteTurnRoute {
     }
 }
 
-fn conversation_turn_request(
-    request: &AgentConversationTurnRequestDto,
-) -> WireResult<ConversationTurnRequest> {
-    // The legacy route field can no longer reach execution: turns admit the
-    // stored credential after admission instead. Reject it deterministically
-    // so a stale caller fails loudly instead of silently changing meaning.
-    if request.remote_route.is_some() {
-        return Err(invalid(
-            "request.remote_route",
-            "remote_route is no longer accepted for conversation turns",
-        ));
-    }
-    let profile = match &request.profile {
-        AppProfileSelectionDto::Auto => floe_app::ProfileSelection::Auto,
-        AppProfileSelectionDto::Explicit { profile_id } => {
-            floe_app::ProfileSelection::Explicit(profile_id.clone())
-        }
-    };
-    let retry_of = request
-        .retry_of
-        .map(|run_id| {
-            floe_app::RunId::from_uuid(run_id)
-                .ok_or_else(|| invalid("request.retry_of", "must be a Run id"))
-        })
-        .transpose()?;
-    // The production constructor always binds the host keychain slot: the
-    // product boundary supplies no saved server connection, and the FFI
-    // caller cannot name a credential source.
-    Ok(ConversationTurnRequest::new(
-        parse_uuid(&request.session_id, "request.session_id")?,
-        request.expected_revision,
-        request.text.clone(),
-        request.device_id.clone(),
-        profile,
-        request.continuation,
-        retry_of,
-    ))
-}
-
 fn producer_identity_dto(identity: &RemoteProducerIdentity) -> RemoteProducerIdentityDto {
     RemoteProducerIdentityDto {
         schema_version: identity.schema_version,
@@ -1173,9 +1134,6 @@ fn worker_action(action: AgentVaultActionDto) -> WireResult<WorkerAction> {
                 operation: session_operation(operation)?,
             }
         }
-        AgentVaultActionDto::ConversationTurn { request } => WorkerAction::ConversationTurn {
-            request: Box::new(conversation_turn_request(&request)?),
-        },
         AgentVaultActionDto::MemoryReview { decision } => WorkerAction::MemoryReview {
             decision: decision
                 .map(|decision| {
@@ -1347,48 +1305,6 @@ mod tests {
         .expect("an unparseable candidate id is rejected on the wire");
         assert_eq!(error.code, ErrorCodeDto::Validation);
         assert_eq!(error.field.as_deref(), Some("action.candidate_id"));
-    }
-
-    #[test]
-    fn conversation_turn_rejects_a_legacy_remote_route() {
-        let request = AgentConversationTurnRequestDto {
-            session_id: Uuid::new_v4().to_string(),
-            expected_revision: 0,
-            text: "Hello".into(),
-            device_id: "mac-local".into(),
-            profile: AppProfileSelectionDto::Explicit {
-                profile_id: "server-model".into(),
-            },
-            continuation: false,
-            retry_of: None,
-            remote_route: Some(AgentRemoteRouteDto {
-                base_url: "http://127.0.0.1:9".into(),
-                bearer_token: "must-not-reach-execution".into(),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                calendar_connections: vec![],
-                pairing: None,
-            }),
-        };
-        // An arbitrary endpoint/bearer through the legacy field is rejected
-        // deterministically: it can never influence model/source execution.
-        let error = conversation_turn_request(&request)
-            .err()
-            .expect("a legacy route is rejected deterministically");
-        assert_eq!(error.code, ErrorCodeDto::Validation);
-        assert_eq!(error.field.as_deref(), Some("request.remote_route"));
-
-        conversation_turn_request(&AgentConversationTurnRequestDto {
-            remote_route: None,
-            ..request
-        })
-        .expect("a turn without a route converts");
-        // The credential source is not nameable from FFI: conversion can only
-        // produce the production constructor shape, which always binds the
-        // host slot. That binding is asserted inside the App crate, where the
-        // private source is visible.
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use floe_protocol::{
-    APP_WIRE_VERSION, AgentConversationTurnRequestDto, AppCommandRequestDto, AppCommandResultDto,
-    AppEventsResultDto, AppProfileSelectionDto, AppQueryRequestDto, AppQueryResultDto,
+    APP_WIRE_VERSION, AppCommandRequestDto, AppCommandResultDto,
+    AppEventsResultDto, AppQueryRequestDto, AppQueryResultDto,
     AppResponseDto, PROTOCOL_VERSION,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -159,33 +159,4 @@ fn app_wire_preserves_explicit_profile_selection() {
     let decoded: AppCommandRequestDto = serde_json::from_value(request.clone()).unwrap();
     assert_eq!(decoded.validate(), Ok(()));
     assert_eq!(serde_json::to_value(decoded).unwrap(), request);
-}
-
-#[test]
-fn conversation_turn_transport_preserves_explicit_profile_selection() {
-    let request = AgentConversationTurnRequestDto {
-        session_id: "session".into(),
-        expected_revision: 4,
-        text: "hello".into(),
-        device_id: "mac-local".into(),
-        profile: AppProfileSelectionDto::Explicit {
-            profile_id: "local-fast".into(),
-        },
-        continuation: false,
-        retry_of: None,
-        remote_route: None,
-    };
-
-    let encoded = serde_json::to_value(&request).unwrap();
-    assert_eq!(
-        encoded.get("profile"),
-        Some(&json!({
-            "kind": "explicit",
-            "profile_id": "local-fast",
-        }))
-    );
-    assert_eq!(
-        serde_json::from_value::<AgentConversationTurnRequestDto>(encoded).unwrap(),
-        request
-    );
 }

@@ -113,7 +113,7 @@ fn calendar_scoped_conversation_actions_are_not_part_of_the_protocol() {
 }
 
 #[test]
-fn general_conversation_transport_has_no_model_or_capability_selector() {
+fn obsolete_conversation_turn_wire_is_rejected() {
     let action = json!({
         "kind": "conversation_turn",
         "request": {
@@ -123,25 +123,7 @@ fn general_conversation_transport_has_no_model_or_capability_selector() {
             "text": "Help me plan the afternoon"
         }
     });
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
-    let continuation = json!({
-        "kind": "conversation_turn",
-        "request": {
-            "session_id": Uuid::new_v4(),
-            "expected_revision": 3,
-            "device_id": "test-device",
-            "text": "Help me plan the afternoon",
-            "continuation": true
-        }
-    });
-    let parsed: AgentVaultActionDto = serde_json::from_value(continuation.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), continuation);
-    for field in ["model", "inference_class", "capabilities", "policy"] {
-        let mut forged = action.clone();
-        forged["request"][field] = json!("untrusted");
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
-    }
+    assert!(serde_json::from_value::<AgentVaultActionDto>(action).is_err());
 }
 
 #[test]

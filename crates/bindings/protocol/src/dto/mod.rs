@@ -12,8 +12,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const APP_WIRE_VERSION: u32 = 2;
 
 pub use agent::{
-    ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentConversationTurnRequestDto,
-    AgentEventDto, AgentFailureCategory, AgentFailureDomain, AgentFailureDto,
+    ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentEventDto, AgentFailureCategory, AgentFailureDomain, AgentFailureDto,
     AgentFailureSafeAction, AgentFixtureOperationDto, AgentFixturePromptDto,
     AgentFixtureRequestDto, AgentFixtureResultDto, AgentFixtureRunDto, AgentFixtureRunOperationDto,
     AgentFixtureRunRequestDto, AgentMemoryOriginDto, AgentMemoryOverviewDto,

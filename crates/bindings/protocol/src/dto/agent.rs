@@ -5,7 +5,6 @@ use uuid::Uuid;
 use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 
 use super::{
-    AppProfileSelectionDto,
     calendar::{CalendarProviderDto, CalendarScopeDto},
 };
 
@@ -209,9 +208,6 @@ pub enum AgentVaultActionDto {
     },
     ConversationSession {
         operation: AgentConversationSessionOperationDto,
-    },
-    ConversationTurn {
-        request: AgentConversationTurnRequestDto,
     },
     MemoryReview {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -555,27 +551,6 @@ pub enum AgentConversationSessionOperationDto {
         session_id: String,
         expected_revision: u64,
     },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentConversationTurnRequestDto {
-    pub session_id: String,
-    pub expected_revision: u64,
-    pub text: String,
-    pub device_id: String,
-    #[serde(default, skip_serializing_if = "is_auto_profile")]
-    pub profile: AppProfileSelectionDto,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub continuation: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_of: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_route: Option<AgentRemoteRouteDto>,
-}
-
-fn is_auto_profile(profile: &AppProfileSelectionDto) -> bool {
-    matches!(profile, AppProfileSelectionDto::Auto)
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
