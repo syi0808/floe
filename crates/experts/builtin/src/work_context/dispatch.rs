@@ -28,9 +28,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )?;
     let view: WorkContextView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let model = host
-        .server_model()
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let model = host.model();
     let result: WorkContextExpertResult = run_work_context_expert(
         model,
         host.policy(),

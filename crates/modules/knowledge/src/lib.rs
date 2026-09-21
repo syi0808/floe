@@ -10,11 +10,9 @@ pub use application::learner_service::LearnerService;
 pub use ports::evidence::EvidenceReader;
 pub use ports::repository::{LearnerJobRepository, MemoryContextReader, MemoryReviewRepository};
 pub mod application {
-    pub mod inference;
     pub mod learner;
     pub mod learner_scheduling;
     pub mod learner_service;
-    pub mod learner_transport;
     pub mod memory;
     pub mod playbooks;
     pub mod review;
@@ -30,21 +28,14 @@ pub use api::{
     MemoryContextSnapshot, MemoryOrigin, MemoryOverviewSnapshot, MemoryReviewSnapshot,
     MemorySummary, PersonalMemoryKind, PersonalMemoryValue, StageMemoryCandidate,
 };
-pub use application::inference::{
-    InferenceLearnerModel, LEARNER_INFERENCE_CAPABILITY, LEARNER_INFERENCE_CONSUMER,
-    LEARNER_INFERENCE_PURPOSE, LearnerInferenceResponse, LearnerInferenceTransport,
-};
 pub use application::learner::{
-    LEARNER_JOB_LEASE_SECONDS, LEARNER_JOB_RETRY_DELAY_SECONDS, LearnerBudget, LearnerJobClaim,
-    LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal,
-    LearnerModel, LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput,
-    LearnerRuntime, MAX_LEARNER_JOB_ATTEMPTS, MemoryCandidateSink, claim_learner_job,
-    explicit_learning_signal, reject_learner_claim, retryable_learner_failure, settle_learner_job,
-    settlement_for_learner_result, validate_learner_job_lifecycle,
-};
-pub use application::learner_transport::{
-    FOUNDATION_LEARNER_PROFILE, LearnerModelAvailability, TransportLearnerModel, learner_profile,
-    review_with_model,
+    LEARNER_INFERENCE_CONSUMER, LEARNER_INFERENCE_PURPOSE, LEARNER_JOB_LEASE_SECONDS,
+    LEARNER_JOB_RETRY_DELAY_SECONDS, LearnerBudget, LearnerJobClaim, LearnerJobLifecycle,
+    LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel, LearnerModelRequest,
+    LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
+    MAX_LEARNER_JOB_ATTEMPTS, MemoryCandidateSink, claim_learner_job, explicit_learning_signal,
+    parse_learner_review_output, reject_learner_claim, retryable_learner_failure,
+    settle_learner_job, settlement_for_learner_result, validate_learner_job_lifecycle,
 };
 pub use application::memory::{
     admit_learning_evidence, project_memory_summary, validate_learning_evidence,

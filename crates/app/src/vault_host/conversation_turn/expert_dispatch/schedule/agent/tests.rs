@@ -14,7 +14,7 @@ use super::*;
 use floe_access::CalendarScope;
 use floe_actions::{CalendarActionState, ExpertCalendarInspection};
 use floe_agent_contract::{
-    DataClass, ModelConversationEntry, PackageKind, PackageRef, TimelineViewRead,
+    DataClass, ModelConversationEntry, PackageKind, PackageRef, TimelineViewRead, TraceContext,
     prompts::PromptRole,
 };
 use floe_context::{CapacityState, FeasibilityItem, RecoveryState, WeatherImpact};
@@ -29,7 +29,8 @@ use floe_experts::{
     RegistryConfiguration, RegistryConfigurationTarget,
 };
 use floe_inference::{
-    ModelAttemptState, ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
+    InferenceExecutionConstraint, InferenceExecutor, ModelAttemptState, ModelStep, ModelTransport,
+    ModelTransportRequest, ModelTransportResponse,
 };
 use floe_vault::{VaultKey, VaultTaskRecord};
 
@@ -481,6 +482,158 @@ impl ModelTransport for Model<'_> {
     }
 }
 
+/// The Schedule Expert's model answers, at the canonical Inference boundary.
+///
+/// Mirrors the transport fake's ScheduleExpert behavior one level up: the
+/// first execute performs the free-windows call over the range the projected
+/// task suggests, and once the transcript carries a tool result the run
+/// answers. Ranges come from the projection, never from the fake.
+struct ScheduleExecutor {
+    executes: Mutex<Vec<floe_agent_contract::ModelRequest>>,
+}
+
+impl ScheduleExecutor {
+    fn new() -> Self {
+        Self {
+            executes: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn execute_count(&self) -> usize {
+        self.executes.lock().unwrap().len()
+    }
+}
+
+impl InferenceExecutor for ScheduleExecutor {
+    fn execute<'a>(
+        &'a self,
+        request: floe_agent_contract::ModelRequest,
+        _scope: &'a floe_execution::ExecutionScope,
+        _constraint: InferenceExecutionConstraint,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_agent_contract::ModelResponse, AgentFailure>,
+    > {
+        let conversation = &request.projection.envelope.conversation;
+        let entries = conversation
+            .history
+            .iter()
+            .chain(conversation.current_turn.iter())
+            .collect::<Vec<_>>();
+        let tool_results = entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    floe_agent_contract::ModelConversationEntry::ToolExchange { .. }
+                )
+            })
+            .count();
+        let coverage = entries.into_iter().find_map(|entry| match entry {
+            floe_agent_contract::ModelConversationEntry::User { text, .. } => {
+                serde_json::from_str::<serde_json::Value>(text).ok().map(|task| {
+                    (
+                        task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
+                        task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
+                    )
+                })
+            }
+            _ => None,
+        });
+        self.executes.lock().unwrap().push(request.clone());
+        let attempt_id = request.attempt_id;
+        Box::pin(async move {
+            let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
+                coverage.ok_or(AgentFailure::InvalidModelOutput)?
+            else {
+                return Err(AgentFailure::InvalidModelOutput);
+            };
+            let step = if tool_results >= 1 {
+                floe_agent_contract::ModelStep::Answer {
+                    text: "One commitment is followed by an available focus window.".into(),
+                    artifacts: vec![],
+                }
+            } else {
+                floe_agent_contract::ModelStep::CallTool {
+                    tool_id: "schedule.find_free_windows".into(),
+                    definition_revision: 1,
+                    input: serde_json::json!({
+                        "minimum_minutes": 60,
+                        "range_start_unix_ms": starts_at_unix_ms,
+                        "range_end_unix_ms": ends_at_unix_ms,
+                    })
+                    .to_string(),
+                }
+            };
+            Ok(floe_agent_contract::ModelResponse {
+                attempt_id,
+                steps: vec![step],
+                usage: floe_agent_contract::ModelUsage {
+                    tokens: 10,
+                    cost_micros: 0,
+                },
+            })
+        })
+    }
+}
+
+/// The executor half of the grant-pause regression: access is disabled after
+/// the second model execute, while the run still holds its views.
+struct PausingGrantExecutor<'host> {
+    vault: &'host EncryptedAgentVault<Keys>,
+    executor: ScheduleExecutor,
+}
+
+impl InferenceExecutor for PausingGrantExecutor<'_> {
+    fn execute<'a>(
+        &'a self,
+        request: floe_agent_contract::ModelRequest,
+        scope: &'a floe_execution::ExecutionScope,
+        constraint: InferenceExecutionConstraint,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_agent_contract::ModelResponse, AgentFailure>,
+    > {
+        Box::pin(async move {
+            let response = self.executor.execute(request, scope, constraint).await?;
+            if self.executor.execute_count() == 2 {
+                let overview = self.vault.calendar_expert_overview().await?;
+                let setup = overview.setups.first().ok_or(AgentFailure::NotFound)?;
+                let connection_id = self
+                    .vault
+                    .calendar_grant_connection_id(setup.setup_id)
+                    .await?;
+                self.vault
+                    .configure_calendar_access_with_connection(
+                        CalendarAccessConfiguration {
+                            instance_id: overview.registry.instance_id,
+                            expected_revision: overview.registry.revision,
+                            setup_id: setup.setup_id,
+                            change: CalendarAccessChange::SetEnabled { enabled: false },
+                        },
+                        connection_id,
+                        Cancellation::default(),
+                    )
+                    .await?;
+            }
+            Ok(response)
+        })
+    }
+}
+
+fn test_scope() -> floe_execution::ExecutionScope {
+    let ledger = floe_execution::budget::BudgetLedger::new(
+        floe_execution::budget::BudgetConfig::new(1_000_000, 1_000_000_000),
+        Default::default(),
+    );
+    floe_execution::ExecutionScope::root(
+        floe_execution::Cancellation::default(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        ledger.work_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    )
+}
+
 struct Fixture {
     vault: EncryptedAgentVault<Keys>,
     core: FloeCore,
@@ -788,10 +941,15 @@ impl Fixture {
     }
 
     fn endpoint_request(&self, invocation_id: Uuid) -> CalendarExpertEndpointRequest {
-        let request = self.request();
+        let mut request = self.request();
+        // Mirror the production run policy: the run's intent decides the
+        // class, so the policy carries both placements and consent stays off.
+        request.policy.allowed_placements =
+            vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote];
         CalendarExpertEndpointRequest {
             person_id: self.session.person_id,
-            usage: UsageLedger::default(),
+            // The fixture calendars are never acquired remotely.
+            intent: ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute),
             context: request.context,
             policy: request.policy,
             grant: request.grant,
@@ -858,7 +1016,8 @@ impl Fixture {
 #[tokio::test]
 async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_mutating_session() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
-    let model = Model::default();
+    let executor = ScheduleExecutor::new();
+    let scope = test_scope();
     let invocation_id = Uuid::new_v4();
     let working = fixture.working_task(invocation_id).await;
     let before = fixture
@@ -872,7 +1031,8 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
         .run_calendar_expert_endpoint(
             &fixture.vault,
             &Access::default(),
-            &model,
+            &executor,
+            &scope,
             fixture.endpoint_request(invocation_id),
             now,
         )
@@ -965,7 +1125,8 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
             .run_calendar_expert_endpoint(
                 &fixture.vault,
                 &Access::default(),
-                &model,
+                &executor,
+                &scope,
                 fixture.endpoint_request(invocation_id),
                 now,
             )
@@ -977,6 +1138,8 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
 #[tokio::test]
 async fn completion_commit_only_advances_the_selected_assignment() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
+    let executor = ScheduleExecutor::new();
+    let scope = test_scope();
     let invocation_id = Uuid::new_v4();
     let working = fixture.working_task(invocation_id).await;
     let result = fixture
@@ -984,7 +1147,8 @@ async fn completion_commit_only_advances_the_selected_assignment() {
         .run_calendar_expert_endpoint(
             &fixture.vault,
             &Access::default(),
-            &Model::default(),
+            &executor,
+            &scope,
             fixture.endpoint_request(invocation_id),
             now,
         )
@@ -1049,6 +1213,8 @@ async fn completion_commit_only_advances_the_selected_assignment() {
 #[tokio::test]
 async fn direct_schedule_settlement_rolls_back_task_and_registry_together() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
+    let executor = ScheduleExecutor::new();
+    let scope = test_scope();
     let invocation_id = Uuid::new_v4();
     let working = fixture.working_task(invocation_id).await;
     let result = fixture
@@ -1056,7 +1222,8 @@ async fn direct_schedule_settlement_rolls_back_task_and_registry_together() {
         .run_calendar_expert_endpoint(
             &fixture.vault,
             &Access::default(),
-            &Model::default(),
+            &executor,
+            &scope,
             fixture.endpoint_request(invocation_id),
             now,
         )
@@ -1104,6 +1271,8 @@ async fn direct_schedule_settlement_rolls_back_task_and_registry_together() {
 #[tokio::test]
 async fn direct_schedule_endpoint_rejects_a_foreign_principal() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
+    let executor = ScheduleExecutor::new();
+    let scope = test_scope();
     let mut request = fixture.endpoint_request(Uuid::new_v4());
     request.person_id = PersonId::new();
 
@@ -1113,7 +1282,8 @@ async fn direct_schedule_endpoint_rejects_a_foreign_principal() {
             .run_calendar_expert_endpoint(
                 &fixture.vault,
                 &Access::default(),
-                &Model::default(),
+                &executor,
+                &scope,
                 request,
                 now,
             )
@@ -1125,6 +1295,8 @@ async fn direct_schedule_endpoint_rejects_a_foreign_principal() {
 #[tokio::test]
 async fn direct_schedule_endpoint_authorizes_the_full_inference_policy() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
+    let executor = ScheduleExecutor::new();
+    let scope = test_scope();
     let mut request = fixture.endpoint_request(Uuid::new_v4());
     request.policy.purpose.clear();
 
@@ -1134,7 +1306,8 @@ async fn direct_schedule_endpoint_authorizes_the_full_inference_policy() {
             .run_calendar_expert_endpoint(
                 &fixture.vault,
                 &Access::default(),
-                &Model::default(),
+                &executor,
+                &scope,
                 request,
                 now,
             )
@@ -1146,6 +1319,8 @@ async fn direct_schedule_endpoint_authorizes_the_full_inference_policy() {
 #[tokio::test]
 async fn direct_schedule_endpoint_requires_the_registered_schedule_package() {
     let fixture = Fixture::with_class(DataClass::Synthetic).await;
+    let executor = ScheduleExecutor::new();
+    let scope = test_scope();
 
     assert!(matches!(
         fixture
@@ -1153,7 +1328,8 @@ async fn direct_schedule_endpoint_requires_the_registered_schedule_package() {
             .run_calendar_expert_endpoint(
                 &fixture.vault,
                 &Access::default(),
-                &Model::default(),
+                &executor,
+                &scope,
                 fixture.endpoint_request(Uuid::new_v4()),
                 now,
             )
@@ -1165,11 +1341,11 @@ async fn direct_schedule_endpoint_requires_the_registered_schedule_package() {
 #[tokio::test]
 async fn direct_schedule_endpoint_revalidates_assignment_after_model_execution() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
-    let model = PausingGrantModel {
+    let executor = PausingGrantExecutor {
         vault: &fixture.vault,
-        model: Model::default(),
+        executor: ScheduleExecutor::new(),
     };
-    fixture.configure_model(&model.model);
+    let scope = test_scope();
 
     assert!(
         fixture
@@ -1177,7 +1353,8 @@ async fn direct_schedule_endpoint_revalidates_assignment_after_model_execution()
             .run_calendar_expert_endpoint(
                 &fixture.vault,
                 &Access::default(),
-                &model,
+                &executor,
+                &scope,
                 fixture.endpoint_request(Uuid::new_v4()),
                 now,
             )

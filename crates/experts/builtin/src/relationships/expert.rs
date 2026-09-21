@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::ExpertModel;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context_contract::{
@@ -103,6 +103,7 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
     let output: RelationshipsOutput = run_personal_model(
         model,
         policy,
+        ExpertModelRequirement::Any,
         &invocation,
         evidence,
         relationships_expert_prompt(),

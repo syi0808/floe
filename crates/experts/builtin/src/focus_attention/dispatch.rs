@@ -19,8 +19,6 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     crate::require_mandatory_source(host, request)?;
-    host.device_model()
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
     let (attention, dependency) = host.attention_view(request).await?;
     host.record_dependency(request.invocation_id, request.invocation_id, dependency)?;
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {

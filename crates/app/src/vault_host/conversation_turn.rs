@@ -443,11 +443,11 @@ mod tests {
     };
 
     use crate::LocalContextCommand;
-    // Legacy Expert compatibility under test: the legacy Expert model, policy
+    // Canonical Expert host under test: the shared-Inference executor, policy
     // and source host the delegated endpoints prepare.
     use super::expert_compat::{
-        Model, PersonalAttentionReader, PersonalAttentionReaderApi, ResultRecorder,
-        StoreResultRecorder, policy,
+        PersonalAttentionReader, PersonalAttentionReaderApi, ResultRecorder,
+        StoreResultRecorder, expert_policy,
     };
     use super::expert_dispatch::ConversationExperts;
     use floe_agent_contract::ModelPlacement;
@@ -455,7 +455,6 @@ mod tests {
     use floe_conversation::{AgentMessage, ModelRequest, ModelResponse, ModelRunner};
     use floe_inference::ModelStep;
     use floe_execution::Cancellation;
-    use floe_provider_adapters::models::FoundationModelRunner;
     use floe_experts_builtin::prompts::focus_expert_prompt;
     use floe_protocol::{
         LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionResultDto,
@@ -655,6 +654,86 @@ mod tests {
         }
     }
 
+    /// A canned canonical Inference executor: records each domain call with
+    /// its execution constraint and answers the queued texts in order.
+    struct CannedExpertExecutor {
+        calls: Mutex<
+            Vec<(
+                floe_agent_contract::ModelRequest,
+                floe_inference::InferenceExecutionConstraint,
+            )>,
+        >,
+        answers: Mutex<std::collections::VecDeque<String>>,
+    }
+
+    impl CannedExpertExecutor {
+        fn answering(answers: Vec<serde_json::Value>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                answers: Mutex::new(
+                    answers.into_iter().map(|answer| answer.to_string()).collect(),
+                ),
+            }
+        }
+
+        fn calls(
+            &self,
+        ) -> Vec<(
+            floe_agent_contract::ModelRequest,
+            floe_inference::InferenceExecutionConstraint,
+        )> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl floe_inference::InferenceExecutor for CannedExpertExecutor {
+        fn execute<'a>(
+            &'a self,
+            request: floe_agent_contract::ModelRequest,
+            _scope: &'a floe_execution::ExecutionScope,
+            constraint: floe_inference::InferenceExecutionConstraint,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+        > {
+            self.calls.lock().unwrap().push((request.clone(), constraint));
+            let answer = self
+                .answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("canned expert answer");
+            Box::pin(async move {
+                Ok(floe_agent_contract::ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![floe_agent_contract::ModelStep::Answer {
+                        text: answer,
+                        artifacts: vec![],
+                    }],
+                    usage: floe_agent_contract::ModelUsage {
+                        tokens: 64,
+                        cost_micros: 0,
+                    },
+                })
+            })
+        }
+    }
+
+    /// A generous Task scope for delegated Expert tests: the Expert bounds
+    /// its own child, so the parent only needs to outlive the message.
+    fn expert_scope() -> floe_execution::ExecutionScope {
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(1_000_000, 1_000_000_000),
+            Default::default(),
+        );
+        floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+        )
+    }
+
     fn read_capability(id: &str) -> CapabilityDescriptor {
         CapabilityDescriptor {
             schema_version: AGENT_VERSION,
@@ -819,7 +898,7 @@ mod tests {
             person_id,
             device_id: "test-device",
         };
-        let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()));
+        let policy = expert_policy();
         let model = OptionalSourceModel {
             requests: Mutex::new(Vec::new()),
             source: floe_agent_contract::ContextSource::Memory,
@@ -925,7 +1004,7 @@ mod tests {
             requests: Mutex::new(vec![]),
             source: floe_agent_contract::ContextSource::Tasks,
         };
-        let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()));
+        let policy = expert_policy();
         let store = vault.governed_general_store(session.id);
         let completed = AgentRuntime {
             store: &store,
@@ -1033,8 +1112,9 @@ mod tests {
 
     #[tokio::test]
     async fn schedule_delegation_uses_registered_task_runner() {
-        let model = legacy_expert_model("http://127.0.0.1:1");
-        let policy = policy(&model);
+        let executor = CannedExpertExecutor::answering(vec![]);
+        let scope = expert_scope();
+        let policy = expert_policy();
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -1048,7 +1128,11 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: true,
+            has_remote_model: true,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -1199,16 +1283,6 @@ mod tests {
 
     /// A legacy Expert Server model, admitted for a fixture caller.
     /// The caller identity only has to be self-consistent here.
-    fn legacy_expert_model(base_url: &str) -> Model {
-        let person_id = PersonId::new();
-        Model::for_stored_connection(
-            Some(saved_server_connection(base_url, person_id, "test-device")),
-            &person_id.to_string(),
-            "test-device",
-        )
-        .unwrap()
-    }
-
     fn legacy_source_client(base_url: &str) -> ServerSourceClient {
         let person_id = PersonId::new();
         ServerSourceClient::prepare(
@@ -1238,20 +1312,6 @@ mod tests {
             .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .await
             .unwrap();
-    }
-
-    #[test]
-    fn stored_server_connection_selects_server_model_for_legacy_experts() {
-        let model = legacy_expert_model("http://127.0.0.1:8431");
-        assert!(matches!(model, Model::Server(_)));
-    }
-
-    #[test]
-    fn missing_stored_connection_uses_the_device_model() {
-        assert!(matches!(
-            Model::for_stored_connection(None, "test-person", "test-device").unwrap(),
-            Model::Foundation(_)
-        ));
     }
 
     #[tokio::test]
@@ -1328,8 +1388,7 @@ mod tests {
             vec![floe_access::ATTENTION_ASSISTANT_CONSUMER]
         );
 
-        let model = Model::Foundation(FoundationModelRunner::encrypted());
-        let policy = policy(&model);
+        let policy = expert_policy();
         let liveness = personal_grants::PersonalDependencyLiveness {
             local_context: &local_context,
             person_id,
@@ -1503,8 +1562,9 @@ mod tests {
 
     #[tokio::test]
     async fn remote_expert_requires_an_admitted_reader() {
-        let model = legacy_expert_model("http://127.0.0.1:1");
-        let policy = policy(&model);
+        let executor = CannedExpertExecutor::answering(vec![]);
+        let scope = expert_scope();
+        let policy = expert_policy();
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -1515,7 +1575,11 @@ mod tests {
         let local_context = LocalContextHost::default();
         let person_id = PersonId::new();
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: false,
+            has_remote_model: true,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -1560,9 +1624,10 @@ mod tests {
     }
 
     #[test]
-    fn legacy_server_model_exposes_only_bounded_context_observe_capabilities() {
-        let model = legacy_expert_model("http://127.0.0.1:8431");
-        let policy = policy(&model);
+    fn expert_offering_exposes_only_bounded_context_observe_capabilities() {
+        let executor = CannedExpertExecutor::answering(vec![]);
+        let scope = expert_scope();
+        let policy = expert_policy();
         let local_context = LocalContextHost::default();
         // Canonical Manager tools come from Context, identically for the
         // device and server model choices: availability never depends on
@@ -1605,7 +1670,11 @@ mod tests {
             evidence: vec![],
         };
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: true,
+            has_remote_model: true,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -1635,8 +1704,9 @@ mod tests {
 
     #[tokio::test]
     async fn unregistered_expert_card_cannot_be_invoked_directly() {
-        let model = Model::for_stored_connection(None, "test-person", "test-device").unwrap();
-        let policy = policy(&model);
+        let executor = CannedExpertExecutor::answering(vec![]);
+        let scope = expert_scope();
+        let policy = expert_policy();
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -1646,7 +1716,11 @@ mod tests {
         };
         let local_context = LocalContextHost::default();
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: true,
+            has_remote_model: true,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -2119,47 +2193,19 @@ mod tests {
             let (calendar_request, socket) = request(socket).await;
             assert_calendar_request_contract(&calendar_request);
             respond_not_found(socket).await;
-
-            let (socket, _) = listener.accept().await.unwrap();
-            let (model_request, socket) = request(socket).await;
-            assert!(model_request.starts_with("POST /v1/agent "));
-            assert!(model_request.contains("Commitments Expert"));
-            assert!(model_request.contains("Confirm by Friday"));
-            let answer = serde_json::json!({
-                "summary": "A reply and Friday commitment are requested.",
-                "findings": [{
-                    "evidence_handle": "mail:request",
-                    "kind": "request_to_user",
-                    "statement": "Confirm the review by Friday.",
-                    "epistemic_status": "observed",
-                    "confidence_millis": 1000
-                }]
-            })
-            .to_string();
-            let output = serde_json::json!({
-                "output": [{"kind": "answer", "text": answer}],
-                "used_tokens": 64,
-                "call_ids": []
-            })
-            .to_string();
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "purpose": "everyday_assistance",
-                    "output": output,
-                    "trace_id": "0123456789abcdef0123456789abcdef",
-                    "routing": {
-                        "placement": "server_local",
-                        "external_transfer": false,
-                        "replay_source": "a".repeat(64)
-                    }
-                })
-                .to_string(),
-            )
-            .await;
         });
-        let model = legacy_expert_model(&format!("http://{address}"));
+        let answer = serde_json::json!({
+            "summary": "A reply and Friday commitment are requested.",
+            "findings": [{
+                "evidence_handle": "mail:request",
+                "kind": "request_to_user",
+                "statement": "Confirm the review by Friday.",
+                "epistemic_status": "observed",
+                "confidence_millis": 1000
+            }]
+        });
+        let executor = CannedExpertExecutor::answering(vec![answer]);
+        let scope = expert_scope();
         let source_client = ServerSourceClient::prepare(
             Some(saved_server_connection(
                 &format!("http://{address}"),
@@ -2171,14 +2217,11 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let remote_reader = match &model {
-            Model::Server(_) => FixtureRemoteReader {
-                source_client: &source_client,
-                person_id,
-            },
-            Model::Foundation(_) => unreachable!(),
+        let remote_reader = FixtureRemoteReader {
+            source_client: &source_client,
+            person_id,
         };
-        let policy = policy(&model);
+        let policy = expert_policy();
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2189,7 +2232,11 @@ mod tests {
         let local_context = LocalContextHost::default();
         let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: true,
+            has_device_model: false,
+            has_remote_model: true,
             source_client: Some(&source_client),
             policy: &policy,
             context: &context,
@@ -2240,6 +2287,31 @@ mod tests {
         let data = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
         let result: CommitmentsExpertResult = serde_json::from_str(data).unwrap();
         assert_eq!(result.findings.len(), 1);
+        // The Expert asked for remote execution through shared Inference with
+        // the exact source coverage it read; the catalog stays empty because
+        // answering Experts declare no capabilities.
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].0.purpose,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE
+        );
+        assert_eq!(
+            calls[0].0.consumer,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER
+        );
+        assert_eq!(
+            calls[0].1,
+            floe_inference::InferenceExecutionConstraint::RemoteOnly
+        );
+        assert!(matches!(
+            calls[0].0.projection.coverage,
+            floe_agent_contract::DependencyCoverage::Dependent { .. }
+        ));
+        assert!(calls[0].0.catalog.tools.is_empty());
+        let envelope = serde_json::to_string(&calls[0].0.projection.envelope).unwrap();
+        assert!(envelope.contains("Commitments Expert"));
+        assert!(envelope.contains("Confirm by Friday"));
         server.await.unwrap();
     }
 
@@ -2334,46 +2406,18 @@ mod tests {
             )
             .await;
 
-            let (socket, _) = listener.accept().await.unwrap();
-            let (model_request, socket) = request(socket).await;
-            assert!(model_request.starts_with("POST /v1/agent "));
-            assert!(model_request.contains("mail:request"));
-            assert!(model_request.contains("calendar:review"));
-            assert!(model_request.contains(&task_id.to_string()));
-            assert!(model_request.contains(&memory_id.to_string()));
-            let answer = serde_json::json!({
-                "summary": "Four bounded sources support the delivery commitment.",
-                "findings": [
-                    {"evidence_handle":"mail:request","kind":"request_to_user","statement":"A reply was requested.","epistemic_status":"observed","confidence_millis":1000},
-                    {"evidence_handle":"calendar:review","kind":"user_commitment","statement":"A review is scheduled.","epistemic_status":"observed","confidence_millis":1000},
-                    {"evidence_handle":task_id.to_string(),"kind":"user_commitment","statement":"A task remains open.","epistemic_status":"observed","confidence_millis":1000},
-                    {"evidence_handle":memory_id.to_string(),"kind":"user_commitment","statement":"The delivery was confirmed.","epistemic_status":"observed","confidence_millis":1000}
-                ]
-            });
-            let output = serde_json::json!({
-                "output": [{"kind": "answer", "text": answer.to_string()}],
-                "used_tokens": 64,
-                "call_ids": []
-            })
-            .to_string();
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "purpose": "everyday_assistance",
-                    "output": output,
-                    "trace_id": "0123456789abcdef0123456789abcdef",
-                    "routing": {
-                        "placement": "server_local",
-                        "external_transfer": false,
-                        "replay_source": "a".repeat(64)
-                    }
-                })
-                .to_string(),
-            )
-            .await;
         });
-        let model = legacy_expert_model(&format!("http://{address}"));
+        let answer = serde_json::json!({
+            "summary": "Four bounded sources support the delivery commitment.",
+            "findings": [
+                {"evidence_handle":"mail:request","kind":"request_to_user","statement":"A reply was requested.","epistemic_status":"observed","confidence_millis":1000},
+                {"evidence_handle":"calendar:review","kind":"user_commitment","statement":"A review is scheduled.","epistemic_status":"observed","confidence_millis":1000},
+                {"evidence_handle":task_id.to_string(),"kind":"user_commitment","statement":"A task remains open.","epistemic_status":"observed","confidence_millis":1000},
+                {"evidence_handle":memory_id.to_string(),"kind":"user_commitment","statement":"The delivery was confirmed.","epistemic_status":"observed","confidence_millis":1000}
+            ]
+        });
+        let executor = CannedExpertExecutor::answering(vec![answer]);
+        let scope = expert_scope();
         let source_client = ServerSourceClient::prepare(
             Some(saved_server_connection(
                 &format!("http://{address}"),
@@ -2385,13 +2429,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let policy = policy(&model);
-        let remote_reader = match &model {
-            Model::Server(_) => FixtureRemoteReader {
-                source_client: &source_client,
-                person_id,
-            },
-            Model::Foundation(_) => unreachable!(),
+        let policy = expert_policy();
+        let remote_reader = FixtureRemoteReader {
+            source_client: &source_client,
+            person_id,
         };
         let context = AgentContext {
             projection_version: 1,
@@ -2436,7 +2477,11 @@ mod tests {
             }],
         }];
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: true,
+            has_device_model: false,
+            has_remote_model: true,
             source_client: Some(&source_client),
             policy: &policy,
             context: &context,
@@ -2448,6 +2493,7 @@ mod tests {
             wellbeing_reader: None,
             context_reader: None,
             task_views: &tasks,
+
             cards: test_expert_cards(),
             grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
                 person_id,
@@ -2486,6 +2532,17 @@ mod tests {
         let result: CommitmentsExpertResult =
             serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
         assert_eq!(result.findings.len(), 4);
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            floe_inference::InferenceExecutionConstraint::RemoteOnly
+        );
+        let envelope = serde_json::to_string(&calls[0].0.projection.envelope).unwrap();
+        assert!(envelope.contains("mail:request"));
+        assert!(envelope.contains("calendar:review"));
+        assert!(envelope.contains(&task_id.to_string()));
+        assert!(envelope.contains(&memory_id.to_string()));
         assert_eq!(result.expires_at_unix_ms, now + 180_000);
         assert!(result.source_handles.contains(&"mail:selected".into()));
         assert!(result.source_handles.contains(&"calendar:selected".into()));
@@ -2570,8 +2627,15 @@ mod tests {
                 }),
             ),
         ];
+        let answers: Vec<serde_json::Value> = cases
+            .iter()
+            .map(|(_, _, _, answer)| answer.clone())
+            .collect();
+        let roles: Vec<&str> = cases.iter().map(|(_, role, _, _)| *role).collect();
+        let executor = CannedExpertExecutor::answering(answers);
+        let scope = expert_scope();
         let server = tokio::spawn(async move {
-            for (path, role, view, answer) in cases {
+            for (path, _, view, _) in cases {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (view_request, socket) = request(socket).await;
                 assert!(view_request.starts_with(&format!("POST {path} ")));
@@ -2580,45 +2644,14 @@ mod tests {
                     serde_json::json!({"schema_version": 1, "view": view}).to_string(),
                 )
                 .await;
-
-                let (socket, _) = listener.accept().await.unwrap();
-                let (model_request, socket) = request(socket).await;
-                assert!(model_request.starts_with("POST /v1/agent "));
-                assert!(model_request.contains(role));
-                let output = serde_json::json!({
-                    "output": [{"kind": "answer", "text": answer.to_string()}],
-                    "used_tokens": 64,
-                    "call_ids": []
-                })
-                .to_string();
-                respond(
-                    socket,
-                    serde_json::json!({
-                        "schema_version": 1,
-                        "purpose": "everyday_assistance",
-                        "output": output,
-                        "trace_id": "0123456789abcdef0123456789abcdef",
-                        "routing": {
-                            "placement": "server_local",
-                            "external_transfer": false,
-                            "replay_source": "a".repeat(64)
-                        }
-                    })
-                    .to_string(),
-                )
-                .await;
             }
         });
-        let model = legacy_expert_model(&format!("http://{address}"));
         let source_client = legacy_source_client(&format!("http://{address}"));
         let person_id = PersonId::new();
-        let policy = policy(&model);
-        let remote_reader = match &model {
-            Model::Server(_) => FixtureRemoteReader {
-                source_client: &source_client,
-                person_id,
-            },
-            Model::Foundation(_) => unreachable!(),
+        let policy = expert_policy();
+        let remote_reader = FixtureRemoteReader {
+            source_client: &source_client,
+            person_id,
         };
         let context = AgentContext {
             projection_version: 1,
@@ -2630,7 +2663,11 @@ mod tests {
         let local_context = LocalContextHost::default();
         let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: false,
+            has_remote_model: true,
             source_client: Some(&source_client),
             policy: &policy,
             context: &context,
@@ -2685,13 +2722,22 @@ mod tests {
         assert_eq!(work.insights[0].evidence_handle, "github:issue");
         assert_eq!(logistics.source_handle, "home:fresh");
         assert_eq!(logistics.preparations[0].evidence_handle, "home:sensor");
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 2);
+        for ((request, constraint), role) in calls.iter().zip(roles) {
+            assert_eq!(
+                *constraint,
+                floe_inference::InferenceExecutionConstraint::RemoteOnly
+            );
+            let instructions = request.projection.envelope.stable_instructions.render();
+            assert!(instructions.contains(role));
+        }
         server.await.unwrap();
     }
 
     #[tokio::test]
     async fn personal_delegations_use_bounded_views_and_capability_free_experts() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -2883,8 +2929,9 @@ mod tests {
                 .await;
             }
         });
-        let model = legacy_expert_model(&format!("http://{address}"));
-        let policy = policy(&model);
+        let executor = CannedExpertExecutor::answering(vec![]);
+        let scope = expert_scope();
+        let policy = expert_policy();
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2894,7 +2941,11 @@ mod tests {
         };
         let local_context = LocalContextHost::default();
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: true,
+            has_remote_model: true,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -2937,6 +2988,7 @@ mod tests {
                 })
                 .await;
             assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
+            assert!(executor.calls().is_empty());
             let _ = (agent_id, source_handle);
             break;
         }
@@ -2945,8 +2997,9 @@ mod tests {
 
     #[tokio::test]
     async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
-        let model = legacy_expert_model("http://127.0.0.1:1");
-        let policy = policy(&model);
+        let executor = CannedExpertExecutor::answering(vec![]);
+        let scope = expert_scope();
+        let policy = expert_policy();
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -2956,7 +3009,11 @@ mod tests {
         };
         let local_context = LocalContextHost::default();
         let experts = ConversationExperts {
-            model: &model,
+            executor: &executor,
+            scope: &scope,
+            server_source_allowed: false,
+            has_device_model: true,
+            has_remote_model: true,
             source_client: None,
             policy: &policy,
             context: &context,

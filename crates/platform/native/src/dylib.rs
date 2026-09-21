@@ -104,20 +104,36 @@ impl ByteCall {
         Err(NativeCallError::Unavailable)
     }
 
+    /// Whether the entry point resolves, without calling it.
+    ///
+    /// Shares the cached resolution with [`ByteCall::call`]: the first probe
+    /// loads once per process, and a later call reuses the same result. A
+    /// caller that cannot run must not be offered: dispatching to it still
+    /// consumes the attempt's budget allowance, starving fallback profiles.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub fn available(&self) -> bool {
+        self.resolved().is_ok()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub fn available(&self) -> bool {
+        false
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn resolved(&self) -> &Result<(usize, usize), NativeCallError> {
+        self.functions.get_or_init(|| {
+            resolve(&self.library).map(|(_, invoke, release)| (invoke as usize, release as usize))
+        })
+    }
+
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn call(
         &self,
         request: &[u8],
         max_response_bytes: usize,
     ) -> Result<Vec<u8>, NativeCallError> {
-        let (invoke, release) = *self
-            .functions
-            .get_or_init(|| {
-                resolve(&self.library)
-                    .map(|(_, invoke, release)| (invoke as usize, release as usize))
-            })
-            .as_ref()
-            .map_err(|failure| *failure)?;
+        let (invoke, release) = *self.resolved().as_ref().map_err(|failure| *failure)?;
         unsafe {
             let invoke = std::mem::transmute::<usize, InvokeBytes>(invoke);
             let release = std::mem::transmute::<usize, Release>(release);
@@ -210,3 +226,29 @@ impl GatedStringCall {
 pub const BUNDLE_SIBLING: usize = 0;
 /// The macOS bundle hop count for `Contents/Frameworks` from `Contents/MacOS`.
 pub const MACOS_BUNDLE_ROOT: usize = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unresolvable_entry_point_is_not_available() {
+        // No test binary ships this dylib next to itself on any platform, so
+        // the probe is deterministically false without loading anything real.
+        // The real bundled entries resolve the same cached way.
+        let missing = ByteCall::new(NativeLibrary {
+            relative_path: "Frameworks/libfloe_test_missing_7f3a.dylib",
+            invoke_symbol: c"floe_test_missing_invoke",
+            release_symbol: c"floe_test_missing_free",
+            #[cfg(target_os = "macos")]
+            bundle_parents: MACOS_BUNDLE_ROOT,
+            #[cfg(not(target_os = "macos"))]
+            bundle_parents: BUNDLE_SIBLING,
+        });
+        assert!(!missing.available());
+        assert_eq!(
+            missing.call(&[], 8).unwrap_err(),
+            NativeCallError::Unavailable
+        );
+    }
+}

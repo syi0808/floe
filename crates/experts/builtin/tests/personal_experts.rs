@@ -5,7 +5,7 @@ use floe_agent_contract::PersonId;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
     AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    InferencePolicyDecision,
+    ExpertModelRequirement, InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
 use floe_context_contract::{
@@ -48,10 +48,6 @@ impl Model {
 }
 
 impl ExpertModel for Model {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
@@ -279,6 +275,9 @@ async fn personal_experts_combine_typed_views_with_bounded_provenance() {
     assert_eq!(calls[0].prompt.role, PromptRole::RelationshipsExpert);
     assert_eq!(calls[1].prompt.role, PromptRole::FocusAttentionExpert);
     assert_eq!(calls[2].prompt.role, PromptRole::WellbeingExpert);
+    assert_eq!(calls[0].requirement, ExpertModelRequirement::Any);
+    assert_eq!(calls[1].requirement, ExpertModelRequirement::DeviceOnly);
+    assert_eq!(calls[2].requirement, ExpertModelRequirement::Any);
     assert_eq!(calls[0].context.evidence.len(), 2);
     assert_eq!(calls[1].context.evidence.len(), 3);
     assert_eq!(calls[2].context.evidence.len(), 2);

@@ -173,25 +173,6 @@ fn valid_loopback_gateway(value: &str) -> bool {
         && port.parse::<u16>().is_ok_and(|port| port > 0)
 }
 
-/// The route candidate before any server fact is observed.
-pub fn candidate_route(connection: &RemoteModelConnection) -> Result<RemoteRoute, AgentFailure> {
-    let candidate = RemoteRoute {
-        base_url: connection.base_url.clone(),
-        bearer_token: connection.bearer_token.clone(),
-        purpose: EVERYDAY_ASSISTANCE_PURPOSE.into(),
-        external: false,
-        allow_external: false,
-        recipient: None,
-        pairing: Some(RoutePairing {
-            client_id: connection.client_id.clone(),
-            person_id: connection.person_id.clone(),
-            device_id: connection.device_id.clone(),
-        }),
-    };
-    ModelRouteConfig::from_route(&candidate)?;
-    Ok(candidate)
-}
-
 pub fn valid_external_recipient(value: &str) -> bool {
     !value.is_empty()
         && value.trim() == value

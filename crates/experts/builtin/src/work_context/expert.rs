@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::ExpertModel;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
 use floe_context_contract::{WorkContextView, validate_work_context_view, work_context_evidence};
 
@@ -52,6 +52,7 @@ pub async fn run_work_context_expert<Model: ExpertModel>(
     let output: WorkOutput = run_portfolio_model(
         model,
         policy,
+        ExpertModelRequirement::RemoteOnly,
         &invocation,
         work_context_evidence(&view)?,
         work_context_expert_prompt(),

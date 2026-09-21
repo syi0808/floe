@@ -9,7 +9,7 @@
 use chrono::{DateTime, Duration, Utc};
 
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
+use floe_agent_contract::{AgentFailure, DataClass, ExpertModelRequirement, ModelPlacement};
 use floe_context_contract::CalendarProvider;
 use floe_day::CalendarRange;
 
@@ -149,20 +149,50 @@ pub fn plan_run(
     })
 }
 
-/// The policy this run's model call is authorized under.
-pub fn run_policy(
-    placement: ModelPlacement,
-    data_class: DataClass,
-    external_transfer_consent: TransferConsent,
-) -> InferencePolicyDecision {
+/// The Context/source policy this run's model call carries.
+///
+/// This carries Context/source semantics only (data classes, freshness,
+/// bounds): it no longer selects a provider placement and never authorizes
+/// model transfer. Canonical Inference maps the run's intent to an execution
+/// constraint, and Access fences the dispatch.
+pub fn run_policy(data_class: DataClass) -> InferencePolicyDecision {
     InferencePolicyDecision {
-        purpose: "everyday-assistance".into(),
+        purpose: "everyday_assistance".into(),
         data_classes: vec![data_class],
-        allowed_placements: vec![placement],
+        allowed_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
         performance_class: "interactive".into(),
         projection_version: 1,
-        external_transfer_consent,
+        external_transfer_consent: floe_agent_contract::TransferConsent::NotGranted,
         bounded_sensitive_projection: false,
+    }
+}
+
+/// What execution class this Schedule run requires.
+///
+/// The single Schedule-owned statement of where its reasoning may happen.
+/// The Expert states the class; Inference selects the profile. This is the
+/// only mapping from `ScheduleReasoning` to execution: no caller consults a
+/// model, placement, or route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduleExecutionIntent {
+    requirement: ExpertModelRequirement,
+}
+
+impl ScheduleExecutionIntent {
+    /// Map the run's reasoning to its execution class: a freshly acquired
+    /// remote calendar stays on this device's own model, while anything else
+    /// reasons wherever the conversation's own route already put it.
+    pub fn from_reasoning(reasoning: ScheduleReasoning) -> Self {
+        Self {
+            requirement: match reasoning {
+                ScheduleReasoning::OnDevice => ExpertModelRequirement::DeviceOnly,
+                ScheduleReasoning::ConversationRoute => ExpertModelRequirement::Any,
+            },
+        }
+    }
+
+    pub fn requirement(self) -> ExpertModelRequirement {
+        self.requirement
     }
 }
 
@@ -286,6 +316,21 @@ mod tests {
                 ScheduleReasoning::ConversationRoute
             );
         }
+    }
+
+    #[test]
+    fn execution_intent_maps_reasoning_to_requirement() {
+        use floe_agent_contract::ExpertModelRequirement;
+
+        assert_eq!(
+            ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::OnDevice).requirement(),
+            ExpertModelRequirement::DeviceOnly
+        );
+        assert_eq!(
+            ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute)
+                .requirement(),
+            ExpertModelRequirement::Any
+        );
     }
 
     #[test]

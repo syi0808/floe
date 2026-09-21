@@ -23,15 +23,38 @@ impl RootModelProvider {
         person_id: &str,
         device_id: &str,
     ) -> Result<Self, AgentFailure> {
+        Self::for_saved_connection_scoped(
+            saved,
+            person_id,
+            device_id,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_inference::CANONICAL_MODEL_CONSUMER,
+        )
+    }
+
+    /// Build under a domain purpose/consumer: device Foundation plus, when
+    /// this caller saved one, the admitted server connection. Both legs
+    /// observe the same domain scope.
+    pub fn for_saved_connection_scoped(
+        saved: Option<floe_inference::SavedServerConnection>,
+        person_id: &str,
+        device_id: &str,
+        purpose: &str,
+        consumer: &str,
+    ) -> Result<Self, AgentFailure> {
         let server = saved
             .map(|stored| {
                 let admitted =
                     floe_inference::admit_saved_connection(stored, person_id, device_id)?;
-                ServerModelProvider::for_connection(&admitted)
+                ServerModelProvider::for_connection_scoped(&admitted, purpose, consumer)
             })
             .transpose()?;
         Ok(Self {
-            foundation: FoundationModelProvider::encrypted(),
+            foundation: FoundationModelProvider::scoped(
+                floe_agent_contract::SessionProtection::Encrypted,
+                purpose,
+                consumer,
+            )?,
             server,
         })
     }
@@ -141,5 +164,50 @@ mod tests {
         let admitted =
             RootModelProvider::for_saved_connection(Some(local), PERSON, DEVICE).unwrap();
         assert!(admitted.server.is_some());
+    }
+
+    #[tokio::test]
+    async fn scoped_providers_observe_the_domain_scope() {
+        use floe_inference::ModelProvider;
+        // Device leg: the same Foundation model observes the domain pair.
+        let device = RootModelProvider::for_saved_connection_scoped(
+            None,
+            PERSON,
+            DEVICE,
+            "governed-memory-review",
+            "knowledge.learner",
+        )
+        .unwrap();
+        let observed = device.observe_profiles().await;
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].profile.purpose.as_str(), "governed-memory-review");
+        assert_eq!(observed[0].profile.consumer.as_str(), "knowledge.learner");
+        assert_eq!(
+            observed[0].profile.execution_location,
+            floe_inference::ExecutionLocation::Device
+        );
+
+        // Root scope is unchanged: the canonical root pair.
+        let root = RootModelProvider::for_saved_connection(None, PERSON, DEVICE).unwrap();
+        let observed = root.observe_profiles().await;
+        assert_eq!(observed.len(), 1);
+        assert_eq!(
+            observed[0].profile.purpose.as_str(),
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE
+        );
+        assert_eq!(
+            observed[0].profile.consumer.as_str(),
+            floe_inference::CANONICAL_MODEL_CONSUMER
+        );
+
+        // Empty scope fails closed at composition, never as an unscoped profile.
+        assert!(
+            RootModelProvider::for_saved_connection_scoped(None, PERSON, DEVICE, "", "c",)
+                .is_err()
+        );
+        assert!(
+            RootModelProvider::for_saved_connection_scoped(None, PERSON, DEVICE, "p", "",)
+                .is_err()
+        );
     }
 }

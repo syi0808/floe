@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::ExpertModel;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
 use floe_context_contract::{
     CalendarContextView, WellbeingView, personal_context_evidence, validate_wellbeing_view,
@@ -77,6 +77,7 @@ pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
     let output: WellbeingOutput = run_personal_model(
         model,
         policy,
+        ExpertModelRequirement::Any,
         &invocation,
         evidence,
         wellbeing_expert_prompt(),

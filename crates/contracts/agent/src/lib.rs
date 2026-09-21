@@ -49,9 +49,9 @@ pub use expert::{
     ViewCancellation, check_running,
 };
 pub use expert_model::{
-    CapabilityDescriptor, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertReasoner,
-    ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry,
-    SourceHistoryBoundary,
+    CapabilityDescriptor, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement,
+    ExpertReasoner, ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry,
+    SourceHistoryBoundary, EXPERT_INFERENCE_CONSUMER,
 };
 pub use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,

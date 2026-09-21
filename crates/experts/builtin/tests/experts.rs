@@ -28,8 +28,15 @@ use floe_experts::{
 use floe_experts_builtin::BuiltinExpertKind;
 use floe_experts_builtin::schedule::{
     ExpertHost, ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
-    MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
+    MAX_TIMELINE_VIEW_ITEMS, ScheduleExecutionIntent, ScheduleReasoning, TimelineViewItem,
+    TimelineViewRead,
 };
+
+/// The intent the synthetic views run under: nothing is acquired remotely,
+/// so the turn reasons on the conversation route.
+fn synthetic_intent() -> ScheduleExecutionIntent {
+    ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute)
+}
 use uuid::Uuid;
 
 struct Fixture {
@@ -50,10 +57,6 @@ struct BatchScheduleModel {
 }
 
 impl ExpertModel for BatchScheduleModel {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
     fn answer<'a>(
         &'a self,
         _: ExpertModelCall,
@@ -126,7 +129,7 @@ async fn expert_executes_whole_read_batches_with_its_own_budget_and_transcript()
             assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
             views: &views,
         }
-        .invoke_with_model(invocation, &model, &synthetic_policy())
+        .invoke_with_model(invocation, &model, &synthetic_policy(), synthetic_intent())
         .await;
         let steps = model.steps.lock().unwrap();
         if exhausted {
@@ -1089,10 +1092,6 @@ impl ScheduleModel {
 }
 
 impl ExpertModel for ScheduleModel {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
     fn answer<'a>(
         &'a self,
         _: ExpertModelCall,
@@ -1206,6 +1205,7 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
         fixture.invocation(fixture.schedule),
         &model,
         &synthetic_policy(),
+        synthetic_intent(),
     )
     .await
     .unwrap();
@@ -1286,6 +1286,7 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
         invalid.invocation(invalid.schedule),
         &invalid_model,
         &synthetic_policy(),
+        synthetic_intent(),
     )
     .await;
     assert_eq!(direct, Err(AgentFailure::InvalidModelOutput));
@@ -1319,7 +1320,7 @@ async fn schedule_times_include_the_year_only_when_the_range_crosses_years() {
         assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
-    .invoke_with_model(invocation, &model, &synthetic_policy())
+    .invoke_with_model(invocation, &model, &synthetic_policy(), synthetic_intent())
     .await
     .unwrap();
 
@@ -1355,7 +1356,7 @@ async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_wi
         assignments: &floe_experts::RegistryAssignments::new(&fixture.registry),
         views: &views,
     }
-    .invoke_with_model(invocation, &model, &synthetic_policy())
+    .invoke_with_model(invocation, &model, &synthetic_policy(), synthetic_intent())
     .await
     .unwrap();
     assert!(

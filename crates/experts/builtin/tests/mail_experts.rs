@@ -5,7 +5,7 @@ use floe_agent_contract::PersonId;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
     AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    InferencePolicyDecision,
+    ExpertModelRequirement, InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context_contract::CommunicationItem;
@@ -41,7 +41,6 @@ struct Scenario {
 }
 
 struct Model {
-    placement: ModelPlacement,
     outputs: Mutex<VecDeque<String>>,
     calls: Mutex<Vec<ExpertModelCall>>,
 }
@@ -49,7 +48,6 @@ struct Model {
 impl Model {
     fn new(outputs: impl IntoIterator<Item = Value>) -> Self {
         Self {
-            placement: ModelPlacement::DeviceLocal,
             outputs: Mutex::new(outputs.into_iter().map(|value| value.to_string()).collect()),
             calls: Mutex::new(vec![]),
         }
@@ -57,10 +55,6 @@ impl Model {
 }
 
 impl ExpertModel for Model {
-    fn placement(&self) -> ModelPlacement {
-        self.placement
-    }
-
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
@@ -166,6 +160,8 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
         let calls = model.calls.lock().unwrap();
         assert_eq!(calls[0].prompt.role, PromptRole::CommitmentsExpert);
         assert_eq!(calls[1].prompt.role, PromptRole::CommunicationExpert);
+        assert_eq!(calls[0].requirement, ExpertModelRequirement::RemoteOnly);
+        assert_eq!(calls[1].requirement, ExpertModelRequirement::RemoteOnly);
         for call in calls.iter() {
             assert_eq!(call.context.evidence.len(), 1);
             assert!(call.context.evidence[0].untrusted_text.contains("subject"));

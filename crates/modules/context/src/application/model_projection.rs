@@ -32,6 +32,12 @@ const MAX_PROJECTED_OUTPUT_BYTES: usize = 16384;
 pub enum ContextProjectionRole {
     Manager,
     Finalization,
+    /// A delegated Expert's own reasoning input: the full authorized context
+    /// the Expert was given, like the Manager, but never the Manager role.
+    Expert,
+    /// The background Knowledge Learner's review input: the memories under
+    /// review plus the digest turn, never foreground conversation.
+    Learner,
 }
 
 /// Everything the canonical projection is assembled from.
@@ -134,12 +140,15 @@ fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure
     Ok(())
 }
 
-/// The live context the projection carries: full for the Manager, bounded and
-/// empty for finalization. Settled conversation observations are untouched in
-/// both cases — they travel in the conversation, not here.
+/// The live context the projection carries: full for the Manager, for a
+/// delegated Expert and for the background Learner, bounded and empty for
+/// finalization. Settled conversation observations are untouched in all
+/// cases — they travel in the conversation, not here.
 fn live_context(role: ContextProjectionRole, context: &AgentContext) -> AgentContext {
     match role {
-        ContextProjectionRole::Manager => context.clone(),
+        ContextProjectionRole::Manager
+        | ContextProjectionRole::Expert
+        | ContextProjectionRole::Learner => context.clone(),
         ContextProjectionRole::Finalization => AgentContext {
             projection_version: context.projection_version,
             persona: None,
@@ -535,6 +544,48 @@ mod tests {
         assert_eq!(projection.envelope.runtime.max_output_bytes, 4096);
         assert_eq!(projection.input_data_classes, vec![DataClass::Personal]);
         assert_eq!(projection.projection_revision, 1);
+    }
+
+    #[test]
+    fn expert_projection_carries_full_live_context() {
+        let context = agent_context();
+        let catalog_value = catalog();
+        let experts = vec![agent_card("schedule")];
+        let history = vec![];
+        let projection = assemble_context_projection(input(
+            ContextProjectionRole::Expert,
+            prompt(),
+            conversation(),
+            &context,
+            &catalog_value,
+            &experts,
+            &history,
+        ))
+        .unwrap();
+        assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
+        assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
+        assert_eq!(projection.coverage, DependencyCoverage::Independent);
+    }
+
+    #[test]
+    fn learner_projection_carries_memories_under_review() {
+        let context = agent_context();
+        let catalog_value = catalog();
+        let experts = vec![agent_card("schedule")];
+        let history = vec![];
+        let projection = assemble_context_projection(input(
+            ContextProjectionRole::Learner,
+            prompt(),
+            conversation(),
+            &context,
+            &catalog_value,
+            &experts,
+            &history,
+        ))
+        .unwrap();
+        assert_eq!(projection.envelope.contextual_data.memories.len(), 1);
+        assert_eq!(projection.envelope.contextual_data.evidence.len(), 1);
+        assert_eq!(projection.coverage, DependencyCoverage::Independent);
     }
 
     #[test]

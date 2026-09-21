@@ -10,16 +10,15 @@ mod ports;
 mod transfer;
 
 pub use api::{
-    DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
-    PlannedRoute, RecipientConstraint, RouteRequest,
+    DataRecipient, ExecutionLocation, InferenceExecutionConstraint, ModelCapabilities, ModelConsumer,
+    ModelProfile, ModelPurpose, PlannedRoute, RecipientConstraint, RouteRequest,
 };
 pub use application::{
     AttemptJournal, AttemptLifecycle, AttemptUpdate, CANONICAL_MODEL_CONSUMER,
-    CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter, InferenceService,
-    ModelAttemptRecord, ModelAttemptState, ModelRouteConfig, PurposeAvailability,
+    CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceExecutor, InferenceRouter,
+    InferenceService, ModelAttemptRecord, ModelAttemptState, ModelRouteConfig, PurposeAvailability,
     RemoteModelConnection, RemoteRoute, RoutePairing, RoutePlanError, SavedConnectionStore,
-    SavedServerConnection, UsageLedger, admit_saved_connection, candidate_route,
-    valid_external_recipient,
+    SavedServerConnection, UsageLedger, admit_saved_connection, valid_external_recipient,
 };
 pub use ports::model_provider::{
     CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,

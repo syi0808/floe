@@ -6,18 +6,20 @@
 //! endpoints exist and which readers back the host port they use.
 
 use super::expert_compat::{
-    ConversationContextReader, ConversationContextReaderApi, EndpointConnectionStore,
-    ExpertModelHost, Model, PersonalAttentionReader, PersonalAttentionReaderApi,
+    CapturingRecorder, ConversationContextReader, ConversationContextReaderApi,
+    EndpointConnectionStore, ExpertModelHost, PersonalAttentionReader, PersonalAttentionReaderApi,
     PersonalPeopleReader, PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
-    PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, policy, read_context_source,
+    PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, expert_policy,
+    read_context_source,
 };
 use super::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
 use floe_experts_builtin::{
     BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest,
 };
+use floe_inference::ModelProvider as _;
 
 pub(in crate::vault_host) mod schedule;
 
@@ -25,8 +27,8 @@ pub(in crate::vault_host) mod schedule;
 ///
 /// Registration is static: the composition root never picks an Expert from what
 /// a request appears to mean.
-pub(super) fn registered_experts<'turn, 'host>() -> floe_experts::ExpertDispatchTable<
-    DelegatedMessageExperts<'turn, 'host>,
+pub(super) fn registered_experts<'turn, 'host, 'msg>() -> floe_experts::ExpertDispatchTable<
+    DelegatedMessageExperts<'turn, 'host, 'msg>,
     BuiltinExpertRequest,
     BuiltinExpertOutput,
 > {
@@ -34,7 +36,7 @@ pub(super) fn registered_experts<'turn, 'host>() -> floe_experts::ExpertDispatch
     let registrations: [(
         BuiltinExpertKind,
         floe_experts::ExpertRun<
-            DelegatedMessageExperts<'turn, 'host>,
+            DelegatedMessageExperts<'turn, 'host, 'msg>,
             BuiltinExpertRequest,
             BuiltinExpertOutput,
         >,
@@ -122,10 +124,12 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            // Legacy Expert compatibility, prepared here because an actual
+            // Canonical Expert composition, prepared here because an actual
             // delegated endpoint runs: the stored credential is loaded from
-            // the injected store and admitted for source and legacy model
-            // use. No pre-resolved route exists.
+            // the injected store and admitted for source and model use.
+            // Inference selects the profile per Expert requirement; this
+            // endpoint only observes non-secret facts to decide which Experts
+            // can be offered at all. No pre-resolved route exists.
             let person_id = self.vault.person_id();
             let stored = floe_inference::SavedConnectionStore::load(&self.connections)?;
             let source_client = ServerSourceClient::prepare(
@@ -133,21 +137,66 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 &person_id.to_string(),
                 &context.device_id,
             )?;
-            let model = Model::for_stored_connection(
-                stored,
-                &person_id.to_string(),
-                &context.device_id,
-            )?;
-            let remote_reader = match (&model, source_client.as_ref()) {
-                (Model::Server(_), Some(client)) => Some(remote_views::RemoteViewReader::new(
+            let provider =
+                floe_provider_adapters::models::RootModelProvider::for_saved_connection_scoped(
+                    stored,
+                    &person_id.to_string(),
+                    &context.device_id,
+                    floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                    floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                )?;
+            let observed = provider.observe_profiles().await;
+            let has_device_model = observed.iter().any(|prepared| {
+                prepared.profile.available
+                    && prepared.profile.execution_location
+                        == floe_inference::ExecutionLocation::Device
+                    && prepared.profile.data_recipient == floe_inference::DataRecipient::Device
+            });
+            let has_remote_model = observed.iter().any(|prepared| {
+                prepared.profile.available
+                    && prepared.profile.execution_location
+                        != floe_inference::ExecutionLocation::Device
+            });
+            let server_source_allowed = source_client.is_some()
+                && observed.iter().any(|prepared| {
+                    prepared.profile.available
+                        && prepared.profile.execution_location
+                            == floe_inference::ExecutionLocation::Gateway
+                        && prepared.profile.data_recipient
+                            == floe_inference::DataRecipient::Device
+                });
+            let authority =
+                floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
+                    self.connections.clone(),
+                    person_id.to_string(),
+                    context.device_id.clone(),
+                );
+            let personal_resolver = personal_grants::PersonalDependencyResolver {
+                vault: &self.vault,
+                local_context: &self.local_context,
+                person_id,
+                device_id: &context.device_id,
+            };
+            let remote_reader = match source_client.as_ref() {
+                Some(client) => Some(remote_views::RemoteViewReader::new(
                     &self.vault,
                     client,
                     person_id,
                     client.source().client_id(),
                     client.source().device_id(),
                 )),
-                _ => None,
+                None => None,
             };
+            let remote_resolver = remote_reader
+                .as_ref()
+                .map(|reader| remote_views::RemoteDependencyResolver { reader });
+            let resolver = CompositeDependencyResolver {
+                personal: &personal_resolver,
+                remote: remote_resolver
+                    .as_ref()
+                    .map(|resolver| resolver as &dyn floe_access::DependencyResolver),
+            };
+            let service = floe_inference::InferenceService::new(provider, resolver, authority);
             let attention_reader = PersonalAttentionReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
@@ -172,7 +221,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 vault: &self.vault,
                 person_id: self.vault.person_id(),
             };
-            let policy = policy(&model);
+            let policy = expert_policy();
             let cards = self.vault.enabled_expert_cards().await?;
             let grants = floe_experts::SourceGrants::new(Some(
                 self.vault
@@ -182,7 +231,11 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                     .setup,
             ));
             let experts = ConversationExperts {
-                model: &model,
+                executor: &service,
+                scope,
+                server_source_allowed,
+                has_device_model,
+                has_remote_model,
                 source_client: source_client.as_ref(),
                 policy: &policy,
                 context: &context.agent_context,
@@ -263,7 +316,11 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
 /// This is the injection site for the host port the builtin Experts declare:
 /// every field is a reader or policy decided elsewhere and handed in here.
 pub(crate) struct ConversationExperts<'model> {
-    pub(super) model: &'model Model,
+    pub(super) executor: &'model dyn floe_inference::InferenceExecutor,
+    pub(super) scope: &'model floe_execution::ExecutionScope,
+    pub(super) server_source_allowed: bool,
+    pub(super) has_device_model: bool,
+    pub(super) has_remote_model: bool,
     pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
@@ -283,22 +340,36 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
 }
 
-impl<'model> ConversationExperts<'model> {
+/// One delegated message's Expert host.
+///
+/// Everything an Expert may read belongs to the turn and comes straight from
+/// the turn's host. What belongs to the message alone is the bounded child of
+/// the Task scope its model attempts settle against, and the captured source
+/// dependencies that make its dispatch coverage exact.
+pub(super) struct DelegatedMessageExperts<'turn, 'model, 'msg> {
+    experts: &'turn ConversationExperts<'model>,
+    recorder: CapturingRecorder<'msg>,
+    model: ExpertModelHost<'msg>,
+}
+
+impl<'turn, 'model, 'msg> DelegatedMessageExperts<'turn, 'model, 'msg> {
     /// The injected readers, bound to the consumer identity the Expert reads as.
+    ///
+    /// Reads record through the capturing recorder so the dependencies behind
+    /// this message's views become the exact model-dispatch coverage.
     fn personal_views<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
         consumer_name: &'a str,
     ) -> PersonalViewSource<'a> {
         PersonalViewSource {
-            model: self.model,
-            source_client: self.source_client,
-            policy: self.policy,
+            server_source_allowed: self.experts.server_source_allowed,
+            source_client: self.experts.source_client,
             person_id: request.person_id,
-            people_reader: self.people_reader,
-            wellbeing_reader: self.wellbeing_reader,
-            remote_reader: self.remote_reader,
-            recorder: self.recorder,
+            people_reader: self.experts.people_reader,
+            wellbeing_reader: self.experts.wellbeing_reader,
+            remote_reader: self.experts.remote_reader,
+            recorder: Some(&self.recorder),
             dependency_turn_id: request.invocation_id,
             dependency_result_id: request.invocation_id,
             consumer_name,
@@ -306,31 +377,12 @@ impl<'model> ConversationExperts<'model> {
     }
 }
 
-/// One delegated message's Expert host.
-///
-/// Everything an Expert may read belongs to the turn and comes straight from
-/// the turn's host. What belongs to the message alone is the ledger its model
-/// attempts are charged to: it arrives with the message, and is bound to the
-/// model here for exactly as long as that message runs.
-pub(super) struct DelegatedMessageExperts<'turn, 'model> {
-    experts: &'turn ConversationExperts<'model>,
-    model: ExpertModelHost<'turn, Model>,
-}
-
-impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model> {
-    type Model = ExpertModelHost<'turn, Model>;
+impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model, 'msg> {
+    type Model = ExpertModelHost<'msg>;
     type SourceRead = floe_context::SourceView<serde_json::Value>;
 
     fn model(&self) -> &Self::Model {
         &self.model
-    }
-
-    fn server_model(&self) -> Option<&Self::Model> {
-        matches!(self.experts.model, Model::Server(_)).then_some(&self.model)
-    }
-
-    fn device_model(&self) -> Option<&Self::Model> {
-        matches!(self.experts.model, Model::Foundation(_)).then_some(&self.model)
     }
 
     fn policy(&self) -> &InferencePolicyDecision {
@@ -374,10 +426,10 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         result_id: Uuid,
         dependency: floe_context_contract::ContextDependency,
     ) -> Result<(), AgentFailure> {
-        self.experts
-            .recorder
-            .ok_or(AgentFailure::CapabilityUnavailable)?
-            .record(turn_id, result_id, dependency)
+        if self.experts.recorder.is_none() {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        self.recorder.record(turn_id, result_id, dependency)
     }
 
     fn calendar_views<'a>(
@@ -385,7 +437,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::CalendarContextView>> {
         Box::pin(async move {
-            self.experts
+            self
                 .personal_views(request, ASSISTANT_CONSUMER)
                 .calendar_views(request.deadline, &request.cancellation)
                 .await
@@ -397,7 +449,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::WorkContextView>> {
         Box::pin(async move {
-            self.experts
+            self
                 .personal_views(request, ASSISTANT_CONSUMER)
                 .work_context_views(request.deadline, &request.cancellation)
                 .await
@@ -409,7 +461,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::PeopleView> {
         Box::pin(async move {
-            self.experts
+            self
                 .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
                 .people_view(request.deadline, &request.cancellation)
                 .await
@@ -422,7 +474,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         people: &'a floe_context::PeopleView,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::ConfirmedInteractionView>> {
         Box::pin(async move {
-            self.experts
+            self
                 .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
                 .confirmed_interaction_views(people, request.deadline, &request.cancellation)
                 .await
@@ -434,7 +486,7 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::WellbeingView> {
         Box::pin(async move {
-            self.experts
+            self
                 .personal_views(request, ASSISTANT_CONSUMER)
                 .wellbeing_view(request.deadline, &request.cancellation)
                 .await
@@ -502,11 +554,28 @@ impl<'turn, 'model> BuiltinExpertHost for DelegatedMessageExperts<'turn, 'model>
 const ASSISTANT_CONSUMER: &str = "assistant";
 
 impl InProcessAgent for ConversationExperts<'_> {
-    /// The Experts this turn may offer, for the model it is running on.
+    /// The Experts this turn may offer, for the execution classes observed.
     ///
-    /// Each card states where its Expert runs; nothing here reads the agent id.
+    /// Each card states where its Expert runs; offering unions the eligible
+    /// cards per observed class. Nothing here reads the agent id, and nothing
+    /// selects which profile a call runs on: Inference does that per call.
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        floe_experts::eligible_cards(&self.cards, self.model.expert_eligibility())
+        let mut cards = Vec::new();
+        if self.has_device_model {
+            cards.extend(floe_experts::eligible_cards(
+                &self.cards,
+                floe_agent_contract::ModelPlacement::DeviceLocal,
+            ));
+        }
+        if self.has_remote_model {
+            cards.extend(floe_experts::eligible_cards(
+                &self.cards,
+                floe_agent_contract::ModelPlacement::Remote,
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        cards.retain(|card| seen.insert(card.id.clone()));
+        cards
     }
 
     async fn handle_message(
@@ -543,12 +612,20 @@ impl InProcessAgent for ConversationExperts<'_> {
             deadline: request.deadline,
             cancellation: request.cancellation.clone(),
         };
-        // This message's attempts are charged to the ledger it carries.
+        // This message's attempts settle against a bounded child of the Task
+        // scope, and its source reads are captured for the exact dispatch
+        // coverage. Both bindings last exactly as long as this message runs.
+        let captured = Mutex::new(Vec::new());
         let host = DelegatedMessageExperts {
             experts: self,
+            recorder: CapturingRecorder {
+                inner: self.recorder,
+                captured: &captured,
+            },
             model: ExpertModelHost {
-                model: self.model,
-                usage: request.usage.clone(),
+                executor: self.executor,
+                scope: self.scope,
+                captured: &captured,
             },
         };
         let output = registered_experts()

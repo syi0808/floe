@@ -18,7 +18,6 @@ use floe_actions::{
 use floe_agent_contract::{
     AgentFailure, CancelReason, CapabilityDescriptor, ModelPlacement, SessionProtection,
 };
-use floe_inference::UsageLedger;
 use floe_context::{
     CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
     CalendarTimelineViews, GovernedDependencyResolver, ProjectedCalendarObservation,
@@ -46,7 +45,10 @@ use floe_experts::{
     ExpertInvocation, ExpertResult, InProcessA2ATransport, InProcessAgent,
 };
 use floe_experts_builtin::BuiltinExpertKind;
-use floe_experts_builtin::schedule::{CalendarHistoryBoundary, ExpertHost};
+use floe_experts_builtin::schedule::{
+    CalendarHistoryBoundary, ExpertHost, ScheduleExecutionIntent, ScheduleReasoning,
+};
+use super::super::super::expert_compat::ExpertModelHost;
 use floe_kernel::AGENT_VERSION;
 use floe_vault::{
     CalendarGrantAdmission, ContextEvidenceReader, EncryptedAgentVault, VaultKeyProvider,
@@ -89,7 +91,7 @@ pub struct CalendarAgentTurnResult {
 
 pub struct CalendarExpertEndpointRequest {
     pub person_id: PersonId,
-    pub usage: UsageLedger,
+    pub intent: ScheduleExecutionIntent,
     pub context: AgentContext,
     pub policy: InferencePolicyDecision,
     pub grant: CalendarTimelineGrant,
@@ -117,13 +119,13 @@ impl FloeCore {
     pub async fn run_calendar_expert_endpoint<
         Keys: VaultKeyProvider,
         Access: CalendarSource + CalendarReadAdmission,
-        Model: floe_inference::ModelTransport + Sync,
         Clock: Fn() -> DateTime<Utc> + Sync + Copy,
     >(
         &self,
         vault: &EncryptedAgentVault<Keys>,
         access: &Access,
-        model: &Model,
+        executor: &dyn floe_inference::InferenceExecutor,
+        scope: &floe_execution::ExecutionScope,
         request: CalendarExpertEndpointRequest,
         clock: Clock,
     ) -> Result<CalendarExpertEndpointResult, AgentFailure> {
@@ -134,20 +136,23 @@ impl FloeCore {
             || request.assignment.len() > 2048
             || request.max_output_bytes == 0
             || request.max_output_bytes > AgentBudget::default().max_output_bytes
-            || !request
-                .policy
-                .allowed_placements
-                .contains(&model.placement())
         {
             return Err(AgentFailure::PolicyDenied);
         }
+        // Inference selects the profile per the run's intent and fences the
+        // dispatch; the endpoint only states the class. The legacy models all
+        // reported device-local placement — the candidate server route was
+        // always server-local — so the endpoint authorizes device-local
+        // context and reads sources without assuming remote processing,
+        // exactly as before. Any external dispatch is fenced by Access at
+        // dispatch time under exact-recipient consent.
         let guarded_access = GrantBoundCalendarAccess {
             core: self,
             vault,
             access,
             grant: request.grant.clone(),
             grant_pin: Mutex::new(None),
-            remote_processing: model.placement() == ModelPlacement::Remote,
+            remote_processing: false,
         };
         let views = CalendarTimelineViews::new(
             &self.lease_registry,
@@ -185,7 +190,7 @@ impl FloeCore {
             floe_context::ExpertContextRequest {
                 person_id: views.grant().person_id,
                 policy: &request.policy,
-                placement: model.placement(),
+                placement: ModelPlacement::DeviceLocal,
                 protection: vault.protection(),
                 now: clock(),
                 deadline: request.deadline,
@@ -232,16 +237,20 @@ impl FloeCore {
             cancellation: request.cancellation.clone(),
         };
         let assignments = floe_experts::RegistryAssignments::new(&registry);
-        // This run's model attempts are charged to the ledger it carries.
-        let reasoner = crate::vault_host::conversation_turn::expert_compat::ExpertModelHost {
-            model,
-            usage: request.usage,
+        // This run's model attempts settle against a bounded child of the
+        // Task scope; its source reads are captured for the exact dispatch
+        // coverage. Both bindings last exactly as long as this run.
+        let captured = Mutex::new(Vec::new());
+        let reasoner = ExpertModelHost {
+            executor,
+            scope,
+            captured: &captured,
         };
         let report = ExpertHost {
             assignments: &assignments,
             views: &ExpertTimelineViews(&views),
         }
-        .invoke_with_model(invocation, &reasoner, &request.policy)
+        .invoke_with_model(invocation, &reasoner, &request.policy, request.intent)
         .await?;
         check_running(request.deadline, &request.cancellation)?;
         views
@@ -1201,7 +1210,7 @@ impl<
         self.validate().await?;
         let assignments = floe_experts::RegistryAssignments::new(&self.registry);
         // This message's model attempts are charged to the ledger it carries.
-        let model = super::super::super::expert_compat::ExpertModelHost {
+        let model = super::legacy_model::LegacyScheduleModelHost {
             model: self.model,
             usage: request.usage.clone(),
         };
@@ -1249,6 +1258,10 @@ impl<
             },
             &model,
             &self.policy,
+            // Deferred to 3-D/3-E with the rest of the agent turn: the turn
+            // reasons on its own model where that model runs, and its legacy
+            // reasoner ignores the requirement.
+            ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute),
         )
         .await?;
         let summary = result

@@ -19,9 +19,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     crate::require_mandatory_source(host, request)?;
-    let model = host
-        .server_model()
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let model = host.model();
     let source_view = host
         .read_source_view(
             request,

@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use floe_agent_contract::prompts::PromptAssembly;
 use floe_agent_contract::{
-    AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall, SessionProtection,
+    AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    ExpertModelRequirement, SessionProtection,
 };
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
@@ -84,12 +85,15 @@ fn admissible(
     Ok(())
 }
 
-/// The one bounded model call an Expert makes, with its context authorized for
-/// the placement it is about to run on.
+/// The one bounded model call an Expert makes, stating what execution class it
+/// requires. The pre-check validates the context shape only; transfer
+/// authority is the Access dispatch fence inside canonical Inference, never
+/// this call.
 #[allow(clippy::too_many_arguments)]
 async fn run_expert_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
+    requirement: ExpertModelRequirement,
     person_id: PersonId,
     invocation_id: Uuid,
     assignment: &str,
@@ -103,7 +107,7 @@ async fn run_expert_model<Model: ExpertModel>(
     cancellation: &floe_execution::Cancellation,
 ) -> Result<ExpertModelAnswer, AgentFailure> {
     policy.authorize(
-        model.placement(),
+        floe_agent_contract::ModelPlacement::DeviceLocal,
         SessionProtection::Encrypted,
         &context,
         u64::try_from(current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
@@ -116,6 +120,7 @@ async fn run_expert_model<Model: ExpertModel>(
             policy: policy.clone(),
             context,
             assignment: assignment.to_owned(),
+            requirement,
             max_output_bytes: max_output_bytes.min(8192),
             max_tokens: max_model_tokens,
             max_cost_micros: max_model_cost_micros,
@@ -136,6 +141,7 @@ async fn run_expert_model<Model: ExpertModel>(
 pub(crate) async fn run_mail_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
+    requirement: ExpertModelRequirement,
     invocation: &MailExpertInvocation,
     prompt: PromptAssembly,
     mut context: AgentContext,
@@ -159,6 +165,7 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
     run_expert_model(
         model,
         policy,
+        requirement,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -178,6 +185,7 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
 pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
+    requirement: ExpertModelRequirement,
     invocation: &PortfolioExpertInvocation,
     evidence: ContextEvidence,
     prompt: PromptAssembly,
@@ -194,6 +202,7 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
     let answer = run_expert_model(
         model,
         policy,
+        requirement,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,
@@ -214,6 +223,7 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
 pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
+    requirement: ExpertModelRequirement,
     invocation: &PersonalExpertInvocation,
     evidence: Vec<ContextEvidence>,
     prompt: PromptAssembly,
@@ -230,6 +240,7 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertMo
     let answer = run_expert_model(
         model,
         policy,
+        requirement,
         invocation.person_id,
         invocation.invocation_id,
         &invocation.assignment,

@@ -1057,7 +1057,6 @@ dependencies = [
  "floe-agent-contract",
  "floe-context-contract",
  "floe-execution",
- "floe-inference",
  "floe-kernel",
  "serde",
  "serde_json",

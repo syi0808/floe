@@ -91,6 +91,19 @@ pub enum RecipientConstraint {
     External { recipient: String, consent: bool },
 }
 
+/// What execution class a domain caller requires.
+///
+/// Inference still selects the profile; the caller only constrains the class.
+/// `DeviceOnly` admits device execution with a device recipient only;
+/// `RemoteOnly` admits off-device execution (gateway or remote).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceExecutionConstraint {
+    Any,
+    DeviceOnly,
+    RemoteOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RouteRequest {
     pub purpose: ModelPurpose,

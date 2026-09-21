@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context_contract::{DataClass, ModelPlacement};
+use floe_context_contract::DataClass;
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 
@@ -19,6 +19,25 @@ use crate::{
     AgentContext, InferencePolicyDecision, ModelReplay, ProviderReplay, ports::BoxFuture,
     prompts::PromptAssembly,
 };
+
+/// The consumer delegated built-in Experts share on canonical Inference.
+///
+/// Experts run under the everyday-assistance purpose with their own consumer,
+/// never as `conversation.root`: the root profile stays root-only while the
+/// product purpose still describes delegated Expert work.
+pub const EXPERT_INFERENCE_CONSUMER: &str = "experts.builtin";
+
+/// What execution class an Expert requires.
+///
+/// Experts state the class; Inference selects the provider. An Expert whose
+/// judgment needs one class states it and lets dispatch fail closed when no
+/// profile satisfies it, rather than silently accepting another class.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ExpertModelRequirement {
+    Any,
+    DeviceOnly,
+    RemoteOnly,
+}
 
 /// One assignment, with the context and the bounds it must be answered under.
 pub struct ExpertModelCall {
@@ -29,6 +48,9 @@ pub struct ExpertModelCall {
     pub policy: InferencePolicyDecision,
     pub context: AgentContext,
     pub assignment: String,
+    /// What execution class this call requires. Carried as intent; the model
+    /// owner maps it to an execution constraint, never to a provider.
+    pub requirement: ExpertModelRequirement,
     pub max_output_bytes: usize,
     pub max_tokens: u64,
     pub max_cost_micros: u64,
@@ -46,14 +68,12 @@ pub struct ExpertModelAnswer {
 
 /// The model an Expert reasons on.
 pub trait ExpertModel: Sync {
-    /// Where this model runs. An Expert whose judgment needs one placement
-    /// refuses rather than silently accepting the other.
-    fn placement(&self) -> ModelPlacement;
-
     /// Answer one assignment.
     ///
     /// Anything but a single answer is `InvalidModelOutput`: the caller asked
-    /// one question and is owed one reply.
+    /// one question and is owed one reply. The call's requirement states what
+    /// execution class the Expert needs; which provider satisfies it is the
+    /// model owner's answer, never the Expert's.
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
@@ -120,6 +140,9 @@ pub struct ExpertReasoningStep {
     pub prompt: PromptAssembly,
     pub policy: InferencePolicyDecision,
     pub context: AgentContext,
+    /// What execution class this step requires. Carried as intent; the model
+    /// owner maps it to an execution constraint, never to a provider.
+    pub requirement: ExpertModelRequirement,
     pub transcript: Vec<ExpertTranscriptEntry>,
     /// The capabilities the Expert is willing to be asked for on this step. An
     /// empty list is how it says it has none left to give.
@@ -142,14 +165,6 @@ pub struct ExpertStepOutcome {
 }
 
 impl ExpertStepOutcome {
-    /// How many of the step's outputs ask for a capability to be run.
-    pub fn call_count(&self) -> usize {
-        self.steps
-            .iter()
-            .filter(|step| matches!(step, ExpertStep::Call { .. }))
-            .count()
-    }
-
     /// The replay receipt for one call in this step, if the provider gave one.
     pub fn replay_for(&self, call_index: usize) -> Result<Option<ProviderReplay>, AgentFailure> {
         self.replay
@@ -163,6 +178,14 @@ impl ExpertStepOutcome {
                 Ok(replay)
             })
             .transpose()
+    }
+
+    /// How many of the step's outputs ask for a capability to be run.
+    pub fn call_count(&self) -> usize {
+        self.steps
+            .iter()
+            .filter(|step| matches!(step, ExpertStep::Call { .. }))
+            .count()
     }
 }
 

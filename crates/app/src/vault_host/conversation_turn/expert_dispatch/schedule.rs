@@ -27,7 +27,7 @@ use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvid
 // BOUNDARY(stage-3): the Schedule Expert still reaches the provider adapter directly.
 // The acquisition must arrive through an owner-defined source port.
 use floe_provider_adapters::control::{
-    RemoteAuthorizationClient, calendar_query_sha256, parse_calendar_challenge,
+    PreparedServerSource, RemoteAuthorizationClient, calendar_query_sha256, parse_calendar_challenge,
 };
 use floe_provider_adapters::sources::native_acquisition::{
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
@@ -43,10 +43,13 @@ use floe_provider_adapters::sources::ServerSourceClient;
 // The legacy calendar turn's own request type is named by the host regressions
 // that still cover that path; the module stays inside the vault host.
 pub(in crate::vault_host) mod agent;
+pub(in crate::vault_host) mod legacy_model;
 
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 
-use super::super::expert_compat::{EndpointConnectionStore, Model, external_transfer_consent};
+use super::super::CompositeDependencyResolver;
+use super::super::expert_compat::EndpointConnectionStore;
+use crate::vault_host::{personal_grants, remote_views};
 
 /// The endpoint the delegating Run invokes for the Schedule Expert.
 ///
@@ -94,10 +97,11 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             if selected.ambiguous {
                 return Err(AgentFailure::AccessReviewRequired);
             }
-            // Legacy Schedule compatibility, prepared here because an actual
+            // Canonical Schedule composition, prepared here because an actual
             // delegated endpoint runs: the stored credential is loaded from
-            // the injected store and admitted for source and legacy model
-            // use. No pre-resolved route exists.
+            // the injected store and admitted for source and model use.
+            // Inference selects the profile per the run's intent; the plan
+            // only states the execution class. No pre-resolved route exists.
             let person_id = self.vault.person_id();
             let stored = floe_inference::SavedConnectionStore::load(&self.connections)?;
             let source_client = ServerSourceClient::prepare(
@@ -115,19 +119,48 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                 chrono::Local::now(),
                 chrono::Utc::now(),
             )?;
-            // The Expert decided where it may reason; the host only builds it.
-            let model = match plan.reasoning {
-                schedule::ScheduleReasoning::OnDevice => {
-                    Model::for_stored_connection(None, &person_id.to_string(), &context.device_id)?
-                }
-                schedule::ScheduleReasoning::ConversationRoute => {
-                    Model::for_stored_connection(
-                        stored,
-                        &person_id.to_string(),
-                        &context.device_id,
-                    )?
-                }
+            // The Expert decided where it may reason; the host only states it.
+            let intent = schedule::ScheduleExecutionIntent::from_reasoning(plan.reasoning);
+            let provider =
+                floe_provider_adapters::models::RootModelProvider::for_saved_connection_scoped(
+                    stored,
+                    &person_id.to_string(),
+                    &context.device_id,
+                    floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                    floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                )?;
+            let authority =
+                floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
+                    self.connections.clone(),
+                    person_id.to_string(),
+                    context.device_id.clone(),
+                );
+            let personal_resolver = personal_grants::PersonalDependencyResolver {
+                vault: &self.vault,
+                local_context: &self.local_context,
+                person_id,
+                device_id: &context.device_id,
             };
+            let remote_reader = match source_client.as_ref() {
+                Some(client) => Some(remote_views::RemoteViewReader::new(
+                    &self.vault,
+                    client,
+                    person_id,
+                    client.source().client_id(),
+                    client.source().device_id(),
+                )),
+                None => None,
+            };
+            let remote_resolver = remote_reader
+                .as_ref()
+                .map(|reader| remote_views::RemoteDependencyResolver { reader });
+            let resolver = CompositeDependencyResolver {
+                personal: &personal_resolver,
+                remote: remote_resolver
+                    .as_ref()
+                    .map(|resolver| resolver as &dyn floe_access::DependencyResolver),
+            };
+            let service = floe_inference::InferenceService::new(provider, resolver, authority);
             let remote_backend = match source_client.as_ref() {
                 Some(client) if plan.acquire_remotely => Some(VaultRemoteCalendarBackend::new(
                     &self.vault,
@@ -169,7 +202,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                     selected.binding.calendar_ids.clone(),
                     selected.setup.setup_id.to_string(),
                     selected.binding.connection_revision,
-                    &model,
                     &self.local_context,
                     &self.core,
                     selected.binding.source_authority,
@@ -178,22 +210,18 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                         .map(|backend| backend as &dyn RemoteCalendarBackend),
                 ),
             };
-            let placement = floe_inference::ModelTransport::placement(&model);
             let endpoint = self
                 .core
                 .run_calendar_expert_endpoint(
                     &self.vault,
                     &access,
-                    &model,
+                    &service,
+                    scope,
                     CalendarExpertEndpointRequest {
                         person_id: self.vault.person_id(),
-                        usage: Default::default(),
+                        intent,
                         context: context.agent_context.clone(),
-                        policy: schedule::run_policy(
-                            placement,
-                            selected.binding.data_class(),
-                            external_transfer_consent(placement),
-                        ),
+                        policy: schedule::run_policy(selected.binding.data_class()),
                         grant: CalendarTimelineGrant {
                             person_id: self.vault.person_id(),
                             handle: selected.setup.view_handle,
@@ -471,14 +499,14 @@ fn validate_active_connection(
     Ok(())
 }
 
-enum Access<'model> {
+enum Access<'host> {
     Fixture(FixtureAccess),
-    Device(DeviceCalendarAccess<'model>),
+    Device(DeviceCalendarAccess<'host>),
     Native(NativeCalendarReadAccess),
-    Remote(RemoteCalendarAccess<'model>),
+    Remote(RemoteCalendarAccess<'host>),
 }
 
-impl<'model> Access<'model> {
+impl<'host> Access<'host> {
     fn new(
         person_id: PersonId,
         provider: CalendarProvider,
@@ -486,11 +514,10 @@ impl<'model> Access<'model> {
         calendar_ids: Vec<String>,
         connection_id: String,
         connection_revision: u64,
-        model: &'model Model,
-        local_context: &'model LocalContextHost,
-        core: &'model crate::FloeCore,
+        local_context: &'host LocalContextHost,
+        core: &'host crate::FloeCore,
         source_authority: Option<floe_context_contract::SourceAuthority>,
-        remote_backend: Option<&'model dyn RemoteCalendarBackend>,
+        remote_backend: Option<&'host dyn RemoteCalendarBackend>,
     ) -> Self {
         match provider {
             CalendarProvider::Fixture => Self::Fixture(FixtureAccess {
@@ -523,20 +550,14 @@ impl<'model> Access<'model> {
                     })
                 }
             }
-            CalendarProvider::Google | CalendarProvider::Microsoft => match model {
-                Model::Server(_) => Self::Remote(RemoteCalendarAccess {
+            CalendarProvider::Google | CalendarProvider::Microsoft => {
+                Self::Remote(RemoteCalendarAccess {
                     backend: remote_backend,
                     provider,
                     device_id,
                     calendar_ids,
-                }),
-                Model::Foundation(_) => Self::Remote(RemoteCalendarAccess {
-                    backend: remote_backend,
-                    provider,
-                    device_id,
-                    calendar_ids,
-                }),
-            },
+                })
+            }
             CalendarProvider::Android => Self::Device(DeviceCalendarAccess {
                 core,
                 connection_id,
@@ -893,14 +914,14 @@ struct VaultRemoteCalendarBackend<'host, Keys> {
     provider: CalendarProvider,
     calendar_ids: Vec<String>,
     connection_revision: u64,
-    pairing: floe_inference::RoutePairing,
+    prepared: &'host PreparedServerSource,
 }
 
 impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
     fn new(
         vault: &'host floe_vault::EncryptedAgentVault<Keys>,
         core: &'host crate::FloeCore,
-        source: &ServerSourceClient,
+        source: &'host ServerSourceClient,
         person_id: PersonId,
         provider: CalendarProvider,
         calendar_ids: Vec<String>,
@@ -918,11 +939,7 @@ impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
             provider,
             calendar_ids,
             connection_revision,
-            pairing: floe_inference::RoutePairing {
-                client_id: prepared.client_id().to_owned(),
-                person_id: prepared.person_id().to_owned(),
-                device_id: prepared.device_id().to_owned(),
-            },
+            prepared,
         })
     }
 
@@ -972,9 +989,9 @@ impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
             .verify_remote_calendar_source_preview(
                 &preview.descriptor_b64url,
                 &preview.producer_signature,
-                &self.pairing.person_id,
-                &self.pairing.client_id,
-                &self.pairing.device_id,
+                self.prepared.person_id(),
+                self.prepared.client_id(),
+                self.prepared.device_id(),
                 connector,
                 &connection.connection_id,
                 self.calendar_ids
@@ -985,8 +1002,8 @@ impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
         if source.person_id != self.person_id.to_string()
             || source.connector_id != connector
             || source.connection_id != connection.connection_id
-            || source.client_id != self.pairing.client_id
-            || source.device_id != self.pairing.device_id
+            || source.client_id != self.prepared.client_id()
+            || source.device_id != self.prepared.device_id()
             || source.execution_owner.is_empty()
         {
             return Err(AgentFailure::StaleContext);
@@ -1017,8 +1034,8 @@ impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
             } else {
                 "release".into()
             },
-            client_id: self.pairing.client_id.clone(),
-            device_id: self.pairing.device_id.clone(),
+            client_id: self.prepared.client_id().to_owned(),
+            device_id: self.prepared.device_id().to_owned(),
             challenge_id,
             admission_id,
             query_sha256,
@@ -1061,7 +1078,7 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
         Box::pin(async move {
             if request.person_id != self.person_id
                 || request.provider != self.provider
-                || request.device_id != self.pairing.device_id
+                || request.device_id != self.prepared.device_id()
                 || request.calendar_ids != self.calendar_ids
                 || request.calendar_ids.len() != 1
             {
@@ -1134,8 +1151,8 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
                 .await?;
             let admission_parts = parse_calendar_challenge(&challenge.challenge_b64url)?;
             if admission_parts.person_id != self.person_id.to_string()
-                || admission_parts.client_id != self.pairing.client_id
-                || admission_parts.device_id != self.pairing.device_id
+                || admission_parts.client_id != self.prepared.client_id()
+                || admission_parts.device_id != self.prepared.device_id()
                 || admission_parts.operation != "admission"
             {
                 return Err(AgentFailure::PolicyDenied);
@@ -1174,8 +1191,8 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
                 .await?;
             let release_parts = parse_calendar_challenge(&release.challenge_b64url)?;
             if release_parts.person_id != self.person_id.to_string()
-                || release_parts.client_id != self.pairing.client_id
-                || release_parts.device_id != self.pairing.device_id
+                || release_parts.client_id != self.prepared.client_id()
+                || release_parts.device_id != self.prepared.device_id()
                 || release_parts.operation != "release"
                 || release_parts.admission_id != admission_parts.challenge_id
                 || release_parts.query_sha256 != admission_expected.query_sha256
@@ -1214,8 +1231,8 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
     }
 }
 
-struct RemoteCalendarAccess<'model> {
-    backend: Option<&'model dyn RemoteCalendarBackend>,
+struct RemoteCalendarAccess<'host> {
+    backend: Option<&'host dyn RemoteCalendarBackend>,
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
@@ -1392,7 +1409,7 @@ mod tests {
     use crate::FloeCore;
     use crate::local_context::{CalendarObservationPublication, LocalContextCommand};
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use floe_agent_contract::{ModelPlacement, TransferConsent};
+    use floe_agent_contract::{DataClass, TransferConsent};
     use floe_context_contract::CalendarScope;
     use floe_context_contract::{
         ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantOperation,
@@ -2036,17 +2053,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_schedule_model_never_consents_to_external_transfer() {
-        // No pre-resolved recipient exists anymore: legacy model calls run
-        // server-local only, so external transfer is never consented here.
-        assert_eq!(
-            external_transfer_consent(ModelPlacement::Remote),
-            TransferConsent::NotGranted
-        );
-        assert_eq!(
-            external_transfer_consent(ModelPlacement::DeviceLocal),
-            TransferConsent::NotGranted
-        );
+    fn schedule_run_policy_never_consents_to_external_transfer() {
+        // No pre-resolved recipient exists: the run policy grants no external
+        // transfer, and Inference fences the dispatch per the run's intent.
+        // A paired server still receives only server-local calls the gateway
+        // route asserts on the wire.
+        for class in [DataClass::Personal, DataClass::Synthetic] {
+            assert_eq!(
+                schedule::run_policy(class).external_transfer_consent,
+                TransferConsent::NotGranted
+            );
+        }
     }
 
     #[test]
@@ -2222,12 +2239,6 @@ mod tests {
                     Some(&connection),
                 )
                 .unwrap();
-            let model = Model::for_stored_connection(
-                None,
-                &setup.person_id.to_string(),
-                "device-a",
-            )
-            .unwrap();
             let access = Access::new(
                 setup.person_id,
                 provider,
@@ -2235,7 +2246,6 @@ mod tests {
                 binding.calendar_ids.clone(),
                 connection.connection_id.clone(),
                 connection.revision,
-                &model,
                 &store,
                 &core,
                 Some(connection.source_authority),

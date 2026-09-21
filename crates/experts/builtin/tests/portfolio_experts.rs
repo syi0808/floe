@@ -5,7 +5,7 @@ use floe_agent_contract::PersonId;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
     AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    InferencePolicyDecision,
+    ExpertModelRequirement, InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
 use floe_context_contract::{LogisticsItem, LogisticsItemKind};
@@ -34,10 +34,6 @@ impl Model {
 }
 
 impl ExpertModel for Model {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
@@ -163,6 +159,8 @@ async fn work_and_life_experts_return_source_linked_advice_without_action_author
     let calls = model.calls.lock().unwrap();
     assert_eq!(calls[0].prompt.role, PromptRole::WorkContextExpert);
     assert_eq!(calls[1].prompt.role, PromptRole::LifeLogisticsExpert);
+    assert_eq!(calls[0].requirement, ExpertModelRequirement::RemoteOnly);
+    assert_eq!(calls[1].requirement, ExpertModelRequirement::RemoteOnly);
     assert!(calls.iter().all(|call| call.assignment.trim().len() > 0));
 }
 
@@ -206,10 +204,6 @@ async fn an_expert_refuses_an_answer_that_overspends_or_overflows_its_bound() {
     }
 
     impl ExpertModel for Overspending {
-        fn placement(&self) -> ModelPlacement {
-            ModelPlacement::DeviceLocal
-        }
-
         fn answer<'a>(
             &'a self,
             _: ExpertModelCall,

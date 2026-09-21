@@ -87,13 +87,15 @@ async fn fetch_canonical_model_purposes(
     Ok(inventory)
 }
 
-fn canonical_server_profile(
+fn canonical_server_profile_for(
     inventory: PurposeInventory,
+    purpose: &str,
+    consumer: &str,
 ) -> Result<floe_inference::ModelProfile, AgentFailure> {
     let availability = inventory
         .purposes
         .into_iter()
-        .find(|(name, _)| name == floe_inference::EVERYDAY_ASSISTANCE_PURPOSE)
+        .find(|(name, _)| name == purpose)
         .map(|(_, purpose)| purpose.into_availability())
         .ok_or(AgentFailure::ServerModelInvalidOutput)?;
     let (execution_location, data_recipient) = match (
@@ -117,9 +119,8 @@ fn canonical_server_profile(
     };
     Ok(floe_inference::ModelProfile {
         id: "server-model".into(),
-        purpose: floe_inference::ModelPurpose::new(floe_inference::EVERYDAY_ASSISTANCE_PURPOSE)
-            .ok_or(AgentFailure::InvalidInput)?,
-        consumer: floe_inference::ModelConsumer::new("conversation.root")
+        purpose: floe_inference::ModelPurpose::new(purpose).ok_or(AgentFailure::InvalidInput)?,
+        consumer: floe_inference::ModelConsumer::new(consumer)
             .ok_or(AgentFailure::InvalidInput)?,
         execution_location,
         data_recipient,
@@ -134,10 +135,27 @@ pub struct ServerModelProvider {
     base_url: String,
     bearer_token: String,
     allow_external: bool,
+    purpose: floe_inference::ModelPurpose,
+    consumer: floe_inference::ModelConsumer,
 }
 
 impl ServerModelProvider {
     pub fn new(base_url: String, bearer_token: String) -> Result<Self, AgentFailure> {
+        Self::scoped(
+            base_url,
+            bearer_token,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_inference::CANONICAL_MODEL_CONSUMER,
+        )
+    }
+
+    /// Observe the server profile under a domain purpose/consumer.
+    pub fn scoped(
+        base_url: String,
+        bearer_token: String,
+        purpose: &str,
+        consumer: &str,
+    ) -> Result<Self, AgentFailure> {
         if !base_url.starts_with("http://127.0.0.1:") || bearer_token.len() < 32 {
             return Err(AgentFailure::InvalidInput);
         }
@@ -145,6 +163,10 @@ impl ServerModelProvider {
             base_url,
             bearer_token,
             allow_external: false,
+            purpose: floe_inference::ModelPurpose::new(purpose)
+                .ok_or(AgentFailure::InvalidInput)?,
+            consumer: floe_inference::ModelConsumer::new(consumer)
+                .ok_or(AgentFailure::InvalidInput)?,
         })
     }
 
@@ -156,9 +178,24 @@ impl ServerModelProvider {
     pub fn for_connection(
         connection: &floe_inference::RemoteModelConnection,
     ) -> Result<Self, AgentFailure> {
-        let provider = Self::new(
+        Self::for_connection_scoped(
+            connection,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_inference::CANONICAL_MODEL_CONSUMER,
+        )
+    }
+
+    /// Build from an admitted saved connection under a domain purpose/consumer.
+    pub fn for_connection_scoped(
+        connection: &floe_inference::RemoteModelConnection,
+        purpose: &str,
+        consumer: &str,
+    ) -> Result<Self, AgentFailure> {
+        let provider = Self::scoped(
             connection.base_url.clone(),
             connection.bearer_token.clone(),
+            purpose,
+            consumer,
         )?;
         Ok(Self {
             allow_external: connection.allow_external,
@@ -171,6 +208,7 @@ pub struct PreparedServerTransport {
     base_url: String,
     bearer_token: String,
     allow_external: bool,
+    purpose: String,
     recipient: Option<String>,
     model_calls: CallLimiter,
 }
@@ -198,7 +236,7 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
         let input = canonical_model_input(&request)?;
         let body = json!({
             "schema_version": 1,
-            "purpose": floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            "purpose": self.purpose,
             "data_classes": request.input_data_classes,
             "allow_external": self.allow_external,
             "expected_recipient": self.recipient,
@@ -271,7 +309,7 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
             "server_local"
         };
         if response.schema_version != 1
-            || response.purpose != floe_inference::EVERYDAY_ASSISTANCE_PURPOSE
+            || response.purpose != self.purpose
             || response.trace_id.len() != 32
             || response.routing.external_transfer != self.recipient.is_some()
             || response.routing.placement != expected_placement
@@ -517,7 +555,11 @@ impl floe_inference::ModelProvider for ServerModelProvider {
         else {
             return Vec::new();
         };
-        let Ok(profile) = canonical_server_profile(inventory) else {
+        let Ok(profile) = canonical_server_profile_for(
+            inventory,
+            self.purpose.as_str(),
+            self.consumer.as_str(),
+        ) else {
             return Vec::new();
         };
         // The prepared transport is pinned to the exact recipient the server
@@ -533,6 +575,7 @@ impl floe_inference::ModelProvider for ServerModelProvider {
                 base_url: self.base_url.clone(),
                 bearer_token: self.bearer_token.clone(),
                 allow_external: self.allow_external,
+                purpose: self.purpose.as_str().to_owned(),
                 recipient,
                 model_calls: model_calls().clone(),
             },
@@ -1680,7 +1723,12 @@ mod tests {
         let inventory = fetch_canonical_model_purposes(&base_url, &"a".repeat(32))
             .await
             .unwrap();
-        let profile = canonical_server_profile(inventory).unwrap();
+        let profile = canonical_server_profile_for(
+            inventory,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_inference::CANONICAL_MODEL_CONSUMER,
+        )
+        .unwrap();
         assert_eq!(profile.id, "server-model");
         assert_eq!(
             profile.data_recipient,
@@ -1688,6 +1736,43 @@ mod tests {
         );
         // Only the single purposes call happened; a second connectors call
         // would have left the test server pending and this await would hang.
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn scoped_observe_stamps_the_domain_pair_and_posts_its_purpose() {
+        use floe_inference::ModelProvider;
+        let (base_url, server) = inventory_server(vec![(
+            "/v1/inference-purposes",
+            json!({
+                "schema_version": 1,
+                "purposes": {
+                    "everyday_assistance": {
+                        "available": true,
+                        "requires_external_consent": false,
+                        "placement": "server_local"
+                    }
+                }
+            }),
+        )])
+        .await;
+        let provider = ServerModelProvider::scoped(
+            base_url,
+            "a".repeat(32),
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        )
+        .unwrap();
+        let observed = provider.observe_profiles().await;
+        assert_eq!(observed.len(), 1);
+        assert_eq!(
+            observed[0].profile.purpose.as_str(),
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE
+        );
+        assert_eq!(
+            observed[0].profile.consumer.as_str(),
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER
+        );
         server.await.unwrap();
     }
 

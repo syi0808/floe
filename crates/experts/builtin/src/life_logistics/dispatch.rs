@@ -28,9 +28,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )?;
     let view: LogisticsView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let model = host
-        .server_model()
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let model = host.model();
     let result: LifeLogisticsExpertResult = run_life_logistics_expert(
         model,
         host.policy(),

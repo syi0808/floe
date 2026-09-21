@@ -131,16 +131,10 @@ pub trait BuiltinExpertHost: Sync {
     /// One source read this Expert holds open while it reasons over it.
     type SourceRead: AuthorizedRead;
 
-    /// The model this turn runs on, whatever its placement.
+    /// The model this turn runs on. Experts state the execution class they
+    /// require on each call; which provider satisfies it is the model
+    /// owner's answer, never a host-side selection.
     fn model(&self) -> &Self::Model;
-
-    /// The same model, but only when it is the paired server model. An Expert
-    /// whose judgment needs server capability refuses rather than silently
-    /// downgrading to the device model.
-    fn server_model(&self) -> Option<&Self::Model>;
-
-    /// The same model, but only when it is the on-device model.
-    fn device_model(&self) -> Option<&Self::Model>;
 
     fn policy(&self) -> &InferencePolicyDecision;
 

@@ -8,7 +8,9 @@ use floe_agent_contract::{
 use floe_execution::ExecutionScope;
 use uuid::Uuid;
 
-use crate::api::{DataRecipient, ExecutionLocation, ModelProfile};
+use crate::api::{
+    DataRecipient, ExecutionLocation, InferenceExecutionConstraint, ModelProfile,
+};
 use crate::ports::model_provider::{
     CanonicalModelRequest, ModelProvider, PreparedModelProfile, PreparedModelTransport,
 };
@@ -40,6 +42,22 @@ impl<Provider, Resolver, Authority> InferenceService<Provider, Resolver, Authori
     }
 }
 
+/// The one Inference-owned execution entry for domain callers.
+///
+/// `InferenceService` is the only implementation: candidate planning, Access
+/// fencing, attempt lifecycle, transport fallback and usage settlement live
+/// there exactly once. The root `ModelPort` adapter and every domain caller
+/// (delegated Experts, Schedule, Knowledge Learner) share this path; domain
+/// callers add only their purpose/consumer and an execution constraint.
+pub trait InferenceExecutor: Sync {
+    fn execute<'a>(
+        &'a self,
+        request: ModelRequest,
+        scope: &'a ExecutionScope,
+        constraint: InferenceExecutionConstraint,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>;
+}
+
 impl<Provider, Resolver, Authority> ModelPort for InferenceService<Provider, Resolver, Authority>
 where
     Provider: ModelProvider + Sync,
@@ -52,7 +70,35 @@ where
         request: ModelRequest,
         scope: &'a ExecutionScope,
     ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
-        Box::pin(async move { self.generate_inner(request, scope).await })
+        Box::pin(async move {
+            // Purpose/consumer must agree across the canonical chain. The root
+            // uses one purpose and one consumer; App no longer invents another
+            // through legacy policy.
+            if request.purpose != CANONICAL_MODEL_PURPOSE
+                || request.consumer != CANONICAL_MODEL_CONSUMER
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            InferenceExecutor::execute(self, request, scope, InferenceExecutionConstraint::Any)
+                .await
+        })
+    }
+}
+
+impl<Provider, Resolver, Authority> InferenceExecutor for InferenceService<Provider, Resolver, Authority>
+where
+    Provider: ModelProvider + Sync,
+    Provider::Prepared: Send,
+    Resolver: DependencyResolver,
+    Authority: ModelDispatchRecipientAuthority,
+{
+    fn execute<'a>(
+        &'a self,
+        request: ModelRequest,
+        scope: &'a ExecutionScope,
+        constraint: InferenceExecutionConstraint,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        Box::pin(async move { self.generate_inner(request, scope, constraint).await })
     }
 }
 
@@ -67,6 +113,7 @@ where
         &self,
         request: ModelRequest,
         scope: &ExecutionScope,
+        constraint: InferenceExecutionConstraint,
     ) -> Result<ModelResponse, AgentFailure> {
         request.validate()?;
         if scope.cancellation().is_cancelled() {
@@ -75,20 +122,16 @@ where
         if tokio::time::Instant::now() >= scope.deadline() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        // Purpose/consumer must agree across the canonical chain. The root
-        // uses one purpose and one consumer; App no longer invents another
-        // through legacy policy.
-        if request.purpose != CANONICAL_MODEL_PURPOSE
-            || request.consumer != CANONICAL_MODEL_CONSUMER
-            || request.projection.envelope.scoped_instructions.purpose != request.purpose
-        {
+        // The envelope purpose must agree with the request purpose on every
+        // path, root or domain; only the root pins which pair it must be.
+        if request.projection.envelope.scoped_instructions.purpose != request.purpose {
             return Err(AgentFailure::InvalidInput);
         }
         let person_id = parse_person(&request.principal)?;
 
         // Observe non-secret profiles. Secrets stay inside prepared transport.
         let observed = self.provider.observe_profiles().await;
-        let candidates = plan_candidates(&observed, &request)?;
+        let candidates = plan_candidates(&observed, &request, constraint)?;
         // Explicit: exactly one candidate, never silently falls back.
         // Auto: ranked local-first candidates with same-rank ambiguity denied.
         let mut last_failure: Option<AgentFailure> = None;
@@ -287,13 +330,14 @@ fn rank_profile(profile: &ModelProfile) -> u8 {
 fn plan_candidates<'a, Prepared>(
     observed: &'a [PreparedModelProfile<Prepared>],
     request: &ModelRequest,
+    constraint: InferenceExecutionConstraint,
 ) -> Result<Vec<&'a PreparedModelProfile<Prepared>>, AgentFailure> {
     if let Some(preferred) = request.preferred_profile_id.as_deref() {
         let exact = observed
             .iter()
             .find(|candidate| candidate.profile.id == preferred)
             .ok_or(AgentFailure::ModelUnavailable)?;
-        validate_candidate(&exact.profile, request)?;
+        validate_candidate(&exact.profile, request, constraint)?;
         return Ok(vec![exact]);
     }
     let mut eligible: Vec<&PreparedModelProfile<Prepared>> = observed
@@ -303,6 +347,7 @@ fn plan_candidates<'a, Prepared>(
         .filter(|candidate| candidate.profile.consumer.as_str() == request.consumer)
         .filter(|candidate| capabilities_hold(&candidate.profile, request))
         .filter(|candidate| placement_consistent(&candidate.profile))
+        .filter(|candidate| constraint_holds(&candidate.profile, constraint))
         .collect();
     if eligible.is_empty() {
         return Err(AgentFailure::ModelUnavailable);
@@ -322,7 +367,11 @@ fn plan_candidates<'a, Prepared>(
     Ok(eligible)
 }
 
-fn validate_candidate(profile: &ModelProfile, request: &ModelRequest) -> Result<(), AgentFailure> {
+fn validate_candidate(
+    profile: &ModelProfile,
+    request: &ModelRequest,
+    constraint: InferenceExecutionConstraint,
+) -> Result<(), AgentFailure> {
     if !profile.available {
         return Err(AgentFailure::ModelUnavailable);
     }
@@ -330,10 +379,25 @@ fn validate_candidate(profile: &ModelProfile, request: &ModelRequest) -> Result<
         || profile.consumer.as_str() != request.consumer
         || !capabilities_hold(profile, request)
         || !placement_consistent(profile)
+        || !constraint_holds(profile, constraint)
     {
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(())
+}
+
+/// Whether one observed profile satisfies the caller's execution class.
+fn constraint_holds(profile: &ModelProfile, constraint: InferenceExecutionConstraint) -> bool {
+    match constraint {
+        InferenceExecutionConstraint::Any => true,
+        InferenceExecutionConstraint::DeviceOnly => {
+            profile.execution_location == ExecutionLocation::Device
+                && profile.data_recipient == DataRecipient::Device
+        }
+        InferenceExecutionConstraint::RemoteOnly => {
+            profile.execution_location != ExecutionLocation::Device
+        }
+    }
 }
 
 fn capabilities_hold(profile: &ModelProfile, request: &ModelRequest) -> bool {
@@ -593,6 +657,37 @@ mod tests {
             consumer: ModelConsumer::new(CANONICAL_MODEL_CONSUMER).unwrap(),
             execution_location: ExecutionLocation::Remote,
             data_recipient: DataRecipient::external(recipient).unwrap(),
+            capabilities: ModelCapabilities(vec![]),
+            available,
+        }
+    }
+
+    fn gateway_profile(id: &str, available: bool) -> ModelProfile {
+        ModelProfile {
+            id: id.into(),
+            purpose: ModelPurpose::new(CANONICAL_MODEL_PURPOSE).unwrap(),
+            consumer: ModelConsumer::new(CANONICAL_MODEL_CONSUMER).unwrap(),
+            execution_location: ExecutionLocation::Gateway,
+            data_recipient: DataRecipient::Device,
+            capabilities: ModelCapabilities(vec![]),
+            available,
+        }
+    }
+
+    fn scoped_profile(
+        id: &str,
+        purpose: &str,
+        consumer: &str,
+        execution_location: ExecutionLocation,
+        data_recipient: DataRecipient,
+        available: bool,
+    ) -> ModelProfile {
+        ModelProfile {
+            id: id.into(),
+            purpose: ModelPurpose::new(purpose).unwrap(),
+            consumer: ModelConsumer::new(consumer).unwrap(),
+            execution_location,
+            data_recipient,
             capabilities: ModelCapabilities(vec![]),
             available,
         }
@@ -1085,6 +1180,300 @@ mod tests {
             InferenceService<TestProvider, AllowResolver, AllowAuthority>,
         >();
         assert!(!service_name.contains("bearer"));
+    }
+
+    fn domain_request(
+        purpose: &str,
+        consumer: &str,
+        mut projection: AuthorizedModelProjection,
+        preferred: Option<String>,
+    ) -> ModelRequest {
+        projection.envelope.scoped_instructions.purpose = purpose.into();
+        ModelRequest {
+            attempt_id: RunId::new().as_uuid(),
+            principal: PersonId::new().to_string(),
+            projection,
+            catalog: AllowedCatalog::default(),
+            purpose: purpose.into(),
+            consumer: consumer.into(),
+            preferred_profile_id: preferred,
+            replay: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn root_adapter_rejects_domain_scope() {
+        let transport = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(
+                scoped_profile(
+                    "device",
+                    "expert-delegation",
+                    "experts.builtin",
+                    ExecutionLocation::Device,
+                    DataRecipient::Device,
+                    true,
+                ),
+                Arc::clone(&transport),
+            )],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = domain_request(
+            "expert-delegation",
+            "experts.builtin",
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        assert_eq!(
+            ModelPort::generate(&service, request, &scope).await.err(),
+            Some(AgentFailure::InvalidInput)
+        );
+        assert_eq!(transport.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn shared_entry_accepts_domain_scope_with_local_first_order() {
+        let device = Arc::new(TestTransport::answer());
+        let server = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (
+                    scoped_profile(
+                        "device",
+                        "expert-delegation",
+                        "experts.builtin",
+                        ExecutionLocation::Device,
+                        DataRecipient::Device,
+                        true,
+                    ),
+                    Arc::clone(&device),
+                ),
+                (
+                    scoped_profile(
+                        "server",
+                        "expert-delegation",
+                        "experts.builtin",
+                        ExecutionLocation::Remote,
+                        DataRecipient::external("ext").unwrap(),
+                        true,
+                    ),
+                    Arc::clone(&server),
+                ),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = domain_request(
+            "expert-delegation",
+            "experts.builtin",
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        let response = service
+            .execute(request, &scope, InferenceExecutionConstraint::Any)
+            .await
+            .unwrap();
+        assert_eq!(response.usage.tokens, 10);
+        assert_eq!(device.calls(), 1);
+        assert_eq!(server.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn shared_entry_enforces_projection_purpose_agreement() {
+        let transport = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(device_profile("device", true), Arc::clone(&transport))],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let mut proj =
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]);
+        proj.envelope.scoped_instructions.purpose = "other-purpose".into();
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            proj,
+            None,
+        );
+        let (_ledger, scope) = scope();
+        assert_eq!(
+            service
+                .execute(request, &scope, InferenceExecutionConstraint::Any)
+                .await
+                .err(),
+            Some(AgentFailure::InvalidInput)
+        );
+        assert_eq!(transport.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn device_only_skips_gateway_and_remote() {
+        let device = Arc::new(TestTransport::answer());
+        let gateway = Arc::new(TestTransport::answer());
+        let remote = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (device_profile("device", true), Arc::clone(&device)),
+                (gateway_profile("gateway", true), Arc::clone(&gateway)),
+                (
+                    external_profile("server", "ext", true),
+                    Arc::clone(&remote),
+                ),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        service
+            .execute(request, &scope, InferenceExecutionConstraint::DeviceOnly)
+            .await
+            .unwrap();
+        assert_eq!(device.calls(), 1);
+        assert_eq!(gateway.calls(), 0);
+        assert_eq!(remote.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn remote_only_skips_device() {
+        let device = Arc::new(TestTransport::answer());
+        let remote = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (device_profile("device", true), Arc::clone(&device)),
+                (
+                    external_profile("server", "ext", true),
+                    Arc::clone(&remote),
+                ),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        service
+            .execute(request, &scope, InferenceExecutionConstraint::RemoteOnly)
+            .await
+            .unwrap();
+        assert_eq!(device.calls(), 0);
+        assert_eq!(remote.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn gateway_satisfies_remote_only() {
+        let gateway = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(gateway_profile("gateway", true), Arc::clone(&gateway))],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        service
+            .execute(request, &scope, InferenceExecutionConstraint::RemoteOnly)
+            .await
+            .unwrap();
+        assert_eq!(gateway.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn unsatisfiable_constraint_is_unavailable_without_dispatch() {
+        let device = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(device_profile("device", true), Arc::clone(&device))],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, remote_only_scope) = scope();
+        assert_eq!(
+            service
+                .execute(
+                    request,
+                    &remote_only_scope,
+                    InferenceExecutionConstraint::RemoteOnly
+                )
+                .await
+                .err(),
+            Some(AgentFailure::ModelUnavailable)
+        );
+        assert_eq!(device.calls(), 0);
+
+        let remote = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(
+                external_profile("server", "ext", true),
+                Arc::clone(&remote),
+            )],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, device_only_scope) = scope();
+        assert_eq!(
+            service
+                .execute(
+                    request,
+                    &device_only_scope,
+                    InferenceExecutionConstraint::DeviceOnly
+                )
+                .await
+                .err(),
+            Some(AgentFailure::ModelUnavailable)
+        );
+        assert_eq!(remote.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn explicit_profile_violating_constraint_never_falls_back() {
+        let device = Arc::new(TestTransport::answer());
+        let remote = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (device_profile("device", true), Arc::clone(&device)),
+                (
+                    external_profile("server", "ext", true),
+                    Arc::clone(&remote),
+                ),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &PersonId::new().to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            Some("device".into()),
+        );
+        let (_ledger, scope) = scope();
+        assert_eq!(
+            service
+                .execute(request, &scope, InferenceExecutionConstraint::RemoteOnly)
+                .await
+                .err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(device.calls(), 0);
+        assert_eq!(remote.calls(), 0);
     }
 }
 

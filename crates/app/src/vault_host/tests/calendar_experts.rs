@@ -2984,6 +2984,64 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
 }
 
 #[test]
+fn builtin_endpoint_offers_only_observed_execution_classes() {
+    // 3-A1: the delegated endpoint composes canonical Inference from the
+    // stored credential and offers Experts from observed non-secret facts.
+    // The paired server is down, so only the device class is observed and
+    // the Remote-only Commitments Expert is denied at admission — before any
+    // source read or model call. Mail is installed and granted, so an offered
+    // Commitments run would fail on the dead-server read with a transport
+    // failure, never CapabilityDenied.
+    let fixture = direct_endpoint_fixture();
+    fixture.runtime.block_on(async {
+        let setup = floe_experts::BuiltinExpertSetup {
+            instance_id: fixture.vault.registry_instance_id(),
+            expected_revision: 0,
+            setup_id: Uuid::new_v4(),
+            sources: vec![floe_experts::BuiltinSourceBinding {
+                source: floe_experts::AgentId::try_new(
+                    floe_experts_builtin::BuiltinContextSource::Mail.source_id(),
+                )
+                .unwrap(),
+                view_handle: Uuid::new_v4(),
+                state: floe_experts::BuiltinSourceState::Available,
+            }],
+        };
+        fixture
+            .vault
+            .install_builtin_experts_enabled(
+                setup,
+                &crate::vault_host::builtin_setup_specs(),
+                floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+    });
+    let endpoint = BuiltinExpertEndpoint::new(
+        Arc::clone(&fixture.core),
+        Arc::clone(&fixture.vault),
+        Arc::clone(&fixture.local_context),
+        EndpointConnectionStore::fixture(Some(fixture_saved_connection(
+            fixture.person,
+            "mac-local",
+        ))),
+    );
+    let (invocation, scope) = direct_invocation(
+        &fixture.person.to_string(),
+        Uuid::new_v4(),
+        floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        "mac-local",
+        "Review my commitments",
+    );
+    let result = fixture.runtime.block_on(floe_agent_contract::AgentEndpoint::execute(
+        &endpoint,
+        invocation,
+        &scope,
+    ));
+    assert_eq!(result.err(), Some(AgentFailure::CapabilityDenied));
+}
+
+#[test]
 fn schedule_endpoint_denies_foreign_principal() {
     // 2-C C5: a forged principal fails closed before any setup read.
     let fixture = direct_endpoint_fixture();

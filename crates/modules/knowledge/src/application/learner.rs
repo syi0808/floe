@@ -11,6 +11,13 @@ pub const LEARNER_JOB_LEASE_SECONDS: i64 = 30;
 pub const MAX_LEARNER_JOB_ATTEMPTS: u8 = 3;
 pub const LEARNER_JOB_RETRY_DELAY_SECONDS: i64 = 5;
 
+/// The Inference purpose/consumer one Learner review runs under.
+///
+/// Knowledge owns the scope; Inference selects the device profile behind it
+/// and Access fences the dispatch. The Learner never names a route.
+pub const LEARNER_INFERENCE_PURPOSE: &str = "governed-memory-review";
+pub const LEARNER_INFERENCE_CONSUMER: &str = "knowledge.learner";
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LearnerMemoryProposal {
@@ -30,6 +37,36 @@ pub struct LearnerReviewOutput {
     pub proposal: Option<LearnerMemoryProposal>,
     pub used_tokens: u64,
     pub cost_micros: u64,
+}
+
+/// Parse the single structured answer one Learner review accepts.
+///
+/// The answer must name the current Knowledge schema and carry an explicit
+/// proposal, even when there is nothing to remember. Unknown fields,
+/// duplicate fields and a missing proposal fail closed: the model did
+/// something this role never asked for.
+pub fn parse_learner_review_output(text: &str) -> Result<Option<LearnerMemoryProposal>, AgentFailure> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
+    if !value
+        .as_object()
+        .is_some_and(|object| object.contains_key("proposal"))
+    {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    let answer: StructuredLearnerAnswer =
+        serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
+    if answer.schema_version != crate::KNOWLEDGE_VERSION {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    Ok(answer.proposal)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredLearnerAnswer {
+    schema_version: u32,
+    proposal: Option<LearnerMemoryProposal>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -521,6 +558,11 @@ pub fn explicit_learning_signal(text: &str) -> Option<crate::LearningObservation
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
 
     struct ReviewModel {
@@ -735,5 +777,363 @@ mod tests {
             reject_learner_claim(&lifecycle, AgentFailure::VaultUnavailable, now),
             Err(AgentFailure::VaultUnavailable)
         );
+    }
+
+    struct CountingModel {
+        placement: floe_context_contract::ModelPlacement,
+        output: LearnerReviewOutput,
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct PendingModel;
+
+    impl LearnerModel for PendingModel {
+        fn placement(&self) -> floe_context_contract::ModelPlacement {
+            floe_context_contract::ModelPlacement::DeviceLocal
+        }
+
+        async fn review(
+            &self,
+            _: LearnerModelRequest,
+        ) -> Result<LearnerReviewOutput, AgentFailure> {
+            std::future::pending().await
+        }
+    }
+
+    impl LearnerModel for CountingModel {
+        fn placement(&self) -> floe_context_contract::ModelPlacement {
+            self.placement
+        }
+
+        async fn review(
+            &self,
+            _: LearnerModelRequest,
+        ) -> Result<LearnerReviewOutput, AgentFailure> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.output.clone())
+        }
+    }
+
+    struct RecordingSink {
+        person_id: floe_kernel::PersonId,
+        requests: Mutex<Vec<crate::StageMemoryCandidate>>,
+    }
+
+    impl RecordingSink {
+        fn new(person_id: floe_kernel::PersonId) -> Self {
+            Self {
+                person_id,
+                requests: Mutex::new(vec![]),
+            }
+        }
+    }
+
+    impl MemoryCandidateSink for RecordingSink {
+        fn person_id(&self) -> floe_kernel::PersonId {
+            self.person_id
+        }
+
+        async fn stage_memory_candidate(
+            &self,
+            request: crate::StageMemoryCandidate,
+        ) -> Result<crate::KnowledgeCandidate, AgentFailure> {
+            self.requests.lock().unwrap().push(request.clone());
+            Ok(crate::KnowledgeCandidate {
+                schema_version: crate::KNOWLEDGE_VERSION,
+                id: Uuid::new_v4(),
+                person_id: floe_kernel::PersonId::new(),
+                observation_id: Uuid::new_v4(),
+                idempotency_key: "fixture-key".into(),
+                kind: crate::KnowledgeKind::Memory,
+                operation: crate::KnowledgeOperation::Create,
+                target_id: request.target_id,
+                base_revision: request.base_revision,
+                payload: crate::KnowledgePayload::Memory {
+                    value: request.value,
+                },
+                before_hash: None,
+                after_hash: "fixture-hash".into(),
+                source_refs: request
+                    .turn_ids
+                    .into_iter()
+                    .map(|turn_id| crate::LearningEvidenceRef {
+                        session_id: request.session_id,
+                        turn_id,
+                    })
+                    .collect(),
+                extractor_version: request.extractor_version,
+                prompt_version: request.prompt_version,
+                actor: request.actor,
+                state: crate::KnowledgeCandidateState::Pending,
+                created_at: request.created_at,
+            })
+        }
+    }
+
+    fn background_input() -> LearnerReviewInput {
+        LearnerReviewInput {
+            schema_version: crate::KNOWLEDGE_VERSION,
+            run_id: Uuid::new_v4(),
+            person_id: floe_kernel::PersonId::new(),
+            session_id: Uuid::new_v4(),
+            session_revision: 1,
+            turn_ids: vec![Uuid::new_v4()],
+            outcome: crate::LearningOutcome::Completed,
+            digest: "The user explicitly asked Floe to remember a preference.".into(),
+            current_memories: vec![],
+            observed_at: Utc::now(),
+        }
+    }
+
+    fn background_proposal(observed_at: DateTime<Utc>) -> LearnerReviewOutput {
+        LearnerReviewOutput {
+            schema_version: crate::KNOWLEDGE_VERSION,
+            proposal: Some(LearnerMemoryProposal {
+                observation_kind: crate::LearningObservationKind::ExplicitRemember,
+                value: crate::PersonalMemoryValue {
+                    kind: crate::PersonalMemoryKind::Preference,
+                    statement: "Prefers focused mornings".into(),
+                    epistemic_status: crate::EpistemicStatus::Fact,
+                    confidence_millis: 900,
+                    valid_from: None,
+                    valid_until: None,
+                    observed_at,
+                },
+                target_id: None,
+                base_revision: None,
+            }),
+            used_tokens: 120,
+            cost_micros: 10,
+        }
+    }
+
+    #[test]
+    fn structured_review_output_parses_strictly() {
+        assert_eq!(
+            parse_learner_review_output(
+                &serde_json::json!({
+                    "schema_version": crate::KNOWLEDGE_VERSION,
+                    "proposal": null,
+                })
+                .to_string()
+            ),
+            Ok(None)
+        );
+        for text in [
+            "```json\n{\"schema_version\":1,\"proposal\":null}\n```",
+            r#"{"schema_version":1}"#,
+            r#"{"schema_version":1,"proposal":null,"reason":"no"}"#,
+            r#"{"schema_version":1,"schema_version":1,"proposal":null}"#,
+            r#"{"schema_version":1,"proposal":null,"proposal":null}"#,
+            r#"{"schema_version":9999,"proposal":null}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                parse_learner_review_output(text),
+                Err(AgentFailure::InvalidModelOutput),
+                "review output must fail closed: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_signal_detection_is_narrow_and_multilingual() {
+        assert_eq!(
+            explicit_learning_signal("회의는 오후가 좋다고 기억해 줘"),
+            Some(crate::LearningObservationKind::ExplicitRemember)
+        );
+        assert_eq!(
+            explicit_learning_signal("Actually, I prefer meetings after 2 PM"),
+            Some(crate::LearningObservationKind::UserCorrection)
+        );
+        assert_eq!(
+            explicit_learning_signal("Please forget my old office preference"),
+            Some(crate::LearningObservationKind::UserCorrection)
+        );
+        assert_eq!(
+            explicit_learning_signal("I remember that meeting from last year"),
+            None
+        );
+        assert_eq!(explicit_learning_signal("오늘 일정 알려줘"), None);
+    }
+
+    #[tokio::test]
+    async fn learner_stages_one_candidate_with_runtime_owned_provenance() {
+        let input = background_input();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let model = CountingModel {
+            placement: floe_context_contract::ModelPlacement::DeviceLocal,
+            output: background_proposal(input.observed_at - chrono::Duration::days(1)),
+            calls: calls.clone(),
+        };
+        let sink = RecordingSink::new(input.person_id);
+        let runtime = LearnerRuntime {
+            model: &model,
+            candidates: &sink,
+            budget: LearnerBudget::default(),
+            extractor_version: "memory-extractor-v1",
+            prompt_version: "memory-review-v1",
+        };
+
+        let candidate = runtime
+            .review(input.clone(), floe_execution::Cancellation::default())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(candidate.source_refs[0].session_id, input.session_id);
+        assert_eq!(
+            sink.requests.lock().unwrap()[0].actor,
+            crate::KnowledgeActor::Learner {
+                run_id: input.run_id
+            }
+        );
+        assert_eq!(
+            sink.requests.lock().unwrap()[0].extractor_version,
+            "memory-extractor-v1"
+        );
+        assert_eq!(
+            sink.requests.lock().unwrap()[0].value.observed_at,
+            input.observed_at
+        );
+    }
+
+    #[tokio::test]
+    async fn learner_cancellation_and_placement_fail_before_model_or_storage() {
+        for (placement, cancellation, expected) in [
+            (
+                floe_context_contract::ModelPlacement::Remote,
+                floe_execution::Cancellation::default(),
+                AgentFailure::PolicyDenied,
+            ),
+            (
+                floe_context_contract::ModelPlacement::DeviceLocal,
+                {
+                    let cancellation = floe_execution::Cancellation::default();
+                    cancellation.cancel();
+                    cancellation
+                },
+                AgentFailure::Cancelled,
+            ),
+        ] {
+            let input = background_input();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let model = CountingModel {
+                placement,
+                output: background_proposal(input.observed_at),
+                calls: calls.clone(),
+            };
+            let sink = RecordingSink::new(input.person_id);
+            let runtime = LearnerRuntime {
+                model: &model,
+                candidates: &sink,
+                budget: LearnerBudget::default(),
+                extractor_version: "memory-extractor-v1",
+                prompt_version: "memory-review-v1",
+            };
+
+            assert_eq!(runtime.review(input, cancellation).await, Err(expected));
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+            assert!(sink.requests.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn learner_rejects_over_budget_or_halted_reviews() {
+        let mut halted = background_input();
+        halted.outcome = crate::LearningOutcome::Halted {
+            reason: AgentFailure::Stalled,
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let model = CountingModel {
+            placement: floe_context_contract::ModelPlacement::DeviceLocal,
+            output: background_proposal(halted.observed_at),
+            calls: calls.clone(),
+        };
+        let sink = RecordingSink::new(halted.person_id);
+        let runtime = LearnerRuntime {
+            model: &model,
+            candidates: &sink,
+            budget: LearnerBudget::default(),
+            extractor_version: "memory-extractor-v1",
+            prompt_version: "memory-review-v1",
+        };
+        assert_eq!(
+            runtime
+                .review(halted, floe_execution::Cancellation::default())
+                .await,
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        let mut input = background_input();
+        input.person_id = sink.person_id;
+        let model = CountingModel {
+            placement: floe_context_contract::ModelPlacement::DeviceLocal,
+            output: LearnerReviewOutput {
+                used_tokens: LearnerBudget::default().max_model_tokens + 1,
+                ..background_proposal(input.observed_at)
+            },
+            calls,
+        };
+        let runtime = LearnerRuntime {
+            model: &model,
+            candidates: &sink,
+            budget: LearnerBudget::default(),
+            extractor_version: "memory-extractor-v1",
+            prompt_version: "memory-review-v1",
+        };
+        assert_eq!(
+            runtime
+                .review(input, floe_execution::Cancellation::default())
+                .await,
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        assert!(sink.requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn learner_preempts_in_flight_review_on_cancellation_or_deadline() {
+        let first_input = background_input();
+        let sink = RecordingSink::new(first_input.person_id);
+        let budget = LearnerBudget {
+            deadline_ms: 1,
+            ..LearnerBudget::default()
+        };
+        let runtime = LearnerRuntime {
+            model: &PendingModel,
+            candidates: &sink,
+            budget,
+            extractor_version: "memory-extractor-v1",
+            prompt_version: "memory-review-v1",
+        };
+        assert_eq!(
+            runtime
+                .review(first_input, floe_execution::Cancellation::default())
+                .await,
+            Err(AgentFailure::DeadlineExceeded)
+        );
+
+        let cancellation = floe_execution::Cancellation::default();
+        let cancel = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            cancel.cancel();
+        });
+        let runtime = LearnerRuntime {
+            model: &PendingModel,
+            candidates: &sink,
+            budget: LearnerBudget::default(),
+            extractor_version: "memory-extractor-v1",
+            prompt_version: "memory-review-v1",
+        };
+        let mut cancellation_input = background_input();
+        cancellation_input.person_id = sink.person_id;
+        assert_eq!(
+            runtime.review(cancellation_input, cancellation).await,
+            Err(AgentFailure::Cancelled)
+        );
+        assert!(sink.requests.lock().unwrap().is_empty());
     }
 }

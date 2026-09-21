@@ -12,15 +12,15 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 ## Current checkpoint
 
-**Active: 3-A — Remaining Root and Domain Caller Convergence.**
+**Active: 3-B — AppHost Composition Closure.**
 
-Use [the 3-A execution plan](stage-3/3-a.md) as the authoritative task document.
+Use [the 3-B execution plan](stage-3/3-b.md) as the authoritative task document.
 
-3-A begins with one prerequisite that was previously described only as Stage 3 native/product debt: the canonical `PreparedFoundationTransport` must use the already-existing private native Foundation transport before legacy Expert/Schedule/Learner callers can be moved safely onto canonical Inference. This is an adapter cutover, not a new native-model implementation and not a reason to pull the rest of 3-D forward.
+3-A is complete and frozen: canonical `PreparedFoundationTransport` drives the existing native Foundation transport, and delegated Experts, the Schedule endpoint, and the Knowledge Learner all execute through the one Inference-owned path. See [the frozen 3-A plan and report](stage-3/3-a.md).
 
 ## Progress
 
-- [ ] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md)
+- [x] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (complete · frozen)
 - [ ] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md)
 - [ ] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md)
 - [ ] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md)

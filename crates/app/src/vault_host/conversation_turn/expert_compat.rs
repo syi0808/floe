@@ -1,21 +1,23 @@
-//! Legacy Expert model/source host compatibility.
+//! Canonical delegated Expert model/source host.
 //!
-//! Temporary isolation behind the delegated endpoints, not a new architecture.
-//! The root General Conversation turn never constructs these: root projection,
-//! model and tools are the canonical Conversation/Context/Engine/Inference
-//! owners. Only an actually delegated legacy Expert endpoint prepares its
-//! legacy model selection, policy and source fallback here, from the injected
-//! saved-connection store. Stage 3-A removes this compatibility.
+//! Delegated built-in Experts reason through shared Inference: the Expert
+//! states what execution class it requires, Context projects the authorized
+//! input, Inference selects the profile and owns the attempt, and Access
+//! fences the dispatch. No provider, route, or usage ledger is selected here.
+//! Schedule keeps its own legacy host until 3-A2 converges it.
 
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Mutex};
 
-use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
-use floe_context::{InferencePolicyDecision, NativeContextView};
-use floe_context::{AttentionView, CalendarContextView, PeopleView, WellbeingView};
-use floe_conversation::{AgentMessage, ModelRequest};
-use floe_inference::ModelStep;
-use floe_kernel::{AGENT_VERSION, PersonId};
-use floe_provider_adapters::models::{FoundationModelRunner, ServerModelRunner};
+use floe_agent_contract::{
+    AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage,
+    ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement, ExpertReasoningStep,
+    ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry, InferencePolicyDecision,
+    InvocationKey, ModelConversation, ModelConversationEntry, ModelPlacement, ModelRequest,
+    ModelStep, ToolCall, ToolDescriptor, ToolResult, TransferConsent,
+};
+use floe_context::{AttentionView, CalendarContextView, NativeContextView, PeopleView, WellbeingView};
+use floe_inference::{InferenceExecutionConstraint, InferenceExecutor};
+use floe_kernel::{PersonId, TaskId};
 use floe_provider_adapters::sources::ServerSourceClient;
 use floe_provider_adapters::sources::server::CalendarContextRequest;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
@@ -26,30 +28,36 @@ use crate::local_context::LocalContextHost;
 
 use super::super::personal_grants;
 
-pub(super) fn policy(model: &Model) -> InferencePolicyDecision {
+/// The Context/source policy delegated Experts run under.
+///
+/// This carries Context/source semantics only (data classes, freshness,
+/// bounds): it no longer selects a provider placement and never authorizes
+/// model transfer. Canonical Inference maps the Expert's requirement to an
+/// execution constraint, and Access fences the dispatch.
+pub(super) fn expert_policy() -> InferencePolicyDecision {
     InferencePolicyDecision {
-        // Canonical root purpose. The root ModelRequest purpose, the envelope
-        // scoped purpose and the provider wire purpose must agree on this;
-        // App no longer invents a different purpose per resolved route.
-        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
         data_classes: vec![DataClass::Personal],
-        allowed_placements: vec![floe_inference::ModelTransport::placement(model)],
+        allowed_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
         performance_class: "interactive".into(),
         projection_version: 1,
-        external_transfer_consent: external_transfer_consent(
-            floe_inference::ModelTransport::placement(model),
-        ),
+        external_transfer_consent: TransferConsent::NotGranted,
         bounded_sensitive_projection: false,
     }
 }
 
-/// The consent a legacy Expert model call stands under.
+/// Map an Expert-owned requirement to the Inference execution constraint.
 ///
-/// No pre-resolved recipient exists anymore, so no external transfer is ever
-/// consented here: the legacy Server transport runs server-local only, and
-/// the prepared route asserts that to the gateway on the wire.
-pub(super) fn external_transfer_consent(placement: ModelPlacement) -> TransferConsent {
-    floe_inference::external_transfer_consent(placement, None)
+/// The mapping is 1:1 by construction: the Expert states a class, Inference
+/// selects a profile satisfying it. No provider is named here.
+fn execution_constraint(
+    requirement: ExpertModelRequirement,
+) -> InferenceExecutionConstraint {
+    match requirement {
+        ExpertModelRequirement::Any => InferenceExecutionConstraint::Any,
+        ExpertModelRequirement::DeviceOnly => InferenceExecutionConstraint::DeviceOnly,
+        ExpertModelRequirement::RemoteOnly => InferenceExecutionConstraint::RemoteOnly,
+    }
 }
 
 /// Where a delegated legacy Expert endpoint reads the saved server
@@ -89,245 +97,367 @@ impl floe_inference::SavedConnectionStore for EndpointConnectionStore {
     }
 }
 
-pub(crate) enum Model {
-    Foundation(FoundationModelRunner),
-    Server(ServerModelRunner),
+/// A result recorder that also captures dependencies for the Expert's own
+/// model dispatch.
+///
+/// Source-backed Expert input must not dispatch as `Independent`: every
+/// dependency recorded for this message is captured here so the model host
+/// can project it as the exact dispatch coverage. The store recording still
+/// flows to the inner recorder unchanged for the Task report.
+pub(super) struct CapturingRecorder<'a> {
+    pub(super) inner: Option<&'a dyn ResultRecorder>,
+    pub(super) captured: &'a Mutex<Vec<floe_context_contract::ContextDependency>>,
 }
 
-impl Model {
-    /// Legacy Expert model selection from the stored server
-    /// credential: a stored connection means Server reasoning, absence means
-    /// on-device Foundation. Pure: the candidate route is validated locally,
-    /// never discovered over the network, so it can only run server-local.
-    pub(super) fn for_stored_connection(
-        stored: Option<floe_inference::SavedServerConnection>,
-        person_id: &str,
-        device_id: &str,
-    ) -> Result<Self, AgentFailure> {
-        match stored {
-            Some(stored) => {
-                let admitted =
-                    floe_inference::admit_saved_connection(stored, person_id, device_id)?;
-                let candidate = floe_inference::candidate_route(&admitted)?;
-                ServerModelRunner::new_model_only(candidate).map(Self::Server)
-            }
-            None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
+impl ResultRecorder for CapturingRecorder<'_> {
+    fn record_independent(&self, turn_id: Uuid, result_id: Uuid) -> Result<(), AgentFailure> {
+        if let Some(inner) = self.inner {
+            inner.record_independent(turn_id, result_id)?;
         }
+        Ok(())
     }
 
-    /// The placement Experts are offered at. A server model runs
-    /// server-class judgment wherever it listens; transport placement
-    /// still names the data destination, which is what consent checks.
-    pub(super) fn expert_eligibility(&self) -> ModelPlacement {
-        match self {
-            Self::Foundation(model) => floe_inference::ModelTransport::placement(model),
-            Self::Server(_) => ModelPlacement::Remote,
-        }
-    }
-}
-
-impl floe_inference::ModelTransport for Model {
-    fn placement(&self) -> ModelPlacement {
-        match self {
-            Self::Foundation(model) => model.placement(),
-            Self::Server(model) => model.placement(),
-        }
-    }
-
-    async fn generate(
+    fn record(
         &self,
-        request: floe_inference::ModelTransportRequest,
-    ) -> Result<floe_inference::ModelTransportResponse, AgentFailure> {
-        let started = std::time::Instant::now();
-        let placement = match self {
-            Self::Foundation(_) => "device_local",
-            Self::Server(_) => "remote",
-        };
-        tracing::info!(placement, "model_attempt_started");
-        let result = match self {
-            Self::Foundation(model) => model.generate(request).await,
-            Self::Server(model) => model.generate(request).await,
-        };
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        match &result {
-            Ok(_) => tracing::info!(placement, elapsed_ms, "model_attempt_completed"),
-            Err(failure) => tracing::error!(
-                placement,
-                elapsed_ms,
-                failure = ?failure,
-                "model_attempt_failed"
-            ),
+        turn_id: Uuid,
+        result_id: Uuid,
+        dependency: floe_context_contract::ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        self.captured
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .push(dependency.clone());
+        if let Some(inner) = self.inner {
+            inner.record(turn_id, result_id, dependency)?;
         }
-        result
+        Ok(())
     }
+}
+
+/// The canonical catalog name for one Expert-declared output data class.
+fn tool_output_class(class: DataClass) -> &'static str {
+    match class {
+        DataClass::Synthetic => "synthetic",
+        DataClass::Personal => "personal",
+        DataClass::TemporaryAiContext => "temporaryaicontext",
+        DataClass::HighlySensitive => "highlysensitive",
+        DataClass::DeviceOnlyRaw => "deviceonlyraw",
+        DataClass::Credential => "credential",
+    }
+}
+
+/// Map Expert-declared capabilities to the canonical tool catalog.
+///
+/// Experts never delegate, so the card list stays empty: any Delegate output
+/// fails closed in Inference. Legacy capability versions are semver strings
+/// carried opaquely (only id matching ever bound them), so every declared
+/// capability maps to revision 1 with its id, schema and output class intact.
+fn expert_catalog(
+    capabilities: &[floe_agent_contract::CapabilityDescriptor],
+) -> Result<AllowedCatalog, AgentFailure> {
+    let mut tools = Vec::with_capacity(capabilities.len());
+    for capability in capabilities {
+        if capability.schema_version != AGENT_VERSION
+            || !capability.read_only
+            || capability.id.trim().is_empty()
+            || capability.version.trim().is_empty()
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let descriptor = ToolDescriptor {
+            id: capability.id.clone(),
+            definition_revision: 1,
+            description: format!("Expert capability {}", capability.id),
+            input_schema: capability
+                .input_schema
+                .clone()
+                .map(|schema| schema.to_string())
+                .unwrap_or_else(|| "{}".into()),
+            output_data_class: tool_output_class(capability.output_data_class).into(),
+        };
+        descriptor.validate()?;
+        tools.push(descriptor);
+    }
+    Ok(AllowedCatalog {
+        cards: vec![],
+        tools,
+        revision: 1,
+    })
+}
+
+/// Map an Expert's working transcript to the canonical model conversation.
+///
+/// Past capability results re-enter as Tool exchanges bound to the declared
+/// catalog revisions; their source coverage travels separately through the
+/// captured record dependencies, so exchanges stay `Independent` here without
+/// losing the exact dispatch coverage.
+fn expert_conversation(
+    transcript: Vec<ExpertTranscriptEntry>,
+    catalog: &AllowedCatalog,
+) -> Result<ModelConversation, AgentFailure> {
+    let mut current_turn = Vec::with_capacity(transcript.len());
+    for entry in transcript {
+        match entry {
+            ExpertTranscriptEntry::Task { text } => {
+                current_turn.push(ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text,
+                });
+            }
+            ExpertTranscriptEntry::Preamble { text } => {
+                current_turn.push(ModelConversationEntry::Preamble {
+                    message_id: Uuid::new_v4(),
+                    text,
+                });
+            }
+            ExpertTranscriptEntry::Capability {
+                call_id,
+                capability_id,
+                input,
+                result,
+            } => {
+                if call_id.is_nil() {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                let definition_revision = catalog
+                    .tools
+                    .iter()
+                    .find(|tool| tool.id == capability_id)
+                    .map(|tool| tool.definition_revision)
+                    .ok_or(AgentFailure::CapabilityDenied)?;
+                current_turn.push(ModelConversationEntry::ToolExchange {
+                    call: ToolCall {
+                        call_id,
+                        invocation_key: InvocationKey::new(),
+                        tool_id: capability_id,
+                        definition_revision,
+                        input,
+                    },
+                    result: ToolResult {
+                        call_id,
+                        text: result,
+                        artifacts: vec![],
+                        coverage: DependencyCoverage::Independent,
+                        issue: None,
+                    },
+                });
+            }
+        }
+    }
+    Ok(ModelConversation {
+        history: vec![],
+        current_turn,
+    })
 }
 
 /// The model an Expert reasons on, as the Expert's own contract states it.
 ///
-/// An Expert asks one question and is owed one answer. Turning that into the
-/// conversation's model request, recovering a failed attempt, and charging what
-/// it spent to this turn's ledger are the model owner's work, so they happen
-/// here rather than inside the Expert.
-pub(crate) struct ExpertModelHost<'a, Transport = Model> {
-    pub(crate) model: &'a Transport,
-    pub(crate) usage: floe_inference::UsageLedger,
+/// An Expert asks one question and is owed one answer. Projecting the
+/// authorized input is Context's work; selecting the profile, fencing the
+/// dispatch, and settling the attempt is Inference's. This host only binds
+/// the two: the Expert call becomes a Context projection plus a canonical
+/// model request under a bounded child of the Task scope.
+pub(crate) struct ExpertModelHost<'a> {
+    pub(crate) executor: &'a dyn InferenceExecutor,
+    pub(crate) scope: &'a floe_execution::ExecutionScope,
+    pub(crate) captured: &'a Mutex<Vec<floe_context_contract::ContextDependency>>,
 }
 
-impl<Transport: floe_inference::ModelTransport + Sync> floe_agent_contract::ExpertModel
-    for ExpertModelHost<'_, Transport>
-{
-    fn placement(&self) -> ModelPlacement {
-        floe_inference::ModelTransport::placement(self.model)
+impl ExpertModelHost<'_> {
+    fn captured_dependencies(
+        &self,
+    ) -> Result<Vec<floe_context_contract::ContextDependency>, AgentFailure> {
+        self.captured
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| AgentFailure::StorageUnavailable)
     }
 
+    fn child_scope(
+        &self,
+        deadline: tokio::time::Instant,
+        max_tokens: u64,
+        max_cost_micros: u64,
+        invocation_id: Uuid,
+    ) -> floe_execution::ExecutionScope {
+        self.scope.child_scope(
+            deadline,
+            max_tokens,
+            max_cost_micros,
+            TaskId::from_uuid(invocation_id),
+        )
+    }
+}
+
+impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
     fn answer<'a>(
         &'a self,
-        call: floe_agent_contract::ExpertModelCall,
-    ) -> floe_agent_contract::BoxFuture<
-        'a,
-        Result<floe_agent_contract::ExpertModelAnswer, AgentFailure>,
-    > {
+        call: ExpertModelCall,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
         Box::pin(async move {
-            let turn_id = Uuid::new_v4();
-            let runner = floe_conversation::TransportModelRunner::new(self.model);
-            let response = floe_conversation::generate_with_recovery(
-                &runner,
-                ModelRequest {
-                    usage: self.usage.clone(),
-                    replay: vec![],
-                    schema_version: floe_agent_contract::AGENT_VERSION,
+            if call.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            if call.deadline <= tokio::time::Instant::now() {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
+            call.prompt.validate()?;
+            if call.assignment.trim().is_empty() || call.assignment.len() > 2048 {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let dependencies = self.captured_dependencies()?;
+            let catalog = AllowedCatalog {
+                cards: vec![],
+                tools: vec![],
+                revision: 1,
+            };
+            let conversation = ModelConversation {
+                history: vec![],
+                current_turn: vec![ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: call.assignment,
+                }],
+            };
+            let projection = floe_context::assemble_context_projection(
+                floe_context::ContextProjectionInput {
+                    role: floe_context::ContextProjectionRole::Expert,
+                    purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                    response_contract: "One answer to the Expert assignment.",
+                    correction: None,
                     prompt: call.prompt,
-                    person_id: call.person_id,
-                    session_id: call.invocation_id,
-                    turn_id,
-                    policy: call.policy,
-                    context: call.context,
-                    messages: vec![AgentMessage::User {
-                        turn_id,
-                        text: call.assignment,
-                    }],
-                    capabilities: vec![],
-                    active_agents: vec![],
-                    remaining_tokens: call.max_tokens,
-                    remaining_cost_micros: call.max_cost_micros,
+                    conversation,
+                    agent_context: &call.context,
+                    catalog: &catalog,
+                    active_experts: &[],
+                    authorized_history_dependencies: &dependencies,
+                    input_data_classes: call.policy.data_classes.clone(),
                     max_output_bytes: call.max_output_bytes,
-                    deadline: call.deadline,
-                    cancellation: call.cancellation,
                 },
-            )
-            .await?;
-            // One question, one reply: a preamble, a capability call or a
+            )?;
+            let child = self.child_scope(
+                call.deadline,
+                call.max_tokens,
+                call.max_cost_micros,
+                call.invocation_id,
+            );
+            let response = self
+                .executor
+                .execute(
+                    ModelRequest {
+                        attempt_id: Uuid::new_v4(),
+                        principal: call.person_id.to_string(),
+                        projection,
+                        catalog,
+                        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+                        consumer: floe_agent_contract::EXPERT_INFERENCE_CONSUMER.into(),
+                        preferred_profile_id: None,
+                        replay: vec![],
+                    },
+                    &child,
+                    execution_constraint(call.requirement),
+                )
+                .await?;
+            // One question, one reply: a preamble, a tool call or a
             // delegation is not an answer to an Expert's assignment.
-            let [ModelStep::Answer { text }] = response.output.as_slice() else {
+            let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else {
                 return Err(AgentFailure::InvalidModelOutput);
             };
-            Ok(floe_agent_contract::ExpertModelAnswer {
-                schema_version: response.schema_version,
+            Ok(ExpertModelAnswer {
+                schema_version: AGENT_VERSION,
                 answer: text.clone(),
-                used_tokens: response.used_tokens,
-                cost_micros: response.cost_micros,
+                used_tokens: response.usage.tokens,
+                cost_micros: response.usage.cost_micros,
             })
         })
     }
 }
 
-impl<Transport: floe_inference::ModelTransport + Sync> floe_agent_contract::ExpertReasoner
-    for ExpertModelHost<'_, Transport>
-{
+impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
     fn step<'a>(
         &'a self,
-        step: floe_agent_contract::ExpertReasoningStep,
-    ) -> floe_agent_contract::BoxFuture<
-        'a,
-        Result<floe_agent_contract::ExpertStepOutcome, AgentFailure>,
-    > {
+        step: ExpertReasoningStep,
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepOutcome, AgentFailure>> {
         Box::pin(async move {
-            // The Expert's transcript is its own; it becomes conversation
-            // messages only for as long as the model call lasts.
-            let turn_id = step.invocation_id;
-            let messages = step
-                .transcript
-                .into_iter()
-                .map(|entry| match entry {
-                    floe_agent_contract::ExpertTranscriptEntry::Task { text } => {
-                        AgentMessage::User { turn_id, text }
-                    }
-                    floe_agent_contract::ExpertTranscriptEntry::Preamble { text } => {
-                        AgentMessage::Preamble { turn_id, text }
-                    }
-                    floe_agent_contract::ExpertTranscriptEntry::Capability {
-                        call_id,
-                        capability_id,
-                        input,
-                        result,
-                    } => AgentMessage::Capability {
-                        turn_id,
-                        call_id,
-                        capability_id,
-                        input,
-                        result: Ok(result),
-                    },
-                })
-                .collect();
-            let runner = floe_conversation::TransportModelRunner::new(self.model);
-            let response = floe_conversation::generate_with_recovery(
-                &runner,
-                ModelRequest {
-                    usage: self.usage.clone(),
-                    replay: step.replay,
-                    schema_version: floe_agent_contract::AGENT_VERSION,
+            if step.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            if step.deadline <= tokio::time::Instant::now() {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
+            step.prompt.validate()?;
+            // The Expert's transcript is its own; it becomes a canonical
+            // conversation only for as long as the model call lasts.
+            let catalog = expert_catalog(&step.capabilities)?;
+            let conversation = expert_conversation(step.transcript, &catalog)?;
+            let dependencies = self.captured_dependencies()?;
+            let projection = floe_context::assemble_context_projection(
+                floe_context::ContextProjectionInput {
+                    role: floe_context::ContextProjectionRole::Expert,
+                    purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                    response_contract: "One Expert reasoning step.",
+                    correction: None,
                     prompt: step.prompt,
-                    person_id: step.person_id,
-                    session_id: step.invocation_id,
-                    turn_id,
-                    policy: step.policy,
-                    context: step.context,
-                    messages,
-                    capabilities: step.capabilities,
-                    active_agents: vec![],
-                    remaining_tokens: step.remaining_tokens,
-                    remaining_cost_micros: step.remaining_cost_micros,
+                    conversation,
+                    agent_context: &step.context,
+                    catalog: &catalog,
+                    active_experts: &[],
+                    authorized_history_dependencies: &dependencies,
+                    input_data_classes: step.policy.data_classes.clone(),
                     max_output_bytes: step.max_output_bytes,
-                    deadline: step.deadline,
-                    cancellation: step.cancellation,
                 },
-            )
-            .await?;
-            Ok(floe_agent_contract::ExpertStepOutcome {
-                schema_version: response.schema_version,
+            )?;
+            let child = self.child_scope(
+                step.deadline,
+                step.remaining_tokens,
+                step.remaining_cost_micros,
+                step.invocation_id,
+            );
+            let response = self
+                .executor
+                .execute(
+                    ModelRequest {
+                        attempt_id: Uuid::new_v4(),
+                        principal: step.person_id.to_string(),
+                        projection,
+                        catalog,
+                        purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+                        consumer: floe_agent_contract::EXPERT_INFERENCE_CONSUMER.into(),
+                        preferred_profile_id: None,
+                        replay: vec![],
+                    },
+                    &child,
+                    execution_constraint(step.requirement),
+                )
+                .await?;
+            Ok(ExpertStepOutcome {
+                schema_version: AGENT_VERSION,
                 steps: response
-                    .output
+                    .steps
                     .into_iter()
                     .map(|step| match step {
-                        ModelStep::Preamble { text } => {
-                            Ok(floe_agent_contract::ExpertStep::Preamble { text })
+                        ModelStep::Preamble { text } => Ok(ExpertStep::Preamble { text }),
+                        ModelStep::Answer { text, .. } => Ok(ExpertStep::Answer { text }),
+                        ModelStep::CallTool { tool_id, input, .. } => {
+                            Ok(ExpertStep::Call {
+                                capability_id: tool_id,
+                                input,
+                            })
                         }
-                        ModelStep::Answer { text } => {
-                            Ok(floe_agent_contract::ExpertStep::Answer { text })
-                        }
-                        ModelStep::Call {
-                            capability_id,
-                            input,
-                        } => Ok(floe_agent_contract::ExpertStep::Call {
-                            capability_id,
-                            input,
-                        }),
                         // An Expert has no one to delegate to.
                         ModelStep::Delegate { .. } => Err(AgentFailure::CapabilityDenied),
                     })
                     .collect::<Result<Vec<_>, _>>()?,
-                replay: response.replay,
-                used_tokens: response.used_tokens,
-                cost_micros: response.cost_micros,
+                replay: None,
+                used_tokens: response.usage.tokens,
+                cost_micros: response.usage.cost_micros,
             })
         })
     }
 }
 
 pub(super) struct PersonalViewSource<'a> {
-    pub(super) model: &'a Model,
+    pub(super) server_source_allowed: bool,
     pub(super) source_client: Option<&'a ServerSourceClient>,
-    pub(super) policy: &'a InferencePolicyDecision,
     pub(super) person_id: PersonId,
     pub(super) people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
     pub(super) wellbeing_reader: Option<&'a dyn PersonalWellbeingReaderApi>,
@@ -401,10 +531,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<CalendarContextView>, AgentFailure> {
-        let Model::Server(_) = self.model else {
-            return Ok(vec![]);
-        };
-        if !self.server_fallback_allowed() {
+        if !self.server_source_allowed {
             return Ok(vec![]);
         }
         let now = std::time::SystemTime::now()
@@ -451,10 +578,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<floe_context::ConfirmedInteractionView>, AgentFailure> {
-        let Model::Server(_) = self.model else {
-            return Ok(vec![]);
-        };
-        if !self.server_fallback_allowed() {
+        if !self.server_source_allowed {
             return Ok(vec![]);
         }
         let source_client = self
@@ -475,10 +599,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<floe_context::WorkContextView>, AgentFailure> {
-        let Model::Server(_model) = self.model else {
-            return Ok(vec![]);
-        };
-        if !self.server_fallback_allowed() {
+        if !self.server_source_allowed {
             return Ok(vec![]);
         }
         let Some(reader) = self.remote_reader else {
@@ -512,12 +633,6 @@ impl PersonalViewSource<'_> {
         }
     }
 
-    fn server_fallback_allowed(&self) -> bool {
-        matches!(self.model, Model::Server(_))
-            && (floe_inference::ModelTransport::placement(self.model)
-                == ModelPlacement::DeviceLocal
-                || self.policy.external_transfer_consent == TransferConsent::Granted)
-    }
 }
 
 pub(super) async fn read_context_source(
@@ -852,5 +967,529 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
                 8 * 1024,
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use floe_agent_contract::{ExpertModel, ExpertReasoner};
+    use std::collections::VecDeque;
+
+    struct FakeExecutor {
+        calls: Mutex<
+            Vec<(
+                floe_agent_contract::ModelRequest,
+                floe_inference::InferenceExecutionConstraint,
+            )>,
+        >,
+        script: Mutex<VecDeque<Result<Vec<ModelStep>, AgentFailure>>>,
+    }
+
+    impl FakeExecutor {
+        fn new(script: Vec<Result<Vec<ModelStep>, AgentFailure>>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                script: Mutex::new(script.into_iter().collect()),
+            }
+        }
+
+        fn calls(
+            &self,
+        ) -> Vec<(
+            floe_agent_contract::ModelRequest,
+            floe_inference::InferenceExecutionConstraint,
+        )> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl floe_inference::InferenceExecutor for FakeExecutor {
+        fn execute<'a>(
+            &'a self,
+            request: floe_agent_contract::ModelRequest,
+            _scope: &'a floe_execution::ExecutionScope,
+            constraint: floe_inference::InferenceExecutionConstraint,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+        > {
+            self.calls.lock().unwrap().push((request.clone(), constraint));
+            let next = self.script.lock().unwrap().pop_front().unwrap();
+            Box::pin(async move {
+                Ok(floe_agent_contract::ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: next?,
+                    usage: floe_agent_contract::ModelUsage {
+                        tokens: 11,
+                        cost_micros: 22,
+                    },
+                })
+            })
+        }
+    }
+
+    fn test_scope() -> floe_execution::ExecutionScope {
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(1_000_000, 1_000_000_000),
+            Default::default(),
+        );
+        floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+        )
+    }
+
+    fn test_context() -> floe_agent_contract::AgentContext {
+        floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            optional_context_issues: vec![],
+            memories: vec![],
+            evidence: vec![],
+        }
+    }
+
+    fn test_call() -> ExpertModelCall {
+        ExpertModelCall {
+            person_id: PersonId::new(),
+            invocation_id: Uuid::new_v4(),
+            prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
+            policy: expert_policy(),
+            context: test_context(),
+            assignment: "Protect the current focus period.".into(),
+            requirement: ExpertModelRequirement::DeviceOnly,
+            max_output_bytes: 8192,
+            max_tokens: 4096,
+            max_cost_micros: 1_000,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+            cancellation: floe_execution::Cancellation::default(),
+        }
+    }
+
+    fn test_capability(id: &str) -> floe_agent_contract::CapabilityDescriptor {
+        floe_agent_contract::CapabilityDescriptor {
+            schema_version: AGENT_VERSION,
+            id: id.into(),
+            version: "1.0.0".into(),
+            read_only: true,
+            output_data_class: DataClass::Personal,
+            input_schema: Some(serde_json::json!({"type": "object"})),
+        }
+    }
+
+    fn test_step() -> ExpertReasoningStep {
+        ExpertReasoningStep {
+            person_id: PersonId::new(),
+            invocation_id: Uuid::new_v4(),
+            prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
+            policy: expert_policy(),
+            context: test_context(),
+            requirement: ExpertModelRequirement::Any,
+            transcript: vec![ExpertTranscriptEntry::Task {
+                text: "Review the selected context.".into(),
+            }],
+            capabilities: vec![test_capability("calendar.read")],
+            replay: vec![],
+            remaining_tokens: 4096,
+            remaining_cost_micros: 1_000,
+            max_output_bytes: 8192,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+            cancellation: floe_execution::Cancellation::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn single_answer_accepts_exactly_one_answer_with_inference_usage() {
+        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+            text: "Protect focus.".into(),
+            artifacts: vec![],
+        }])]);
+        let scope = test_scope();
+        let captured = Mutex::new(Vec::new());
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+        };
+        let answer = ExpertModel::answer(&host, test_call()).await.unwrap();
+        assert_eq!(answer.schema_version, AGENT_VERSION);
+        assert_eq!(answer.answer, "Protect focus.");
+        assert_eq!(answer.used_tokens, 11);
+        assert_eq!(answer.cost_micros, 22);
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].0.purpose,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE
+        );
+        assert_eq!(
+            calls[0].0.consumer,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER
+        );
+        assert_eq!(
+            calls[0].1,
+            floe_inference::InferenceExecutionConstraint::DeviceOnly
+        );
+        assert!(calls[0].0.catalog.tools.is_empty());
+        assert!(calls[0].0.catalog.cards.is_empty());
+    }
+
+    #[tokio::test]
+    async fn single_answer_rejects_non_answers() {
+        for steps in [
+            vec![],
+            vec![ModelStep::Preamble {
+                text: "Thinking.".into(),
+            }],
+            vec![ModelStep::CallTool {
+                tool_id: "calendar.read".into(),
+                definition_revision: 1,
+                input: "{}".into(),
+            }],
+            vec![ModelStep::Delegate {
+                agent_id: "floe.builtin.focus.v1".into(),
+                definition_revision: 1,
+                message: "hi".into(),
+                context_refs: vec![],
+            }],
+            vec![
+                ModelStep::Answer {
+                    text: "one".into(),
+                    artifacts: vec![],
+                },
+                ModelStep::Answer {
+                    text: "two".into(),
+                    artifacts: vec![],
+                },
+            ],
+        ] {
+            let executor = FakeExecutor::new(vec![Ok(steps)]);
+            let scope = test_scope();
+            let captured = Mutex::new(Vec::new());
+            let host = ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &captured,
+            };
+            assert_eq!(
+                ExpertModel::answer(&host, test_call()).await.err(),
+                Some(AgentFailure::InvalidModelOutput)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn single_answer_maps_each_requirement_to_its_constraint() {
+        for (requirement, constraint) in [
+            (
+                ExpertModelRequirement::Any,
+                floe_inference::InferenceExecutionConstraint::Any,
+            ),
+            (
+                ExpertModelRequirement::DeviceOnly,
+                floe_inference::InferenceExecutionConstraint::DeviceOnly,
+            ),
+            (
+                ExpertModelRequirement::RemoteOnly,
+                floe_inference::InferenceExecutionConstraint::RemoteOnly,
+            ),
+        ] {
+            let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+                text: "ok".into(),
+                artifacts: vec![],
+            }])]);
+            let scope = test_scope();
+            let captured = Mutex::new(Vec::new());
+            let host = ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &captured,
+            };
+            let mut call = test_call();
+            call.requirement = requirement;
+            ExpertModel::answer(&host, call).await.unwrap();
+            assert_eq!(executor.calls()[0].1, constraint);
+        }
+    }
+
+    #[tokio::test]
+    async fn source_backed_input_dispatches_with_exact_captured_coverage() {
+        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+            text: "ok".into(),
+            artifacts: vec![],
+        }])]);
+        let scope = test_scope();
+        let person_id = PersonId::new();
+        let now = chrono::Utc::now();
+        let dependency = floe_context_contract::ContextDependency::try_new(
+            person_id,
+            floe_context_contract::GrantId::new(),
+            floe_context_contract::GrantAuthority::new(),
+            floe_context_contract::GrantSourceBinding::try_new(
+                person_id,
+                floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+                floe_context_contract::ConnectorId::try_new("connector").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
+                floe_context_contract::SourceAuthority::new(),
+            )
+            .unwrap(),
+            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+            vec![floe_context_contract::GrantDataCategory::Metadata],
+            floe_context_contract::GrantOperation::Read,
+            floe_context_contract::GrantPurpose::Assistant,
+            floe_context_contract::GrantConsumer::builtin("expert").unwrap(),
+            floe_context_contract::ProcessingRestriction::LocalOnly,
+            floe_context_contract::ConsumerPolicyAuthority::new(),
+            Uuid::new_v4(),
+            vec![7; 32],
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(5),
+        )
+        .unwrap();
+        let captured = Mutex::new(vec![dependency.clone()]);
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+        };
+        ExpertModel::answer(&host, test_call()).await.unwrap();
+        let calls = executor.calls();
+        match &calls[0].0.projection.coverage {
+            floe_agent_contract::DependencyCoverage::Dependent { dependencies } => {
+                assert_eq!(dependencies.as_slice(), &[dependency]);
+            }
+            coverage => panic!("source-backed input must not be {coverage:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_expert_input_fails_closed_without_dispatch() {
+        let scope = test_scope();
+        // Empty assignment, empty prompt, empty data classes, oversized
+        // output, and cancelled/expired calls never reach Inference.
+        // Evidence shape stays the view readers' and the Expert pre-check's
+        // responsibility, exactly as on the canonical root path.
+        let mut empty_assignment = test_call();
+        empty_assignment.assignment = "   ".into();
+        let mut empty_prompt = test_call();
+        empty_prompt.prompt.components.clear();
+        let mut empty_classes = test_call();
+        empty_classes.policy.data_classes.clear();
+        let mut too_large = test_call();
+        too_large.max_output_bytes = usize::MAX;
+        let cancelled = {
+            let call = test_call();
+            call.cancellation.cancel();
+            call
+        };
+        let mut expired = test_call();
+        expired.deadline = tokio::time::Instant::now();
+        for (index, call) in [
+            empty_assignment,
+            empty_prompt,
+            empty_classes,
+            too_large,
+            cancelled,
+            expired,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+                text: "unreachable".into(),
+                artifacts: vec![],
+            }])]);
+            let captured = Mutex::new(Vec::new());
+            let host = ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &captured,
+            };
+            let result = ExpertModel::answer(&host, call).await;
+            assert!(result.is_err(), "case {index} unexpectedly succeeded");
+            assert!(executor.calls().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn reasoning_step_maps_declared_capabilities_and_denies_delegation() {
+        let call_id = Uuid::new_v4();
+        let executor = FakeExecutor::new(vec![Ok(vec![
+            ModelStep::Preamble {
+                text: "Checking.".into(),
+            },
+            ModelStep::CallTool {
+                tool_id: "calendar.read".into(),
+                definition_revision: 1,
+                input: "{}".into(),
+            },
+        ])]);
+        let scope = test_scope();
+        let captured = Mutex::new(Vec::new());
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+        };
+        let mut step = test_step();
+        step.transcript.push(ExpertTranscriptEntry::Capability {
+            call_id,
+            capability_id: "calendar.read".into(),
+            input: "{}".into(),
+            result: "no conflicts".into(),
+        });
+        let outcome = ExpertReasoner::step(&host, step).await.unwrap();
+        assert_eq!(outcome.schema_version, AGENT_VERSION);
+        assert_eq!(outcome.used_tokens, 11);
+        assert_eq!(outcome.cost_micros, 22);
+        assert_eq!(
+            outcome.steps.as_slice(),
+            [
+                ExpertStep::Preamble {
+                    text: "Checking.".into()
+                },
+                ExpertStep::Call {
+                    capability_id: "calendar.read".into(),
+                    input: "{}".into(),
+                },
+            ]
+        );
+        let calls = executor.calls();
+        assert_eq!(calls[0].0.catalog.tools.len(), 1);
+        assert_eq!(calls[0].0.catalog.tools[0].id, "calendar.read");
+
+        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Delegate {
+            agent_id: "floe.builtin.focus.v1".into(),
+            definition_revision: 1,
+            message: "you take it".into(),
+            context_refs: vec![],
+        }])]);
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+        };
+        assert_eq!(
+            ExpertReasoner::step(&host, test_step()).await.err(),
+            Some(AgentFailure::CapabilityDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_step_rejects_undeclared_or_unreadable_capabilities() {
+        let scope = test_scope();
+        // Transcript references a capability the step did not declare.
+        let mut undeclared = test_step();
+        undeclared.transcript.push(ExpertTranscriptEntry::Capability {
+            call_id: Uuid::new_v4(),
+            capability_id: "calendar.write".into(),
+            input: "{}".into(),
+            result: "done".into(),
+        });
+        // Non-read-only and wrong-schema capabilities are denied like the
+        // legacy transport denied them.
+        let mut writable = test_step();
+        writable.capabilities = vec![floe_agent_contract::CapabilityDescriptor {
+            read_only: false,
+            ..test_capability("calendar.read")
+        }];
+        let mut wrong_schema = test_step();
+        wrong_schema.capabilities = vec![floe_agent_contract::CapabilityDescriptor {
+            schema_version: AGENT_VERSION + 1,
+            ..test_capability("calendar.read")
+        }];
+        // A reasoning step without its task has no canonical conversation.
+        let mut taskless = test_step();
+        taskless.transcript = vec![ExpertTranscriptEntry::Preamble {
+            text: "no task".into(),
+        }];
+        for step in [undeclared, writable, wrong_schema, taskless] {
+            let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+                text: "unreachable".into(),
+                artifacts: vec![],
+            }])]);
+            let captured = Mutex::new(Vec::new());
+            let host = ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &captured,
+            };
+            assert!(ExpertReasoner::step(&host, step).await.is_err());
+            assert!(executor.calls().is_empty());
+        }
+    }
+
+    #[test]
+    fn capturing_recorder_forwards_to_the_store_and_keeps_a_copy() {
+        struct Probe {
+            records: Mutex<Vec<floe_context_contract::ContextDependency>>,
+        }
+        impl ResultRecorder for Probe {
+            fn record_independent(&self, _: Uuid, _: Uuid) -> Result<(), AgentFailure> {
+                Ok(())
+            }
+            fn record(
+                &self,
+                _: Uuid,
+                _: Uuid,
+                dependency: floe_context_contract::ContextDependency,
+            ) -> Result<(), AgentFailure> {
+                self.records.lock().unwrap().push(dependency);
+                Ok(())
+            }
+        }
+        let probe = Probe {
+            records: Mutex::new(Vec::new()),
+        };
+        let captured = Mutex::new(Vec::new());
+        let recorder = CapturingRecorder {
+            inner: Some(&probe),
+            captured: &captured,
+        };
+        let person_id = PersonId::new();
+        let now = chrono::Utc::now();
+        let dependency = floe_context_contract::ContextDependency::try_new(
+            person_id,
+            floe_context_contract::GrantId::new(),
+            floe_context_contract::GrantAuthority::new(),
+            floe_context_contract::GrantSourceBinding::try_new(
+                person_id,
+                floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+                floe_context_contract::ConnectorId::try_new("connector").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new("owner").unwrap(),
+                floe_context_contract::SourceAuthority::new(),
+            )
+            .unwrap(),
+            vec![floe_context_contract::ResourceHandle::try_new("resource").unwrap()],
+            vec![floe_context_contract::GrantDataCategory::Metadata],
+            floe_context_contract::GrantOperation::Read,
+            floe_context_contract::GrantPurpose::Assistant,
+            floe_context_contract::GrantConsumer::builtin("expert").unwrap(),
+            floe_context_contract::ProcessingRestriction::LocalOnly,
+            floe_context_contract::ConsumerPolicyAuthority::new(),
+            Uuid::new_v4(),
+            vec![7; 32],
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(5),
+        )
+        .unwrap();
+        recorder
+            .record(Uuid::new_v4(), Uuid::new_v4(), dependency.clone())
+            .unwrap();
+        assert_eq!(captured.lock().unwrap().as_slice(), &[dependency.clone()]);
+        assert_eq!(probe.records.lock().unwrap().as_slice(), &[dependency]);
+        let bare = CapturingRecorder {
+            inner: None,
+            captured: &captured,
+        };
+        bare.record_independent(Uuid::new_v4(), Uuid::new_v4())
+            .unwrap();
     }
 }

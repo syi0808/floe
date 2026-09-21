@@ -11,11 +11,12 @@ use crate::BuiltinExpertKind;
 use crate::prompts::schedule_expert_prompt;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::InferencePolicyDecision;
+use super::ScheduleExecutionIntent;
 use floe_agent_contract::{
     AgentFailure, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState, DataClass,
     ExpertAssignments, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation,
     ExpertReasoner, ExpertReasoningStep, ExpertResult, ExpertStep, ExpertStepOutcome,
-    ExpertTranscriptEntry, ModelPlacement, ModelReplay, ViewCancellation, check_running,
+    ExpertTranscriptEntry, ModelReplay, ViewCancellation, check_running,
 };
 use floe_agent_runtime::execute_recorded;
 use floe_execution::Cancellation;
@@ -51,9 +52,17 @@ impl<Assignments: ExpertAssignments, Views: ExpertViews> ExpertHost<'_, Assignme
         invocation: ExpertInvocation,
         model: &Model,
         policy: &InferencePolicyDecision,
+        intent: ScheduleExecutionIntent,
     ) -> Result<ExpertResult, AgentFailure> {
-        self.invoke_inner(invocation, ExpertReasoning::Lightweight { model, policy })
-            .await
+        self.invoke_inner(
+            invocation,
+            ExpertReasoning::Lightweight {
+                model,
+                policy,
+                intent,
+            },
+        )
+        .await
     }
 
     async fn invoke_inner<Model: ExpertReasoner>(
@@ -98,12 +107,15 @@ impl<Assignments: ExpertAssignments, Views: ExpertViews> ExpertHost<'_, Assignme
         let minimum = admitted.focus_minimum_minutes;
         let (view, summary, model_calls, view_calls, action_proposals) =
             match (admitted.builtin_expert.as_deref(), reasoning) {
-                (Some(expert), ExpertReasoning::Lightweight { model, policy })
-                    if expert == BuiltinExpertKind::Schedule.package_id() =>
-                {
+                (Some(expert), ExpertReasoning::Lightweight {
+                    model,
+                    policy,
+                    intent,
+                }) if expert == BuiltinExpertKind::Schedule.package_id() => {
                     let (summary, model_calls, view, view_calls) = run_schedule_reasoning(
                         model,
                         policy,
+                        intent,
                         &invocation,
                         self.views,
                         admitted.data_class,
@@ -262,6 +274,7 @@ enum ExpertReasoning<'model, Model> {
     Lightweight {
         model: &'model Model,
         policy: &'model InferencePolicyDecision,
+        intent: ScheduleExecutionIntent,
     },
 }
 
@@ -269,10 +282,6 @@ enum ExpertReasoning<'model, Model> {
 struct NoExpertModel;
 
 impl floe_agent_contract::ExpertModel for NoExpertModel {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
     fn answer<'a>(
         &'a self,
         _: floe_agent_contract::ExpertModelCall,
@@ -296,6 +305,7 @@ impl ExpertReasoner for NoExpertModel {
 async fn run_schedule_reasoning<Model: ExpertReasoner, Views: ExpertViews>(
     model: &Model,
     policy: &InferencePolicyDecision,
+    intent: ScheduleExecutionIntent,
     invocation: &ExpertInvocation,
     views: &Views,
     data_class: DataClass,
@@ -345,6 +355,7 @@ async fn run_schedule_reasoning<Model: ExpertReasoner, Views: ExpertViews>(
         let response = generate_schedule_step(
             model,
             &expert_policy,
+            intent,
             invocation,
             &transcript,
             &replay,
@@ -823,6 +834,7 @@ fn bounded_calendar_view(
 async fn generate_schedule_step<Model: ExpertReasoner>(
     model: &Model,
     policy: &InferencePolicyDecision,
+    intent: ScheduleExecutionIntent,
     invocation: &ExpertInvocation,
     transcript: &[ExpertTranscriptEntry],
     replay: &[ModelReplay],
@@ -848,6 +860,7 @@ async fn generate_schedule_step<Model: ExpertReasoner>(
             prompt: schedule_expert_prompt(),
             policy: policy.clone(),
             context: invocation.context.clone(),
+            requirement: intent.requirement(),
             transcript: transcript.to_vec(),
             capabilities,
             replay: replay.to_vec(),

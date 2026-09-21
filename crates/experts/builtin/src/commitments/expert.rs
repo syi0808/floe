@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::ExpertModel;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
     CalendarContextView, FLOE_TASK_VIEW_ID, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
@@ -94,6 +94,7 @@ pub async fn run_commitments_expert_with_views<Model: ExpertModel>(
     let response = run_mail_model(
         model,
         policy,
+        ExpertModelRequirement::RemoteOnly,
         &invocation,
         commitments_expert_prompt(),
         evidence.context,

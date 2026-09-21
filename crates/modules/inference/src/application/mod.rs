@@ -9,10 +9,12 @@ mod usage;
 pub use attempt::{AttemptJournal, AttemptLifecycle, ModelAttemptRecord, ModelAttemptState};
 pub use route_config::{
     EVERYDAY_ASSISTANCE_PURPOSE, ModelRouteConfig, PurposeAvailability, RemoteModelConnection,
-    RemoteRoute, RoutePairing, candidate_route, valid_external_recipient,
+    RemoteRoute, RoutePairing, valid_external_recipient,
 };
 pub use route_selection::SavedConnectionStore;
 pub use router::{InferenceRouter, RoutePlanError};
 pub use saved_connection::{SavedServerConnection, admit_saved_connection};
-pub use service::{CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, InferenceService};
+pub use service::{
+    CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, InferenceExecutor, InferenceService,
+};
 pub use usage::{AttemptUpdate, UsageLedger};
