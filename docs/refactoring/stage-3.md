@@ -12,9 +12,9 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 ## Current checkpoint
 
-**Active: 3-C — Protocol and FFI Contract Cutover.**
+**Active: 3-D — Flutter, Native and Server Caller Cutover.**
 
-Use [the 3-C execution plan](stage-3/3-c.md) for the next change set. 3-B is **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report). No 3-C implementation is part of 3-B closure.
+Use [the 3-D execution plan](stage-3/3-d.md) for the next change set. 3-C is **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
 
 3-A is **complete · frozen**. Core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`; residual closure on execution baseline `beb6a624b0e912fe94faa1ea7628c72a96c8283b` deleted the caller-zero Schedule agent-turn runtime and its legacy model quarantine. Schedule now has only the canonical Expert endpoint model path. Owner regressions and proposal fixtures no longer require the deleted runtime; see [the residual closure report](stage-3/3-a.md#residual-closure-agent-report).
 
@@ -22,7 +22,7 @@ Use [the 3-C execution plan](stage-3/3-c.md) for the next change set. 3-B is **c
 
 - [x] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (complete · frozen; residual closure complete)
 - [x] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md) (complete · frozen)
-- [ ] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md)
+- [x] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md) (complete · frozen)
 - [ ] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md)
 - [ ] **3-E — Outer compatibility deletion** — [execution plan](stage-3/3-e.md)
 - [ ] **3-F — End-to-end product validation** — [execution plan](stage-3/3-f.md)
@@ -76,16 +76,15 @@ The remaining debt belongs to 3-C through 3-F:
 
 3-B closed the request credential seam, root/Expert/Schedule current-connection composition, owner-derived Expert availability and canonical AppWire query/event service cutover. App constructs opaque provider capabilities through a shared host-scoped store; it no longer reads raw saved credentials or interprets model profiles on the canonical runtime path. See [the 3-B report](stage-3/3-b.md#agent-report) for the implementation and validation evidence.
 
-Concrete AppComposition getters and `AppHost::legacy_services()` remain only for live old ABI callers. Their protocol/caller cutover and eventual caller-zero deletion remain 3-C/3-D/3-E work.
+Concrete AppComposition getters and `AppHost::legacy_services()` remain only for live old ABI callers. Their remaining caller cutover and eventual caller-zero deletion belong to 3-D/3-E.
 
-### Product-wire duplication
+### Closed Rust protocol and FFI contracts
 
-The canonical Conversation product command already exists as
-`AppCommandDto::ConversationStartTurn`.
+Canonical Conversation remains on `command_v2/query_v2/events_v2` and `AppCommandDto::ConversationStartTurn`. 3-C proved the old AgentVault ConversationTurn sender count was zero and deleted that wire path without removing internal turn machinery or live ConversationSession callers.
 
-The old AgentVault `ConversationTurn` DTO and `AgentRemoteRouteDto` remain. The latter mixes endpoint, bearer, model purpose/consent, pairing identity and source data and is still used by remote authority/pairing/grant product calls.
+Pairing and remote Access now have separate typed Rust protocol/FFI services admitted through AppHost's verified caller identity. Pairing accepts only setup endpoint/evidence; protected authority and Calendar/View grant operations prepare transports from the current saved connection inside provider adapters. Rust `AgentRemoteRouteDto`, `RemoteTurnRoute` and old remote AgentVault route operations are deleted, not compatibility aliases.
 
-3-C separates connection/pairing intent from model execution topology. 3-D migrates the real callers. 3-E deletes the old shapes only after caller count reaches zero.
+Flutter production source is intentionally unchanged and its old remote senders are now stale. The [3-C report](stage-3/3-c.md#agent-report) names their exact signatures, result decoders, bindings and tests for 3-D. 3-E deletes the remaining unrelated compatibility only after its own caller-zero proof.
 
 ### Live compatibility and Apple delivery
 
