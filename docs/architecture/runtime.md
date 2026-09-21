@@ -104,14 +104,21 @@ The final outer path is:
 ```text
 Flutter / native / server caller
   -> protocol / FFI intent conversion
-  -> App composition
+  -> AppHost request admission / verified CallerContext
+  -> typed App service / composition
   -> owner service
   -> canonical internal runtime
   -> adapters
 ```
 
-Outer callers may express user intent, including an explicit user-selected model profile where the product exposes one. They must not carry raw bearer tokens, arbitrary model endpoints, resolved internal route bundles or Access policy flags.
+Outer callers may express user intent, including an explicit user-selected model profile where the product exposes one. They must not carry saved bearer tokens, arbitrary model endpoints, resolved internal route bundles or Access policy flags. Before a connection is saved, pairing alone may supply a bounded loopback setup endpoint and signed challenge/polling evidence. Only an approved pairing result may return the newly issued token for secure persistence; its Debug/diagnostic representation is redacted.
 
 Canonical AppWire commands, queries and events pass through `HostRequest` and the typed `ConversationCommands`, `ConversationQueries` and `ConversationEvents` services. Identity and runtime epoch come from `CallerContext`; read requests cannot override person/device. AppComposition delegates to private worker/query and bounded event-buffer machinery, and event payloads are filtered to the caller principal. FFI only converts service/owner values to unchanged wire DTOs. Concrete AppComposition getters and `legacy_services()` remain only for live old ABI callers, not canonical AppWire.
 
-That outer cutover is active Stage 3 work; it must not be pulled back into the frozen Stage 2 as compatibility ownership.
+Pairing and remote Access have separate owner-oriented protocol envelopes and typed `RemotePairingCommands` / `RemoteAccessCommands` services. Their FFI entry points admit each request through `AppHost::request(request_id)`; FFI validates/converts structure and never supplies caller identity or decides authority. Pairing derives Person/device from `CallerContext` and client identity from the exact pending pairing ID. Connections and the key holder validate challenge, issuer and report identity.
+
+After pairing, producer inspection/enrollment and Calendar/View grant operations receive only review/source/grant intent. Provider-owned `RemoteAuthorityEndpoint::from_current_connection` and `ServerSourceClient::from_current_connection` reload the shared current store and admit the verified Person/device before preparing transport. App sees non-secret admitted client identity, not raw saved credentials. Access retains producer pinning and exact source/revision/provider/recipient/grant checks; source catalogs stay lazy and separate from model discovery.
+
+Remote operations use bounded worker jobs. Their result observations and completed-job release are bound to the originating Person, device, runtime epoch and owner domain; they do not cancel a Run or Task. The generic AgentVault polling/stop/release path cannot access these jobs. While a job is retained, a changed command cannot reuse its operation ID. Approved credentials are held only in bounded results until release/eviction and secure persistence by the caller.
+
+The old AgentVault ConversationTurn wire and route-shaped pairing/authority/grant inputs are not accepted. Internal `WorkerAction::ConversationTurn` remains the canonical runtime machinery; unrelated AgentVault/AgentFixture callers and ConversationSession remain live compatibility. Flutter's old remote senders are deliberately not a second Rust contract; their cutover belongs to Stage 3. That outer cutover must not be pulled back into frozen Stage 2 as compatibility ownership.

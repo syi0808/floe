@@ -337,7 +337,7 @@ pub(crate) fn validation(field: &'static str) -> AppWireErrorDto {
     )
 }
 
-fn request_validation(field: &'static str) -> AppWireErrorDto {
+pub(crate) fn request_validation(field: &'static str) -> AppWireErrorDto {
     if field == "schema_version" {
         wire_error(
             AppWireErrorCodeDto::UnsupportedVersion,
@@ -375,7 +375,7 @@ pub(crate) fn host_failure(failure: floe_app::HostError) -> AppWireErrorDto {
     }
 }
 
-fn service_error(failure: floe_app::ServiceError) -> AppWireErrorDto {
+pub(crate) fn service_error(failure: floe_app::ServiceError) -> AppWireErrorDto {
     let (code, message) = match failure {
         floe_app::ServiceError::InvalidInput => {
             (AppWireErrorCodeDto::Validation, "invalid app command")

@@ -9,6 +9,7 @@ mod app_wire;
 mod bridge;
 pub mod conversion;
 mod diagnostics;
+mod remote_wire;
 
 pub use abi::*;
 pub use bridge::FloeHandle;

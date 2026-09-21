@@ -8,36 +8,6 @@ use floe_conversation::ProfileSelection;
 use floe_kernel::RunId;
 use uuid::Uuid;
 
-/// The paired server one outer remote authority/pairing operation names, and
-/// what it reported.
-///
-/// Conversation turns no longer carry this: the canonical owners admit the
-/// stored credential after admission. The outer compatibility operations keep
-/// it until Stage 3.
-///
-/// The model route and the source catalog are two different admissions that one
-/// resolution happens to observe together; they are kept apart here so that
-/// neither is mistaken for the other.
-#[derive(Clone)]
-pub struct RemoteTurnRoute {
-    pub route: floe_inference::RemoteRoute,
-    pub calendar_connections: Vec<floe_connections::CalendarConnectionRef>,
-}
-
-impl RemoteTurnRoute {
-    pub fn pairing(&self) -> Option<&floe_inference::RoutePairing> {
-        self.route.pairing.as_ref()
-    }
-
-    /// The recipient this route resolves to, for the consent question.
-    pub fn recipient(&self) -> floe_inference::RouteRecipient {
-        floe_inference::RouteRecipient {
-            external: self.route.external,
-            allowed: self.route.allow_external,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ConversationTurnRequest {
     /// What the command is, in Conversation's own terms. The worker compares

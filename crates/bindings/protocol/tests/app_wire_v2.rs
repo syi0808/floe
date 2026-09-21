@@ -1,7 +1,6 @@
 use floe_protocol::{
-    APP_WIRE_VERSION, AppCommandRequestDto, AppCommandResultDto,
-    AppEventsResultDto, AppQueryRequestDto, AppQueryResultDto,
-    AppResponseDto, PROTOCOL_VERSION,
+    APP_WIRE_VERSION, AppCommandRequestDto, AppCommandResultDto, AppEventsResultDto,
+    AppQueryRequestDto, AppQueryResultDto, AppResponseDto, PROTOCOL_VERSION,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};

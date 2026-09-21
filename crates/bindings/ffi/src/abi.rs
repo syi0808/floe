@@ -234,3 +234,23 @@ pub unsafe extern "C" fn floe_core_free(handle: *mut FloeHandle) {
         unsafe { drop(Box::from_raw(handle)) };
     }
 }
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+#[cfg(unix)]
+pub unsafe extern "C" fn floe_core_remote_pairing_v2(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    invoke_json_v2(handle_ptr, request_json, crate::remote_wire::pairing)
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+#[cfg(unix)]
+pub unsafe extern "C" fn floe_core_remote_access_v2(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    invoke_json_v2(handle_ptr, request_json, crate::remote_wire::access)
+}

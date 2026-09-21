@@ -4,9 +4,7 @@ use uuid::Uuid;
 
 use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
 
-use super::{
-    calendar::{CalendarProviderDto, CalendarScopeDto},
-};
+use super::calendar::{CalendarProviderDto, CalendarScopeDto};
 
 pub use floe_agent_contract::{
     AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
@@ -215,82 +213,6 @@ pub enum AgentVaultActionDto {
     },
     Memory {},
     Connections {},
-    RemoteAuthorityInspectProducer {
-        route: AgentRemoteRouteDto,
-    },
-    RemoteAuthorityReviewAndEnroll {
-        route: AgentRemoteRouteDto,
-        producer: RemoteProducerIdentityDto,
-    },
-    RemoteAuthorityEnrollmentStatus {
-        route: AgentRemoteRouteDto,
-        enrollment_id: String,
-    },
-    RemotePairingPrepare {},
-    RemotePairingConfirm {
-        route: AgentRemoteRouteDto,
-        challenge: RemotePairingChallengeDto,
-        polling_proof: String,
-    },
-    RemotePairingStatus {
-        route: AgentRemoteRouteDto,
-        pairing_id: String,
-        polling_proof: String,
-    },
-    RemotePairingFinalize {
-        route: AgentRemoteRouteDto,
-        pairing_id: String,
-        polling_proof: String,
-        challenge: RemotePairingChallengeDto,
-    },
-    RemoteCalendarGrantPreview {
-        route: AgentRemoteRouteDto,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-    },
-    RemoteCalendarGrantReview {
-        route: AgentRemoteRouteDto,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        expected_producer_fingerprint: String,
-    },
-    RemoteCalendarGrantStatus {
-        grant_id: GrantId,
-    },
-    RemoteCalendarGrantPause {
-        grant_id: GrantId,
-        expected_authority: GrantAuthority,
-    },
-    RemoteViewGrantPreview {
-        route: AgentRemoteRouteDto,
-        view_id: String,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        consumer: String,
-    },
-    RemoteViewGrantReview {
-        route: AgentRemoteRouteDto,
-        view_id: String,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        consumer: String,
-        expected_producer_fingerprint: String,
-        expected_source_authority: SourceAuthority,
-        expected_connection_revision: u64,
-        expected_provider_identity: String,
-        expected_recipient: String,
-    },
-    RemoteViewGrantStatus {
-        grant_id: GrantId,
-    },
-    RemoteViewGrantPause {
-        grant_id: GrantId,
-        expected_authority: GrantAuthority,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -381,152 +303,6 @@ pub struct PersonalAccessOverviewDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemoteProducerIdentityDto {
-    pub schema_version: u32,
-    pub instance_id: String,
-    pub execution_owner: String,
-    pub audience: String,
-    pub key_id: String,
-    pub public_key: String,
-    pub fingerprint: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteAuthorityEnrollmentStatusDto {
-    pub enrollment_id: String,
-    pub key_id: String,
-    pub fingerprint: String,
-    pub local_confirmed: bool,
-    pub admin_approved: bool,
-    pub active: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemotePairingChallengeDto {
-    pub schema_version: u32,
-    pub pairing_id: String,
-    pub challenge_id: String,
-    pub challenge_b64url: String,
-    pub producer_signature: String,
-    pub producer: RemoteProducerIdentityDto,
-    pub issuer: RemoteOwnerPublicKeyDto,
-    pub expires_at_unix_ms: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemotePairingConfirmationDto {
-    pub schema_version: u32,
-    pub pairing_id: String,
-    pub status: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemotePairingStatusDto {
-    pub schema_version: u32,
-    pub pairing_id: String,
-    pub status: String,
-    pub person_id: String,
-    pub device_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub producer: Option<RemoteProducerIdentityDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer: Option<RemoteOwnerPublicKeyDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer_fingerprint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteCalendarGrantPreviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub provider_identity: String,
-    pub execution_owner: String,
-    pub producer: RemoteProducerIdentityDto,
-    pub consumer: String,
-    pub purpose: String,
-    pub recipient: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteCalendarGrantOverviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub grant_id: GrantId,
-    pub grant_authority: GrantAuthority,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub execution_owner: String,
-    pub state: String,
-    pub review_required: bool,
-    pub consumer: String,
-    pub purpose: String,
-    pub recipient: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteViewGrantPreviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub view_id: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub connection_revision: u64,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub provider_identity: String,
-    pub execution_owner: String,
-    pub producer: RemoteProducerIdentityDto,
-    pub consumer: String,
-    pub purpose: String,
-    pub recipient: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteViewGrantOverviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub grant_id: GrantId,
-    pub grant_authority: GrantAuthority,
-    pub view_id: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub connection_revision: Option<u64>,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub execution_owner: String,
-    pub state: String,
-    pub review_required: bool,
-    pub consumer: String,
-    pub purpose: String,
-    pub recipient: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteOwnerPublicKeyDto {
-    pub key_id: String,
-    pub public_key: String,
-    pub fingerprint: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct AgentMemoryReviewDecisionDto {
     pub candidate_id: String,
     pub decision: AgentMemoryReviewDecisionKindDto,
@@ -551,53 +327,6 @@ pub enum AgentConversationSessionOperationDto {
         session_id: String,
         expected_revision: u64,
     },
-}
-
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentRemoteRouteDto {
-    pub base_url: String,
-    pub bearer_token: String,
-    pub purpose: String,
-    pub external: bool,
-    pub allow_external: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recipient: Option<String>,
-    pub calendar_connections: Vec<AgentRemoteCalendarConnectionDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pairing: Option<AgentRemotePairingDto>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentRemotePairingDto {
-    pub client_id: String,
-    pub person_id: String,
-    pub device_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentRemoteCalendarConnectionDto {
-    pub connector_id: String,
-    pub connection_id: String,
-    pub connection_revision: u64,
-}
-
-impl std::fmt::Debug for AgentRemoteRouteDto {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AgentRemoteRouteDto")
-            .field("base_url", &self.base_url)
-            .field("bearer_token", &"[REDACTED]")
-            .field("purpose", &self.purpose)
-            .field("external", &self.external)
-            .field("allow_external", &self.allow_external)
-            .field("recipient", &self.recipient)
-            .field("calendar_connections", &self.calendar_connections)
-            .field("pairing", &self.pairing)
-            .finish()
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -712,22 +441,6 @@ pub struct AgentVaultResultDto {
     pub memory: Option<AgentMemoryOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connections: Option<Vec<ConnectorSnapshotDto>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_producer: Option<RemoteProducerIdentityDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_pairing: Option<RemotePairingStatusDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_owner: Option<RemoteOwnerPublicKeyDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_view_grant: Option<RemoteViewGrantOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_view_preview: Option<RemoteViewGrantPreviewDto>,
     pub failure: Option<AgentVaultFailureDto>,
 }
 

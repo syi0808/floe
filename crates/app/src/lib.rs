@@ -18,6 +18,7 @@ mod events;
 mod host;
 mod local_context;
 mod prompts;
+mod remote_services;
 mod services;
 mod turn_request;
 #[cfg(unix)]
@@ -53,7 +54,6 @@ pub use floe_access::{
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
 pub use floe_connections::{CalendarConnectionRef, PairingIssuer, PairingStatus};
 pub use floe_conversation::AgentOutcome;
-pub use floe_inference::{RemoteRoute, RoutePairing};
 pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
@@ -81,6 +81,10 @@ pub use host::{AppHost, HostRequest};
 pub use local_context::{
     CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
 };
+pub use remote_services::{
+    PairingTarget, RemoteAccessCommand, RemoteAccessCommands, RemoteAccessResult,
+    RemotePairingCommand, RemotePairingCommands, RemotePairingResult,
+};
 pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
@@ -88,7 +92,7 @@ pub use services::{
     EventRead, ProfileSelection, ReadConversation, ReadConversationEvents, RunEventRecord,
     ServiceError, StartTurn, TurnMode,
 };
-pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute};
+pub use turn_request::ConversationTurnRequest;
 #[cfg(unix)]
 pub use vault_host::{VaultBridge, VaultRequestFailure};
 pub use worker::{

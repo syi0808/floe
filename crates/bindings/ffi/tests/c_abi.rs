@@ -943,3 +943,59 @@ fn abi_returns_typed_errors_for_bad_boundary_input() {
     assert!(handle.is_null());
     assert_eq!(take_json(error)["error"]["field"], "path");
 }
+
+#[test]
+fn remote_owner_abis_validate_envelopes_and_preserve_request_correlation() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = Uuid::new_v4();
+    let person_directory = directory.path().join("people").join(person.to_string());
+    std::fs::create_dir_all(&person_directory).unwrap();
+    std::fs::write(directory.path().join("local_device_id"), "verified-mac").unwrap();
+    let core = Core::open(person_directory.join("floe.db").to_str().unwrap());
+    for (endpoint, kind) in [
+        (
+            floe_core_remote_pairing_v2
+                as unsafe extern "C" fn(*mut FloeHandle, *const c_char) -> *mut c_char,
+            "read_result",
+        ),
+        (floe_core_remote_access_v2, "read_result"),
+    ] {
+        let request_id = Uuid::new_v4();
+        let call = |body: Value| {
+            let request = CString::new(body.to_string()).unwrap();
+            take_json(unsafe { endpoint(core.0, request.as_ptr()) })
+        };
+        let request = json!({"schema_version": 2, "request_id": request_id, "operation": {"kind": kind, "operation_id": Uuid::new_v4(), "release": false}});
+        let accepted = call(request.clone());
+        assert_eq!(accepted["request_id"], request_id.to_string());
+        assert_eq!(accepted["error"]["code"], "not_found");
+        let mut wrong = request.clone();
+        wrong["schema_version"] = json!(3);
+        assert_eq!(call(wrong)["error"]["code"], "unsupported_version");
+        for field in [
+            "person_id",
+            "device_id",
+            "route",
+            "base_url",
+            "bearer_token",
+            "allow_external",
+            "calendar_connections",
+        ] {
+            let mut forged = request.clone();
+            forged["operation"][field] = json!("must_not_appear_in_diagnostics");
+            let rejected = call(forged);
+            assert_eq!(rejected["request_id"], request_id.to_string());
+            assert_eq!(rejected["error"]["code"], "validation");
+            assert!(
+                !rejected
+                    .to_string()
+                    .contains("must_not_appear_in_diagnostics")
+            );
+        }
+        let malformed = CString::new("{").unwrap();
+        assert_eq!(
+            take_json(unsafe { endpoint(core.0, malformed.as_ptr()) })["error"]["code"],
+            "validation"
+        );
+    }
+}

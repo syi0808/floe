@@ -11,7 +11,7 @@ use floe_agent_contract::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
-use crate::{ConversationTurnRequest, RemoteTurnRoute};
+use crate::ConversationTurnRequest;
 
 /// The Person's vault, as this process currently holds it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -211,81 +211,13 @@ pub enum WorkerAction {
     },
     Memory,
     Connections,
-    RemoteAuthorityInspectProducer {
-        route: Box<RemoteTurnRoute>,
+    RemoteAccess {
+        caller: crate::CallerContext,
+        command: crate::RemoteAccessCommand,
     },
-    RemoteAuthorityReviewAndEnroll {
-        route: Box<RemoteTurnRoute>,
-        producer: Box<floe_access::RemoteProducerIdentity>,
-    },
-    RemoteAuthorityEnrollmentStatus {
-        route: Box<RemoteTurnRoute>,
-        enrollment_id: String,
-    },
-    RemotePairingPrepare,
-    RemotePairingConfirm {
-        route: Box<RemoteTurnRoute>,
-        challenge: Box<RemotePairingChallenge>,
-        polling_proof: String,
-    },
-    RemotePairingStatus {
-        route: Box<RemoteTurnRoute>,
-        pairing_id: String,
-        polling_proof: String,
-    },
-    RemotePairingFinalize {
-        route: Box<RemoteTurnRoute>,
-        pairing_id: String,
-        polling_proof: String,
-        challenge: Box<RemotePairingChallenge>,
-    },
-    RemoteCalendarGrantPreview {
-        route: Box<RemoteTurnRoute>,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-    },
-    RemoteCalendarGrantReview {
-        route: Box<RemoteTurnRoute>,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        expected_producer_fingerprint: String,
-    },
-    RemoteCalendarGrantStatus {
-        grant_id: floe_access::GrantId,
-    },
-    RemoteCalendarGrantPause {
-        grant_id: floe_access::GrantId,
-        expected_authority: floe_access::GrantAuthority,
-    },
-    RemoteViewGrantPreview {
-        route: Box<RemoteTurnRoute>,
-        view_id: String,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        consumer: String,
-    },
-    RemoteViewGrantReview {
-        route: Box<RemoteTurnRoute>,
-        view_id: String,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        consumer: String,
-        expected_producer_fingerprint: String,
-        expected_source_authority: floe_context_contract::SourceAuthority,
-        expected_connection_revision: u64,
-        expected_provider_identity: String,
-        expected_recipient: String,
-    },
-    RemoteViewGrantStatus {
-        grant_id: floe_access::GrantId,
-    },
-    RemoteViewGrantPause {
-        grant_id: floe_access::GrantId,
-        expected_authority: floe_access::GrantAuthority,
+    RemotePairing {
+        caller: crate::CallerContext,
+        command: crate::RemotePairingCommand,
     },
 }
 
@@ -322,21 +254,8 @@ impl WorkerAction {
             Self::MemoryReview { .. } => "memory_review",
             Self::Memory => "memory",
             Self::Connections => "connections",
-            Self::RemoteAuthorityInspectProducer { .. } => "remote_authority_inspect_producer",
-            Self::RemoteAuthorityReviewAndEnroll { .. } => "remote_authority_review_and_enroll",
-            Self::RemoteAuthorityEnrollmentStatus { .. } => "remote_authority_enrollment_status",
-            Self::RemotePairingPrepare => "remote_pairing_prepare",
-            Self::RemotePairingConfirm { .. } => "remote_pairing_confirm",
-            Self::RemotePairingStatus { .. } => "remote_pairing_status",
-            Self::RemotePairingFinalize { .. } => "remote_pairing_finalize",
-            Self::RemoteCalendarGrantPreview { .. } => "remote_calendar_grant_preview",
-            Self::RemoteCalendarGrantReview { .. } => "remote_calendar_grant_review",
-            Self::RemoteCalendarGrantStatus { .. } => "remote_calendar_grant_status",
-            Self::RemoteCalendarGrantPause { .. } => "remote_calendar_grant_pause",
-            Self::RemoteViewGrantPreview { .. } => "remote_view_grant_preview",
-            Self::RemoteViewGrantReview { .. } => "remote_view_grant_review",
-            Self::RemoteViewGrantStatus { .. } => "remote_view_grant_status",
-            Self::RemoteViewGrantPause { .. } => "remote_view_grant_pause",
+            Self::RemoteAccess { command, .. } => command.name(),
+            Self::RemotePairing { command, .. } => command.name(),
         }
     }
 
@@ -361,21 +280,8 @@ impl WorkerAction {
                 | Self::MemoryReview { .. }
                 | Self::Memory
                 | Self::Connections
-                | Self::RemoteAuthorityInspectProducer { .. }
-                | Self::RemoteAuthorityReviewAndEnroll { .. }
-                | Self::RemoteAuthorityEnrollmentStatus { .. }
-                | Self::RemotePairingPrepare
-                | Self::RemotePairingConfirm { .. }
-                | Self::RemotePairingStatus { .. }
-                | Self::RemotePairingFinalize { .. }
-                | Self::RemoteCalendarGrantPreview { .. }
-                | Self::RemoteCalendarGrantReview { .. }
-                | Self::RemoteCalendarGrantStatus { .. }
-                | Self::RemoteCalendarGrantPause { .. }
-                | Self::RemoteViewGrantPreview { .. }
-                | Self::RemoteViewGrantReview { .. }
-                | Self::RemoteViewGrantStatus { .. }
-                | Self::RemoteViewGrantPause { .. }
+                | Self::RemoteAccess { .. }
+                | Self::RemotePairing { .. }
         )
     }
 }
@@ -426,3 +332,32 @@ pub struct WorkerResult {
 
 /// One trace field a worker result reports about itself.
 pub type WorkerTrace = BTreeMap<&'static str, String>;
+
+impl WorkerAction {
+    pub(crate) fn remote_caller(&self) -> Option<&crate::CallerContext> {
+        match self {
+            Self::RemotePairing { caller, .. } | Self::RemoteAccess { caller, .. } => Some(caller),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn same_remote_command(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::RemotePairing { caller, command },
+                Self::RemotePairing {
+                    caller: other_caller,
+                    command: other_command,
+                },
+            ) => caller == other_caller && command == other_command,
+            (
+                Self::RemoteAccess { caller, command },
+                Self::RemoteAccess {
+                    caller: other_caller,
+                    command: other_command,
+                },
+            ) => caller == other_caller && command == other_command,
+            _ => false,
+        }
+    }
+}

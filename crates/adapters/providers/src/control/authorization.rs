@@ -10,6 +10,7 @@ use floe_connections::{
     PairingConfirmation, PairingConfirmationRequest, PairingIssuer, PairingStatus,
     PairingStatusRequest, ProducerIdentity, RemoteControl,
 };
+#[cfg(test)]
 use floe_inference::RemoteRoute;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -128,7 +129,7 @@ pub struct PairingStartResponse {
     pub producer_signature: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PairingStatusResponse {
     pub schema_version: u32,
@@ -350,6 +351,8 @@ impl RemoteAuthorizationClient {
     pub fn new(base_url: &str, bearer_token: &str) -> Result<Self, AgentFailure> {
         let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
         if address.scheme() != "http"
+            || !address.username().is_empty()
+            || address.password().is_some()
             || address.host_str() != Some("127.0.0.1")
             || address.path() != "/"
             || address.query().is_some()
@@ -980,6 +983,8 @@ impl HttpRemoteControl {
     pub fn new(base_url: &str) -> Result<Self, AgentFailure> {
         let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
         if address.scheme() != "http"
+            || !address.username().is_empty()
+            || address.password().is_some()
             || address.host_str() != Some("127.0.0.1")
             || address.path() != "/"
             || address.query().is_some()
@@ -1152,7 +1157,7 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+    pub(super) struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
 
     impl VaultKeyProvider for TestKeys {
         fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
@@ -1669,17 +1674,30 @@ const ENROLLMENT_BUDGET: Duration = Duration::from_secs(30);
 /// holder it was given.
 pub struct RemoteAuthorityEndpoint<'a, Keys> {
     client: RemoteAuthorizationClient,
+    client_id: String,
     /// A locked vault has no key to enroll under; asking who the producer is
     /// still works without one.
     keys: Option<&'a Keys>,
 }
 
 impl<'a, Keys: RemoteAuthorizationKeys> RemoteAuthorityEndpoint<'a, Keys> {
-    pub fn new(route: &RemoteRoute, keys: Option<&'a Keys>) -> Result<Self, AgentFailure> {
+    pub fn from_current_connection(
+        store: &impl floe_inference::SavedConnectionStore,
+        person_id: &str,
+        device_id: &str,
+        keys: Option<&'a Keys>,
+    ) -> Result<Self, AgentFailure> {
+        let saved = store.load()?.ok_or(AgentFailure::PolicyDenied)?;
+        let source = super::PreparedServerSource::admit(saved, person_id, device_id)?;
         Ok(Self {
-            client: RemoteAuthorizationClient::new(&route.base_url, &route.bearer_token)?,
+            client: RemoteAuthorizationClient::new(source.base_url(), source.bearer_token())?,
+            client_id: source.client_id().to_owned(),
             keys,
         })
+    }
+
+    pub fn client_id(&self) -> &str {
+        &self.client_id
     }
 }
 
@@ -1815,5 +1833,109 @@ impl<Keys: RemoteAuthorizationKeys> floe_access::RemoteGrantTransport
                 producer: access_producer_identity(&preview.producer),
             })
         })
+    }
+}
+
+impl std::fmt::Debug for PairingStatusResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PairingStatusResponse")
+            .field("pairing_id", &self.pairing_id)
+            .field("status", &self.status)
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod current_authority_tests {
+    use super::*;
+    use crate::control::CurrentSavedConnectionStore;
+    use floe_inference::{SavedConnectionStore, SavedServerConnection};
+    use floe_vault::EncryptedAgentVault;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct Store {
+        saved: Arc<Mutex<Option<SavedServerConnection>>>,
+        loads: Arc<AtomicUsize>,
+    }
+
+    impl SavedConnectionStore for Store {
+        fn load(&self) -> Result<Option<SavedServerConnection>, AgentFailure> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.saved.lock().unwrap().clone())
+        }
+    }
+
+    #[test]
+    fn authority_preparation_reloads_private_credentials_and_exact_identity_without_discovery() {
+        let person = uuid::Uuid::new_v4().to_string();
+        let saved = SavedServerConnection {
+            base_url: "http://127.0.0.1:8431".into(),
+            token: "first_private_token_value_long_enough".into(),
+            client_id: "client-1".into(),
+            person_id: person.clone(),
+            device_id: "device-1".into(),
+            allow_external: false,
+            external_recipients: vec![],
+        };
+        let store = Store {
+            saved: Arc::new(Mutex::new(Some(saved))),
+            loads: Arc::new(AtomicUsize::new(0)),
+        };
+        let current = CurrentSavedConnectionStore::new(store.clone());
+        type Endpoint<'store> =
+            RemoteAuthorityEndpoint<'store, EncryptedAgentVault<super::tests::TestKeys>>;
+        let first = Endpoint::from_current_connection(&current, &person, "device-1", None).unwrap();
+        assert_eq!(first.client_id(), "client-1");
+        assert_eq!(
+            first.client.bearer_token,
+            "first_private_token_value_long_enough"
+        );
+        store.saved.lock().unwrap().as_mut().unwrap().token =
+            "second_private_token_value_long_enough".into();
+        let second =
+            Endpoint::from_current_connection(&current, &person, "device-1", None).unwrap();
+        assert_eq!(
+            second.client.bearer_token,
+            "second_private_token_value_long_enough"
+        );
+        for (claimed_person, claimed_device) in [
+            (uuid::Uuid::new_v4().to_string(), "device-1"),
+            (person.clone(), "foreign-device"),
+        ] {
+            assert!(matches!(
+                Endpoint::from_current_connection(&current, &claimed_person, claimed_device, None),
+                Err(AgentFailure::PolicyDenied)
+            ));
+        }
+        *store.saved.lock().unwrap() = None;
+        assert!(matches!(
+            Endpoint::from_current_connection(&current, &person, "device-1", None),
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert_eq!(store.loads.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn setup_rejects_embedded_credentials_and_status_debug_redacts_new_token() {
+        for endpoint in [
+            "http://user:secret@127.0.0.1:8431",
+            "http://user@127.0.0.1:8431",
+            "https://example.com",
+        ] {
+            assert!(HttpRemoteControl::new(endpoint).is_err());
+        }
+        let status: PairingStatusResponse = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "pairing_id": "pairing", "status": "approved",
+            "person_id": "person", "device_id": "device", "client_id": "pairing",
+            "token": "private_new_pairing_token"
+        }))
+        .unwrap();
+        assert!(!format!("{status:?}").contains("private_new_pairing_token"));
     }
 }

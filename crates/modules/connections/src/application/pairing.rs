@@ -81,7 +81,11 @@ fn validate_status(pairing_id: &str, response: &PairingStatus) -> Result<(), Age
             "pending" | "local_confirmed" | "approved" | "rejected" | "expired" | "repair_required"
         )
         || (response.status == "approved"
-            && (response.client_id.is_none() || response.token.is_none()))
+            && (response.client_id.is_none()
+                || response
+                    .token
+                    .as_deref()
+                    .is_none_or(|token| validate_token_text(token).is_err())))
         || (response.status != "approved"
             && (response.client_id.is_some() || response.token.is_some()))
     {
@@ -388,7 +392,7 @@ pub struct PairingOperation {
     pub state: PairingOperationState,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum PairingOperationState {
     AwaitingApproval,
     Approved { client_id: String, token: String },
@@ -491,4 +495,16 @@ fn settle_pairing(
         },
         PairingDirective::Settled { state },
     )
+}
+
+impl std::fmt::Debug for PairingOperationState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::AwaitingApproval => "AwaitingApproval",
+            Self::Approved { .. } => "Approved { token: [REDACTED], .. }",
+            Self::Rejected => "Rejected",
+            Self::Expired => "Expired",
+            Self::RepairRequired => "RepairRequired",
+        })
+    }
 }

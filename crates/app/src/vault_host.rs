@@ -116,6 +116,18 @@ impl VaultBridge {
             })
     }
 
+    pub(crate) fn remote_request(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: Uuid,
+        action: Option<WorkerAction>,
+        pairing: bool,
+        release: bool,
+    ) -> Result<WorkerResult, AgentFailure> {
+        self.worker()?
+            .remote_request(caller, operation_id, action, pairing, release)
+    }
+
     pub(crate) fn conversation_query(
         &self,
         person: PersonId,
@@ -829,8 +841,11 @@ impl Worker {
     ) -> Result<WorkerResult, AgentFailure> {
         let person_id = person;
         if let WorkerOperation::Submit { action } = operation {
+            if action.remote_caller().is_some() {
+                return Err(AgentFailure::PolicyDenied);
+            }
             self.submit_job(person, id, action)?;
-            return self.poll_job(person_id, id, 0, false, false);
+            return self.poll_job(person_id, id, 0, false, false, None);
         }
         let (after_sequence, stop, release) = match operation {
             WorkerOperation::Poll { after_sequence } => (after_sequence, false, false),
@@ -838,7 +853,36 @@ impl Worker {
             WorkerOperation::Release => (0, false, true),
             WorkerOperation::Submit { .. } => unreachable!("submitted above"),
         };
-        self.poll_job(person_id, id, after_sequence, stop, release)
+        self.poll_job(person_id, id, after_sequence, stop, release, None)
+    }
+
+    fn remote_request(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: Uuid,
+        action: Option<WorkerAction>,
+        pairing: bool,
+        release: bool,
+    ) -> Result<WorkerResult, AgentFailure> {
+        if operation_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if let Some(action) = action {
+            if action.remote_caller() != Some(caller)
+                || matches!(action, WorkerAction::RemotePairing { .. }) != pairing
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            self.submit_job(PersonId(caller.person_id()), operation_id, Box::new(action))?;
+        }
+        self.poll_job(
+            PersonId(caller.person_id()),
+            operation_id,
+            0,
+            false,
+            release,
+            Some((caller, pairing)),
+        )
     }
 
     /// Read how far one job got, after any stop or release the caller asked for.
@@ -849,11 +893,22 @@ impl Worker {
         after_sequence: usize,
         stop: bool,
         release: bool,
+        remote: Option<(&crate::CallerContext, bool)>,
     ) -> Result<WorkerResult, AgentFailure> {
         let jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         let job = jobs.get(&id).cloned().ok_or(AgentFailure::NotFound)?;
         if job.person != person {
             return Err(AgentFailure::NotFound);
+        }
+        match remote {
+            Some((caller, pairing))
+                if job.action.remote_caller() != Some(caller)
+                    || matches!(*job.action, WorkerAction::RemotePairing { .. }) != pairing =>
+            {
+                return Err(AgentFailure::NotFound);
+            }
+            None if job.action.remote_caller().is_some() => return Err(AgentFailure::PolicyDenied),
+            _ => {}
         }
         drop(jobs);
         if stop {
@@ -919,10 +974,14 @@ impl Worker {
             if !response.done {
                 return Err(AgentFailure::Conflict);
             }
-            self.jobs
-                .lock()
-                .map_err(|_| AgentFailure::Interrupted)?
-                .remove(&id);
+            let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
+            if !jobs
+                .get(&id)
+                .is_some_and(|current| Arc::ptr_eq(current, &job))
+            {
+                return Err(AgentFailure::NotFound);
+            }
+            jobs.remove(&id);
         }
         Ok(response)
     }
@@ -949,6 +1008,12 @@ impl Worker {
         id: Uuid,
         action: Box<WorkerAction>,
     ) -> Result<Arc<Job>, AgentFailure> {
+        if action
+            .remote_caller()
+            .is_some_and(|caller| caller.person_id() != person.0)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         if let Some(job) = jobs.get(&id) {
             if job.person != person {
@@ -956,6 +1021,11 @@ impl Worker {
             }
             // One request id means one command; a second one under the same id
             // is a different request, whatever it asks for.
+            if action.remote_caller().is_some() || job.action.remote_caller().is_some() {
+                if !job.action.same_remote_command(&action) {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
             if job.action.name() != action.name() {
                 return Err(AgentFailure::Conflict);
             }
@@ -1779,418 +1849,470 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 |_| VaultState::Ready,
             )))
         }
-        WorkerAction::RemotePairingPrepare => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            Ok(VaultExecutionResult {
-                remote_owner: Some(Box::pin(vault.remote_owner_public_key()).await?),
-                ..VaultExecutionResult::ready()
-            })
+        WorkerAction::RemotePairing { caller, command } => {
+            let person_text = caller.person_id().to_string();
+            match command {
+                crate::RemotePairingCommand::Prepare => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    Ok(VaultExecutionResult {
+                        remote_owner: Some(Box::pin(vault.remote_owner_public_key()).await?),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemotePairingCommand::Confirm {
+                    target,
+                    issuer_fingerprint,
+                    challenge,
+                    polling_proof,
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let service = floe_connections::PairingService::new(
+                        floe_provider_adapters::control::authorization::HttpRemoteControl::new(
+                            &target.base_url,
+                        )?,
+                    );
+                    floe_connections::admit_pairing_issuer(&floe_connections::PairingIssuer {
+                        key_id: challenge.issuer.key_id.clone(),
+                        public_key: challenge.issuer.public_key.clone(),
+                        fingerprint: issuer_fingerprint.clone(),
+                    })?;
+                    let status = Box::pin(floe_connections::confirm_pairing(
+                        &service,
+                        &remote_authority::VaultPairingKeys {
+                            vault: vault.vault.as_ref(),
+                        },
+                        &job.person.to_string(),
+                        floe_connections::PairingIdentity {
+                            person_id: &person_text,
+                            device_id: caller.device_id(),
+                            client_id: &challenge.pairing_id,
+                        },
+                        challenge,
+                        polling_proof,
+                        tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
+                        &job.cancellation,
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_pairing: Some(status),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemotePairingCommand::Status {
+                    target,
+                    pairing_id,
+                    polling_proof,
+                } => {
+                    let service = floe_connections::PairingService::new(
+                        floe_provider_adapters::control::authorization::HttpRemoteControl::new(
+                            &target.base_url,
+                        )?,
+                    );
+                    let status = Box::pin(floe_connections::read_pairing_status(
+                        &service,
+                        &job.person.to_string(),
+                        floe_connections::PairingIdentity {
+                            person_id: &person_text,
+                            device_id: caller.device_id(),
+                            client_id: pairing_id,
+                        },
+                        pairing_id,
+                        polling_proof,
+                        tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
+                        &job.cancellation,
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_pairing: Some(status),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemotePairingCommand::Finalize {
+                    target,
+                    issuer_fingerprint,
+                    pairing_id,
+                    polling_proof,
+                    challenge,
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let service = floe_connections::PairingService::new(
+                        floe_provider_adapters::control::authorization::HttpRemoteControl::new(
+                            &target.base_url,
+                        )?,
+                    );
+                    floe_connections::admit_pairing_issuer(&floe_connections::PairingIssuer {
+                        key_id: challenge.issuer.key_id.clone(),
+                        public_key: challenge.issuer.public_key.clone(),
+                        fingerprint: issuer_fingerprint.clone(),
+                    })?;
+                    let status = Box::pin(floe_connections::finalize_pairing(
+                        &service,
+                        &remote_authority::VaultPairingKeys {
+                            vault: vault.vault.as_ref(),
+                        },
+                        &job.person.to_string(),
+                        floe_connections::PairingIdentity {
+                            person_id: &person_text,
+                            device_id: caller.device_id(),
+                            client_id: pairing_id,
+                        },
+                        pairing_id,
+                        polling_proof,
+                        challenge,
+                        tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
+                        &job.cancellation,
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_pairing: Some(status),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+            }
         }
-        WorkerAction::RemotePairingConfirm {
-            route,
-            challenge,
-            polling_proof,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            let service = floe_connections::PairingService::new(
-                floe_provider_adapters::control::authorization::HttpRemoteControl::new(
-                    &route.route.base_url,
-                )?,
-            );
-            let status = Box::pin(floe_connections::confirm_pairing(
-                &service,
-                &remote_authority::VaultPairingKeys {
-                    vault: vault.vault.as_ref(),
-                },
-                &job.person.to_string(),
-                pairing_identity(pairing),
-                challenge,
-                polling_proof,
-                tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
-                &job.cancellation,
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_pairing: Some(status),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemotePairingStatus {
-            route,
-            pairing_id,
-            polling_proof,
-        } => {
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            let service = floe_connections::PairingService::new(
-                floe_provider_adapters::control::authorization::HttpRemoteControl::new(
-                    &route.route.base_url,
-                )?,
-            );
-            let status = Box::pin(floe_connections::read_pairing_status(
-                &service,
-                &job.person.to_string(),
-                pairing_identity(pairing),
-                pairing_id,
-                polling_proof,
-                tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
-                &job.cancellation,
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_pairing: Some(status),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemotePairingFinalize {
-            route,
-            pairing_id,
-            polling_proof,
-            challenge,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            let service = floe_connections::PairingService::new(
-                floe_provider_adapters::control::authorization::HttpRemoteControl::new(
-                    &route.route.base_url,
-                )?,
-            );
-            let status = Box::pin(floe_connections::finalize_pairing(
-                &service,
-                &remote_authority::VaultPairingKeys {
-                    vault: vault.vault.as_ref(),
-                },
-                &job.person.to_string(),
-                pairing_identity(pairing),
-                pairing_id,
-                polling_proof,
-                challenge,
-                tokio::time::Instant::now() + remote_authority::PAIRING_DEADLINE,
-                &job.cancellation,
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_pairing: Some(status),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteAuthorityInspectProducer { route } => {
-            let vault = current.as_ref().map(|(_, vault)| vault.vault.as_ref());
-            let transport = RemoteAuthorityEndpoint::new(&route.route, vault)?;
-            let store = vault.map(|vault| remote_authority::VaultRemoteAuthority { vault });
-            let inspection = Box::pin(floe_access::inspect_remote_authority(
-                &transport,
-                store
-                    .as_ref()
-                    .map(|store| store as &dyn floe_access::RemoteAuthorityStore),
-                &remote_authority::authority_window(job.cancellation.clone()),
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_producer: Some(inspection.producer),
-                remote_owner: inspection.owner,
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteAuthorityReviewAndEnroll { route, producer } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            // Another Person's pairing is denied before anything else can
-            // fail: enrollment is theirs to attempt or not at all.
-            floe_access::admit_enrollment_pairing(
-                job.person,
-                access_pairing_identity(pairing),
-            )?;
-            let vault = vault.vault.as_ref();
-            let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
-            let enrolled = Box::pin(floe_access::review_and_enroll_remote_authority(
-                &transport,
-                &remote_authority::VaultRemoteAuthority { vault },
-                job.person,
-                access_pairing_identity(pairing),
-                (**producer).clone(),
-                &remote_authority::authority_window(job.cancellation.clone()),
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_producer: Some(enrolled.producer),
-                remote_enrollment: Some(enrolled.enrollment),
-                remote_owner: Some(enrolled.owner),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteAuthorityEnrollmentStatus {
-            route,
-            enrollment_id,
-        } => {
-            let vault = current.as_ref().map(|(_, vault)| vault.vault.as_ref());
-            let transport = RemoteAuthorityEndpoint::new(&route.route, vault)?;
-            let status = Box::pin(floe_access::remote_enrollment_status(
-                &transport,
-                enrollment_id,
-                &remote_authority::authority_window(job.cancellation.clone()),
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_enrollment: Some(status),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteCalendarGrantPreview {
-            route,
-            connector_id,
-            connection_id,
-            resource,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            let vault = vault.vault.as_ref();
-            let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
-            let evidence = calendar_access::remote_calendar_evidence(core, job.person).await?;
-            let preview = Box::pin(floe_access::preview_remote_calendar_grant(
-                vault,
-                &transport,
-                floe_access::RemoteCalendarGrantRequest {
-                    person_id: job.person,
-                    pairing: access_pairing_identity(pairing),
+        WorkerAction::RemoteAccess { caller, command } => {
+            let person_text = caller.person_id().to_string();
+            match command {
+                crate::RemoteAccessCommand::InspectProducer => {
+                    let vault = current.as_ref().map(|(_, vault)| vault.vault.as_ref());
+                    let transport = RemoteAuthorityEndpoint::from_current_connection(
+                        connections,
+                        &person_text,
+                        caller.device_id(),
+                        vault,
+                    )?;
+                    let store = vault.map(|vault| remote_authority::VaultRemoteAuthority { vault });
+                    let inspection = Box::pin(floe_access::inspect_remote_authority(
+                        &transport,
+                        store
+                            .as_ref()
+                            .map(|store| store as &dyn floe_access::RemoteAuthorityStore),
+                        &remote_authority::authority_window(job.cancellation.clone()),
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_producer: Some(inspection.producer),
+                        remote_owner: inspection.owner,
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::ReviewAndEnroll { producer } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let vault = vault.vault.as_ref();
+                    let transport = RemoteAuthorityEndpoint::from_current_connection(
+                        connections,
+                        &person_text,
+                        caller.device_id(),
+                        Some(vault),
+                    )?;
+                    let enrolled = Box::pin(floe_access::review_and_enroll_remote_authority(
+                        &transport,
+                        &remote_authority::VaultRemoteAuthority { vault },
+                        job.person,
+                        floe_access::RemotePairingIdentity {
+                            person_id: &person_text,
+                            device_id: caller.device_id(),
+                            client_id: transport.client_id(),
+                        },
+                        (**producer).clone(),
+                        &remote_authority::authority_window(job.cancellation.clone()),
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_producer: Some(enrolled.producer),
+                        remote_enrollment: Some(enrolled.enrollment),
+                        remote_owner: Some(enrolled.owner),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::EnrollmentStatus { enrollment_id } => {
+                    let vault = current.as_ref().map(|(_, vault)| vault.vault.as_ref());
+                    let transport = RemoteAuthorityEndpoint::from_current_connection(
+                        connections,
+                        &person_text,
+                        caller.device_id(),
+                        vault,
+                    )?;
+                    let status = Box::pin(floe_access::remote_enrollment_status(
+                        &transport,
+                        enrollment_id,
+                        &remote_authority::authority_window(job.cancellation.clone()),
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_enrollment: Some(status),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+
+                crate::RemoteAccessCommand::CalendarGrantPreview {
                     connector_id,
                     connection_id,
                     resource,
-                },
-                evidence.as_access(),
-                &remote_authority::authority_window(job.cancellation.clone()),
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_calendar_preview: Some(crate::RemoteCalendarGrantPreview {
-                    person_id: job.person,
-                    connector_id: preview.reference.connector_id,
-                    connection_id: preview.reference.connection_id,
-                    resource: preview.reference.resource,
-                    source_authority: preview.reference.source_authority,
-                    provider_identity: preview.reference.provider_identity,
-                    execution_owner: preview.reference.execution_owner,
-                    producer: preview.producer,
-                    consumer: preview.consumer,
-                    recipient: preview.recipient,
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteCalendarGrantReview {
-            route,
-            connector_id,
-            connection_id,
-            resource,
-            expected_producer_fingerprint,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?;
-            let vault = vault.vault.as_ref();
-            let transport = RemoteAuthorityEndpoint::new(&route.route, Some(vault))?;
-            let evidence = calendar_access::remote_calendar_evidence(core, job.person).await?;
-            let grant = Box::pin(floe_access::review_and_activate_remote_calendar_grant(
-                vault,
-                &transport,
-                floe_access::RemoteCalendarGrantRequest {
-                    person_id: job.person,
-                    pairing: access_pairing_identity(pairing),
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let vault = vault.vault.as_ref();
+                    let transport = RemoteAuthorityEndpoint::from_current_connection(
+                        connections,
+                        &person_text,
+                        caller.device_id(),
+                        Some(vault),
+                    )?;
+                    let evidence =
+                        calendar_access::remote_calendar_evidence(core, job.person).await?;
+                    let preview = Box::pin(floe_access::preview_remote_calendar_grant(
+                        vault,
+                        &transport,
+                        floe_access::RemoteCalendarGrantRequest {
+                            person_id: job.person,
+                            pairing: floe_access::RemotePairingIdentity {
+                                person_id: &person_text,
+                                device_id: caller.device_id(),
+                                client_id: transport.client_id(),
+                            },
+                            connector_id,
+                            connection_id,
+                            resource,
+                        },
+                        evidence.as_access(),
+                        &remote_authority::authority_window(job.cancellation.clone()),
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_calendar_preview: Some(crate::RemoteCalendarGrantPreview {
+                            person_id: job.person,
+                            connector_id: preview.reference.connector_id,
+                            connection_id: preview.reference.connection_id,
+                            resource: preview.reference.resource,
+                            source_authority: preview.reference.source_authority,
+                            provider_identity: preview.reference.provider_identity,
+                            execution_owner: preview.reference.execution_owner,
+                            producer: preview.producer,
+                            consumer: preview.consumer,
+                            recipient: preview.recipient,
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::CalendarGrantReview {
                     connector_id,
                     connection_id,
                     resource,
-                },
-                evidence.as_access(),
-                expected_producer_fingerprint,
-                &remote_authority::authority_window(job.cancellation.clone()),
-            ))
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_calendar_grant: Some(RemoteGrantOverview {
-                    grant,
-                    connection_revision: None,
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteCalendarGrantStatus { grant_id } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = floe_access::remote_calendar_grant(vault.vault.as_ref(), *grant_id).await?;
-            Ok(VaultExecutionResult {
-                remote_calendar_grant: Some(RemoteGrantOverview {
-                    grant,
-                    connection_revision: None,
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteCalendarGrantPause {
-            grant_id,
-            expected_authority,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = floe_access::pause_remote_calendar_grant(
-                vault.vault.as_ref(),
-                *grant_id,
-                *expected_authority,
-            )
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_calendar_grant: Some(RemoteGrantOverview {
-                    grant,
-                    connection_revision: None,
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteViewGrantPreview {
-            route,
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let person_text = job.person.to_string();
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?.clone();
-            let prepared = floe_provider_adapters::control::PreparedServerSource::from_parts(
-                &route.route.base_url,
-                &route.route.bearer_token,
-                &pairing.client_id,
-                &pairing.person_id,
-                &pairing.device_id,
-            )?;
-            let source_client =
-                floe_provider_adapters::sources::ServerSourceClient::new(prepared);
-            let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                &source_client,
-                vault.vault.as_ref(),
-            );
-            let preview = floe_access::preview_remote_view_grant(
-                vault.vault.as_ref(),
-                &transport,
-                floe_access::RemoteViewGrantRequest {
-                    person_id: job.person,
-                    pairing: floe_access::RemotePairingIdentity {
-                        person_id: &person_text,
-                        client_id: &pairing.client_id,
-                        device_id: &pairing.device_id,
-                    },
+                    expected_producer_fingerprint,
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let vault = vault.vault.as_ref();
+                    let transport = RemoteAuthorityEndpoint::from_current_connection(
+                        connections,
+                        &person_text,
+                        caller.device_id(),
+                        Some(vault),
+                    )?;
+                    let evidence =
+                        calendar_access::remote_calendar_evidence(core, job.person).await?;
+                    let grant = Box::pin(floe_access::review_and_activate_remote_calendar_grant(
+                        vault,
+                        &transport,
+                        floe_access::RemoteCalendarGrantRequest {
+                            person_id: job.person,
+                            pairing: floe_access::RemotePairingIdentity {
+                                person_id: &person_text,
+                                device_id: caller.device_id(),
+                                client_id: transport.client_id(),
+                            },
+                            connector_id,
+                            connection_id,
+                            resource,
+                        },
+                        evidence.as_access(),
+                        expected_producer_fingerprint,
+                        &remote_authority::authority_window(job.cancellation.clone()),
+                    ))
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_calendar_grant: Some(RemoteGrantOverview {
+                            grant,
+                            connection_revision: None,
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::CalendarGrantStatus { grant_id } => {
+                    let _source = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                connections, &person_text, caller.device_id(),
+            )?.ok_or(AgentFailure::PolicyDenied)?;
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let grant =
+                        floe_access::remote_calendar_grant(vault.vault.as_ref(), *grant_id).await?;
+                    Ok(VaultExecutionResult {
+                        remote_calendar_grant: Some(RemoteGrantOverview {
+                            grant,
+                            connection_revision: None,
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::CalendarGrantPause {
+                    grant_id,
+                    expected_authority,
+                } => {
+                    let _source = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                connections, &person_text, caller.device_id(),
+            )?.ok_or(AgentFailure::PolicyDenied)?;
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let grant = floe_access::pause_remote_calendar_grant(
+                        vault.vault.as_ref(),
+                        *grant_id,
+                        *expected_authority,
+                    )
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_calendar_grant: Some(RemoteGrantOverview {
+                            grant,
+                            connection_revision: None,
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::ViewGrantPreview {
                     view_id,
                     connector_id,
                     connection_id,
                     resource,
-                    consumer_name: consumer,
-                    data_category: floe_context::remote_view_data_category(view_id),
-                },
-                floe_context::remote_view_resource(view_id, connection_id) == *resource,
-                floe_context::is_remote_view(view_id),
-                &floe_access::RemoteCallWindow {
-                    deadline: tokio::time::Instant::now() + Duration::from_secs(10),
-                    cancellation: job.cancellation.clone(),
-                },
-            )
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_view_preview: Some(preview),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteViewGrantReview {
-            route,
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_connection_revision,
-            expected_provider_identity,
-            expected_recipient,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let person_text = job.person.to_string();
-            let pairing = route.pairing().ok_or(AgentFailure::PolicyDenied)?.clone();
-            let prepared = floe_provider_adapters::control::PreparedServerSource::from_parts(
-                &route.route.base_url,
-                &route.route.bearer_token,
-                &pairing.client_id,
-                &pairing.person_id,
-                &pairing.device_id,
-            )?;
-            let source_client =
-                floe_provider_adapters::sources::ServerSourceClient::new(prepared);
-            let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                &source_client,
-                vault.vault.as_ref(),
-            );
-            let grant = floe_access::review_and_activate_remote_view_grant(
-                vault.vault.as_ref(),
-                &transport,
-                floe_access::RemoteViewGrantRequest {
-                    person_id: job.person,
-                    pairing: floe_access::RemotePairingIdentity {
-                        person_id: &person_text,
-                        client_id: &pairing.client_id,
-                        device_id: &pairing.device_id,
-                    },
+                    consumer,
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                connections, &person_text, caller.device_id(),
+            )?.ok_or(AgentFailure::PolicyDenied)?;
+                    let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                        &source_client,
+                        vault.vault.as_ref(),
+                    );
+                    let preview = floe_access::preview_remote_view_grant(
+                        vault.vault.as_ref(),
+                        &transport,
+                        floe_access::RemoteViewGrantRequest {
+                            person_id: job.person,
+                            pairing: floe_access::RemotePairingIdentity {
+                                person_id: &person_text,
+                                client_id: source_client.source().client_id(),
+                                device_id: caller.device_id(),
+                            },
+                            view_id,
+                            connector_id,
+                            connection_id,
+                            resource,
+                            consumer_name: consumer,
+                            data_category: floe_context::remote_view_data_category(view_id),
+                        },
+                        floe_context::remote_view_resource(view_id, connection_id) == *resource,
+                        floe_context::is_remote_view(view_id),
+                        &floe_access::RemoteCallWindow {
+                            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+                            cancellation: job.cancellation.clone(),
+                        },
+                    )
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_view_preview: Some(preview),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::ViewGrantReview {
                     view_id,
                     connector_id,
                     connection_id,
                     resource,
-                    consumer_name: consumer,
-                    data_category: floe_context::remote_view_data_category(view_id),
-                },
-                floe_access::RemoteViewGrantExpectation {
-                    producer_fingerprint: expected_producer_fingerprint,
-                    source_authority: *expected_source_authority,
-                    connection_revision: *expected_connection_revision,
-                    provider_identity: expected_provider_identity,
-                    recipient: expected_recipient,
-                },
-                floe_context::remote_view_resource(view_id, connection_id) == *resource,
-                floe_context::is_remote_view(view_id),
-                &floe_access::RemoteCallWindow {
-                    deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                    cancellation: job.cancellation.clone(),
-                },
-            )
-            .await?;
-            Ok(VaultExecutionResult {
-                remote_view_grant: Some(RemoteGrantOverview {
-                    grant,
-                    connection_revision: Some(*expected_connection_revision),
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteViewGrantStatus { grant_id } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = vault.get_remote_view_grant(*grant_id).await?;
-            Ok(VaultExecutionResult {
-                remote_view_grant: Some(RemoteGrantOverview {
-                    grant,
-                    connection_revision: None,
-                }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::RemoteViewGrantPause {
-            grant_id,
-            expected_authority,
-        } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let grant = vault
-                .pause_remote_view_grant(*grant_id, *expected_authority)
-                .await?;
-            Ok(VaultExecutionResult {
-                remote_view_grant: Some(RemoteGrantOverview {
-                    grant,
-                    connection_revision: None,
-                }),
-                ..VaultExecutionResult::ready()
-            })
+                    consumer,
+                    expected_producer_fingerprint,
+                    expected_source_authority,
+                    expected_connection_revision,
+                    expected_provider_identity,
+                    expected_recipient,
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                connections, &person_text, caller.device_id(),
+            )?.ok_or(AgentFailure::PolicyDenied)?;
+                    let transport = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                        &source_client,
+                        vault.vault.as_ref(),
+                    );
+                    let grant = floe_access::review_and_activate_remote_view_grant(
+                        vault.vault.as_ref(),
+                        &transport,
+                        floe_access::RemoteViewGrantRequest {
+                            person_id: job.person,
+                            pairing: floe_access::RemotePairingIdentity {
+                                person_id: &person_text,
+                                client_id: source_client.source().client_id(),
+                                device_id: caller.device_id(),
+                            },
+                            view_id,
+                            connector_id,
+                            connection_id,
+                            resource,
+                            consumer_name: consumer,
+                            data_category: floe_context::remote_view_data_category(view_id),
+                        },
+                        floe_access::RemoteViewGrantExpectation {
+                            producer_fingerprint: expected_producer_fingerprint,
+                            source_authority: *expected_source_authority,
+                            connection_revision: *expected_connection_revision,
+                            provider_identity: expected_provider_identity,
+                            recipient: expected_recipient,
+                        },
+                        floe_context::remote_view_resource(view_id, connection_id) == *resource,
+                        floe_context::is_remote_view(view_id),
+                        &floe_access::RemoteCallWindow {
+                            deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                            cancellation: job.cancellation.clone(),
+                        },
+                    )
+                    .await?;
+                    Ok(VaultExecutionResult {
+                        remote_view_grant: Some(RemoteGrantOverview {
+                            grant,
+                            connection_revision: Some(*expected_connection_revision),
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::ViewGrantStatus { grant_id } => {
+                    let _source = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                connections, &person_text, caller.device_id(),
+            )?.ok_or(AgentFailure::PolicyDenied)?;
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let grant = vault.get_remote_view_grant(*grant_id).await?;
+                    Ok(VaultExecutionResult {
+                        remote_view_grant: Some(RemoteGrantOverview {
+                            grant,
+                            connection_revision: None,
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+                crate::RemoteAccessCommand::ViewGrantPause {
+                    grant_id,
+                    expected_authority,
+                } => {
+                    let _source = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                connections, &person_text, caller.device_id(),
+            )?.ok_or(AgentFailure::PolicyDenied)?;
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let grant = vault
+                        .pause_remote_view_grant(*grant_id, *expected_authority)
+                        .await?;
+                    Ok(VaultExecutionResult {
+                        remote_view_grant: Some(RemoteGrantOverview {
+                            grant,
+                            connection_revision: None,
+                        }),
+                        ..VaultExecutionResult::ready()
+                    })
+                }
+            }
         }
     }
 }
@@ -2478,7 +2600,6 @@ mod tests {
     // These regressions drive the worker the way the binding does, so the
     // fixtures they stand up are stated on the binding's wire.
     use crate::AgentFixturePrompt;
-    use crate::RemoteTurnRoute;
     use floe_protocol::*;
     use floe_vault::VaultKey;
     use ring::signature::{self, Ed25519KeyPair, KeyPair};
@@ -2499,6 +2620,7 @@ mod tests {
     mod learner_worker;
     mod memory_review;
     mod proposals;
+    mod remote_product;
     mod vault_registry;
 
     use super::conversation_turn::expert_dispatch::BuiltinExpertEndpoint;
@@ -2609,9 +2731,20 @@ mod tests {
     fn wait(worker: &Worker, person: PersonId, id: Uuid) -> WorkerResult {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let result = worker
-                .request(person, id, WorkerOperation::Poll { after_sequence: 0 })
-                .unwrap();
+            let remote = worker.jobs.lock().unwrap().get(&id).and_then(|job| {
+                job.action.remote_caller().cloned().map(|caller| {
+                    (
+                        caller,
+                        matches!(*job.action, WorkerAction::RemotePairing { .. }),
+                    )
+                })
+            });
+            let result = if let Some((caller, pairing)) = remote {
+                worker.remote_request(&caller, id, None, pairing, false)
+            } else {
+                worker.request(person, id, WorkerOperation::Poll { after_sequence: 0 })
+            }
+            .unwrap();
             if result.done {
                 return result;
             }
@@ -2622,6 +2755,17 @@ mod tests {
 
     fn perform(worker: &Worker, person: PersonId, action: WorkerAction) -> WorkerResult {
         let id = Uuid::new_v4();
+        if let Some(caller) = action.remote_caller().cloned() {
+            let pairing = matches!(action, WorkerAction::RemotePairing { .. });
+            worker
+                .remote_request(&caller, id, Some(action), pairing, false)
+                .unwrap();
+            let result = wait(worker, person, id);
+            worker
+                .remote_request(&caller, id, None, pairing, true)
+                .unwrap();
+            return result;
+        }
         worker
             .request(
                 person,
@@ -2649,18 +2793,6 @@ mod tests {
             "create failed: {:?}",
             created.failure
         );
-        let route = RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: "http://not-loopback.invalid".into(),
-                bearer_token: "not-a-real-token".into(),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: None,
-            },
-            calendar_connections: vec![],
-        };
         let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
@@ -2673,9 +2805,11 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            WorkerAction::RemoteAuthorityReviewAndEnroll {
-                route: Box::new(route),
-                producer: Box::new(producer),
+            WorkerAction::RemoteAccess {
+                caller: remote_caller(person, "device-1"),
+                command: crate::RemoteAccessCommand::ReviewAndEnroll {
+                    producer: Box::new(producer),
+                },
             },
         );
         assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
@@ -2684,7 +2818,16 @@ mod tests {
     #[test]
     fn remote_enrollment_rejects_pairing_for_another_person_before_network_access() {
         let directory = tempfile::tempdir().unwrap();
-        let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+        let worker = Worker::new_with_connection_store(
+            directory.path().join("vaults"),
+            Keys::default(),
+            CurrentSavedConnectionStore::fixed(Some(saved_remote_connection(
+                PersonId::new(),
+                "device-1",
+                "http://not-loopback.invalid".into(),
+            ))),
+        )
+        .unwrap();
         let person = PersonId::new();
         let created = perform(&worker, person, WorkerAction::Create {});
         assert_eq!(
@@ -2692,22 +2835,6 @@ mod tests {
             "create failed: {:?}",
             created.failure
         );
-        let route = RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: "http://not-loopback.invalid".into(),
-                bearer_token: "not-a-real-token".into(),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: Some(floe_inference::RoutePairing {
-                    client_id: "saved-client".into(),
-                    person_id: PersonId::new().to_string(),
-                    device_id: "saved-device".into(),
-                }),
-            },
-            calendar_connections: vec![],
-        };
         let producer = floe_access::RemoteProducerIdentity {
             schema_version: 1,
             instance_id: Uuid::new_v4().to_string(),
@@ -2720,9 +2847,11 @@ mod tests {
         let result = perform(
             &worker,
             person,
-            WorkerAction::RemoteAuthorityReviewAndEnroll {
-                route: Box::new(route),
-                producer: Box::new(producer),
+            WorkerAction::RemoteAccess {
+                caller: remote_caller(person, "device-1"),
+                command: crate::RemoteAccessCommand::ReviewAndEnroll {
+                    producer: Box::new(producer),
+                },
             },
         );
         assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
@@ -2732,7 +2861,13 @@ mod tests {
     fn remote_enrollment_uses_signed_challenge_and_stays_pending_admin() {
         let directory = tempfile::tempdir().unwrap();
         let person = PersonId::new();
-        let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+        let connections = TestConnections::default();
+        let worker = Worker::new_with_connection_store(
+            directory.path().join("vaults"),
+            Keys::default(),
+            connections.store(),
+        )
+        .unwrap();
         let created = perform(&worker, person, WorkerAction::Create {});
         assert_eq!(
             created.failure, None,
@@ -2766,28 +2901,19 @@ mod tests {
         let server = thread::spawn(move || {
             serve_signed_enrollment(listener, producer_key, server_producer, person)
         });
-        let route = RemoteTurnRoute {
-            route: floe_inference::RemoteRoute {
-                base_url: format!("http://127.0.0.1:{}", address.port()),
-                bearer_token: "secret_token_value_that_is_long_enough".into(),
-                purpose: "everyday_assistance".into(),
-                external: false,
-                allow_external: false,
-                recipient: None,
-                pairing: Some(floe_inference::RoutePairing {
-                    client_id: "client-1".into(),
-                    person_id: person.to_string(),
-                    device_id: "device-1".into(),
-                }),
-            },
-            calendar_connections: vec![],
-        };
+        connections.replace(Some(saved_remote_connection(
+            person,
+            "device-1",
+            format!("http://127.0.0.1:{}", address.port()),
+        )));
         let result = perform(
             &worker,
             person,
-            WorkerAction::RemoteAuthorityReviewAndEnroll {
-                route: Box::new(route),
-                producer: Box::new(producer),
+            WorkerAction::RemoteAccess {
+                caller: remote_caller(person, "device-1"),
+                command: crate::RemoteAccessCommand::ReviewAndEnroll {
+                    producer: Box::new(producer),
+                },
             },
         );
         let server_result = server.join().unwrap();
@@ -2804,6 +2930,33 @@ mod tests {
         assert!(status.local_confirmed);
         assert!(!status.admin_approved);
         assert!(!status.active);
+    }
+
+    fn remote_caller(person: PersonId, device: &str) -> crate::CallerContext {
+        crate::CallerContext::verified(
+            crate::LocalIdentityClaim {
+                person_id: person.0,
+                device_id: device.into(),
+            },
+            1,
+        )
+        .unwrap()
+    }
+
+    fn saved_remote_connection(
+        person: PersonId,
+        device: &str,
+        base_url: String,
+    ) -> floe_inference::SavedServerConnection {
+        floe_inference::SavedServerConnection {
+            base_url,
+            token: "secret_token_value_that_is_long_enough".into(),
+            client_id: "client-1".into(),
+            person_id: person.to_string(),
+            device_id: device.into(),
+            allow_external: false,
+            external_recipients: vec![],
+        }
     }
 
     fn serve_signed_enrollment(
@@ -3677,28 +3830,6 @@ mod tests {
 }
 
 /// The Person's vault, as this device's own storage shows it.
-/// The pairing a route names, as Connections states one.
-fn pairing_identity(
-    pairing: &floe_inference::RoutePairing,
-) -> floe_connections::PairingIdentity<'_> {
-    floe_connections::PairingIdentity {
-        person_id: &pairing.person_id,
-        client_id: &pairing.client_id,
-        device_id: &pairing.device_id,
-    }
-}
-
-/// The pairing a route names, as Access states one.
-fn access_pairing_identity(
-    pairing: &floe_inference::RoutePairing,
-) -> floe_access::RemotePairingIdentity<'_> {
-    floe_access::RemotePairingIdentity {
-        person_id: &pairing.person_id,
-        client_id: &pairing.client_id,
-        device_id: &pairing.device_id,
-    }
-}
-
 fn stored_vault_state(root: &std::path::Path, person: PersonId) -> VaultState {
     if root.join(person.to_string()).join("vault.id").exists() {
         VaultState::Locked

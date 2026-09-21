@@ -1,3 +1,16 @@
+mod access;
+pub use access::{
+    RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
+    RemoteAuthorityEnrollmentStatusDto, RemoteCalendarGrantOverviewDto,
+    RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
+    RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto,
+};
+pub use connections::RemotePairingChallengeDto;
+mod connections;
+pub use connections::{
+    PairingOutcomeDto, PairingReportDto, PairingTargetDto, RemotePairingOperationDto,
+    RemotePairingRequestDto, RemotePairingResultDto,
+};
 mod agent;
 mod calendar;
 mod commands;
@@ -12,27 +25,23 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const APP_WIRE_VERSION: u32 = 2;
 
 pub use agent::{
-    ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentEventDto, AgentFailureCategory, AgentFailureDomain, AgentFailureDto,
-    AgentFailureSafeAction, AgentFixtureOperationDto, AgentFixturePromptDto,
-    AgentFixtureRequestDto, AgentFixtureResultDto, AgentFixtureRunDto, AgentFixtureRunOperationDto,
-    AgentFixtureRunRequestDto, AgentMemoryOriginDto, AgentMemoryOverviewDto,
-    AgentMemoryReviewDecisionDto, AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto,
-    AgentMemorySummaryDto, AgentProposalActionDto, AgentProposalInspectionDto,
-    AgentProposalStatusDto, AgentRemoteCalendarConnectionDto, AgentRemotePairingDto,
-    AgentRemoteRouteDto, AgentRetryPolicy, AgentSessionDto, AgentVaultActionDto,
-    AgentVaultFailureDto, AgentVaultOperationDto, AgentVaultRecoveryActionDto,
-    AgentVaultRequestDto, AgentVaultResultDto, AgentVaultStateDto, CalendarAccessChangeDto,
-    CalendarAccessConfigurationDto, CalendarActionDecisionDto, CalendarActionOperationDto,
-    CalendarActionRequestDto, CalendarExpertOverviewDto, CalendarExpertSetupDto,
-    CalendarSubjectPreviewDto, CalendarSubjectPreviewRequestDto, ConnectorSnapshotDto,
-    ContactsAccessChangeDto, ContactsAccessConfigurationDto, EpistemicStatusDto,
-    FeasibilityGrantQueryDto, KnowledgeCandidateDto, KnowledgeDecisionResultDto,
-    PersonalAccessChangeDto, PersonalAccessConfigurationDto, PersonalAccessOverviewDto,
-    PersonalMemoryKindDto, RegistryConfigurationDto, RegistryConfigurationTargetDto,
-    RegistryOverviewDto, RemoteAuthorityEnrollmentStatusDto, RemoteCalendarGrantOverviewDto,
-    RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemotePairingChallengeDto,
-    RemotePairingConfirmationDto, RemotePairingStatusDto, RemoteProducerIdentityDto,
-    RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto,
+    ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentEventDto,
+    AgentFailureCategory, AgentFailureDomain, AgentFailureDto, AgentFailureSafeAction,
+    AgentFixtureOperationDto, AgentFixturePromptDto, AgentFixtureRequestDto, AgentFixtureResultDto,
+    AgentFixtureRunDto, AgentFixtureRunOperationDto, AgentFixtureRunRequestDto,
+    AgentMemoryOriginDto, AgentMemoryOverviewDto, AgentMemoryReviewDecisionDto,
+    AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
+    AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
+    AgentSessionDto, AgentVaultActionDto, AgentVaultFailureDto, AgentVaultOperationDto,
+    AgentVaultRecoveryActionDto, AgentVaultRequestDto, AgentVaultResultDto, AgentVaultStateDto,
+    CalendarAccessChangeDto, CalendarAccessConfigurationDto, CalendarActionDecisionDto,
+    CalendarActionOperationDto, CalendarActionRequestDto, CalendarExpertOverviewDto,
+    CalendarExpertSetupDto, CalendarSubjectPreviewDto, CalendarSubjectPreviewRequestDto,
+    ConnectorSnapshotDto, ContactsAccessChangeDto, ContactsAccessConfigurationDto,
+    EpistemicStatusDto, FeasibilityGrantQueryDto, KnowledgeCandidateDto,
+    KnowledgeDecisionResultDto, PersonalAccessChangeDto, PersonalAccessConfigurationDto,
+    PersonalAccessOverviewDto, PersonalMemoryKindDto, RegistryConfigurationDto,
+    RegistryConfigurationTargetDto, RegistryOverviewDto,
 };
 pub use calendar::{
     CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,

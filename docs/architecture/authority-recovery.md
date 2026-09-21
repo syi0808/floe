@@ -8,8 +8,9 @@ These invariants survive refactoring. They are architectural safety properties, 
 - Access owns grants, exact recipients, purposes, processing restrictions, revocation and admission/release fences.
 - Context may acquire/project only evidence authorized for the current Person, source, scope and freshness requirements.
 - Inference may choose an approved model route, but route selection cannot enlarge data authority.
-- Provider credentials remain private to credential/provider boundaries and are not product-wire or Conversation inputs.
+- Saved provider credentials remain private to credential/provider boundaries and are not product-wire or Conversation inputs. The narrow exception is newly issued approved-pairing output for secure persistence, never a subsequent request input; token-bearing Debug/diagnostics are redacted.
 - Root, built-in Expert and Schedule composition share one host-scoped current-connection store. Provider adapters bind loaded credentials to the verified person/device; exact-recipient authority reloads current state at admission, handoff and post-response revalidation. A prepared transport or availability observation never substitutes for those checks.
+- Pairing setup accepts only a bounded loopback endpoint and pairing evidence. Person/device come from AppHost's verified `CallerContext`, never a product route bundle; Connections/key-holder validation binds the exact pending pairing ID, signed challenge and owner issuer. Remote authority and Calendar/View grant services prepare transports from the same current store through provider-owned exact person/device admission. Access still validates producer/source/revision/provider/recipient/grant evidence; model consent and source catalogs are not pairing/grant request fields.
 - Revocation prevents later admission or release. It cannot retroactively recall data already transmitted or a provider effect already accepted.
 
 ## Provenance and coverage travel with evidence

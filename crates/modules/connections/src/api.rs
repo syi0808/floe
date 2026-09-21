@@ -30,7 +30,7 @@ pub struct PairingConfirmation {
     pub status: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct PairingStatus {
     pub schema_version: u32,
     pub pairing_id: String,
@@ -171,4 +171,15 @@ pub fn admit_pairing_issuer(issuer: &PairingIssuer) -> Result<(), AgentFailure> 
         return Err(AgentFailure::CapabilityUnavailable);
     }
     Ok(())
+}
+
+impl std::fmt::Debug for PairingStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PairingStatus")
+            .field("pairing_id", &self.pairing_id)
+            .field("status", &self.status)
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .finish_non_exhaustive()
+    }
 }

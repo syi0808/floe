@@ -268,3 +268,106 @@ impl AppComposition {
         &self.agent_vault
     }
 }
+
+#[cfg(unix)]
+impl crate::RemotePairingCommands for AppComposition {
+    fn remote_pairing(
+        &self,
+        caller: &crate::CallerContext,
+        request_id: uuid::Uuid,
+        command: crate::RemotePairingCommand,
+    ) -> Result<crate::RemotePairingResult, crate::ServiceError> {
+        command.validate()?;
+        let result = self
+            .agent_vault
+            .remote_request(
+                caller,
+                request_id,
+                Some(crate::WorkerAction::RemotePairing {
+                    caller: caller.clone(),
+                    command,
+                }),
+                true,
+                false,
+            )
+            .map_err(service_failure)?;
+        Ok(pairing_result(result))
+    }
+
+    fn read_pairing_result(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        release: bool,
+    ) -> Result<crate::RemotePairingResult, crate::ServiceError> {
+        self.agent_vault
+            .remote_request(caller, operation_id, None, true, release)
+            .map(pairing_result)
+            .map_err(service_failure)
+    }
+}
+
+fn pairing_result(result: crate::WorkerResult) -> crate::RemotePairingResult {
+    crate::RemotePairingResult {
+        operation_id: result.request_id,
+        stage: result.stage,
+        done: result.done,
+        owner: result.remote_owner,
+        pairing: result.remote_pairing,
+        failure: result.failure,
+    }
+}
+
+#[cfg(unix)]
+impl crate::RemoteAccessCommands for AppComposition {
+    fn remote_access(
+        &self,
+        caller: &crate::CallerContext,
+        request_id: uuid::Uuid,
+        command: crate::RemoteAccessCommand,
+    ) -> Result<crate::RemoteAccessResult, crate::ServiceError> {
+        let result = self
+            .agent_vault
+            .remote_request(
+                caller,
+                request_id,
+                Some(crate::WorkerAction::RemoteAccess {
+                    caller: caller.clone(),
+                    command,
+                }),
+                false,
+                false,
+            )
+            .map_err(service_failure)?;
+        Ok(access_result(result))
+    }
+
+    fn read_access_result(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: uuid::Uuid,
+        release: bool,
+    ) -> Result<crate::RemoteAccessResult, crate::ServiceError> {
+        self.agent_vault
+            .remote_request(caller, operation_id, None, false, release)
+            .map(access_result)
+            .map_err(service_failure)
+    }
+}
+
+fn access_result(result: crate::WorkerResult) -> crate::RemoteAccessResult {
+    crate::RemoteAccessResult {
+        operation_id: result.request_id,
+        stage: result.stage,
+        done: result.done,
+        person_id: result.person_id,
+        producer: result.remote_producer,
+        owner: result.remote_owner,
+        enrollment: result.remote_enrollment,
+        calendar_grant: result.remote_calendar_grant,
+        calendar_preview: result.remote_calendar_preview,
+        view_grant: result.remote_view_grant,
+        view_preview: result.remote_view_preview,
+        failure: result.failure,
+    }
+}

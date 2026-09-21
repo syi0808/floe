@@ -140,11 +140,10 @@ impl PreparedServerSource {
         )
     }
 
-    /// Prepare a source from route-supplied transport parts.
+    /// Prepare a low-level source fixture from explicit transport parts.
     ///
-    /// Only the outer remote authority/pairing compatibility path supplies its
-    /// own route; it keeps owning the caller binding through Access. Shape is
-    /// validated here exactly as for saved connections.
+    /// Product operations use current-connection admission instead. This
+    /// constructor remains for provider and cross-crate source regression tests.
     pub fn from_parts(
         base_url: &str,
         bearer_token: &str,
@@ -256,11 +255,7 @@ mod tests {
             Err(AgentFailure::PolicyDenied)
         );
         assert_eq!(
-            PreparedServerSource::admit(
-                saved(),
-                "00000000-0000-4000-8000-000000000002",
-                DEVICE
-            ),
+            PreparedServerSource::admit(saved(), "00000000-0000-4000-8000-000000000002", DEVICE),
             Err(AgentFailure::PolicyDenied)
         );
 
@@ -311,13 +306,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prepared.client_id(), "route-client");
-        assert!(PreparedServerSource::from_parts(
-            "http://not-loopback.invalid",
-            &"route_token_value_that_is_long_enough".to_string(),
-            "route-client",
-            PERSON,
-            DEVICE,
-        )
-        .is_err());
+        assert!(
+            PreparedServerSource::from_parts(
+                "http://not-loopback.invalid",
+                &"route_token_value_that_is_long_enough".to_string(),
+                "route-client",
+                PERSON,
+                DEVICE,
+            )
+            .is_err()
+        );
     }
 }

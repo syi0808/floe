@@ -9,12 +9,11 @@ use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
     CalendarProposalInspection, CalendarSubjectPreview, CalendarSubjectRequest,
     ContactsAccessChange, ContactsAccessConfiguration, ConversationSessionOperation,
-    FeasibilityGrantQuery, FixtureOperation, GrantState,
-    MemoryReviewDecision, MemoryReviewResult, PairingIssuer, PairingStatus, PersonId,
-    PersonalAccessChange, PersonalAccessConfiguration, ProcessingRestriction,
-    RemoteCalendarGrantPreview, RemoteEnrollmentStatus, RemoteOwnerPublicKey,
-    RemotePairingChallenge, RemoteProducerIdentity, RemoteTurnRoute, VaultState, WorkerAction,
-    WorkerOperation, WorkerResult,
+    FeasibilityGrantQuery, FixtureOperation, GrantState, MemoryReviewDecision, MemoryReviewResult,
+    PairingIssuer, PersonId, PersonalAccessChange, PersonalAccessConfiguration,
+    ProcessingRestriction, RemoteCalendarGrantPreview, RemoteEnrollmentStatus,
+    RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState, WorkerAction, WorkerOperation,
+    WorkerResult,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::*;
@@ -25,7 +24,7 @@ fn parse_uuid(value: &str, field: &'static str) -> WireResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| invalid(field, "must be a UUID"))
 }
 
-fn remote_calendar_grant_overview(
+pub(crate) fn remote_calendar_grant_overview(
     grant: &floe_app::DataAccessGrant,
 ) -> Result<RemoteCalendarGrantOverviewDto, AgentFailure> {
     let resource = grant
@@ -70,7 +69,7 @@ fn remote_calendar_grant_overview(
     })
 }
 
-fn remote_view_grant_overview(
+pub(crate) fn remote_view_grant_overview(
     grant: &floe_app::DataAccessGrant,
     connection_revision: Option<u64>,
 ) -> Result<RemoteViewGrantOverviewDto, AgentFailure> {
@@ -84,12 +83,6 @@ fn remote_view_grant_overview(
     let (view_id, _) = resource
         .split_once(':')
         .ok_or(AgentFailure::VaultUnavailable)?;
-    if !matches!(
-        view_id,
-        "mail.communication" | "work.context" | "life.logistics"
-    ) {
-        return Err(AgentFailure::PolicyDenied);
-    }
     let consumer = grant
         .scope()
         .consumers()
@@ -126,7 +119,7 @@ fn remote_view_grant_overview(
     })
 }
 
-fn remote_view_grant_preview(
+pub(crate) fn remote_view_grant_preview(
     person_id: PersonId,
     preview: &floe_app::RemoteViewGrantPreview,
 ) -> RemoteViewGrantPreviewDto {
@@ -192,7 +185,11 @@ fn encode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, Age
     decode_contract(value)
 }
 
-fn failure_envelope(failure: &AgentFailure, stage: &str, request_id: &str) -> AgentVaultFailureDto {
+pub(crate) fn failure_envelope(
+    failure: &AgentFailure,
+    stage: &str,
+    request_id: &str,
+) -> AgentVaultFailureDto {
     let kind = serde_json::to_value(failure)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -580,39 +577,9 @@ fn contacts_access(request: &ContactsAccessConfigurationDto) -> ContactsAccessCo
     }
 }
 
-/// The paired server one wire request names.
-fn remote_route(route: &AgentRemoteRouteDto) -> RemoteTurnRoute {
-    RemoteTurnRoute {
-        route: floe_app::RemoteRoute {
-            base_url: route.base_url.clone(),
-            bearer_token: route.bearer_token.clone(),
-            purpose: route.purpose.clone(),
-            external: route.external,
-            allow_external: route.allow_external,
-            recipient: route.recipient.clone(),
-            pairing: route
-                .pairing
-                .as_ref()
-                .map(|pairing| floe_app::RoutePairing {
-                    client_id: pairing.client_id.clone(),
-                    person_id: pairing.person_id.clone(),
-                    device_id: pairing.device_id.clone(),
-                }),
-        },
-        // The source catalog is a separate admission that rides the same wire.
-        calendar_connections: route
-            .calendar_connections
-            .iter()
-            .map(|connection| floe_app::CalendarConnectionRef {
-                connector_id: connection.connector_id.clone(),
-                connection_id: connection.connection_id.clone(),
-                connection_revision: connection.connection_revision,
-            })
-            .collect(),
-    }
-}
-
-fn producer_identity_dto(identity: &RemoteProducerIdentity) -> RemoteProducerIdentityDto {
+pub(crate) fn producer_identity_dto(
+    identity: &RemoteProducerIdentity,
+) -> RemoteProducerIdentityDto {
     RemoteProducerIdentityDto {
         schema_version: identity.schema_version,
         instance_id: identity.instance_id.clone(),
@@ -624,7 +591,7 @@ fn producer_identity_dto(identity: &RemoteProducerIdentity) -> RemoteProducerIde
     }
 }
 
-fn producer_identity(identity: &RemoteProducerIdentityDto) -> RemoteProducerIdentity {
+pub(crate) fn producer_identity(identity: &RemoteProducerIdentityDto) -> RemoteProducerIdentity {
     RemoteProducerIdentity {
         schema_version: identity.schema_version,
         instance_id: identity.instance_id.clone(),
@@ -636,7 +603,7 @@ fn producer_identity(identity: &RemoteProducerIdentityDto) -> RemoteProducerIden
     }
 }
 
-fn owner_key_dto(key: &RemoteOwnerPublicKey) -> RemoteOwnerPublicKeyDto {
+pub(crate) fn owner_key_dto(key: &RemoteOwnerPublicKey) -> RemoteOwnerPublicKeyDto {
     RemoteOwnerPublicKeyDto {
         key_id: key.key_id.clone(),
         public_key: key.public_key.clone(),
@@ -644,22 +611,7 @@ fn owner_key_dto(key: &RemoteOwnerPublicKey) -> RemoteOwnerPublicKeyDto {
     }
 }
 
-/// Read one owner key off the wire.
-///
-/// The key is its two fields; the fingerprint the caller sent is only its own
-/// claim about them, so it is checked here and then dropped.
-fn owner_key(key: &RemoteOwnerPublicKeyDto) -> WireResult<RemoteOwnerPublicKey> {
-    let owner = RemoteOwnerPublicKey {
-        key_id: key.key_id.clone(),
-        public_key: key.public_key.clone(),
-    };
-    if owner.fingerprint() != key.fingerprint {
-        return Err(invalid("issuer.fingerprint", "must match the key it names"));
-    }
-    Ok(owner)
-}
-
-fn pairing_issuer_dto(issuer: &PairingIssuer) -> RemoteOwnerPublicKeyDto {
+pub(crate) fn pairing_issuer_dto(issuer: &PairingIssuer) -> RemoteOwnerPublicKeyDto {
     RemoteOwnerPublicKeyDto {
         key_id: issuer.key_id.clone(),
         public_key: issuer.public_key.clone(),
@@ -667,32 +619,9 @@ fn pairing_issuer_dto(issuer: &PairingIssuer) -> RemoteOwnerPublicKeyDto {
     }
 }
 
-fn pairing_status_dto(status: PairingStatus) -> RemotePairingStatusDto {
-    RemotePairingStatusDto {
-        schema_version: status.schema_version,
-        pairing_id: status.pairing_id,
-        status: status.status,
-        person_id: status.person_id,
-        device_id: status.device_id,
-        producer: status
-            .producer
-            .as_ref()
-            .map(|producer| RemoteProducerIdentityDto {
-                schema_version: producer.schema_version,
-                instance_id: producer.instance_id.clone(),
-                execution_owner: producer.execution_owner.clone(),
-                audience: producer.audience.clone(),
-                key_id: producer.key_id.clone(),
-                public_key: producer.public_key.clone(),
-                fingerprint: producer.fingerprint.clone(),
-            }),
-        issuer: status.issuer.as_ref().map(pairing_issuer_dto),
-        issuer_fingerprint: status.issuer_fingerprint,
-        token: status.token,
-    }
-}
-
-fn enrollment_status_dto(status: RemoteEnrollmentStatus) -> RemoteAuthorityEnrollmentStatusDto {
+pub(crate) fn enrollment_status_dto(
+    status: RemoteEnrollmentStatus,
+) -> RemoteAuthorityEnrollmentStatusDto {
     RemoteAuthorityEnrollmentStatusDto {
         enrollment_id: status.enrollment_id,
         key_id: status.key_id,
@@ -784,7 +713,7 @@ fn memory_dto(
     })
 }
 
-fn remote_calendar_preview_dto(
+pub(crate) fn remote_calendar_preview_dto(
     person_id: PersonId,
     preview: RemoteCalendarGrantPreview,
 ) -> RemoteCalendarGrantPreviewDto {
@@ -836,29 +765,6 @@ pub fn worker_result(result: WorkerResult) -> Result<AgentVaultResultDto, AgentF
         memory_review: result.memory_review.map(memory_review_dto).transpose()?,
         memory: result.memory.map(memory_dto).transpose()?,
         connections: result.connections.map(encode_contracts).transpose()?,
-        remote_producer: result.remote_producer.as_ref().map(producer_identity_dto),
-        remote_enrollment: result.remote_enrollment.map(enrollment_status_dto),
-        remote_pairing: result.remote_pairing.map(pairing_status_dto),
-        remote_owner: result.remote_owner.as_ref().map(owner_key_dto),
-        remote_calendar_grant: result
-            .remote_calendar_grant
-            .as_ref()
-            .map(|overview| remote_calendar_grant_overview(&overview.grant))
-            .transpose()?,
-        remote_calendar_preview: result
-            .remote_calendar_preview
-            .map(|preview| remote_calendar_preview_dto(result.person_id, preview)),
-        remote_view_grant: result
-            .remote_view_grant
-            .as_ref()
-            .map(|overview| {
-                remote_view_grant_overview(&overview.grant, overview.connection_revision)
-            })
-            .transpose()?,
-        remote_view_preview: result
-            .remote_view_preview
-            .as_ref()
-            .map(|preview| remote_view_grant_preview(result.person_id, preview)),
         personal_access: result.personal_access.map(personal_access_dto),
         calendar_actions: result
             .calendar_actions
@@ -1054,18 +960,6 @@ fn subject_request(request: CalendarSubjectPreviewRequestDto) -> CalendarSubject
     }
 }
 
-fn pairing_challenge(challenge: RemotePairingChallengeDto) -> WireResult<RemotePairingChallenge> {
-    Ok(RemotePairingChallenge {
-        pairing_id: challenge.pairing_id,
-        challenge_id: challenge.challenge_id,
-        challenge_b64url: challenge.challenge_b64url,
-        producer_signature: challenge.producer_signature,
-        producer: producer_identity(&challenge.producer),
-        issuer: owner_key(&challenge.issuer)?,
-        expires_at_unix_ms: challenge.expires_at_unix_ms,
-    })
-}
-
 /// Read one worker request off the wire as the app's own command.
 pub fn worker_operation(operation: AgentVaultOperationDto) -> WireResult<WorkerOperation> {
     Ok(match operation {
@@ -1153,138 +1047,6 @@ fn worker_action(action: AgentVaultActionDto) -> WireResult<WorkerAction> {
         },
         AgentVaultActionDto::Memory {} => WorkerAction::Memory,
         AgentVaultActionDto::Connections {} => WorkerAction::Connections,
-        AgentVaultActionDto::RemoteAuthorityInspectProducer { route } => {
-            WorkerAction::RemoteAuthorityInspectProducer {
-                route: Box::new(remote_route(&route)),
-            }
-        }
-        AgentVaultActionDto::RemoteAuthorityReviewAndEnroll { route, producer } => {
-            WorkerAction::RemoteAuthorityReviewAndEnroll {
-                route: Box::new(remote_route(&route)),
-                producer: Box::new(producer_identity(&producer)),
-            }
-        }
-        AgentVaultActionDto::RemoteAuthorityEnrollmentStatus {
-            route,
-            enrollment_id,
-        } => WorkerAction::RemoteAuthorityEnrollmentStatus {
-            route: Box::new(remote_route(&route)),
-            enrollment_id,
-        },
-        AgentVaultActionDto::RemotePairingPrepare {} => WorkerAction::RemotePairingPrepare,
-        AgentVaultActionDto::RemotePairingConfirm {
-            route,
-            challenge,
-            polling_proof,
-        } => WorkerAction::RemotePairingConfirm {
-            route: Box::new(remote_route(&route)),
-            challenge: Box::new(pairing_challenge(challenge)?),
-            polling_proof,
-        },
-        AgentVaultActionDto::RemotePairingStatus {
-            route,
-            pairing_id,
-            polling_proof,
-        } => WorkerAction::RemotePairingStatus {
-            route: Box::new(remote_route(&route)),
-            pairing_id,
-            polling_proof,
-        },
-        AgentVaultActionDto::RemotePairingFinalize {
-            route,
-            pairing_id,
-            polling_proof,
-            challenge,
-        } => WorkerAction::RemotePairingFinalize {
-            route: Box::new(remote_route(&route)),
-            pairing_id,
-            polling_proof,
-            challenge: Box::new(pairing_challenge(challenge)?),
-        },
-        AgentVaultActionDto::RemoteCalendarGrantPreview {
-            route,
-            connector_id,
-            connection_id,
-            resource,
-        } => WorkerAction::RemoteCalendarGrantPreview {
-            route: Box::new(remote_route(&route)),
-            connector_id,
-            connection_id,
-            resource,
-        },
-        AgentVaultActionDto::RemoteCalendarGrantReview {
-            route,
-            connector_id,
-            connection_id,
-            resource,
-            expected_producer_fingerprint,
-        } => WorkerAction::RemoteCalendarGrantReview {
-            route: Box::new(remote_route(&route)),
-            connector_id,
-            connection_id,
-            resource,
-            expected_producer_fingerprint,
-        },
-        AgentVaultActionDto::RemoteCalendarGrantStatus { grant_id } => {
-            WorkerAction::RemoteCalendarGrantStatus { grant_id }
-        }
-        AgentVaultActionDto::RemoteCalendarGrantPause {
-            grant_id,
-            expected_authority,
-        } => WorkerAction::RemoteCalendarGrantPause {
-            grant_id,
-            expected_authority,
-        },
-        AgentVaultActionDto::RemoteViewGrantPreview {
-            route,
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-        } => WorkerAction::RemoteViewGrantPreview {
-            route: Box::new(remote_route(&route)),
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-        },
-        AgentVaultActionDto::RemoteViewGrantReview {
-            route,
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_connection_revision,
-            expected_provider_identity,
-            expected_recipient,
-        } => WorkerAction::RemoteViewGrantReview {
-            route: Box::new(remote_route(&route)),
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_connection_revision,
-            expected_provider_identity,
-            expected_recipient,
-        },
-        AgentVaultActionDto::RemoteViewGrantStatus { grant_id } => {
-            WorkerAction::RemoteViewGrantStatus { grant_id }
-        }
-        AgentVaultActionDto::RemoteViewGrantPause {
-            grant_id,
-            expected_authority,
-        } => WorkerAction::RemoteViewGrantPause {
-            grant_id,
-            expected_authority,
-        },
     })
 }
 
