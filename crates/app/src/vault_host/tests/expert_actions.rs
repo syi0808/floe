@@ -16,6 +16,7 @@ use floe_experts_builtin::schedule::{ExpertHost, ExpertViews};
 use floe_vault::*;
 
 use super::*;
+use super::expert_evidence::delegation_message;
 
 /// An Expert invocation records its capability calls before dispatch; these
 /// regressions run one that makes none.
@@ -58,17 +59,11 @@ use floe_context_contract::SourceAuthority;
 use floe_context_contract::TimelineViewItem;
 use floe_conversation::AgentMessage;
 use floe_day::Event;
-use floe_experts::A2AArtifact;
-use floe_experts::A2AMessage;
-use floe_experts::A2AMessageRole;
 use floe_experts::A2APart;
-use floe_experts::A2ATask;
-use floe_experts::A2ATaskState;
 use floe_experts::AgentRegistry;
 use floe_experts::CalendarAccessChange;
 use floe_experts::CalendarAccessConfiguration;
 use floe_experts::CalendarExpertSetup;
-use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
 use floe_experts::ExpertBudget;
 use floe_experts::ExpertInput;
 use floe_experts::ExpertInvocation;
@@ -149,42 +144,6 @@ struct Fixture {
     reference: ExpertProposalReference,
     evidence: ExpertResult,
     root: tempfile::TempDir,
-}
-
-fn delegation_message(turn_id: Uuid, evidence: &ExpertResult) -> AgentMessage {
-    let context_id = Uuid::new_v4();
-    AgentMessage::Delegation {
-        turn_id,
-        task: A2ATask {
-            id: evidence.invocation_id,
-            context_id,
-            agent_id: evidence.package.id.clone(),
-            state: A2ATaskState::Completed,
-            history: vec![A2AMessage {
-                message_id: Uuid::new_v4(),
-                context_id,
-                task_id: Some(evidence.invocation_id),
-                role: A2AMessageRole::User,
-                parts: vec![A2APart::Text {
-                    text: "Prepare a bounded scheduling proposal.".into(),
-                }],
-            }],
-            artifacts: vec![A2AArtifact {
-                artifact_id: Uuid::new_v4(),
-                name: "Schedule expert result".into(),
-                parts: vec![
-                    A2APart::Text {
-                        text: "A scheduling proposal is available for review.".into(),
-                    },
-                    A2APart::Data {
-                        media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
-                        data: serde_json::to_string(evidence).unwrap(),
-                    },
-                ],
-            }],
-            failure: None,
-        },
-    }
 }
 
 impl Fixture {

@@ -2,7 +2,7 @@
 
 **Status: active**
 
-**Code baseline reviewed:** `39263a1339d0519b78a20680c0eea73506ff6d6f` (`2-F`)
+**Stage 3 entry baseline (historical):** `39263a1339d0519b78a20680c0eea73506ff6d6f` (`2-F`)
 
 Stage 3 answers: **do the remaining production callers and product boundaries use the canonical owners that Stage 2 froze, without reconstructing execution topology outside those owners?**
 
@@ -12,15 +12,15 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 ## Current checkpoint
 
-**Active: 3-A residual closure — remove caller-zero Schedule agent-turn compatibility.**
+**Active: 3-B — AppHost Composition Closure.**
 
-Use [the 3-A execution plan](stage-3/3-a.md), especially its `Residual closure authority` / R0-R4 section, as the authoritative task document.
+Use [the 3-B execution plan](stage-3/3-b.md) for the next change set. No 3-B implementation is part of 3-A closure.
 
-The first-pass 3-A core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`: canonical Foundation transport, delegated Experts, the production Schedule endpoint and the Knowledge Learner all use the Inference-owned path. A post-closure review found one caller-zero Schedule agent-turn runtime retained only by tests; 3-A is narrowly reopened to delete that residual compatibility before 3-B starts.
+3-A is **complete · frozen**. Core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`; residual closure on execution baseline `beb6a624b0e912fe94faa1ea7628c72a96c8283b` deleted the caller-zero Schedule agent-turn runtime and its legacy model quarantine. Schedule now has only the canonical Expert endpoint model path. Owner regressions and proposal fixtures no longer require the deleted runtime; see [the residual closure report](stage-3/3-a.md#residual-closure-agent-report).
 
 ## Progress
 
-- [ ] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (core convergence complete; residual closure active)
+- [x] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (complete · frozen; residual closure complete)
 - [ ] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md)
 - [ ] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md)
 - [ ] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md)
@@ -66,34 +66,11 @@ Flutter
 
 Outer layers translate intent, provide concrete adapter implementations and present results. They do not regain business ownership.
 
-## Baseline review before 3-A
+## Remaining Stage 3 debt after 3-A
 
-The inventory below is retained as **historical planning input from before the first-pass 3-A implementation**. It does not describe the current `main` after `8bdd506...`. Current 3-A status is the narrow residual closure above; after it closes, this section must be replaced or rewritten to describe only remaining 3-B through 3-F debt.
+General Conversation, delegated built-in Experts, the production Schedule endpoint and the isolated Knowledge Learner execute models through canonical Inference. Domain prompt, policy and budget semantics remain with their owners. `PreparedFoundationTransport` reaches the existing bundled native transport using the canonical attempt identity. These are closed 3-A boundaries, not remaining migration work.
 
-The original Stage 3 baseline review found these live production seams.
-
-### Domain inference callers outside canonical Inference
-
-1. delegated built-in Expert compatibility in
-   `crates/app/src/vault_host/conversation_turn/expert_compat.rs`;
-2. Schedule/Calendar compatibility in
-   `crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs` and
-   `schedule/agent.rs`;
-3. the isolated Knowledge Learner in
-   `crates/modules/knowledge/src/application/inference.rs` and
-   `learner_transport.rs`, composed from App through
-   `crates/app/src/vault_host/learner_worker.rs`.
-
-All three may retain domain-specific prompt, policy and budget semantics. None should retain independent provider route, model-attempt or usage ownership after 3-A.
-
-### Canonical local-model gap
-
-The existing `FoundationModelRunner` already calls the bundled
-`libfloe_local_model.dylib`. The canonical
-`PreparedFoundationTransport::generate` still returns
-`AgentFailure::LocalModelUnavailable`.
-
-3-A owns the minimal adapter convergence needed to make canonical Inference capable of the existing native local-model path. 3-D owns the final Flutter/Apple packaging and product-caller cutover/verification.
+The remaining debt belongs to 3-B through 3-F:
 
 ### App composition seams
 
@@ -115,6 +92,12 @@ The old AgentVault `ConversationTurn` DTO and `AgentRemoteRouteDto` remain. The 
 
 3-C separates connection/pairing intent from model execution topology. 3-D migrates the real callers. 3-E deletes the old shapes only after caller count reaches zero.
 
+### Live compatibility and Apple delivery
+
+The separate AgentFixture runtime in `crates/app/src/agent_fixture.rs`, driven through the vault host, remains live product-boundary debt for 3-D/3-E. Its Conversation legacy runtime and provider compatibility support are not retained for Schedule tests and are not part of the completed 3-A residual.
+
+Canonical Foundation transport is implemented; packaged macOS, iPhone and iPad caller/bindings/dylib validation remains 3-D/3-F work. Build these artifacts from the same source snapshot and use an explicitly selected fresh development profile when stored meaning changes.
+
 ### Validation-harness debt already known
 
 Before 3-F can be a trustworthy gate, repair the stale validation entry points discovered on this baseline:
@@ -128,12 +111,13 @@ These are validation-harness debt, not reasons to weaken architecture or skip pr
 ## Execution order
 
 ~~~text
-3-A  domain execution convergence
+3-A  domain execution convergence (complete · frozen)
   A0 canonical Foundation prepared transport
   A1 delegated built-in Expert execution
   A2 Schedule / Calendar execution
   A3 Knowledge Learner inference
   A4 closure / caller proof
+  R0-R4 caller-zero Schedule residual closure (complete)
 
 3-B  AppHost composition closure
 

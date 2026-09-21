@@ -40,10 +40,7 @@ use crate::local_context::LocalContextHost;
 use floe_connections::CalendarConnectionRef;
 use floe_provider_adapters::sources::ServerSourceClient;
 
-// The legacy calendar turn's own request type is named by the host regressions
-// that still cover that path; the module stays inside the vault host.
 pub(in crate::vault_host) mod agent;
-pub(in crate::vault_host) mod legacy_model;
 
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 

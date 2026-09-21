@@ -2520,6 +2520,7 @@ mod tests {
 
     mod calendar_experts;
     mod expert_actions;
+    pub(in crate::vault_host) mod expert_evidence;
     mod learner_worker;
     mod memory_review;
     mod proposals;

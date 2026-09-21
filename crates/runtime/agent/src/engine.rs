@@ -2857,6 +2857,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_delegation_assignment_rejects_before_any_dispatch() {
+        assert_shape_rejected(
+            drive_shape(vec![ModelStep::Delegate {
+                agent_id: "expert-a".into(),
+                definition_revision: 1,
+                message: " ".into(),
+                context_refs: vec![],
+            }])
+            .await,
+        );
+    }
+
+    #[tokio::test]
     async fn multiple_answers_are_invalid() {
         assert_shape_rejected(drive_shape(vec![answer("one"), answer("two")]).await);
     }

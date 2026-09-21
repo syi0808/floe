@@ -4,7 +4,6 @@
 //! states what execution class it requires, Context projects the authorized
 //! input, Inference selects the profile and owns the attempt, and Access
 //! fences the dispatch. No provider, route, or usage ledger is selected here.
-//! Schedule keeps its own legacy host until 3-A2 converges it.
 
 use std::{future::Future, pin::Pin, sync::Mutex};
 

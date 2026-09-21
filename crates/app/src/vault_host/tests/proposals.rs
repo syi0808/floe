@@ -1,139 +1,20 @@
 use chrono::TimeZone;
-use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarReadAdmission};
 use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
 use floe_agent_contract::{
-    AgentContext, DataClass, ExpertResult, InferencePolicyDecision, ModelConversationEntry,
-    prompts::PromptRole,
+    DataClass, ExpertFocusProposal, ExpertInsight, ExpertResult, PackageKind, PackageRef,
 };
-use floe_context::CalendarSource;
-use floe_context_contract::{CalendarProvider, ModelPlacement, TransferConsent};
-use floe_conversation::{AgentBudget, AgentMessage};
-use floe_day::{CalendarRange, CalendarTimelineGrant};
-use floe_experts::EXPERT_RESULT_MEDIA_TYPE;
-use floe_experts::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget};
-use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
+use floe_context_contract::CalendarProvider;
+use floe_conversation::AgentMessage;
+use floe_day::CalendarRange;
+use floe_experts::{
+    AgentRegistry, CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget,
+};
 
-use crate::vault_host::conversation_turn::expert_dispatch::schedule::agent::CalendarAgentTurnRequest;
-
+use super::expert_evidence::delegation_message;
 use super::*;
-use floe_conversation::AgentCommand;
-
-struct Access;
-
-impl CalendarReadAdmission for Access {}
-
-impl CalendarSource for Access {
-    async fn check(
-        &self,
-        request: CalendarReadAccessRequest,
-    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
-        Ok(CalendarReadAccessStamp {
-            schema_version: 1,
-            person_id: request.person_id,
-            device_id: request.device_id,
-            provider: request.provider,
-            calendar_ids: request.calendar_ids,
-            native_subject_fingerprint: "f".repeat(64),
-            generation: "synthetic-generation".into(),
-        })
-    }
-}
-
-struct Model;
 
 fn fixture_now() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc.with_ymd_and_hms(2050, 1, 15, 9, 0, 0).unwrap()
-}
-
-/// The conversation the envelope carries, history then current turn.
-fn envelope_messages(request: &ModelTransportRequest) -> Vec<&ModelConversationEntry> {
-    request
-        .envelope
-        .conversation
-        .history
-        .iter()
-        .chain(request.envelope.conversation.current_turn.iter())
-        .collect()
-}
-
-impl ModelTransport for Model {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
-    async fn generate(
-        &self,
-        request: ModelTransportRequest,
-    ) -> Result<ModelTransportResponse, AgentFailure> {
-        let schedule_expert = request.prompt.role == PromptRole::ScheduleExpert;
-        let messages = envelope_messages(&request);
-        let step = if schedule_expert {
-            let coverage = messages.iter().find_map(|entry| match entry {
-                ModelConversationEntry::User { text, .. } => {
-                    serde_json::from_str::<serde_json::Value>(text)
-                        .ok()
-                        .map(|task| {
-                            (
-                                task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
-                                task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
-                            )
-                        })
-                }
-                _ => None,
-            });
-            let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
-                coverage.ok_or(AgentFailure::InvalidModelOutput)?
-            else {
-                return Err(AgentFailure::InvalidModelOutput);
-            };
-            // A capability result reaches a transport as a tool exchange; a
-            // delegation settles as its own exchange, and is not one of these.
-            let latest = messages.iter().rev().find_map(|entry| match entry {
-                ModelConversationEntry::ToolExchange { call, result }
-                    if result.issue.is_none() =>
-                {
-                    Some(call.tool_id.as_str())
-                }
-                _ => None,
-            });
-            match latest {
-                Some("schedule.find_free_windows") => ModelStep::Answer {
-                    text: "Synthetic proposal recorded.".into(),
-                },
-                _ => ModelStep::Call {
-                    capability_id: "schedule.find_free_windows".into(),
-                    input: serde_json::json!({
-                        "minimum_minutes": 60,
-                        "range_start_unix_ms": starts_at_unix_ms,
-                        "range_end_unix_ms": ends_at_unix_ms,
-                    })
-                    .to_string(),
-                },
-            }
-        } else if messages.iter().any(|entry| {
-            matches!(
-                entry,
-                ModelConversationEntry::DelegationExchange { .. }
-            )
-        }) {
-            ModelStep::Answer {
-                text: "Synthetic proposal recorded.".into(),
-            }
-        } else {
-            ModelStep::Delegate {
-                agent_id: request.active_agents[0].id.clone(),
-                message: "Find a suitable time for this calendar request.".into(),
-                context_refs: vec![],
-            }
-        };
-        Ok(ModelTransportResponse {
-            replay: None,
-            schema_version: 1,
-            output: vec![step],
-            used_tokens: 10,
-            cost_micros: 0,
-        })
-    }
 }
 
 async fn seed(
@@ -230,75 +111,140 @@ async fn seed(
         .unwrap()
         .unwrap()
         .revision;
-    let initial = vault.create_sample_session().await.unwrap();
-    let result = core
-        .run_calendar_agent_turn(
-            &vault,
-            &Access,
-            &Model,
-            CalendarAgentTurnRequest {
-                continuation: false,
-                command: AgentCommand {
-                    schema_version: 1,
-                    person_id: person,
-                    session_id: initial.id,
-                    expected_revision: initial.revision,
-                    text: "Synthetic focus request".into(),
-                },
-                context: AgentContext {
-                    projection_version: 1,
-                    persona: None,
-                    optional_context_issues: vec![],
-                    memories: vec![],
-                    evidence: vec![],
-                },
-                policy: InferencePolicyDecision {
-                    purpose: "synthetic-briefing".into(),
-                    data_classes: vec![DataClass::Synthetic],
-                    allowed_placements: vec![ModelPlacement::DeviceLocal],
-                    performance_class: "fixture".into(),
-                    projection_version: 1,
-                    external_transfer_consent: TransferConsent::NotGranted,
-                    bounded_sensitive_projection: false,
-                },
-                budget: AgentBudget::default(),
-                grant: CalendarTimelineGrant {
-                    person_id: person,
-                    handle: setup.view_handle,
-                    provider: CalendarProvider::Fixture,
-                    device_id: "test-device".into(),
-                    calendar_ids: vec!["test-calendar".into()],
-                    connection_revision: revision,
-                    day,
-                    starts_at: now + chrono::Duration::minutes(5),
-                    ends_at: now + chrono::Duration::hours(2),
-                    expires_at: now + chrono::Duration::minutes(2),
-                },
-                assignment_id: setup.expert_assignment_id,
-                feasibility: None,
-                wellbeing: None,
-                destination: None,
-                propose_focus: true,
-                cancellation: Cancellation::default(),
-            },
-            || now,
-            |_| {},
+    let snapshot = vault.expert_registry().await.unwrap().unwrap();
+    let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
+    let registry_revision = registry.revision();
+    let card = registry
+        .expert_card(
+            person,
+            setup.expert_assignment_id,
+            registry_revision,
+            setup.view_handle,
         )
+        .unwrap();
+    let evidence = ExpertResult {
+        schema_version: 1,
+        invocation_id: Uuid::new_v4(),
+        instance_id: vault.registry_instance_id(),
+        person_id: person,
+        assignment_id: setup.expert_assignment_id,
+        package: PackageRef {
+            kind: PackageKind::Expert,
+            id: card.id,
+            version: card.version,
+        },
+        view_handle: setup.view_handle,
+        source_handle: format!("calendar.timeline:{}:{revision}", setup.view_handle),
+        data_class: DataClass::Synthetic,
+        expires_at_unix_ms: (now + chrono::Duration::minutes(2)).timestamp_millis() as u64,
+        insights: vec![ExpertInsight::FocusWindow {
+            starts_at_unix_ms: (now + chrono::Duration::minutes(5)).timestamp_millis() as u64,
+            ends_at_unix_ms: (now + chrono::Duration::minutes(65)).timestamp_millis() as u64,
+        }],
+        action_proposals: vec![ExpertFocusProposal {
+            starts_at_unix_ms: (now + chrono::Duration::minutes(5)).timestamp_millis() as u64,
+            ends_at_unix_ms: (now + chrono::Duration::minutes(65)).timestamp_millis() as u64,
+            view_handle: setup.view_handle,
+        }],
+        summary: Some("Synthetic proposal recorded.".into()),
+        model_calls: 2,
+        state_revision: 1,
+        view_calls: 1,
+    };
+    registry
+        .record_result(registry_revision, &evidence)
+        .unwrap();
+    let mut session = vault.create_sample_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    session.active_turn = Some(turn_id);
+    session.revision = 1;
+    session.messages.push(AgentMessage::User {
+        turn_id,
+        text: "Synthetic focus request".into(),
+    });
+    vault.compare_and_swap(&session, 0).await.unwrap();
+    session.revision = 2;
+    session
+        .messages
+        .push(delegation_message(turn_id, &evidence));
+    vault
+        .commit_expert_session(&session, 1, registry_revision, &registry.snapshot())
         .await
         .unwrap();
-    assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
-    let evidence = result
-        .session
-        .messages
-        .iter()
-        .find_map(|message| match message {
-            AgentMessage::Delegation { task, .. } => Some(
-                serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap(),
-            ),
-            _ => None,
-        })
+    session.revision = 3;
+    session.active_turn = None;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&session, 2).await.unwrap();
+    (session, evidence)
+}
+
+#[tokio::test]
+async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let core = FloeCore::open(directory.path().join("core.db"))
+        .await
         .unwrap();
-    (result.session, evidence)
+    let (session, evidence) = seed(&root, person, keys.clone(), &core).await;
+    let vault = EncryptedAgentVault::open(&root, person, keys)
+        .await
+        .unwrap();
+    let connection = core.calendar_connection(person).await.unwrap().unwrap();
+    core.import_calendar(
+        person,
+        connection.revision,
+        CalendarRange {
+            start_date: fixture_now().date_naive(),
+            end_date_exclusive: (fixture_now() + chrono::Duration::days(1)).date_naive(),
+            timezone_offset_seconds: 0,
+            end_timezone_offset_seconds: None,
+        },
+        vec![],
+        fixture_now(),
+    )
+    .await
+    .unwrap();
+    let revision = core
+        .calendar_connection(person)
+        .await
+        .unwrap()
+        .unwrap()
+        .revision;
+    assert_eq!(revision, connection.revision + 1);
+    assert_eq!(
+        core.prepare_expert_calendar_action(
+            &vault,
+            ExpertCalendarRequest {
+                reference: ExpertProposalReference {
+                    person_id: person,
+                    session_id: session.id,
+                    invocation_id: evidence.invocation_id,
+                },
+                destination: ExpertCalendarDestination {
+                    provider: CalendarProvider::Fixture,
+                    calendar_id: "test-calendar".into(),
+                    connection_revision: revision,
+                    timezone: "Asia/Seoul".into(),
+                },
+                cancellation: Cancellation::default(),
+                deadline: tokio::time::Instant::now() + Duration::from_secs(1),
+            },
+            fixture_now,
+        )
+        .await,
+        Err(AgentFailure::StaleContext),
+    );
+    assert_eq!(vault.load(person, session.id).await.unwrap(), session);
+    assert!(
+        core.actions()
+            .calendar_actions(person)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

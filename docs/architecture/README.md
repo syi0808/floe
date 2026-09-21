@@ -2,7 +2,7 @@
 
 This directory describes Floe's **current semantic ownership and repository boundaries**. It is the first source to read when a code task needs architectural context.
 
-The physical Rust workspace has already moved to the approved modular-monolith package layout. Stage 2 is complete: the internal General Conversation runtime goes through the canonical owner services. Remaining product-boundary callers (AppHost, FFI, Flutter, native/server, plus delegated Expert/Schedule legacy runtime) converge in Stage 3. Do not confuse a transitional caller with ownership: temporary compatibility does not transfer policy to App, FFI, Flutter or an adapter.
+The physical Rust workspace has already moved to the approved modular-monolith package layout. Stage 2 is complete: the internal General Conversation runtime goes through the canonical owner services. Delegated Experts, Schedule and the Knowledge Learner also execute models through canonical Inference. Remaining product-boundary callers (AppHost, FFI, Flutter, native/server and the live AgentFixture runtime) converge in Stage 3. Do not confuse a transitional caller with ownership: temporary compatibility does not transfer policy to App, FFI, Flutter or an adapter.
 
 ## Layer map
 
