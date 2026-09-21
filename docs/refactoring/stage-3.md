@@ -14,7 +14,7 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 **Active: 3-D — Flutter, Native and Server Caller Cutover.**
 
-Use [the 3-D execution plan](stage-3/3-d.md) for the next change set. 3-C is **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
+Use [the 3-D execution plan](stage-3/3-d.md) for the active change set. The Flutter caller cutover and harness repairs are implemented, but 3-D is not closed: its [Agent report](stage-3/3-d.md#agent-report) records the remaining full-Flutter/server validation blockers and iOS environment limitation. 3-C is **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
 
 3-A is **complete · frozen**. Core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`; residual closure on execution baseline `beb6a624b0e912fe94faa1ea7628c72a96c8283b` deleted the caller-zero Schedule agent-turn runtime and its legacy model quarantine. Schedule now has only the canonical Expert endpoint model path. Owner regressions and proposal fixtures no longer require the deleted runtime; see [the residual closure report](stage-3/3-a.md#residual-closure-agent-report).
 
@@ -70,7 +70,7 @@ Outer layers translate intent, provide concrete adapter implementations and pres
 
 General Conversation, delegated built-in Experts, the production Schedule endpoint and the isolated Knowledge Learner execute models through canonical Inference. Domain prompt, policy and budget semantics remain with their owners. `PreparedFoundationTransport` reaches the existing bundled native transport using the canonical attempt identity. These are closed 3-A boundaries, not remaining migration work.
 
-The remaining debt belongs to 3-C through 3-F:
+The remaining debt belongs to 3-D through 3-F:
 
 ### Closed canonical App composition
 
@@ -84,23 +84,22 @@ Canonical Conversation remains on `command_v2/query_v2/events_v2` and `AppComman
 
 Pairing and remote Access now have separate typed Rust protocol/FFI services admitted through AppHost's verified caller identity. Pairing accepts only setup endpoint/evidence; protected authority and Calendar/View grant operations prepare transports from the current saved connection inside provider adapters. Rust `AgentRemoteRouteDto`, `RemoteTurnRoute` and old remote AgentVault route operations are deleted, not compatibility aliases.
 
-Flutter production source is intentionally unchanged and its old remote senders are now stale. The [3-C report](stage-3/3-c.md#agent-report) names their exact signatures, result decoders, bindings and tests for 3-D. 3-E deletes the remaining unrelated compatibility only after its own caller-zero proof.
+3-D has moved Flutter production pairing and protected Access callers onto these owner APIs. Pairing accepts setup intent, protected Access receives no saved connection route, and approved pairing results remain retained until secure persistence succeeds. The frozen [3-C report](stage-3/3-c.md#agent-report) remains historical handoff evidence, not the current Flutter caller inventory. 3-E deletes the remaining unrelated compatibility only after its own caller-zero proof.
 
 ### Live compatibility and Apple delivery
 
-The separate AgentFixture runtime in `crates/app/src/agent_fixture.rs`, driven through the vault host, remains live product-boundary debt for 3-D/3-E. Its Conversation legacy runtime and provider compatibility support are not retained for Schedule tests and are not part of the completed 3-A residual.
+The separate AgentFixture runtime in `crates/app/src/agent_fixture.rs`, driven through the vault host, now has no production Flutter caller. Explicit Rust/Flutter test helpers still use its ABI; final Rust compatibility deletion remains 3-E work after 3-D closure. Production Conversation uses fixture-neutral shared models and has no synthetic fallback. Its remaining unrelated AgentVault session/management callers are classified in the 3-D report. This compatibility is not retained for Schedule tests and is not part of the completed 3-A residual.
 
-Canonical Foundation transport is implemented; packaged macOS, iPhone and iPad caller/bindings/dylib validation remains 3-D/3-F work. Build these artifacts from the same source snapshot and use an explicitly selected fresh development profile when stored meaning changes.
+Canonical Foundation transport is implemented. 3-D has verified the macOS release bundle, both dylib loads and supported local-model smoke; iPhone/iPad packaging is not claimed green because the installed Xcode cannot resolve an iOS build destination. Build artifacts from the same source snapshot and use an explicitly selected fresh development profile when stored meaning changes.
 
-### Validation-harness debt already known
+### Validation-harness repair and remaining gates
 
-Before 3-F can be a trustworthy gate, repair the stale validation entry points discovered on this baseline:
+3-D repaired the stale validation entry points discovered on the baseline:
 
-- `tools/validation/check-local-model.sh` still invokes removed package `floe-infra`;
-- `apps/client/integration/local_server_pairing_test.dart` still imports removed
-  `features/server/local_server_client.dart` rather than the current Connections path.
+- `tools/validation/check-local-model.sh` validates current provider-adapter and Inference packages; the smoke script uses the actual `floe-app` example;
+- `apps/client/integration/local_server_pairing_test.dart` uses current Connections imports and the real native pairing owner gateway, with explicitly memory-only test credential persistence.
 
-These are validation-harness debt, not reasons to weaken architecture or skip product evidence.
+The repaired pairing integration cannot execute while the baseline Go package extraction fails to compile. Full Flutter validation also retains baseline failures. These are unresolved 3-D gates, not reasons to weaken assertions or skip protected Access/revocation evidence. Keep 3-D active; do not start 3-E.
 
 ## Execution order
 
