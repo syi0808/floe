@@ -13,10 +13,15 @@ use std::{
 };
 
 use chrono::{TimeZone, Utc};
+use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentContext;
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::Cancellation;
+use floe_agent_contract::CapabilityDescriptor;
+use floe_agent_contract::CapabilityExecution;
+use floe_agent_contract::CapabilityExecutionState;
 use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::ProviderReplay;
 use floe_agent_contract::SessionProtection;
 use floe_context_contract::ContextIssueReason;
 use floe_context_contract::DataClass;
@@ -24,7 +29,6 @@ use floe_context_contract::EpistemicStatus;
 use floe_context_contract::ModelPlacement;
 use floe_context_contract::PersonalMemoryKind;
 use floe_context_contract::TransferConsent;
-use floe_conversation::AGENT_VERSION;
 use floe_conversation::AgentBudget;
 use floe_conversation::AgentCommand;
 use floe_conversation::AgentEventKind;
@@ -33,21 +37,17 @@ use floe_conversation::AgentOutcome;
 use floe_conversation::AgentRuntime;
 use floe_conversation::AgentSession;
 use floe_conversation::AgentUsage;
-use floe_conversation::CapabilityDescriptor;
-use floe_conversation::CapabilityExecution;
-use floe_conversation::CapabilityExecutionState;
 use floe_conversation::CapabilityHost;
 use floe_conversation::CapabilityInvocation;
 use floe_conversation::GovernedSessionRepository;
 use floe_conversation::ModelRequest;
 use floe_conversation::ModelResponse;
 use floe_conversation::ModelRunner;
-use floe_conversation::ModelStep;
-use floe_conversation::ModelUsage;
-use floe_conversation::ProviderReplay;
 use floe_conversation::SessionStore;
+use floe_execution::budget::ModelUsage;
 use floe_inference::ModelAttemptRecord;
 use floe_inference::ModelAttemptState;
+use floe_inference::ModelStep;
 use floe_kernel::PersonId;
 use floe_knowledge::KNOWLEDGE_VERSION;
 use floe_knowledge::KnowledgeActor;
@@ -893,7 +893,7 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     child.result = Some(Ok(markers[5].into()));
     session.capability_executions.push(child);
     session.active_turn = Some(turn);
-    session.pending_output = Some(vec![floe_conversation::ModelStep::Preamble {
+    session.pending_output = Some(vec![floe_inference::ModelStep::Preamble {
         text: markers[6].into(),
     }]);
     let attempt_id = Uuid::new_v4();

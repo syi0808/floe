@@ -138,12 +138,10 @@ mod tests {
 
     use super::*;
     use floe_inference::{
-        CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, DataRecipient, ExecutionLocation,
-        InferenceService, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
-    };
-    use floe_inference::ports::model_provider::{
-        CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,
-        PreparedModelTransport,
+        CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, CanonicalModelRequest,
+        CanonicalModelResponse, DataRecipient, ExecutionLocation, InferenceService,
+        ModelCapabilities, ModelConsumer, ModelProfile, ModelProvider, ModelPurpose,
+        PreparedModelProfile, PreparedModelTransport,
     };
 
     const PERSON: &str = "00000000-0000-4000-8000-000000000001";

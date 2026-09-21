@@ -17,13 +17,13 @@ mod error;
 pub mod events;
 mod host;
 mod inference_routes;
-pub mod local_context;
+mod local_context;
 mod prompts;
 mod services;
-pub mod turn_request;
+mod turn_request;
 #[cfg(unix)]
 mod vault_host;
-pub mod worker;
+mod worker;
 
 pub use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
 /// The values this host's own API names at its boundary.
@@ -65,13 +65,12 @@ pub use agent_fixture::{
 };
 pub use agent_run::{AgentFixtureRunCommand, AgentFixtureRunRequest, AgentFixtureRunSnapshot};
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
-pub use bootstrap::local_identity_for_database;
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
 pub use core::{Classification, FloeCore};
 pub use error::{CoreError, ErrorCode};
 /// The acquisition values one local-context command carries.
-pub use floe_context::{PublishedCalendarObservation, valid_native_subject_fingerprint};
+pub use floe_context::valid_native_subject_fingerprint;
 pub use floe_provider_adapters::sources::native_acquisition::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
@@ -80,7 +79,6 @@ pub use floe_provider_adapters::sources::native_acquisition::{
     PersonalAcquisitionResult, PersonalDomain, attention_failure, personal_failure,
 };
 pub use host::{AppHost, HostRequest};
-pub use inference_routes::HostInferenceRoutes;
 pub use local_context::{
     CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
 };

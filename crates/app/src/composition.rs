@@ -170,7 +170,7 @@ fn service_failure(failure: floe_kernel::AgentFailure) -> crate::ServiceError {
 /// Create the host: one current-thread runtime, the local store, the Vault
 /// worker and the route selector, bound to the verified local identity.
 pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
-    let identity = crate::local_identity_for_database(std::path::Path::new(path))
+    let identity = crate::bootstrap::local_identity_for_database(std::path::Path::new(path))
         .map_err(AppOpenError::Host)?;
     let runtime = Builder::new_current_thread()
         .enable_all()

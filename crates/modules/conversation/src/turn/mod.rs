@@ -16,4 +16,4 @@ pub use session::*;
 pub use source_history::{
     bounded_source_history_start, carries_source_history, project_source_history,
 };
-pub use usage::{ModelUsage, UsageAttempt, UsageLedger, sync_usage, turn_ledger};
+pub use usage::{sync_usage, turn_ledger};

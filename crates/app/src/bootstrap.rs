@@ -36,7 +36,7 @@ fn runtime_epoch() -> u64 {
     (((value >> 64) as u64 ^ value as u64) & i64::MAX as u64).max(1)
 }
 
-pub fn local_identity_for_database(
+pub(crate) fn local_identity_for_database(
     database_path: &Path,
 ) -> Result<Option<crate::LocalIdentityClaim>, HostError> {
     floe_provider_adapters::local_identity_for_database(database_path)

@@ -15,7 +15,10 @@ use floe_access::{
 use floe_actions::{
     CalendarAction, ExpertCalendarDestination, ExpertCalendarRequest, ExpertProposalReference,
 };
-use floe_agent_contract::{AgentFailure, CancelReason, ModelPlacement, SessionProtection};
+use floe_agent_contract::{
+    AgentFailure, CancelReason, CapabilityDescriptor, ModelPlacement, SessionProtection,
+};
+use floe_inference::UsageLedger;
 use floe_context::{
     CalendarMirrorReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
     CalendarTimelineViews, GovernedDependencyResolver, ProjectedCalendarObservation,
@@ -31,8 +34,7 @@ use floe_context_contract::views::personal::{
 };
 use floe_conversation::{
     AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentOutcome, AgentRuntime, AgentSession,
-    CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse,
-    ModelRunner, SessionStore, UsageLedger,
+    CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse, ModelRunner, SessionStore,
 };
 use floe_day::CalendarTimelineGrant;
 use floe_execution::Cancellation;

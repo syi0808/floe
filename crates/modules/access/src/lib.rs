@@ -1,6 +1,6 @@
-pub mod application;
+mod application;
 mod data_access_grant;
-pub mod ports;
+mod ports;
 
 pub use application::personal_grants::{
     apply as apply_personal_access, apply_contacts,

@@ -62,17 +62,17 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     // The mock answers both the root model and the delegated Schedule
     // endpoint; the endpoint reads it from its injected fixture store.
     let (mock, server) = answer_server(vec![
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "Hello!".into(),
         },
-        floe_conversation::ModelStep::Delegate {
+        floe_inference::ModelStep::Delegate {
             agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
                 .package_id()
                 .into(),
             message: "Read my calendar".into(),
             context_refs: vec![],
         },
-        floe_conversation::ModelStep::Call {
+        floe_inference::ModelStep::Call {
             capability_id: "schedule.find_free_windows".into(),
             input: serde_json::json!({
                 "minimum_minutes": 60,
@@ -81,10 +81,10 @@ fn native_grants_capture_authority_only_on_explicit_review() {
             })
             .to_string(),
         },
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "Your calendar is clear.".into(),
         },
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "Your calendar is clear.".into(),
         },
     ]);
@@ -333,14 +333,14 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     // The mock answers both the root model and the delegated Schedule
     // endpoint; the endpoint reads it from its injected fixture store.
     let (mock, server) = answer_server(vec![
-        floe_conversation::ModelStep::Delegate {
+        floe_inference::ModelStep::Delegate {
             agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
                 .package_id()
                 .into(),
             message: "Find an open hour".into(),
             context_refs: vec![],
         },
-        floe_conversation::ModelStep::Call {
+        floe_inference::ModelStep::Call {
             capability_id: "schedule.find_free_windows".into(),
             input: serde_json::json!({
                 "minimum_minutes": 60,
@@ -349,10 +349,10 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
             })
             .to_string(),
         },
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "The fixture calendar has an open hour.".into(),
         },
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "You have an open hour.".into(),
         },
     ]);
@@ -480,7 +480,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
     let action = || WorkerAction::ConversationTurn {
@@ -577,10 +577,10 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
     .session
     .unwrap();
     let (mock, server) = answer_server(vec![
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "First durable answer".into(),
         },
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "Second durable answer".into(),
         },
     ]);
@@ -1020,7 +1020,7 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
     let request_id = Uuid::new_v4();
@@ -1068,7 +1068,7 @@ fn same_request_id_with_different_profile_conflicts() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
     let request_id = Uuid::new_v4();
@@ -1114,7 +1114,7 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
     let request_id = Uuid::new_v4();
@@ -1160,7 +1160,7 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
     let (refreshed_mock, idle) = answer_server(vec![]);
@@ -1248,7 +1248,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     );
     assert_eq!(resumed.failure, None);
     assert_eq!(resumed.session.unwrap().id, session.id);
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "General answer without experts".into(),
     }]);
     let result = perform(
@@ -1350,7 +1350,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
 
     let worker = Worker::new(root, keys).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
-    let (mock, server) = answer_server(vec![floe_conversation::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "Continued once".into(),
     }]);
     let action = || WorkerAction::ConversationTurn {
@@ -1566,14 +1566,14 @@ fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<Strin
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
         let steps = [
-            floe_conversation::ModelStep::Delegate {
+            floe_inference::ModelStep::Delegate {
                 agent_id: floe_experts_builtin::BuiltinExpertKind::Commitments
                     .package_id()
                     .into(),
                 message: "Review my commitments".into(),
                 context_refs: vec![],
             },
-            floe_conversation::ModelStep::Answer {
+            floe_inference::ModelStep::Answer {
                 text: "Mail access needs review before I can check commitments.".into(),
             },
         ];
@@ -1741,7 +1741,7 @@ fn canonical_inventory_body() -> String {
 }
 
 fn answer_server(
-    steps: Vec<floe_conversation::ModelStep>,
+    steps: Vec<floe_inference::ModelStep>,
 ) -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1818,8 +1818,8 @@ fn answer_server(
             }
             assert_eq!(path, "/v1/agent");
             let (index, mut step) = steps.next().expect("scripted steps peeked Some");
-            let has_call = matches!(step, floe_conversation::ModelStep::Call { .. });
-            if let floe_conversation::ModelStep::Call { capability_id, .. } = &mut step {
+            let has_call = matches!(step, floe_inference::ModelStep::Call { .. });
+            if let floe_inference::ModelStep::Call { capability_id, .. } = &mut step {
                 *capability_id = remote_tool_name(capability_id);
             }
             requests.push(format!("{headers}\r\n\r\n{body}"));
@@ -2543,7 +2543,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
 /// here would be a loud failure, and the recorded paths prove the turn only
 /// contacts post-admission discovery and transport.
 fn recording_answer_server(
-    steps: Vec<floe_conversation::ModelStep>,
+    steps: Vec<floe_inference::ModelStep>,
 ) -> (
     MockServer,
     Arc<Mutex<Vec<String>>>,
@@ -2658,7 +2658,7 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
     .session
     .unwrap();
     let (mock, paths, server) =
-        recording_answer_server(vec![floe_conversation::ModelStep::Answer {
+        recording_answer_server(vec![floe_inference::ModelStep::Answer {
             text: "Hello.".into(),
         }]);
     let result = perform(
@@ -3137,14 +3137,14 @@ fn schedule_plans_from_the_delegation_message_not_the_root_prompt() {
     // The mock answers the root model only: the expert never reaches its
     // model because planning refuses first.
     let (mock, server) = answer_server(vec![
-        floe_conversation::ModelStep::Delegate {
+        floe_inference::ModelStep::Delegate {
             agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
                 .package_id()
                 .into(),
             message: floe_experts_builtin::schedule::FOCUS_REQUEST.into(),
             context_refs: vec![],
         },
-        floe_conversation::ModelStep::Answer {
+        floe_inference::ModelStep::Answer {
             text: "The calendar request could not be planned.".into(),
         },
     ]);

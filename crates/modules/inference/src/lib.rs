@@ -6,7 +6,7 @@
 
 mod api;
 mod application;
-pub mod ports;
+mod ports;
 mod transfer;
 
 pub use api::{
@@ -16,10 +16,10 @@ pub use api::{
 pub use application::{
     AttemptJournal, AttemptLifecycle, AttemptUpdate, CANONICAL_MODEL_CONSUMER,
     CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceRouter, InferenceService,
-    LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY, ModelAttemptRecord, ModelAttemptState,
-    ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute, RoutePairing,
-    RoutePlanError, SavedConnectionStore, SavedServerConnection, UsageLedger,
-    admit_saved_connection, candidate_route, valid_external_recipient,
+    ModelAttemptRecord, ModelAttemptState, ModelRouteConfig, PurposeAvailability,
+    RemoteModelConnection, RemoteRoute, RoutePairing, RoutePlanError, SavedConnectionStore,
+    SavedServerConnection, UsageLedger, admit_saved_connection, candidate_route,
+    valid_external_recipient,
 };
 pub use ports::model_provider::{
     CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,

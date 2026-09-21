@@ -690,9 +690,10 @@ mod tests {
         GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
     use floe_agent_contract::AgentFailure;
-    use floe_conversation::{
-        AgentMessage, CapabilityExecution, CapabilityExecutionState, ProviderReplay,
+    use floe_agent_contract::{
+        CapabilityExecution, CapabilityExecutionState, ProviderReplay,
     };
+    use floe_conversation::AgentMessage;
 
     use super::super::context_dependencies::merge_context_dependency_coverage;
     use super::*;

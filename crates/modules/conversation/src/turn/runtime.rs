@@ -5,10 +5,13 @@ use uuid::Uuid;
 
 use crate::*;
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
-use floe_agent_contract::{CapabilityExecutionState, ModelReplay};
+use floe_agent_contract::{
+    AGENT_VERSION, CapabilityExecution, CapabilityExecutionState, ModelReplay,
+};
 use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_execution::Cancellation;
 use floe_execution::tasks::run_bounded as bounded;
+use floe_inference::{ModelStep, UsageLedger};
 use floe_experts::{
     A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
     NoA2AHost,

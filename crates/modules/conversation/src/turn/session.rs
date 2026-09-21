@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
 
-pub use floe_inference::ModelStep;
+use floe_inference::ModelStep;
 
-pub use floe_agent_contract::{
-    AgentCardManifestEntry, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState,
+use floe_agent_contract::{
+    AGENT_VERSION, AgentCardManifestEntry, CapabilityDescriptor, CapabilityExecution,
     ContextEnvelope, ContextManifest, ContextualData, EvidenceManifestEntry, MemoryManifestEntry,
     ModelReplay, PromptManifestEntry, ProviderReplay, RuntimeContext, ScopedInstructions,
 };
@@ -21,8 +21,6 @@ use floe_agent_contract::{
 };
 
 use floe_context::InferencePolicyDecision;
-
-pub const AGENT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -322,7 +320,7 @@ impl AgentBudget {
 }
 
 pub struct CapabilityInvocation {
-    pub usage: crate::turn::UsageLedger,
+    pub usage: floe_inference::UsageLedger,
     pub schema_version: u32,
     pub call_id: Uuid,
     pub person_id: PersonId,
@@ -346,7 +344,7 @@ pub trait CapabilityHost {
 
 #[derive(Clone)]
 pub struct ModelRequest {
-    pub usage: crate::turn::UsageLedger,
+    pub usage: floe_inference::UsageLedger,
     pub replay: Vec<ModelReplay>,
     pub schema_version: u32,
     pub prompt: floe_knowledge::prompts::PromptAssembly,

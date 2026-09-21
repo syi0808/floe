@@ -8,7 +8,7 @@
 use crate::turn_request::SavedConnectionSource;
 
 #[derive(Clone, Copy, Default)]
-pub struct HostInferenceRoutes;
+pub(crate) struct HostInferenceRoutes;
 
 /// Current exact-recipient authority for the canonical root model path.
 ///

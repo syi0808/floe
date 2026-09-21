@@ -12,14 +12,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{
-    AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent,
+    AgentFailure, CapabilityDescriptor, DataClass, ModelPlacement, SessionProtection,
+    TransferConsent,
 };
 use floe_context::{AgentContext, InferencePolicyDecision};
 use floe_conversation::{
     AgentBudget, AgentCommand, AgentEvent, AgentMessage, AgentRuntime, AgentSession,
-    CapabilityDescriptor, CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse,
-    ModelRunner, ModelStep, SessionStore,
+    CapabilityHost, CapabilityInvocation, ModelRequest, ModelResponse, ModelRunner, SessionStore,
 };
+use floe_inference::ModelStep;
 use floe_execution::Cancellation;
 use floe_experts::{
     A2AArtifact, A2AMessageRole, A2APart, A2ARouter, A2ASendMessageRequest, A2ATask, A2ATaskState,

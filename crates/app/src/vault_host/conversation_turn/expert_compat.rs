@@ -12,7 +12,8 @@ use std::{future::Future, pin::Pin};
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
 use floe_context::{InferencePolicyDecision, NativeContextView};
 use floe_context::{AttentionView, CalendarContextView, PeopleView, WellbeingView};
-use floe_conversation::{AgentMessage, ModelRequest, ModelStep};
+use floe_conversation::{AgentMessage, ModelRequest};
+use floe_inference::ModelStep;
 use floe_kernel::{AGENT_VERSION, PersonId};
 use floe_provider_adapters::models::{FoundationModelRunner, ServerModelRunner};
 use floe_provider_adapters::sources::ServerSourceClient;
@@ -169,7 +170,7 @@ impl floe_inference::ModelTransport for Model {
 /// here rather than inside the Expert.
 pub(crate) struct ExpertModelHost<'a, Transport = Model> {
     pub(crate) model: &'a Transport,
-    pub(crate) usage: floe_conversation::UsageLedger,
+    pub(crate) usage: floe_inference::UsageLedger,
 }
 
 impl<Transport: floe_inference::ModelTransport + Sync> floe_agent_contract::ExpertModel
@@ -842,7 +843,7 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
     ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>> {
         let handle = uuid::Uuid::new_v5(&self.person_id.0, b"floe.tasks");
         Box::pin(
-            floe_context::application::day_context_views::task_context_view(
+            floe_context::task_context_view(
                 &self.core.store,
                 self.person_id,
                 handle,

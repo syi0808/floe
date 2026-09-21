@@ -329,10 +329,10 @@ mod tests {
         ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
     use floe_agent_contract::{DataClass, ModelPlacement, TransferConsent};
+    use floe_agent_contract::{ModelReplay, ProviderReplay};
     use floe_context::{AgentContext, InferencePolicyDecision};
     use floe_conversation::{
-        AgentBudget, AgentMessage, ModelReplay, ModelRequest, ProviderReplay, SessionStore,
-        prompts::manager_prompt,
+        AgentBudget, AgentMessage, ModelRequest, SessionStore, prompts::manager_prompt,
     };
     use floe_execution::Cancellation;
     use floe_kernel::AGENT_VERSION;

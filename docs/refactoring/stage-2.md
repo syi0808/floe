@@ -28,16 +28,16 @@ Detailed work is split into the execution plans linked below. This overview owns
   - [x] **2-B.5 — Integrated 2-B hardening** — [execution plan](stage-2/2-b5.md) · [credential-seam P1](stage-2/2-b5-credential-seam.md) · [final credential-read P0](stage-2/2-b5-credential-read.md)
 - [x] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [x] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
-- [ ] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
+- [x] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
 - [ ] **2-F — Stage 2 final validation** — [execution plan](stage-2/2-f.md)
 
 ## Current checkpoint
 
-**Active: 2-E — Internal public-surface closure.**
+**Active: 2-F — Stage 2 final validation.**
 
-2-D is complete/frozen: zero-production-caller internal compatibility is gone (`delegate_expert_task`, the pre-turn remote route resolver chain, recipient-snapshot accessors, single-attempt Conversation bridges, caller-less `TransportModelRunner::transport()`), with no renamed-equivalent wrappers; delegated Expert/Schedule compatibility stays for Stage 3-A and outer FFI/Flutter/remote-route compatibility stays for Stage 3.
+2-E is complete/frozen: owner crate roots expose real owner APIs (`adapters`/`turn`/`ports`/`application` topologies hidden, wrong-owner migration aliases removed, App-only composition reduced to crate-private), with no renamed-equivalent wrappers; delegated Expert/Schedule compatibility stays for Stage 3-A and outer FFI/Flutter/remote-route compatibility stays for Stage 3.
 
-Use [the 2-E execution plan](stage-2/2-e.md) as the authoritative task document.
+Use [the 2-F execution plan](stage-2/2-f.md) as the authoritative task document.
 
 ## Target internal architecture
 

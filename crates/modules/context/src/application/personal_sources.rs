@@ -39,8 +39,8 @@ pub use floe_access::{
     ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
     FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
     WELLBEING_CONNECTOR, WELLBEING_RESOURCE, apple_execution_owner, attention_execution_owner,
-    attention_source, contacts_connection, contacts_execution_owner, contacts_source,
-    feasibility_source, wellbeing_source,
+    attention_source, contacts_connection, contacts_execution_owner, feasibility_source,
+    wellbeing_source,
 };
 
 /// A read that has not run out of time and has not been cancelled.

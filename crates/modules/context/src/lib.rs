@@ -1,4 +1,4 @@
-pub mod application {
+mod application {
     pub mod archive;
     pub mod assembler;
     pub mod calendar_connector;
@@ -24,7 +24,7 @@ pub mod application {
     pub mod tools;
 }
 
-pub mod ports {
+mod ports {
     pub mod archive_reader;
     pub mod calendar_source;
     pub mod evidence_reader;
@@ -45,6 +45,7 @@ pub use application::consumed::ConsumedLineage;
 pub use application::coverage::{
     CoverageAccumulator, CoverageMessageFact, CoverageRegistry, message_coverage,
 };
+pub use application::day_context_views::{note_context_view, task_context_view};
 pub use application::expert_context::{ExpertContextRequest, prepare_expert_context};
 pub use application::history::read_history_coverage;
 pub use application::leases::{

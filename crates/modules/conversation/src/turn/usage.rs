@@ -5,8 +5,8 @@
 
 use crate::AgentUsage;
 
-pub use floe_execution::budget::{ModelUsage, UsageAttempt};
-pub use floe_inference::UsageLedger;
+use floe_execution::budget::ModelUsage;
+use floe_inference::UsageLedger;
 
 /// Carry the ledger's model usage onto the Session counters the turn reports.
 pub fn sync_usage(ledger: &UsageLedger, usage: &mut AgentUsage) {

@@ -4,9 +4,9 @@ use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
 use floe_conversation::{AgentBudget, AgentEvent, SessionStore};
 #[cfg(test)]
-use floe_conversation::{
-    AgentCommand, AgentRuntime, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
-};
+use floe_agent_contract::CapabilityDescriptor;
+#[cfg(test)]
+use floe_conversation::{AgentCommand, AgentRuntime, CapabilityHost, CapabilityInvocation};
 use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
@@ -355,7 +355,7 @@ async fn optional_task_views(
     let handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
     let acquired = floe_context::acquire_optional_source(
         floe_agent_contract::ContextSource::Tasks,
-        floe_context::application::day_context_views::task_context_view(
+        floe_context::task_context_view(
             &core.store,
             person_id,
             handle,
@@ -452,7 +452,8 @@ mod tests {
     use super::expert_dispatch::ConversationExperts;
     use floe_agent_contract::ModelPlacement;
     use floe_context::AttentionView;
-    use floe_conversation::{AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep};
+    use floe_conversation::{AgentMessage, ModelRequest, ModelResponse, ModelRunner};
+    use floe_inference::ModelStep;
     use floe_execution::Cancellation;
     use floe_provider_adapters::models::FoundationModelRunner;
     use floe_experts_builtin::prompts::focus_expert_prompt;
@@ -1079,7 +1080,7 @@ mod tests {
         let task_id = Uuid::new_v4();
         let task = experts
             .handle_message(A2ASendMessageRequest {
-                usage: floe_conversation::turn::UsageLedger::default(),
+                usage: floe_inference::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: Uuid::new_v4(),
@@ -1387,7 +1388,7 @@ mod tests {
         };
         let fake_model = PositiveFakeModel;
         let mut request = ModelRequest {
-            usage: floe_conversation::turn::UsageLedger::default(),
+            usage: floe_inference::UsageLedger::default(),
             replay: vec![],
             schema_version: AGENT_VERSION,
             prompt: focus_expert_prompt(),
@@ -1535,7 +1536,7 @@ mod tests {
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
-                usage: floe_conversation::turn::UsageLedger::default(),
+                usage: floe_inference::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: uuid::Uuid::new_v4(),
@@ -1663,7 +1664,7 @@ mod tests {
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
-                usage: floe_conversation::turn::UsageLedger::default(),
+                usage: floe_inference::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id: PersonId::new(),
                 session_id: uuid::Uuid::new_v4(),
@@ -2213,7 +2214,7 @@ mod tests {
         let task_id = uuid::Uuid::new_v4();
         let task = experts
             .handle_message(A2ASendMessageRequest {
-                usage: floe_conversation::turn::UsageLedger::default(),
+                usage: floe_inference::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: uuid::Uuid::new_v4(),
@@ -2461,7 +2462,7 @@ mod tests {
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
-                usage: floe_conversation::turn::UsageLedger::default(),
+                usage: floe_inference::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id,
                 session_id: uuid::Uuid::new_v4(),
@@ -2655,7 +2656,7 @@ mod tests {
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
             let task = experts
                 .handle_message(A2ASendMessageRequest {
-                    usage: floe_conversation::turn::UsageLedger::default(),
+                    usage: floe_inference::UsageLedger::default(),
                     schema_version: AGENT_VERSION,
                     person_id,
                     session_id: uuid::Uuid::new_v4(),
@@ -2915,7 +2916,7 @@ mod tests {
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
                 .handle_message(A2ASendMessageRequest {
-                    usage: floe_conversation::turn::UsageLedger::default(),
+                    usage: floe_inference::UsageLedger::default(),
                     schema_version: AGENT_VERSION,
                     person_id: PersonId::new(),
                     session_id: uuid::Uuid::new_v4(),
@@ -2976,7 +2977,7 @@ mod tests {
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
-                usage: floe_conversation::turn::UsageLedger::default(),
+                usage: floe_inference::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
                 person_id: PersonId::new(),
                 session_id: uuid::Uuid::new_v4(),

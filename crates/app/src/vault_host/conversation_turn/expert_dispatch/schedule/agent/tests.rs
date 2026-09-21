@@ -19,7 +19,7 @@ use floe_agent_contract::{
 };
 use floe_context::{CapacityState, FeasibilityItem, RecoveryState, WeatherImpact};
 use floe_context_contract::TransferConsent;
-use floe_conversation::{AgentEventKind, ModelStep};
+use floe_conversation::AgentEventKind;
 use floe_day::{
     CalendarBatch, CalendarRange, CalendarRecord, CalendarSelection, EventSchedule, TimedSchedule,
 };
@@ -29,7 +29,7 @@ use floe_experts::{
     RegistryConfiguration, RegistryConfigurationTarget,
 };
 use floe_inference::{
-    ModelAttemptState, ModelTransport, ModelTransportRequest, ModelTransportResponse,
+    ModelAttemptState, ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
 };
 use floe_vault::{VaultKey, VaultTaskRecord};
 

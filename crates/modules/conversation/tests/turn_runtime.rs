@@ -7,7 +7,8 @@ use std::{
 };
 
 use floe_agent_contract::{
-    AgentContext, InferencePolicyDecision, ModelConversationEntry, SessionProtection,
+    AGENT_VERSION, AgentContext, CapabilityDescriptor, CapabilityExecutionState,
+    InferencePolicyDecision, ModelConversationEntry, ProviderReplay, SessionProtection,
     prompts::{PersonaProfile, PromptComponentKind, PromptRole},
 };
 use floe_context_contract::{
@@ -16,7 +17,7 @@ use floe_context_contract::{
 };
 use floe_conversation::{prompts::manager_prompt, *};
 use floe_execution::{CancelReason, Cancellation};
-use floe_inference::ModelAttemptState;
+use floe_inference::{ModelAttemptState, ModelStep};
 use floe_kernel::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;

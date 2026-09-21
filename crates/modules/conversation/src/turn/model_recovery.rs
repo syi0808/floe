@@ -1,5 +1,6 @@
-use crate::{AgentMessage, ModelRequest, ModelResponse, ModelRunner, ModelStep};
-use floe_agent_contract::AgentFailure;
+use crate::{AgentMessage, ModelRequest, ModelResponse, ModelRunner};
+use floe_agent_contract::{AGENT_VERSION, AgentFailure};
+use floe_inference::ModelStep;
 
 pub async fn generate_with_recovery<Model: ModelRunner>(
     model: &Model,
@@ -138,7 +139,7 @@ fn validate_legacy_response(
     {
         return Err(AgentFailure::BudgetExceeded);
     }
-    if response.schema_version != crate::AGENT_VERSION
+    if response.schema_version != AGENT_VERSION
         || response.output.is_empty()
         || response.output.len() > 16
         || response.call_count() > 8

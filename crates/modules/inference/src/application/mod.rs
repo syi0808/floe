@@ -8,9 +8,8 @@ mod usage;
 
 pub use attempt::{AttemptJournal, AttemptLifecycle, ModelAttemptRecord, ModelAttemptState};
 pub use route_config::{
-    EVERYDAY_ASSISTANCE_PURPOSE, LEGACY_INFERENCE_CONSUMER, MODEL_GENERATION_CAPABILITY,
-    ModelRouteConfig, PurposeAvailability, RemoteModelConnection, RemoteRoute, RoutePairing,
-    candidate_route, valid_external_recipient,
+    EVERYDAY_ASSISTANCE_PURPOSE, ModelRouteConfig, PurposeAvailability, RemoteModelConnection,
+    RemoteRoute, RoutePairing, candidate_route, valid_external_recipient,
 };
 pub use route_selection::SavedConnectionStore;
 pub use router::{InferenceRouter, RoutePlanError};

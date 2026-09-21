@@ -1,12 +1,12 @@
 //! Conversation-owned Session admission, root Run execution, and finalization.
 
-pub mod adapters;
+mod adapters;
 mod api;
 mod application;
 mod domain;
 mod ports;
 pub mod prompts;
-pub mod turn;
+mod turn;
 
 pub use adapters::model_transport::{TransportModelRunner, transport_request};
 pub use api::{
@@ -39,4 +39,10 @@ pub use floe_agent_contract::{
 pub use floe_agent_runtime::FinalPayloadValidator;
 pub use ports::{ConversationRepository, SessionArchiveRepository, SessionRepository};
 
-pub use turn::*;
+pub use turn::{
+    AgentBudget, AgentCommand, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage,
+    AgentOutcome, AgentRuntime, AgentSession, AgentSessionScope, AgentUsage, CapabilityHost,
+    CapabilityInvocation, DelegationExecution, DelegationExecutionState, ModelRequest,
+    ModelResponse, ModelRunner, SessionRecoveryPointer, SessionStore,
+    bounded_source_history_start, carries_source_history, generate_with_recovery,
+};

@@ -1,8 +1,7 @@
 use chrono::{TimeZone, Utc};
 use floe_context::{
     FLOE_NOTE_VIEW_ID, FLOE_TASK_VIEW_ID, MAX_NATIVE_CONTEXT_BYTES, NativeContextItem,
-    TaskContextPriority, acquire_optional_source,
-    application::day_context_views::{note_context_view, task_context_view},
+    TaskContextPriority, acquire_optional_source, note_context_view, task_context_view,
     validate_native_context_view,
 };
 use floe_context_contract::{ContextIssueReason, ContextSource};

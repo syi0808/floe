@@ -11,8 +11,8 @@ use crate::{
     ModelProfile, ModelPurpose, RecipientConstraint, RoutePlanError, RouteRequest,
 };
 
-pub const LEGACY_INFERENCE_CONSUMER: &str = "legacy.inference";
-pub const MODEL_GENERATION_CAPABILITY: &str = "agent_steps";
+pub(crate) const LEGACY_INFERENCE_CONSUMER: &str = "legacy.inference";
+pub(crate) const MODEL_GENERATION_CAPABILITY: &str = "agent_steps";
 pub const EVERYDAY_ASSISTANCE_PURPOSE: &str = "everyday_assistance";
 
 /// A paired local-server connection the person already consented to.
