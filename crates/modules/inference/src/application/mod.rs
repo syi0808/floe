@@ -15,6 +15,7 @@ pub use route_selection::SavedConnectionStore;
 pub use router::{InferenceRouter, RoutePlanError};
 pub use saved_connection::{SavedServerConnection, admit_saved_connection};
 pub use service::{
-    CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, InferenceExecutor, InferenceService,
+    CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, InferenceAvailability, InferenceExecutor,
+    InferenceService,
 };
 pub use usage::{AttemptUpdate, UsageLedger};

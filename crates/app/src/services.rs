@@ -1,3 +1,5 @@
+use floe_conversation::RunState;
+use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
 use crate::CallerContext;
@@ -135,6 +137,65 @@ pub trait ConversationCommands {
     ) -> Result<CancelRunReceipt, ServiceError>;
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReadConversation {
+    Command { command_id: Uuid },
+    Run { run_id: Uuid },
+    Message { message_id: Uuid },
+}
+
+impl ReadConversation {
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        let identifier = match self {
+            Self::Command { command_id } => command_id,
+            Self::Run { run_id } => run_id,
+            Self::Message { message_id } => message_id,
+        };
+        if identifier.is_nil() {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub trait ConversationQueries {
+    fn read_conversation(
+        &self,
+        caller: &CallerContext,
+        request: ReadConversation,
+    ) -> Result<Option<floe_conversation::RunReceipt>, ServiceError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadConversationEvents {
+    pub runtime_epoch: Option<u64>,
+    pub cursor: Option<u64>,
+    pub limit: u16,
+}
+
+impl ReadConversationEvents {
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        if self.limit == 0
+            || self.limit > 256
+            || self.runtime_epoch.is_some() != self.cursor.is_some()
+            || self.runtime_epoch == Some(0)
+        {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub trait ConversationEvents {
+    fn read_conversation_events(
+        &self,
+        caller: &CallerContext,
+        request: ReadConversationEvents,
+    ) -> Result<EventRead, ServiceError>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +271,64 @@ mod tests {
             Err(ServiceError::InvalidInput)
         );
     }
+
+    #[test]
+    fn read_services_validate_ids_and_cursor_bounds_without_credentials() {
+        for request in [
+            ReadConversation::Command {
+                command_id: Uuid::nil(),
+            },
+            ReadConversation::Run {
+                run_id: Uuid::nil(),
+            },
+            ReadConversation::Message {
+                message_id: Uuid::nil(),
+            },
+        ] {
+            assert_eq!(request.validate(), Err(ServiceError::InvalidInput));
+        }
+        let valid = ReadConversationEvents {
+            runtime_epoch: Some(7),
+            cursor: Some(0),
+            limit: 256,
+        };
+        assert_eq!(valid.validate(), Ok(()));
+        for invalid in [
+            ReadConversationEvents {
+                limit: 0,
+                ..valid.clone()
+            },
+            ReadConversationEvents {
+                limit: 257,
+                ..valid.clone()
+            },
+            ReadConversationEvents {
+                runtime_epoch: Some(0),
+                ..valid.clone()
+            },
+            ReadConversationEvents {
+                runtime_epoch: None,
+                ..valid.clone()
+            },
+            ReadConversationEvents {
+                cursor: None,
+                ..valid.clone()
+            },
+        ] {
+            assert_eq!(invalid.validate(), Err(ServiceError::InvalidInput));
+        }
+        let debug = format!(
+            "{:?} {:?} {:?}",
+            request(),
+            valid,
+            ReadConversation::Run {
+                run_id: Uuid::new_v4()
+            }
+        );
+        for secret in ["token", "bearer", "base_url", "credential"] {
+            assert!(!debug.contains(secret));
+        }
+    }
 }
 
 /// The calendar actions one caller may see, with the authority they stand
@@ -221,4 +340,43 @@ pub struct CalendarActionsResult {
     pub writes_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authority: Option<floe_actions::ActionAuthority>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EventPayload {
+    CommandUpdated {
+        command_id: CommandId,
+        run_id: RunId,
+        session_revision: u64,
+    },
+    RunUpdated(RunEventRecord),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunEventRecord {
+    pub run_id: RunId,
+    pub session_id: Uuid,
+    pub aggregate_revision: u64,
+    pub executor_generation: u64,
+    pub state: RunState,
+    pub generated_reply: bool,
+    pub issue: Option<AgentFailure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationEvent {
+    pub cursor: u64,
+    pub aggregate_revision: u64,
+    pub payload: EventPayload,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EventRead {
+    Events {
+        next_cursor: u64,
+        events: Vec<ConversationEvent>,
+    },
+    ResyncRequired {
+        snapshot_cursor: u64,
+    },
 }

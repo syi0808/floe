@@ -70,11 +70,11 @@ where
     }
 }
 
-/// Test-only fixed saved connection with current-store semantics.
+/// Fixed saved connection for construction-time test injection.
 ///
 /// Holds one injected connection and returns a clone on every `load`, so the
 /// authority still reloads per check. Production never constructs this: the
-/// product path passes `None` and reads the host keychain slot through
+/// product path reads the host keychain slot through
 /// [`SavedServerConnectionStore`].
 #[derive(Clone)]
 pub struct FixedSavedConnectionStore {
@@ -93,22 +93,31 @@ impl floe_inference::SavedConnectionStore for FixedSavedConnectionStore {
     }
 }
 
-/// The current saved-connection source for the canonical root authority.
-///
-/// `Keychain` is the production source: the host keychain slot re-read on
-/// every recipient check. `Fixed` carries a test-only injected connection
-/// with the same reload-per-check shape.
-pub enum CurrentSavedConnectionStore {
-    Keychain(SavedServerConnectionStore),
-    Fixed(FixedSavedConnectionStore),
+/// Shared host-scoped store; clones reload the same current state.
+#[derive(Clone)]
+pub struct CurrentSavedConnectionStore {
+    store: std::sync::Arc<dyn floe_inference::SavedConnectionStore + Send + Sync>,
+}
+
+impl CurrentSavedConnectionStore {
+    pub fn new(store: impl floe_inference::SavedConnectionStore + Send + Sync + 'static) -> Self {
+        Self {
+            store: std::sync::Arc::new(store),
+        }
+    }
+
+    pub fn host_keychain() -> Self {
+        Self::new(SavedServerConnectionStore)
+    }
+
+    pub fn fixed(saved: Option<floe_inference::SavedServerConnection>) -> Self {
+        Self::new(FixedSavedConnectionStore::fixed(saved))
+    }
 }
 
 impl floe_inference::SavedConnectionStore for CurrentSavedConnectionStore {
     fn load(&self) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
-        match self {
-            Self::Keychain(store) => store.load(),
-            Self::Fixed(store) => store.load(),
-        }
+        self.store.load()
     }
 }
 
@@ -299,33 +308,31 @@ mod tests {
     fn every_check_reloads_the_current_store() {
         use std::sync::Mutex;
         struct MutableStore {
-            current: Mutex<Option<floe_inference::SavedServerConnection>>,
+            current: Arc<Mutex<Option<floe_inference::SavedServerConnection>>>,
         }
         impl floe_inference::SavedConnectionStore for MutableStore {
             fn load(&self) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
                 Ok(self.current.lock().unwrap().clone())
             }
         }
-        let store = Arc::new(MutableStore {
-            current: Mutex::new(Some(saved())),
+        let current = Arc::new(Mutex::new(Some(saved())));
+        let store = CurrentSavedConnectionStore::new(MutableStore {
+            current: current.clone(),
         });
-        struct Shared<'a>(&'a MutableStore);
-        impl floe_inference::SavedConnectionStore for Shared<'_> {
-            fn load(
-                &self,
-            ) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
-                self.0.load()
-            }
-        }
         let authority =
-            SavedConnectionRecipientAuthority::new(Shared(&store), PERSON.into(), DEVICE.into());
+            SavedConnectionRecipientAuthority::new(store.clone(), PERSON.into(), DEVICE.into());
         assert!(authority.check_recipient(RECIPIENT).is_ok());
         // Mutating the current store is observed on the very next check: no
         // snapshot was kept at construction.
-        *store.current.lock().unwrap() = None;
+        *current.lock().unwrap() = None;
         assert_eq!(
             authority.check_recipient(RECIPIENT).err(),
             Some(AgentFailure::PolicyDenied)
+        );
+        assert!(
+            crate::sources::ServerSourceClient::from_current_connection(&store, PERSON, DEVICE)
+                .unwrap()
+                .is_none()
         );
     }
 

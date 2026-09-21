@@ -59,43 +59,6 @@ fn execution_constraint(
     }
 }
 
-/// Where a delegated legacy Expert endpoint reads the saved server
-/// connection for its model/source compatibility: the host keychain slot in
-/// production, a fixed injected fixture in tests.
-///
-/// Constructor-injected per endpoint. The endpoint admits the loaded
-/// connection against the invocation principal and the execution-context
-/// device id on every execution; no credential ever travels in the
-/// delegation itself. Temporary legacy Expert transport support until
-/// Stage 3-A.
-#[derive(Clone)]
-pub(crate) enum EndpointConnectionStore {
-    HostKeychain(floe_provider_adapters::control::SavedServerConnectionStore),
-    #[cfg(test)]
-    Fixture(Option<floe_inference::SavedServerConnection>),
-}
-
-impl EndpointConnectionStore {
-    pub(crate) fn host_keychain() -> Self {
-        Self::HostKeychain(floe_provider_adapters::control::SavedServerConnectionStore)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fixture(saved: Option<floe_inference::SavedServerConnection>) -> Self {
-        Self::Fixture(saved)
-    }
-}
-
-impl floe_inference::SavedConnectionStore for EndpointConnectionStore {
-    fn load(&self) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
-        match self {
-            Self::HostKeychain(store) => store.load(),
-            #[cfg(test)]
-            Self::Fixture(saved) => Ok(saved.clone()),
-        }
-    }
-}
-
 /// A result recorder that also captures dependencies for the Expert's own
 /// model dispatch.
 ///
@@ -455,7 +418,6 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
 }
 
 pub(super) struct PersonalViewSource<'a> {
-    pub(super) server_source_allowed: bool,
     pub(super) source_client: Option<&'a ServerSourceClient>,
     pub(super) person_id: PersonId,
     pub(super) people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
@@ -530,7 +492,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<CalendarContextView>, AgentFailure> {
-        if !self.server_source_allowed {
+        if self.source_client.is_none() {
             return Ok(vec![]);
         }
         let now = std::time::SystemTime::now()
@@ -577,7 +539,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<floe_context::ConfirmedInteractionView>, AgentFailure> {
-        if !self.server_source_allowed {
+        if self.source_client.is_none() {
             return Ok(vec![]);
         }
         let source_client = self
@@ -598,7 +560,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<floe_context::WorkContextView>, AgentFailure> {
-        if !self.server_source_allowed {
+        if self.source_client.is_none() {
             return Ok(vec![]);
         }
         let Some(reader) = self.remote_reader else {

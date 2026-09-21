@@ -485,17 +485,24 @@ impl SourceGrants {
     }
 }
 
-/// The cards a caller running at `placement` may offer.
-///
-/// A card states where its Expert runs; the caller never decides eligibility
-/// from what an agent id looks like.
-pub fn eligible_cards(
+/// The cards eligible for the execution classes observed by Inference.
+pub fn eligible_cards_for_availability(
     cards: &[crate::AgentCard],
-    placement: floe_agent_contract::ModelPlacement,
+    availability: floe_inference::InferenceAvailability,
 ) -> Vec<crate::AgentCard> {
+    use floe_agent_contract::ModelPlacement;
+    use floe_inference::InferenceExecutionConstraint;
+
+    let mut seen = std::collections::HashSet::new();
     cards
         .iter()
-        .filter(|card| card.runs_at(placement))
+        .filter(|card| {
+            (availability.can_execute(InferenceExecutionConstraint::DeviceOnly)
+                && card.runs_at(ModelPlacement::DeviceLocal))
+                || (availability.can_execute(InferenceExecutionConstraint::RemoteOnly)
+                    && card.runs_at(ModelPlacement::Remote))
+        })
+        .filter(|card| seen.insert(card.id.clone()))
         .cloned()
         .collect()
 }

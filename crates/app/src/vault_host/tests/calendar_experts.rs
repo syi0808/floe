@@ -88,13 +88,15 @@ fn native_grants_capture_authority_only_on_explicit_review() {
             text: "Your calendar is clear.".into(),
         },
     ]);
-    let worker = Worker::with_core_and_endpoint_store(
+    let worker = Worker::with_core_and_connection_store(
         directory.path().join("vaults"),
         Keys::default(),
         core.clone(),
         Arc::new(LocalContextHost::default()),
         Arc::new(crate::events::AppEventBuffer::default()),
-        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "iphone"))),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            saved_server_connection(&mock, person, "iphone"),
+        )),
     )
     .unwrap();
     assert!(
@@ -251,7 +253,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     ProfileSelection::Explicit("server-model".into()),
                     false,
                     None,
-                ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "iphone")))),
+                )),
             },
         )
     };
@@ -356,13 +358,15 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
             text: "You have an open hour.".into(),
         },
     ]);
-    let worker = Worker::with_core_and_endpoint_store(
+    let worker = Worker::with_core_and_connection_store(
         root.clone(),
         keys.clone(),
         Arc::clone(&core),
         Arc::new(LocalContextHost::default()),
         Arc::new(crate::events::AppEventBuffer::default()),
-        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "mac-local"))),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            saved_server_connection(&mock, person, "mac-local"),
+        )),
     )
     .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
@@ -427,7 +431,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
                 ProfileSelection::Explicit("server-model".into()),
                 false,
                 None,
-            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+            )),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -467,9 +471,15 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
 
 #[test]
 fn production_conversation_replays_the_same_request_without_model_redispatch() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -483,6 +493,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "One durable answer".into(),
     }]);
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     let action = || WorkerAction::ConversationTurn {
         request: Box::new(ConversationTurnRequest::new(
             session.id,
@@ -492,7 +503,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
             ProfileSelection::Explicit("server-model".into()),
             false,
             None,
-        ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+        )),
     };
     let request_id = Uuid::new_v4();
     worker
@@ -563,9 +574,15 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
 
 #[test]
 fn terminal_conversation_accepts_the_next_run_without_ui_release() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -585,6 +602,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
         },
     ]);
     let first_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -599,7 +617,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         ProfileSelection::Explicit("server-model".into()),
                         false,
                         None,
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+                    )),
                 }),
             },
         )
@@ -609,6 +627,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
     let first_session = first.session.unwrap();
 
     let second_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -623,7 +642,7 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
                         ProfileSelection::Explicit("server-model".into()),
                         false,
                         None,
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+                    )),
                 }),
             },
         )
@@ -651,9 +670,15 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
 
 #[test]
 fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let setup_id = Uuid::new_v4();
     let empty = perform(
@@ -708,8 +733,8 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
     .session
     .unwrap();
     let (mock, entered, release, server) = blocking_answer_server();
-    let competing_mock = mock.clone();
     let conversation_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -724,7 +749,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         ProfileSelection::Explicit("server-model".into()),
                         false,
                         None,
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+                    )),
                 }),
             },
         )
@@ -744,6 +769,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
         .clone();
 
     let competing_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -758,7 +784,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
                         ProfileSelection::Explicit("server-model".into()),
                         false,
                         None,
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&competing_mock, person, "mac-local")))),
+                    )),
                 }),
             },
         )
@@ -861,12 +887,20 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
 
 #[test]
 fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     assert_eq!(
-        worker.app_events.read(7, None, None, 16),
-        crate::events::EventRead::ResyncRequired { snapshot_cursor: 0 }
+        worker
+            .app_events
+            .read(&person.to_string(), 7, None, None, 16),
+        crate::EventRead::ResyncRequired { snapshot_cursor: 0 }
     );
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
@@ -880,15 +914,18 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     .unwrap();
     let (mock, entered, release, server) = blocking_answer_server();
     let request_id = Uuid::new_v4();
-    let request = || ConversationTurnRequest::new(
-        session.id,
-        session.revision,
-        "Cancel this run".into(),
-        "mac-local".into(),
-        ProfileSelection::Explicit("server-model".into()),
-        false,
-        None,
-    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let request = || {
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Cancel this run".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        )
+    };
     let admitted = worker
         .start_conversation(
             person,
@@ -898,14 +935,14 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         .unwrap();
     assert_eq!(admitted.state, floe_conversation::RunState::Working);
     assert!(matches!(
-        worker.app_events.read(7, Some(7), Some(0), 16),
-        crate::events::EventRead::Events {
+        worker.app_events.read(&person.to_string(), 7, Some(7), Some(0), 16),
+        crate::EventRead::Events {
             next_cursor: 1,
             events
         } if matches!(
             events.as_slice(),
-            [crate::events::BufferedEvent {
-                payload: crate::events::EventPayload::CommandUpdated { run_id, .. },
+            [crate::ConversationEvent {
+                payload: crate::EventPayload::CommandUpdated { run_id, .. },
                 ..
             }] if *run_id == admitted.run_id
         )
@@ -965,14 +1002,14 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         .unwrap();
     assert_eq!(command.state, floe_conversation::RunState::Cancelled);
     assert!(matches!(
-        worker.app_events.read(7, Some(7), Some(1), 16),
-        crate::events::EventRead::Events {
+        worker.app_events.read(&person.to_string(), 7, Some(7), Some(1), 16),
+        crate::EventRead::Events {
             next_cursor: 2,
             events
         } if matches!(
             events.as_slice(),
-            [crate::events::BufferedEvent {
-                payload: crate::events::EventPayload::RunUpdated(run),
+            [crate::ConversationEvent {
+                payload: crate::EventPayload::RunUpdated(run),
                 ..
             }] if run.run_id == admitted.run_id
                 && run.state == floe_conversation::RunState::Cancelled
@@ -1007,9 +1044,15 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
 
 #[test]
 fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -1025,15 +1068,18 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
     }]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest::new(
-        session.id,
-        session.revision,
-        "Answer once".into(),
-        "mac-local".into(),
-        ProfileSelection::Explicit("server-model".into()),
-        false,
-        None,
-    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let request = || {
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Answer once".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        )
+    };
     let admitted = worker
         .start_conversation(person, command_id, request())
         .unwrap();
@@ -1055,9 +1101,15 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
 
 #[test]
 fn same_request_id_with_different_profile_conflicts() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -1073,15 +1125,18 @@ fn same_request_id_with_different_profile_conflicts() {
     }]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest::new(
-        session.id,
-        session.revision,
-        "Answer once".into(),
-        "mac-local".into(),
-        ProfileSelection::Explicit("server-model".into()),
-        false,
-        None,
-    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let request = || {
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Answer once".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        )
+    };
     worker
         .start_conversation(person, command_id, request())
         .unwrap();
@@ -1101,9 +1156,15 @@ fn same_request_id_with_different_profile_conflicts() {
 
 #[test]
 fn same_request_id_with_different_continuation_claim_conflicts() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -1119,15 +1180,18 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
     }]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest::new(
-        session.id,
-        session.revision,
-        "Answer once".into(),
-        "mac-local".into(),
-        ProfileSelection::Explicit("server-model".into()),
-        false,
-        None,
-    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let request = || {
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Answer once".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        )
+    };
     worker
         .start_conversation(person, command_id, request())
         .unwrap();
@@ -1147,9 +1211,15 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
 
 #[test]
 fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -1166,34 +1236,36 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
     let (refreshed_mock, idle) = answer_server(vec![]);
     let request_id = Uuid::new_v4();
     let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
-    let request = || ConversationTurnRequest::new(
-        session.id,
-        session.revision,
-        "Answer once".into(),
-        "mac-local".into(),
-        ProfileSelection::Explicit("server-model".into()),
-        false,
-        None,
-    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")));
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let request = || {
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Answer once".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        )
+    };
     let admitted = worker
         .start_conversation(person, command_id, request())
         .unwrap();
-    let mut refreshed_request = request();
+    let finished = wait(&worker, person, request_id);
+    let refreshed_request = request();
     // A refreshed stored connection (a different mock server) is runtime
     // state, not command identity: the duplicate still replays.
-    refreshed_request =
-        refreshed_request.with_fixed_saved_connection_for_test(Some(saved_server_connection(
-            &refreshed_mock,
-            person,
-            "mac-local",
-        )));
+    connections.replace(Some(saved_server_connection(
+        &refreshed_mock,
+        person,
+        "mac-local",
+    )));
     assert_eq!(
         worker
             .start_conversation(person, command_id, refreshed_request)
             .unwrap(),
         admitted
     );
-    let finished = wait(&worker, person, request_id);
     assert_eq!(finished.failure, None, "first: {finished:?}");
     worker
         .request(person, request_id, WorkerOperation::Release)
@@ -1203,7 +1275,83 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
 }
 
 #[test]
+fn inflight_connection_refresh_replays_without_redispatch() {
+    let connections = TestConnections::default();
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mock, entered, release, server) = blocking_answer_server();
+    let (refreshed_mock, idle) = answer_server(vec![]);
+    let request_id = Uuid::new_v4();
+    let command_id = floe_kernel::CommandId::from_uuid(request_id).unwrap();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let request = || {
+        ConversationTurnRequest::new(
+            session.id,
+            session.revision,
+            "Answer once".into(),
+            "mac-local".into(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        )
+    };
+    let admitted = worker
+        .start_conversation(person, command_id, request())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !entered.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        worker
+            .conversation_query(person, ConversationQuery::Run(admitted.run_id))
+            .unwrap()
+            .unwrap()
+            .state,
+        floe_conversation::RunState::Working,
+    );
+    let refreshed_request = request();
+    connections.replace(Some(saved_server_connection(
+        &refreshed_mock,
+        person,
+        "mac-local",
+    )));
+    assert_eq!(
+        worker
+            .start_conversation(person, command_id, refreshed_request)
+            .unwrap(),
+        admitted
+    );
+    release.store(true, Ordering::Release);
+    let finished = wait(&worker, person, request_id);
+    assert_eq!(finished.failure, None, "first: {finished:?}");
+    worker
+        .request(person, request_id, WorkerOperation::Release)
+        .unwrap();
+    server.join().unwrap();
+    assert!(idle.join().unwrap().is_empty());
+}
+
+#[test]
 fn production_general_turn_does_not_require_or_install_builtin_setup() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     std::fs::create_dir(&root).unwrap();
@@ -1226,7 +1374,8 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     );
     drop(vault);
 
-    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    let worker =
+        Worker::new_with_connection_store(root.clone(), keys.clone(), connections.store()).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
     let fetched = perform(
         &worker,
@@ -1251,6 +1400,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "General answer without experts".into(),
     }]);
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     let result = perform(
         &worker,
         person,
@@ -1263,7 +1413,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
                 ProfileSelection::Explicit("server-model".into()),
                 false,
                 None,
-            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+            )),
         },
     );
     assert_eq!(result.failure, None, "general turn: {result:?}");
@@ -1288,11 +1438,13 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
 
 #[test]
 fn production_continuation_uses_the_persisted_conversation_run_without_duplicate_user_text() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     let person = PersonId::new();
     let keys = Keys::default();
-    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    let worker =
+        Worker::new_with_connection_store(root.clone(), keys.clone(), connections.store()).unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -1348,11 +1500,12 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
         .unwrap();
     drop(vault);
 
-    let worker = Worker::new(root, keys).unwrap();
+    let worker = Worker::new_with_connection_store(root, keys, connections.store()).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
     let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
         text: "Continued once".into(),
     }]);
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     let action = || WorkerAction::ConversationTurn {
         request: Box::new(ConversationTurnRequest::new(
             session.id,
@@ -1362,7 +1515,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
             ProfileSelection::Explicit("server-model".into()),
             true,
             None,
-        ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+        )),
     };
     let request_id = Uuid::new_v4();
     worker
@@ -1421,10 +1574,12 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     // The mock answers both the root model and the delegated builtin
     // endpoint; the endpoint reads it from its injected fixture store.
     let (mock, server) = commitments_denial_server();
-    let worker = Worker::new_with_endpoint_store(
+    let worker = Worker::new_with_connection_store(
         root.clone(),
         keys.clone(),
-        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "mac-local"))),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            saved_server_connection(&mock, person, "mac-local"),
+        )),
     )
     .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
@@ -1450,7 +1605,7 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
                 ProfileSelection::Explicit("server-model".into()),
                 false,
                 None,
-            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+            )),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -2111,9 +2266,15 @@ fn canonical_answer_script(text: &str) -> Vec<serde_json::Value> {
 
 #[test]
 fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -2124,9 +2285,12 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
     )
     .session
     .unwrap();
-    let (mock, purposes, agent_posts, done, server) =
-        observing_server(server_local_inventory(), canonical_answer_script("Canonical hello."));
+    let (mock, purposes, agent_posts, done, server) = observing_server(
+        server_local_inventory(),
+        canonical_answer_script("Canonical hello."),
+    );
     let request_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -2141,9 +2305,7 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
                         ProfileSelection::Explicit("server-model".into()),
                         false,
                         None,
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(
-                            &mock, person, "mac-local",
-                        )))),
+                    )),
                 }),
             },
         )
@@ -2172,9 +2334,15 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
 
 #[test]
 fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -2188,6 +2356,7 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
     let (mock, purposes, agent_posts, done, server) =
         observing_server(server_local_inventory(), vec![]);
     let request_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -2202,9 +2371,7 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
                         ProfileSelection::Explicit("no-such-profile".into()),
                         false,
                         None,
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(
-                            &mock, person, "mac-local",
-                        )))),
+                    )),
                 }),
             },
         )
@@ -2230,9 +2397,15 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
 
 #[test]
 fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -2254,9 +2427,9 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
             }
         }
     });
-    let (mock, purposes, agent_posts, done, server) =
-        observing_server(inventory, vec![]);
+    let (mock, purposes, agent_posts, done, server) = observing_server(inventory, vec![]);
     let request_id = Uuid::new_v4();
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
         .request(
             person,
@@ -2274,9 +2447,7 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
                         // The saved connection never consented to external
                         // use, so the exact-recipient fence must deny before
                         // any transport handoff.
-                    ).with_fixed_saved_connection_for_test(Some(saved_server_connection(
-                            &mock, person, "mac-local",
-                        )))),
+                    )),
                 }),
             },
         )
@@ -2644,9 +2815,15 @@ fn recording_answer_server(
 
 #[test]
 fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -2657,10 +2834,10 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
     )
     .session
     .unwrap();
-    let (mock, paths, server) =
-        recording_answer_server(vec![floe_inference::ModelStep::Answer {
-            text: "Hello.".into(),
-        }]);
+    let (mock, paths, server) = recording_answer_server(vec![floe_inference::ModelStep::Answer {
+        text: "Hello.".into(),
+    }]);
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     let result = perform(
         &worker,
         person,
@@ -2673,7 +2850,7 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
                 ProfileSelection::Explicit("server-model".into()),
                 false,
                 None,
-            ).with_fixed_saved_connection_for_test(Some(saved_server_connection(&mock, person, "mac-local")))),
+            )),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");
@@ -2693,9 +2870,15 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
 
 #[test]
 fn unavailable_saved_server_does_not_prevent_conversation_admission() {
+    let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
-    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -2712,6 +2895,15 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
     let base_url = format!("http://{}", dead.local_addr().unwrap());
     drop(dead);
     let request_id = Uuid::new_v4();
+    connections.replace(Some(floe_inference::SavedServerConnection {
+        base_url,
+        token: "d".repeat(32),
+        client_id: "test-client".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+        allow_external: false,
+        external_recipients: vec![],
+    }));
     let request = ConversationTurnRequest::new(
         session.id,
         session.revision,
@@ -2720,17 +2912,7 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
         ProfileSelection::Explicit("server-model".into()),
         false,
         None,
-    ).with_fixed_saved_connection_for_test(Some(
-            floe_inference::SavedServerConnection {
-                base_url,
-                token: "d".repeat(32),
-                client_id: "test-client".into(),
-                person_id: person.to_string(),
-                device_id: "mac-local".into(),
-                allow_external: false,
-                external_recipients: vec![],
-            },
-        ));
+    );
     // Admission succeeds even though the saved server is unreachable: no
     // pre-turn discovery gates the Run.
     let admission = worker.start_conversation(
@@ -2789,7 +2971,7 @@ fn local_only_root_turn_starts_with_no_remote_connection() {
             ProfileSelection::Explicit("server-model".into()),
             false,
             None,
-        ).with_fixed_saved_connection_for_test(None),
+        ),
     );
     assert!(admission.is_ok(), "admission: {admission:?}");
     let finished = wait(&worker, person, request_id);
@@ -2920,7 +3102,7 @@ fn builtin_endpoint_denies_forged_principal_without_touching_state() {
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
-        EndpointConnectionStore::fixture(None),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
     );
     let (invocation, scope) = direct_invocation(
         "person:foreign",
@@ -2947,10 +3129,9 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
-        EndpointConnectionStore::fixture(Some(fixture_saved_connection(
-            fixture.person,
-            "mac-local",
-        ))),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            fixture_saved_connection(fixture.person, "mac-local"),
+        )),
     );
     let parent_run_id = Uuid::new_v4();
     let agent_id = floe_experts_builtin::BuiltinExpertKind::Commitments.package_id();
@@ -3021,10 +3202,9 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
-        EndpointConnectionStore::fixture(Some(fixture_saved_connection(
-            fixture.person,
-            "mac-local",
-        ))),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            fixture_saved_connection(fixture.person, "mac-local"),
+        )),
     );
     let (invocation, scope) = direct_invocation(
         &fixture.person.to_string(),
@@ -3049,7 +3229,7 @@ fn schedule_endpoint_denies_foreign_principal() {
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
-        EndpointConnectionStore::fixture(None),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
     );
     let (invocation, scope) = direct_invocation(
         "person:foreign",
@@ -3135,7 +3315,7 @@ fn schedule_endpoint_requires_review_for_foreign_device() {
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
-        EndpointConnectionStore::fixture(None),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
     );
     let (invocation, scope) = direct_invocation(
         &fixture.person.to_string(),
@@ -3206,13 +3386,15 @@ fn schedule_plans_from_the_delegation_message_not_the_root_prompt() {
             text: "The calendar request could not be planned.".into(),
         },
     ]);
-    let worker = Worker::with_core_and_endpoint_store(
+    let worker = Worker::with_core_and_connection_store(
         root.clone(),
         keys.clone(),
         Arc::clone(&core),
         Arc::new(LocalContextHost::default()),
         Arc::new(crate::events::AppEventBuffer::default()),
-        EndpointConnectionStore::fixture(Some(saved_server_connection(&mock, person, "mac-local"))),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            saved_server_connection(&mock, person, "mac-local"),
+        )),
     )
     .unwrap();
     assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
@@ -3269,20 +3451,15 @@ fn schedule_plans_from_the_delegation_message_not_the_root_prompt() {
         &worker,
         person,
         WorkerAction::ConversationTurn {
-            request: Box::new(
-                ConversationTurnRequest::new(
-                    session.id,
-                    session.revision,
-                    "What is on my calendar today".into(),
-                    "mac-local".into(),
-                    ProfileSelection::Explicit("server-model".into()),
-                    false,
-                    None,
-                )
-                .with_fixed_saved_connection_for_test(Some(saved_server_connection(
-                    &mock, person, "mac-local",
-                ))),
-            ),
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "What is on my calendar today".into(),
+                "mac-local".into(),
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            )),
         },
     );
     assert_eq!(result.failure, None, "result: {result:?}");

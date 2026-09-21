@@ -1,64 +1,25 @@
 use std::{collections::VecDeque, sync::Mutex};
 
-use floe_conversation::{RunReceipt, RunState};
-use floe_kernel::{AgentFailure, CommandId, RunId};
-use uuid::Uuid;
+use crate::services::{ConversationEvent, EventPayload, EventRead, RunEventRecord};
+use floe_conversation::RunReceipt;
 
 const MAX_RETAINED_EVENTS: usize = 128;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EventPayload {
-    CommandUpdated {
-        command_id: CommandId,
-        run_id: RunId,
-        session_revision: u64,
-    },
-    RunUpdated(RunEventRecord),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunEventRecord {
-    pub run_id: RunId,
-    pub session_id: Uuid,
-    pub aggregate_revision: u64,
-    pub executor_generation: u64,
-    pub state: RunState,
-    pub generated_reply: bool,
-    pub issue: Option<AgentFailure>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BufferedEvent {
-    pub cursor: u64,
-    pub aggregate_revision: u64,
-    pub payload: EventPayload,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EventRead {
-    Events {
-        next_cursor: u64,
-        events: Vec<BufferedEvent>,
-    },
-    ResyncRequired {
-        snapshot_cursor: u64,
-    },
-}
 
 #[derive(Default)]
 struct EventState {
     latest_cursor: u64,
-    events: VecDeque<BufferedEvent>,
+    events: VecDeque<(String, ConversationEvent)>,
 }
 
 #[derive(Default)]
-pub struct AppEventBuffer {
+pub(crate) struct AppEventBuffer {
     state: Mutex<EventState>,
 }
 
 impl AppEventBuffer {
     pub(crate) fn publish_command(&self, receipt: &RunReceipt) {
         self.publish(
+            &receipt.principal,
             receipt.aggregate_revision,
             EventPayload::CommandUpdated {
                 command_id: receipt.command_id,
@@ -70,6 +31,7 @@ impl AppEventBuffer {
 
     pub(crate) fn publish_run(&self, receipt: &RunReceipt) {
         self.publish(
+            &receipt.principal,
             receipt.aggregate_revision,
             EventPayload::RunUpdated(RunEventRecord {
                 run_id: receipt.run_id,
@@ -83,8 +45,9 @@ impl AppEventBuffer {
         );
     }
 
-    pub fn read(
+    pub(crate) fn read(
         &self,
+        principal: &str,
         runtime_epoch: u64,
         requested_epoch: Option<u64>,
         cursor: Option<u64>,
@@ -104,7 +67,7 @@ impl AppEventBuffer {
         if state
             .events
             .front()
-            .is_some_and(|oldest| cursor.saturating_add(1) < oldest.cursor)
+            .is_some_and(|oldest| cursor.saturating_add(1) < oldest.1.cursor)
         {
             return EventRead::ResyncRequired {
                 snapshot_cursor: state.latest_cursor,
@@ -113,7 +76,8 @@ impl AppEventBuffer {
         let events = state
             .events
             .iter()
-            .filter(|event| event.cursor > cursor)
+            .filter(|(owner, event)| owner == principal && event.cursor > cursor)
+            .map(|(_, event)| event)
             .take(usize::from(limit))
             .cloned()
             .collect::<Vec<_>>();
@@ -124,7 +88,7 @@ impl AppEventBuffer {
         }
     }
 
-    fn publish(&self, aggregate_revision: u64, payload: EventPayload) {
+    fn publish(&self, principal: &str, aggregate_revision: u64, payload: EventPayload) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let Some(cursor) = state.latest_cursor.checked_add(1) else {
             state.events.clear();
@@ -132,11 +96,14 @@ impl AppEventBuffer {
             return;
         };
         state.latest_cursor = cursor;
-        state.events.push_back(BufferedEvent {
-            cursor,
-            aggregate_revision,
-            payload,
-        });
+        state.events.push_back((
+            principal.to_owned(),
+            ConversationEvent {
+                cursor,
+                aggregate_revision,
+                payload,
+            },
+        ));
         while state.events.len() > MAX_RETAINED_EVENTS {
             state.events.pop_front();
         }
@@ -146,6 +113,9 @@ impl AppEventBuffer {
 #[cfg(test)]
 mod tests {
     use floe_agent_contract::DependencyCoverage;
+    use floe_conversation::RunState;
+    use floe_kernel::{CommandId, RunId};
+    use uuid::Uuid;
 
     use super::*;
 
@@ -154,7 +124,7 @@ mod tests {
             run_id: RunId::new(),
             command_id: CommandId::new(),
             session_id: Uuid::new_v4(),
-            principal: Uuid::new_v4().to_string(),
+            principal: Uuid::from_u128(1).to_string(),
             request_digest: [1; 32],
             state: RunState::Working,
             output: None,
@@ -175,22 +145,22 @@ mod tests {
     fn initial_epoch_change_future_cursor_and_retention_gap_require_resync() {
         let buffer = AppEventBuffer::default();
         assert_eq!(
-            buffer.read(7, None, None, 16),
+            buffer.read(&Uuid::from_u128(1).to_string(), 7, None, None, 16),
             EventRead::ResyncRequired { snapshot_cursor: 0 }
         );
         for revision in 1..=130 {
             buffer.publish_run(&receipt(revision));
         }
         assert!(matches!(
-            buffer.read(7, Some(6), Some(130), 16),
+            buffer.read(&Uuid::from_u128(1).to_string(), 7, Some(6), Some(130), 16),
             EventRead::ResyncRequired { .. }
         ));
         assert!(matches!(
-            buffer.read(7, Some(7), Some(131), 16),
+            buffer.read(&Uuid::from_u128(1).to_string(), 7, Some(7), Some(131), 16),
             EventRead::ResyncRequired { .. }
         ));
         assert_eq!(
-            buffer.read(7, Some(7), Some(0), 16),
+            buffer.read(&Uuid::from_u128(1).to_string(), 7, Some(7), Some(0), 16),
             EventRead::ResyncRequired {
                 snapshot_cursor: 130
             }
@@ -206,18 +176,43 @@ mod tests {
         let EventRead::Events {
             next_cursor,
             events,
-        } = buffer.read(9, Some(9), Some(0), 1)
+        } = buffer.read(&Uuid::from_u128(1).to_string(), 9, Some(9), Some(0), 1)
         else {
             panic!("expected events");
         };
         assert_eq!(next_cursor, 1);
         assert_eq!(events.len(), 1);
         assert!(matches!(
-            buffer.read(9, Some(9), Some(next_cursor), 16),
+            buffer.read(&Uuid::from_u128(1).to_string(), 9, Some(9), Some(next_cursor), 16),
             EventRead::Events {
                 next_cursor: 2,
                 events
             } if events.len() == 1
         ));
+    }
+
+    #[test]
+    fn read_never_releases_another_principals_events() {
+        let buffer = AppEventBuffer::default();
+        let owned = receipt(1);
+        let mut foreign = receipt(2);
+        foreign.principal = Uuid::new_v4().to_string();
+        buffer.publish_command(&foreign);
+        buffer.publish_run(&owned);
+        let EventRead::Events {
+            events,
+            next_cursor,
+        } = buffer.read(&owned.principal, 9, Some(9), Some(0), 1)
+        else {
+            panic!("expected owned event");
+        };
+        assert_eq!(next_cursor, 2);
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0].payload, EventPayload::RunUpdated(run) if run.run_id == owned.run_id)
+        );
+        assert!(
+            matches!(buffer.read(&Uuid::new_v4().to_string(), 9, Some(9), Some(0), 1), EventRead::Events { events, .. } if events.is_empty())
+        );
     }
 }

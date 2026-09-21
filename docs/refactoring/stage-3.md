@@ -12,16 +12,16 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 ## Current checkpoint
 
-**Active: 3-B — AppHost Composition Closure.**
+**Active: 3-C — Protocol and FFI Contract Cutover.**
 
-Use [the 3-B execution plan](stage-3/3-b.md) for the next change set. No 3-B implementation is part of 3-A closure.
+Use [the 3-C execution plan](stage-3/3-c.md) for the next change set. 3-B is **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report). No 3-C implementation is part of 3-B closure.
 
 3-A is **complete · frozen**. Core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`; residual closure on execution baseline `beb6a624b0e912fe94faa1ea7628c72a96c8283b` deleted the caller-zero Schedule agent-turn runtime and its legacy model quarantine. Schedule now has only the canonical Expert endpoint model path. Owner regressions and proposal fixtures no longer require the deleted runtime; see [the residual closure report](stage-3/3-a.md#residual-closure-agent-report).
 
 ## Progress
 
 - [x] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (complete · frozen; residual closure complete)
-- [ ] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md)
+- [x] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md) (complete · frozen)
 - [ ] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md)
 - [ ] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md)
 - [ ] **3-E — Outer compatibility deletion** — [execution plan](stage-3/3-e.md)
@@ -66,22 +66,17 @@ Flutter
 
 Outer layers translate intent, provide concrete adapter implementations and present results. They do not regain business ownership.
 
-## Remaining Stage 3 debt after 3-A
+## Remaining Stage 3 product-boundary debt
 
 General Conversation, delegated built-in Experts, the production Schedule endpoint and the isolated Knowledge Learner execute models through canonical Inference. Domain prompt, policy and budget semantics remain with their owners. `PreparedFoundationTransport` reaches the existing bundled native transport using the canonical attempt identity. These are closed 3-A boundaries, not remaining migration work.
 
-The remaining debt belongs to 3-B through 3-F:
+The remaining debt belongs to 3-C through 3-F:
 
-### App composition seams
+### Closed canonical App composition
 
-General Conversation command admission is already intent-only, but App still contains:
+3-B closed the request credential seam, root/Expert/Schedule current-connection composition, owner-derived Expert availability and canonical AppWire query/event service cutover. App constructs opaque provider capabilities through a shared host-scoped store; it no longer reads raw saved credentials or interprets model profiles on the canonical runtime path. See [the 3-B report](stage-3/3-b.md#agent-report) for the implementation and validation evidence.
 
-- the `SavedConnectionSource`/HostSlot credential seam on `ConversationTurnRequest`;
-- per-turn provider/source preparation such as `ServerSourceClient::prepare`;
-- concrete VaultBridge reads from AppWire query/events;
-- `AppHost::legacy_services()` used by old FFI paths.
-
-3-B closes these without moving owner policy back into App.
+Concrete AppComposition getters and `AppHost::legacy_services()` remain only for live old ABI callers. Their protocol/caller cutover and eventual caller-zero deletion remain 3-C/3-D/3-E work.
 
 ### Product-wire duplication
 
@@ -119,7 +114,7 @@ These are validation-harness debt, not reasons to weaken architecture or skip pr
   A4 closure / caller proof
   R0-R4 caller-zero Schedule residual closure (complete)
 
-3-B  AppHost composition closure
+3-B  AppHost composition closure (complete · frozen)
 
 3-C  protocol / FFI product-contract cutover
 

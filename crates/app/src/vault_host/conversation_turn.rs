@@ -47,8 +47,6 @@ use uuid::Uuid;
 
 use crate::FloeCore;
 use crate::local_context::LocalContextHost;
-// BOUNDARY(stage-3): the conversation turn still reaches the provider adapter
-// directly. Source acquisition must arrive through a Context-owned port.
 use floe_provider_adapters::sources::ServerSourceClient;
 
 use super::personal_grants;
@@ -66,6 +64,7 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     local_context: &'a LocalContextHost,
     person_id: PersonId,
     request: &'a ConversationTurnRequest,
+    connections: &'a floe_provider_adapters::control::CurrentSavedConnectionStore,
     command_id: floe_agent_contract::CommandId,
     conversation_repository: &'a std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     run_cancellations: &'a std::sync::Arc<floe_conversation::RunCancellationRegistry>,
@@ -83,6 +82,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
     conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
     run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
+    connections: &floe_provider_adapters::control::CurrentSavedConnectionStore,
     person_id: PersonId,
     command_id: floe_agent_contract::CommandId,
     request: &ConversationTurnRequest,
@@ -118,6 +118,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         local_context,
         person_id,
         request,
+        connections,
         command_id,
         conversation_repository,
         run_cancellations,
@@ -168,14 +169,11 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     let person_id = inputs.person_id;
     let request = inputs.request;
     let session_id = request.session_id;
-    // Source transport prepared from the stored credential after admission:
-    // the product-injected connection when supplied, else the host keychain
-    // slot. No model route is consulted and no catalog is prefetched. Absence
-    // means local-only: remote tools report CapabilityUnavailable instead of
-    // falling back to another route.
-    let stored = request.stored_server_connection()?;
-    let source_client =
-        ServerSourceClient::prepare(stored, &person_id.to_string(), &request.device_id)?;
+    let source_client = ServerSourceClient::from_current_connection(
+        inputs.connections,
+        &person_id.to_string(),
+        &request.device_id,
+    )?;
     let remote_reader = match source_client.as_ref() {
         Some(client) => Some(remote_views::RemoteViewReader::new(
             vault,
@@ -245,25 +243,17 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             },
             std::sync::Arc::clone(inputs.run_cancellations),
         )?;
-        // Canonical root model path: Engine → InferenceService →
-        // Access dispatch fence → provider transport. The provider is
-        // prepared once from the admitted saved connection; the recipient
-        // authority re-reads the current saved-connection store on every
-        // Access check, bound to the verified person/device. No pre-turn
-        // route exists; delegated legacy Expert endpoints prepare their own
-        // compatibility from the explicit invocation when they run.
-        let provider = crate::inference_routes::HostInferenceRoutes::root_model_provider(
+        let provider = floe_provider_adapters::models::RootModelProvider::from_current_connection(
+            inputs.connections,
             &person_id.to_string(),
             &request.device_id,
-            request.saved_connection_source(),
         )?;
-        let authority = crate::inference_routes::root_recipient_authority(
-            &person_id.to_string(),
-            &request.device_id,
-            request.saved_connection_source(),
+        let authority = floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
+            inputs.connections.clone(),
+            person_id.to_string(),
+            request.device_id.clone(),
         );
-        let model_service =
-            floe_inference::InferenceService::new(provider, resolver, authority);
+        let model_service = floe_inference::InferenceService::new(provider, resolver, authority);
         // Canonical root projection: Conversation filtering plus Context
         // assembly, reauthorizing history through the same Context dependency
         // authority the model fence uses. Committed turn coverage is the
@@ -1130,9 +1120,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: true,
-            has_remote_model: true,
+            availability: test_model_availability(true, true).await,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -1285,8 +1273,10 @@ mod tests {
     /// The caller identity only has to be self-consistent here.
     fn legacy_source_client(base_url: &str) -> ServerSourceClient {
         let person_id = PersonId::new();
-        ServerSourceClient::prepare(
-            Some(saved_server_connection(base_url, person_id, "test-device")),
+        ServerSourceClient::from_current_connection(
+            &floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+                saved_server_connection(base_url, person_id, "test-device"),
+            )),
             &person_id.to_string(),
             "test-device",
         )
@@ -1577,9 +1567,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: false,
-            has_remote_model: true,
+            availability: test_model_availability(false, true).await,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -1623,8 +1611,8 @@ mod tests {
         assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
     }
 
-    #[test]
-    fn expert_offering_exposes_only_bounded_context_observe_capabilities() {
+    #[tokio::test]
+    async fn expert_offering_exposes_only_bounded_context_observe_capabilities() {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
         let policy = expert_policy();
@@ -1672,9 +1660,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: true,
-            has_remote_model: true,
+            availability: test_model_availability(true, true).await,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -1718,9 +1704,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: true,
-            has_remote_model: true,
+            availability: test_model_availability(true, true).await,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -2206,11 +2190,9 @@ mod tests {
         });
         let executor = CannedExpertExecutor::answering(vec![answer]);
         let scope = expert_scope();
-        let source_client = ServerSourceClient::prepare(
-            Some(saved_server_connection(
-                &format!("http://{address}"),
-                person_id,
-                "test-device",
+        let source_client = ServerSourceClient::from_current_connection(
+            &floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+                saved_server_connection(&format!("http://{address}"), person_id, "test-device"),
             )),
             &person_id.to_string(),
             "test-device",
@@ -2234,9 +2216,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: true,
-            has_device_model: false,
-            has_remote_model: true,
+            availability: test_model_availability(false, true).await,
             source_client: Some(&source_client),
             policy: &policy,
             context: &context,
@@ -2418,11 +2398,9 @@ mod tests {
         });
         let executor = CannedExpertExecutor::answering(vec![answer]);
         let scope = expert_scope();
-        let source_client = ServerSourceClient::prepare(
-            Some(saved_server_connection(
-                &format!("http://{address}"),
-                person_id,
-                "test-device",
+        let source_client = ServerSourceClient::from_current_connection(
+            &floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+                saved_server_connection(&format!("http://{address}"), person_id, "test-device"),
             )),
             &person_id.to_string(),
             "test-device",
@@ -2479,9 +2457,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: true,
-            has_device_model: false,
-            has_remote_model: true,
+            availability: test_model_availability(false, true).await,
             source_client: Some(&source_client),
             policy: &policy,
             context: &context,
@@ -2665,9 +2641,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: false,
-            has_remote_model: true,
+            availability: test_model_availability(false, true).await,
             source_client: Some(&source_client),
             policy: &policy,
             context: &context,
@@ -2943,9 +2917,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: true,
-            has_remote_model: true,
+            availability: test_model_availability(true, true).await,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -3011,9 +2983,7 @@ mod tests {
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
-            server_source_allowed: false,
-            has_device_model: true,
-            has_remote_model: true,
+            availability: test_model_availability(true, true).await,
             source_client: None,
             policy: &policy,
             context: &context,
@@ -3084,6 +3054,83 @@ mod tests {
                 cost_micros: 5,
             })
         }
+    }
+
+    #[tokio::test]
+    async fn expert_eligibility_is_owned_and_unions_execution_classes_once() {
+        use floe_agent_contract::ModelPlacement;
+        let mut cards = test_expert_cards()[..3].to_vec();
+        cards[0].supported_placements = vec![ModelPlacement::DeviceLocal];
+        cards[1].supported_placements = vec![ModelPlacement::Remote];
+        cards[2].supported_placements = vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote];
+        cards.push(cards[2].clone());
+        for (device, remote, indices) in [
+            (false, false, vec![]),
+            (true, false, vec![0, 2]),
+            (false, true, vec![1, 2]),
+            (true, true, vec![0, 1, 2]),
+        ] {
+            let available = test_model_availability(device, remote).await;
+            let eligible = floe_experts::eligible_cards_for_availability(&cards, available);
+            assert_eq!(
+                eligible,
+                indices
+                    .into_iter()
+                    .map(|index| cards[index].clone())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    async fn test_model_availability(
+        device: bool,
+        remote: bool,
+    ) -> floe_inference::InferenceAvailability {
+        struct Provider {
+            device: bool,
+            remote: bool,
+        }
+        impl floe_inference::ModelProvider for Provider {
+            type Prepared = B2DeviceTransport;
+            async fn observe_profiles(
+                &self,
+            ) -> Vec<floe_inference::PreparedModelProfile<Self::Prepared>> {
+                [
+                    (floe_inference::ExecutionLocation::Device, self.device),
+                    (floe_inference::ExecutionLocation::Gateway, self.remote),
+                ]
+                .into_iter()
+                .map(
+                    |(location, available)| floe_inference::PreparedModelProfile {
+                        profile: floe_inference::ModelProfile {
+                            id: format!("{location:?}"),
+                            purpose: floe_inference::ModelPurpose::new(
+                                floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                            )
+                            .unwrap(),
+                            consumer: floe_inference::ModelConsumer::new(
+                                floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                            )
+                            .unwrap(),
+                            execution_location: location,
+                            data_recipient: floe_inference::DataRecipient::Device,
+                            capabilities: Default::default(),
+                            available,
+                        },
+                        transport: B2DeviceTransport {
+                            calls: Arc::new(AtomicUsize::new(0)),
+                        },
+                    },
+                )
+                .collect()
+            }
+        }
+        floe_inference::InferenceAvailability::observe(
+            &Provider { device, remote },
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        )
+        .await
     }
 
     struct B2DeviceProvider {

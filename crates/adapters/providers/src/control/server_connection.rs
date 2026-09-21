@@ -186,7 +186,7 @@ impl PreparedServerSource {
 pub fn load_saved_connection() -> Result<Option<SavedServerConnection>, AgentFailure> {
     // No test seam: production credential lookup is unconditional. Tests that
     // need a deterministically absent credential inject a fixed store through
-    // the turn request instead of reading this slot at all.
+    // the host construction boundary instead of reading this slot at all.
     let secret = floe_native::read_generic_password(
         SERVER_CREDENTIAL_SERVICE,
         SERVER_CREDENTIAL_ACCOUNT,

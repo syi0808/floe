@@ -14,7 +14,8 @@ pub use calendar_setup::{
     CalendarExpertSetupResult, ExpertPackaging,
 };
 pub use expert_setup::{
-    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec, SourceGrants, eligible_cards,
+    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec, SourceGrants,
+    eligible_cards_for_availability,
 };
 
 /// The identity of a builtin agent in the common delegation path.

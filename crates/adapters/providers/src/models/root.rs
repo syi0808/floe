@@ -15,16 +15,16 @@ pub struct RootModelProvider {
 }
 
 impl RootModelProvider {
-    /// Build from verified caller identity and the product-supplied saved
-    /// server connection, if any. A saved connection bound to another
+    /// Load and admit the current saved connection for the verified caller.
+    /// A saved connection bound to another
     /// person/device fails closed instead of downgrading to device-only.
-    pub fn for_saved_connection(
-        saved: Option<floe_inference::SavedServerConnection>,
+    pub fn from_current_connection(
+        store: &impl floe_inference::SavedConnectionStore,
         person_id: &str,
         device_id: &str,
     ) -> Result<Self, AgentFailure> {
-        Self::for_saved_connection_scoped(
-            saved,
+        Self::from_current_connection_scoped(
+            store,
             person_id,
             device_id,
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
@@ -35,14 +35,15 @@ impl RootModelProvider {
     /// Build under a domain purpose/consumer: device Foundation plus, when
     /// this caller saved one, the admitted server connection. Both legs
     /// observe the same domain scope.
-    pub fn for_saved_connection_scoped(
-        saved: Option<floe_inference::SavedServerConnection>,
+    pub fn from_current_connection_scoped(
+        store: &impl floe_inference::SavedConnectionStore,
         person_id: &str,
         device_id: &str,
         purpose: &str,
         consumer: &str,
     ) -> Result<Self, AgentFailure> {
-        let server = saved
+        let server = store
+            .load()?
             .map(|stored| {
                 let admitted =
                     floe_inference::admit_saved_connection(stored, person_id, device_id)?;
@@ -133,26 +134,39 @@ mod tests {
     #[test]
     fn saved_connection_is_bound_to_verified_caller_identity() {
         // No saved connection: device-only.
-        let device_only = RootModelProvider::for_saved_connection(None, PERSON, DEVICE).unwrap();
+        let device_only = RootModelProvider::from_current_connection(
+            &crate::control::CurrentSavedConnectionStore::fixed(None),
+            PERSON,
+            DEVICE,
+        )
+        .unwrap();
         assert!(device_only.server.is_none());
 
         // Foreign identity fails closed instead of downgrading silently.
-        assert!(RootModelProvider::for_saved_connection(
-            Some(saved()),
-            PERSON,
-            "other-device",
-        )
-        .is_err());
-        assert!(RootModelProvider::for_saved_connection(
-            Some(saved()),
-            "00000000-0000-4000-8000-000000000002",
-            DEVICE,
-        )
-        .is_err());
+        assert!(
+            RootModelProvider::from_current_connection(
+                &crate::control::CurrentSavedConnectionStore::fixed(Some(saved())),
+                PERSON,
+                "other-device",
+            )
+            .is_err()
+        );
+        assert!(
+            RootModelProvider::from_current_connection(
+                &crate::control::CurrentSavedConnectionStore::fixed(Some(saved())),
+                "00000000-0000-4000-8000-000000000002",
+                DEVICE,
+            )
+            .is_err()
+        );
 
         // Matching identity admits the server.
-        let admitted =
-            RootModelProvider::for_saved_connection(Some(saved()), PERSON, DEVICE).unwrap();
+        let admitted = RootModelProvider::from_current_connection(
+            &crate::control::CurrentSavedConnectionStore::fixed(Some(saved())),
+            PERSON,
+            DEVICE,
+        )
+        .unwrap();
         assert!(admitted.server.is_some());
     }
 
@@ -161,8 +175,12 @@ mod tests {
         let mut local = saved();
         local.allow_external = false;
         local.external_recipients = vec![];
-        let admitted =
-            RootModelProvider::for_saved_connection(Some(local), PERSON, DEVICE).unwrap();
+        let admitted = RootModelProvider::from_current_connection(
+            &crate::control::CurrentSavedConnectionStore::fixed(Some(local)),
+            PERSON,
+            DEVICE,
+        )
+        .unwrap();
         assert!(admitted.server.is_some());
     }
 
@@ -170,8 +188,8 @@ mod tests {
     async fn scoped_providers_observe_the_domain_scope() {
         use floe_inference::ModelProvider;
         // Device leg: the same Foundation model observes the domain pair.
-        let device = RootModelProvider::for_saved_connection_scoped(
-            None,
+        let device = RootModelProvider::from_current_connection_scoped(
+            &crate::control::CurrentSavedConnectionStore::fixed(None),
             PERSON,
             DEVICE,
             "governed-memory-review",
@@ -188,7 +206,12 @@ mod tests {
         );
 
         // Root scope is unchanged: the canonical root pair.
-        let root = RootModelProvider::for_saved_connection(None, PERSON, DEVICE).unwrap();
+        let root = RootModelProvider::from_current_connection(
+            &crate::control::CurrentSavedConnectionStore::fixed(None),
+            PERSON,
+            DEVICE,
+        )
+        .unwrap();
         let observed = root.observe_profiles().await;
         assert_eq!(observed.len(), 1);
         assert_eq!(
@@ -202,12 +225,59 @@ mod tests {
 
         // Empty scope fails closed at composition, never as an unscoped profile.
         assert!(
-            RootModelProvider::for_saved_connection_scoped(None, PERSON, DEVICE, "", "c",)
-                .is_err()
+            RootModelProvider::from_current_connection_scoped(
+                &crate::control::CurrentSavedConnectionStore::fixed(None),
+                PERSON,
+                DEVICE,
+                "",
+                "c",
+            )
+            .is_err()
         );
         assert!(
-            RootModelProvider::for_saved_connection_scoped(None, PERSON, DEVICE, "p", "",)
-                .is_err()
+            RootModelProvider::from_current_connection_scoped(
+                &crate::control::CurrentSavedConnectionStore::fixed(None),
+                PERSON,
+                DEVICE,
+                "p",
+                "",
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_source_capability_does_not_require_an_available_model() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut connection = saved();
+        connection.base_url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let store = crate::control::CurrentSavedConnectionStore::fixed(Some(connection));
+        let source =
+            crate::sources::ServerSourceClient::from_current_connection(&store, PERSON, DEVICE)
+                .unwrap();
+        assert!(source.is_some());
+        let provider = RootModelProvider::from_current_connection_scoped(
+            &store,
+            PERSON,
+            DEVICE,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        )
+        .unwrap();
+        let availability = floe_inference::InferenceAvailability::observe(
+            &provider,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        )
+        .await;
+        assert!(
+            !availability.can_execute(floe_inference::InferenceExecutionConstraint::RemoteOnly)
+        );
+        assert!(
+            crate::sources::ServerSourceClient::from_current_connection(&store, PERSON, DEVICE)
+                .unwrap()
+                .is_some()
         );
     }
 }

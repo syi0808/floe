@@ -111,7 +111,7 @@ pub fn plan_run(
     assignment: &str,
     provider: CalendarProvider,
     calendar_count: usize,
-    remote_route_available: bool,
+    remote_source_available: bool,
     local_now: DateTime<chrono::Local>,
     now: DateTime<Utc>,
 ) -> Result<ScheduleRunPlan, AgentFailure> {
@@ -129,7 +129,7 @@ pub fn plan_run(
             return Err(AgentFailure::CapabilityUnavailable);
         }
     }
-    let acquire_remotely = remote_route_available
+    let acquire_remotely = remote_source_available
         && matches!(
             provider,
             CalendarProvider::Google | CalendarProvider::Microsoft
@@ -304,13 +304,13 @@ mod tests {
                 .reasoning,
             ScheduleReasoning::OnDevice
         );
-        for (provider, remote_route) in [
+        for (provider, remote_source) in [
             (CalendarProvider::Google, false),
             (CalendarProvider::EventKit, true),
             (CalendarProvider::Fixture, true),
         ] {
             assert_eq!(
-                plan_run("review", provider, 1, remote_route, local, now)
+                plan_run("review", provider, 1, remote_source, local, now)
                     .unwrap()
                     .reasoning,
                 ScheduleReasoning::ConversationRoute

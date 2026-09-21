@@ -14,9 +14,8 @@ mod composition;
 mod core;
 mod diagnostics;
 mod error;
-pub mod events;
+mod events;
 mod host;
-mod inference_routes;
 mod local_context;
 mod prompts;
 mod services;
@@ -85,11 +84,13 @@ pub use local_context::{
 pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
-    ConversationCommands, ProfileSelection, ServiceError, StartTurn, TurnMode,
+    ConversationCommands, ConversationEvent, ConversationEvents, ConversationQueries, EventPayload,
+    EventRead, ProfileSelection, ReadConversation, ReadConversationEvents, RunEventRecord,
+    ServiceError, StartTurn, TurnMode,
 };
 pub use turn_request::{ConversationTurnRequest, RemoteTurnRoute};
 #[cfg(unix)]
-pub use vault_host::{ConversationQuery, VaultBridge, VaultRequestFailure};
+pub use vault_host::{VaultBridge, VaultRequestFailure};
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
     CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation, FixtureOperation,

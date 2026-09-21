@@ -57,9 +57,6 @@ impl crate::ConversationCommands for AppComposition {
                 floe_kernel::RunId::from_uuid(run_id).ok_or(crate::ServiceError::InvalidInput)
             })
             .transpose()?;
-        // Turn admission performs no credential selection: the production
-        // constructor always binds the host keychain slot, and the canonical
-        // owners admit the stored credential after admission.
         let turn = crate::ConversationTurnRequest::new(
             request.session_id,
             request.expected_revision,
@@ -110,6 +107,52 @@ impl crate::ConversationCommands for AppComposition {
             run_id: request.run_id,
             outcome: crate::CancelRunOutcome::Accepted,
         })
+    }
+}
+
+#[cfg(unix)]
+impl crate::ConversationQueries for AppComposition {
+    fn read_conversation(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ReadConversation,
+    ) -> Result<Option<floe_conversation::RunReceipt>, crate::ServiceError> {
+        use crate::vault_host::ConversationQuery;
+        request.validate()?;
+        let query = match request {
+            crate::ReadConversation::Command { command_id } => ConversationQuery::Command(
+                floe_kernel::CommandId::from_uuid(command_id)
+                    .ok_or(crate::ServiceError::InvalidInput)?,
+            ),
+            crate::ReadConversation::Run { run_id } => ConversationQuery::Run(
+                floe_kernel::RunId::from_uuid(run_id).ok_or(crate::ServiceError::InvalidInput)?,
+            ),
+            crate::ReadConversation::Message { message_id } => ConversationQuery::Message(
+                floe_kernel::RunId::from_uuid(message_id)
+                    .ok_or(crate::ServiceError::InvalidInput)?,
+            ),
+        };
+        self.agent_vault
+            .conversation_query(floe_kernel::PersonId(caller.person_id()), query)
+            .map_err(service_failure)
+    }
+}
+
+#[cfg(unix)]
+impl crate::ConversationEvents for AppComposition {
+    fn read_conversation_events(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ReadConversationEvents,
+    ) -> Result<crate::EventRead, crate::ServiceError> {
+        request.validate()?;
+        Ok(self.agent_vault.app_events().read(
+            &caller.person_id().to_string(),
+            caller.runtime_epoch(),
+            request.runtime_epoch,
+            request.cursor,
+            request.limit,
+        ))
     }
 }
 
@@ -168,7 +211,7 @@ fn service_failure(failure: floe_kernel::AgentFailure) -> crate::ServiceError {
 }
 
 /// Create the host: one current-thread runtime, the local store, the Vault
-/// worker and the route selector, bound to the verified local identity.
+/// worker, bound to the verified local identity.
 pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let identity = crate::bootstrap::local_identity_for_database(std::path::Path::new(path))
         .map_err(AppOpenError::Host)?;

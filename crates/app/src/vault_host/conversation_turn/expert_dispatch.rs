@@ -6,9 +6,9 @@
 //! endpoints exist and which readers back the host port they use.
 
 use super::expert_compat::{
-    CapturingRecorder, ConversationContextReader, ConversationContextReaderApi,
-    EndpointConnectionStore, ExpertModelHost, PersonalAttentionReader, PersonalAttentionReaderApi,
-    PersonalPeopleReader, PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
+    CapturingRecorder, ConversationContextReader, ConversationContextReaderApi, ExpertModelHost,
+    PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
+    PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
     PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, expert_policy,
     read_context_source,
 };
@@ -19,7 +19,6 @@ use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertRe
 use floe_experts_builtin::{
     BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest,
 };
-use floe_inference::ModelProvider as _;
 
 pub(in crate::vault_host) mod schedule;
 
@@ -86,7 +85,7 @@ pub(crate) struct BuiltinExpertEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
     local_context: Arc<LocalContextHost>,
-    connections: EndpointConnectionStore,
+    connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
 }
 
 impl<Keys> BuiltinExpertEndpoint<Keys> {
@@ -94,7 +93,7 @@ impl<Keys> BuiltinExpertEndpoint<Keys> {
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
         local_context: Arc<LocalContextHost>,
-        connections: EndpointConnectionStore,
+        connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
     ) -> Self {
         Self {
             core,
@@ -124,53 +123,31 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            // Canonical Expert composition, prepared here because an actual
-            // delegated endpoint runs: the stored credential is loaded from
-            // the injected store and admitted for source and model use.
-            // Inference selects the profile per Expert requirement; this
-            // endpoint only observes non-secret facts to decide which Experts
-            // can be offered at all. No pre-resolved route exists.
             let person_id = self.vault.person_id();
-            let stored = floe_inference::SavedConnectionStore::load(&self.connections)?;
-            let source_client = ServerSourceClient::prepare(
-                stored.clone(),
+            let source_client = ServerSourceClient::from_current_connection(
+                &self.connections,
                 &person_id.to_string(),
                 &context.device_id,
             )?;
             let provider =
-                floe_provider_adapters::models::RootModelProvider::for_saved_connection_scoped(
-                    stored,
+                floe_provider_adapters::models::RootModelProvider::from_current_connection_scoped(
+                    &self.connections,
                     &person_id.to_string(),
                     &context.device_id,
                     floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
                     floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
                 )?;
-            let observed = provider.observe_profiles().await;
-            let has_device_model = observed.iter().any(|prepared| {
-                prepared.profile.available
-                    && prepared.profile.execution_location
-                        == floe_inference::ExecutionLocation::Device
-                    && prepared.profile.data_recipient == floe_inference::DataRecipient::Device
-            });
-            let has_remote_model = observed.iter().any(|prepared| {
-                prepared.profile.available
-                    && prepared.profile.execution_location
-                        != floe_inference::ExecutionLocation::Device
-            });
-            let server_source_allowed = source_client.is_some()
-                && observed.iter().any(|prepared| {
-                    prepared.profile.available
-                        && prepared.profile.execution_location
-                            == floe_inference::ExecutionLocation::Gateway
-                        && prepared.profile.data_recipient
-                            == floe_inference::DataRecipient::Device
-                });
-            let authority =
-                floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
-                    self.connections.clone(),
-                    person_id.to_string(),
-                    context.device_id.clone(),
-                );
+            let availability = floe_inference::InferenceAvailability::observe(
+                &provider,
+                floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            )
+            .await;
+            let authority = floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
+                self.connections.clone(),
+                person_id.to_string(),
+                context.device_id.clone(),
+            );
             let personal_resolver = personal_grants::PersonalDependencyResolver {
                 vault: &self.vault,
                 local_context: &self.local_context,
@@ -233,9 +210,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             let experts = ConversationExperts {
                 executor: &service,
                 scope,
-                server_source_allowed,
-                has_device_model,
-                has_remote_model,
+                availability,
                 source_client: source_client.as_ref(),
                 policy: &policy,
                 context: &context.agent_context,
@@ -318,9 +293,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
 pub(crate) struct ConversationExperts<'model> {
     pub(super) executor: &'model dyn floe_inference::InferenceExecutor,
     pub(super) scope: &'model floe_execution::ExecutionScope,
-    pub(super) server_source_allowed: bool,
-    pub(super) has_device_model: bool,
-    pub(super) has_remote_model: bool,
+    pub(super) availability: floe_inference::InferenceAvailability,
     pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
@@ -363,7 +336,6 @@ impl<'turn, 'model, 'msg> DelegatedMessageExperts<'turn, 'model, 'msg> {
         consumer_name: &'a str,
     ) -> PersonalViewSource<'a> {
         PersonalViewSource {
-            server_source_allowed: self.experts.server_source_allowed,
             source_client: self.experts.source_client,
             person_id: request.person_id,
             people_reader: self.experts.people_reader,
@@ -560,22 +532,7 @@ impl InProcessAgent for ConversationExperts<'_> {
     /// cards per observed class. Nothing here reads the agent id, and nothing
     /// selects which profile a call runs on: Inference does that per call.
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        let mut cards = Vec::new();
-        if self.has_device_model {
-            cards.extend(floe_experts::eligible_cards(
-                &self.cards,
-                floe_agent_contract::ModelPlacement::DeviceLocal,
-            ));
-        }
-        if self.has_remote_model {
-            cards.extend(floe_experts::eligible_cards(
-                &self.cards,
-                floe_agent_contract::ModelPlacement::Remote,
-            ));
-        }
-        let mut seen = std::collections::HashSet::new();
-        cards.retain(|card| seen.insert(card.id.clone()));
-        cards
+        floe_experts::eligible_cards_for_availability(&self.cards, self.availability)
     }
 
     async fn handle_message(

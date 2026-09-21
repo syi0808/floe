@@ -9,6 +9,7 @@ These invariants survive refactoring. They are architectural safety properties, 
 - Context may acquire/project only evidence authorized for the current Person, source, scope and freshness requirements.
 - Inference may choose an approved model route, but route selection cannot enlarge data authority.
 - Provider credentials remain private to credential/provider boundaries and are not product-wire or Conversation inputs.
+- Root, built-in Expert and Schedule composition share one host-scoped current-connection store. Provider adapters bind loaded credentials to the verified person/device; exact-recipient authority reloads current state at admission, handoff and post-response revalidation. A prepared transport or availability observation never substitutes for those checks.
 - Revocation prevents later admission or release. It cannot retroactively recall data already transmitted or a provider effect already accepted.
 
 ## Provenance and coverage travel with evidence

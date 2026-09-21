@@ -31,6 +31,14 @@ Responsibilities do not collapse across this chain:
 
 The canonical `InferenceService : ModelPort` production cutover is complete and is the current General Conversation reality. A legacy caller does not make App or Provider the semantic owner.
 
+### Host composition
+
+`ConversationTurnRequest` carries only session/revision, text, profile intent, continuation/retry intent and the verified device identity. It has no credential source or lookup semantics.
+
+The Vault worker owns one shared `CurrentSavedConnectionStore`, cloned into the open Vault and its root, built-in Expert and Schedule compositions. Production binds the host keychain; tests inject a fixed or mutable store at worker construction. Provider-owned `RootModelProvider::from_current_connection[_scoped]` and `ServerSourceClient::from_current_connection` load and admit the current connection against the verified person/device, returning opaque capabilities. App neither materializes saved credentials nor selects model placement. Recipient authority shares this store and reloads it at every fence rather than trusting the prepared transport's snapshot.
+
+`InferenceAvailability` observes execution classes for a purpose/consumer through the same candidate rules used for execution. Experts owns card eligibility against that non-secret observation. Availability is not dispatch authorization: actual execution still runs the canonical Inference/Access checks. Remote source capability is observed independently of model availability; source catalogs remain lazy and never participate in profile discovery or selection.
+
 ### Tool path
 
 Canonical ownership:
@@ -66,9 +74,11 @@ App run_general_turn
   -> Manager synthesis
 ```
 
-Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: the root turn serves `TaskCoordinator` as its `DelegationPort` directly, and every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Endpoint composition uses a constructor-injected saved-connection store (host keychain in production, fixed fixture in tests), admitted per execution against the invocation principal and context device id. Model execution uses `ExpertModelHost` and the shared `InferenceExecutor` under the Task's bounded child `ExecutionScope`; Experts express execution constraints, not provider routes.
+Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: the root turn serves `TaskCoordinator` as its `DelegationPort` directly, and every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Endpoint composition shares the host-scoped current store described above; provider adapters admit it per execution against the invocation principal and context device id. Model execution uses `ExpertModelHost` and the shared `InferenceExecutor` under the Task's bounded child `ExecutionScope`; Experts express execution constraints, not provider routes.
 
 Schedule has one production model-execution path: `ScheduleEndpoint` → `run_calendar_expert_endpoint` → `ExpertModelHost` → `InferenceExecutor`. Calendar source acquisition, exact dependency coverage, grant revalidation and atomic Task/Expert settlement remain with their existing owners. There is no parallel Schedule Session/agent-turn model runtime. Test-only persisted Delegation/ExpertResult fixtures support proposal inspection and publication tests without another model runtime. The separate live AgentFixture compatibility runtime remains product-boundary debt for Stage 3-D/3-E.
+
+Schedule planning receives remote **source** availability from the composed capability, not a model route. Google/Microsoft enumeration remains lazy and provider-specific; Access owns Calendar authorization, while Schedule owns the requirement that freshly remote-acquired Calendar data uses DeviceOnly reasoning.
 
 ## Consequential actions
 
@@ -101,5 +111,7 @@ Flutter / native / server caller
 ```
 
 Outer callers may express user intent, including an explicit user-selected model profile where the product exposes one. They must not carry raw bearer tokens, arbitrary model endpoints, resolved internal route bundles or Access policy flags.
+
+Canonical AppWire commands, queries and events pass through `HostRequest` and the typed `ConversationCommands`, `ConversationQueries` and `ConversationEvents` services. Identity and runtime epoch come from `CallerContext`; read requests cannot override person/device. AppComposition delegates to private worker/query and bounded event-buffer machinery, and event payloads are filtered to the caller principal. FFI only converts service/owner values to unchanged wire DTOs. Concrete AppComposition getters and `legacy_services()` remain only for live old ABI callers, not canonical AppWire.
 
 That outer cutover is active Stage 3 work; it must not be pulled back into the frozen Stage 2 as compatibility ownership.

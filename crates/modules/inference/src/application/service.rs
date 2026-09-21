@@ -21,6 +21,34 @@ pub const CANONICAL_MODEL_CONSUMER: &str = "conversation.root";
 const MAX_ATTEMPT_TOKENS: u64 = 4_096;
 const MAX_ATTEMPT_COST_MICROS: u64 = 1_000_000;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InferenceAvailability {
+    any: bool,
+    device: bool,
+    remote: bool,
+}
+
+impl InferenceAvailability {
+    pub async fn observe(provider: &impl ModelProvider, purpose: &str, consumer: &str) -> Self {
+        let observed = provider.observe_profiles().await;
+        let available =
+            |constraint| auto_candidates(&observed, purpose, consumer, constraint).is_ok();
+        Self {
+            any: available(InferenceExecutionConstraint::Any),
+            device: available(InferenceExecutionConstraint::DeviceOnly),
+            remote: available(InferenceExecutionConstraint::RemoteOnly),
+        }
+    }
+
+    pub fn can_execute(self, constraint: InferenceExecutionConstraint) -> bool {
+        match constraint {
+            InferenceExecutionConstraint::Any => self.any,
+            InferenceExecutionConstraint::DeviceOnly => self.device,
+            InferenceExecutionConstraint::RemoteOnly => self.remote,
+        }
+    }
+}
+
 /// Canonical root ModelPort. Inference owns profile selection, route planning,
 /// transport retry/fallback and model budget settlement. Access owns
 /// exact-recipient dispatch authority. Provider owns transport/credentials.
@@ -340,12 +368,21 @@ fn plan_candidates<'a, Prepared>(
         validate_candidate(&exact.profile, request, constraint)?;
         return Ok(vec![exact]);
     }
+    auto_candidates(observed, &request.purpose, &request.consumer, constraint)
+}
+
+fn auto_candidates<'a, Prepared>(
+    observed: &'a [PreparedModelProfile<Prepared>],
+    purpose: &str,
+    consumer: &str,
+    constraint: InferenceExecutionConstraint,
+) -> Result<Vec<&'a PreparedModelProfile<Prepared>>, AgentFailure> {
     let mut eligible: Vec<&PreparedModelProfile<Prepared>> = observed
         .iter()
         .filter(|candidate| candidate.profile.available)
-        .filter(|candidate| candidate.profile.purpose.as_str() == request.purpose)
-        .filter(|candidate| candidate.profile.consumer.as_str() == request.consumer)
-        .filter(|candidate| capabilities_hold(&candidate.profile, request))
+        .filter(|candidate| candidate.profile.purpose.as_str() == purpose)
+        .filter(|candidate| candidate.profile.consumer.as_str() == consumer)
+        .filter(|candidate| capabilities_hold(&candidate.profile))
         .filter(|candidate| placement_consistent(&candidate.profile))
         .filter(|candidate| constraint_holds(&candidate.profile, constraint))
         .collect();
@@ -377,7 +414,7 @@ fn validate_candidate(
     }
     if profile.purpose.as_str() != request.purpose
         || profile.consumer.as_str() != request.consumer
-        || !capabilities_hold(profile, request)
+        || !capabilities_hold(profile)
         || !placement_consistent(profile)
         || !constraint_holds(profile, constraint)
     {
@@ -400,10 +437,9 @@ fn constraint_holds(profile: &ModelProfile, constraint: InferenceExecutionConstr
     }
 }
 
-fn capabilities_hold(profile: &ModelProfile, request: &ModelRequest) -> bool {
+fn capabilities_hold(profile: &ModelProfile) -> bool {
     // The canonical root needs no special capability beyond a valid catalog;
     // an empty catalog is allowed and transport decides wire details.
-    let _ = request;
     !profile
         .capabilities
         .0
@@ -672,6 +708,98 @@ mod tests {
             capabilities: ModelCapabilities(vec![]),
             available,
         }
+    }
+
+    #[tokio::test]
+    async fn availability_uses_scoped_candidate_rules_without_dispatch() {
+        let transport = Arc::new(TestTransport::answer());
+        let cases = [
+            (vec![], [false, false, false]),
+            (vec![device_profile("device", true)], [true, true, false]),
+            (vec![gateway_profile("gateway", true)], [true, false, true]),
+            (
+                vec![external_profile("remote", "partner.example", true)],
+                [true, false, true],
+            ),
+            (vec![device_profile("device", false)], [false, false, false]),
+            (
+                vec![
+                    device_profile("first", true),
+                    device_profile("second", true),
+                ],
+                [false, false, false],
+            ),
+            (
+                vec![
+                    device_profile("device", true),
+                    gateway_profile("gateway", true),
+                ],
+                [true, true, true],
+            ),
+        ];
+        for (profiles, expected) in cases {
+            let provider = TestProvider {
+                profiles: profiles
+                    .into_iter()
+                    .map(|profile| (profile, transport.clone()))
+                    .collect(),
+            };
+            let observed = InferenceAvailability::observe(
+                &provider,
+                CANONICAL_MODEL_PURPOSE,
+                CANONICAL_MODEL_CONSUMER,
+            )
+            .await;
+            assert_eq!(
+                [
+                    observed.can_execute(InferenceExecutionConstraint::Any),
+                    observed.can_execute(InferenceExecutionConstraint::DeviceOnly),
+                    observed.can_execute(InferenceExecutionConstraint::RemoteOnly),
+                ],
+                expected
+            );
+            assert_eq!(
+                InferenceAvailability::observe(
+                    &provider,
+                    "other-purpose",
+                    CANONICAL_MODEL_CONSUMER
+                )
+                .await,
+                InferenceAvailability::default()
+            );
+            assert_eq!(
+                InferenceAvailability::observe(
+                    &provider,
+                    CANONICAL_MODEL_PURPOSE,
+                    "other-consumer"
+                )
+                .await,
+                InferenceAvailability::default()
+            );
+        }
+        for mut invalid in [
+            device_profile("device", true),
+            external_profile("remote", "partner.example", true),
+        ] {
+            if invalid.execution_location == ExecutionLocation::Device {
+                invalid.capabilities.0.push(" ".into());
+            } else {
+                invalid.data_recipient = DataRecipient::Device;
+            }
+            let provider = TestProvider {
+                profiles: vec![(invalid, transport.clone())],
+            };
+            assert_eq!(
+                InferenceAvailability::observe(
+                    &provider,
+                    CANONICAL_MODEL_PURPOSE,
+                    CANONICAL_MODEL_CONSUMER
+                )
+                .await,
+                InferenceAvailability::default()
+            );
+        }
+        assert_eq!(transport.calls(), 0);
     }
 
     fn scoped_profile(
@@ -1476,5 +1604,3 @@ mod tests {
         assert_eq!(remote.calls(), 0);
     }
 }
-
-

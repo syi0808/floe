@@ -1,17 +1,12 @@
 use std::collections::BTreeMap;
 
-use floe_app::{AgentFailure, CommandId, PersonId, RunId, RunReceipt, RunState};
+use floe_app::{AgentFailure, EventPayload, EventRead, RunEventRecord, RunReceipt, RunState};
 use floe_protocol::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
     AppCommandResultDto, AppCommandStatusDto, AppEventDto, AppEventKindDto, AppEventsRequestDto,
     AppEventsResultDto, AppMessageDto, AppMessageRoleDto, AppProfileSelectionDto, AppQueryDto,
     AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto,
     AppTurnExecutionDto, AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
-};
-
-use floe_app::{
-    ConversationQuery,
-    events::{EventPayload, EventRead, RunEventRecord},
 };
 
 use crate::bridge::FloeHandle;
@@ -112,51 +107,43 @@ pub(crate) fn query(
     handle: &FloeHandle,
     request: AppQueryRequestDto,
 ) -> AppWireResult<AppQueryResultDto> {
+    query_with_host(&handle.app(), request)
+}
+
+fn query_with_host<Services: floe_app::HostServices + floe_app::ConversationQueries>(
+    host: &floe_app::AppHost<Services>,
+    request: AppQueryRequestDto,
+) -> AppWireResult<AppQueryResultDto> {
     request.validate().map_err(request_validation)?;
-    let host_request = handle
-        .app()
-        .request(request.request_id)
-        .map_err(host_failure)?;
+    let host_request = host.request(request.request_id).map_err(host_failure)?;
     let caller = host_request.caller();
-    let person = PersonId(caller.person_id());
     let runtime_epoch = caller.runtime_epoch();
-    #[cfg(unix)]
     let services = host_request.services();
     match request.query {
         AppQueryDto::ConversationGetCommand { command_id } => {
-            let command_id =
-                CommandId::from_uuid(command_id).ok_or_else(|| validation("query.command_id"))?;
             let receipt = services
-                .agent_vault()
-                .conversation_query(person, ConversationQuery::Command(command_id))
-                .map_err(agent_failure)?;
+                .read_conversation(caller, floe_app::ReadConversation::Command { command_id })
+                .map_err(service_error)?;
             Ok(match receipt {
                 Some(receipt) => AppQueryResultDto::CommandReceipt {
                     receipt: command_receipt(&receipt, runtime_epoch),
                 },
-                None => AppQueryResultDto::UnknownCommand {
-                    command_id: command_id.as_uuid(),
-                },
+                None => AppQueryResultDto::UnknownCommand { command_id },
             })
         }
         AppQueryDto::ConversationGetRun { run_id } => {
-            let run_id = RunId::from_uuid(run_id).ok_or_else(|| validation("query.run_id"))?;
             let receipt = services
-                .agent_vault()
-                .conversation_query(person, ConversationQuery::Run(run_id))
-                .map_err(agent_failure)?
+                .read_conversation(caller, floe_app::ReadConversation::Run { run_id })
+                .map_err(service_error)?
                 .ok_or_else(not_found)?;
             Ok(AppQueryResultDto::RunSnapshot {
                 run: run_snapshot(receipt, runtime_epoch),
             })
         }
         AppQueryDto::ConversationGetMessage { message_id } => {
-            let run_id =
-                RunId::from_uuid(message_id).ok_or_else(|| validation("query.message_id"))?;
             let receipt = services
-                .agent_vault()
-                .conversation_query(person, ConversationQuery::Message(run_id))
-                .map_err(agent_failure)?
+                .read_conversation(caller, floe_app::ReadConversation::Message { message_id })
+                .map_err(service_error)?
                 .ok_or_else(not_found)?;
             let text = receipt.output.ok_or_else(not_found)?;
             Ok(AppQueryResultDto::Message {
@@ -174,18 +161,27 @@ pub(crate) fn events(
     handle: &FloeHandle,
     request: AppEventsRequestDto,
 ) -> AppWireResult<AppEventsResultDto> {
+    events_with_host(&handle.app(), request)
+}
+
+fn events_with_host<Services: floe_app::HostServices + floe_app::ConversationEvents>(
+    host: &floe_app::AppHost<Services>,
+    request: AppEventsRequestDto,
+) -> AppWireResult<AppEventsResultDto> {
     request.validate().map_err(request_validation)?;
-    let host_request = handle
-        .app()
-        .request(request.request_id)
-        .map_err(host_failure)?;
+    let host_request = host.request(request.request_id).map_err(host_failure)?;
     let runtime_epoch = host_request.caller().runtime_epoch();
-    let read = host_request.services().agent_vault().app_events().read(
-        runtime_epoch,
-        request.runtime_epoch,
-        request.cursor,
-        request.limit,
-    );
+    let read = host_request
+        .services()
+        .read_conversation_events(
+            host_request.caller(),
+            floe_app::ReadConversationEvents {
+                runtime_epoch: request.runtime_epoch,
+                cursor: request.cursor,
+                limit: request.limit,
+            },
+        )
+        .map_err(service_error)?;
     Ok(match read {
         EventRead::Events {
             next_cursor,
@@ -485,14 +481,249 @@ fn wire_error(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
     use super::*;
 
+    #[derive(Clone, Default)]
     struct Services {
-        captured: Mutex<Option<(Uuid, String, floe_app::StartTurn)>>,
-        cancelled: Mutex<Option<(Uuid, String, floe_app::CancelRun)>>,
+        captured: Arc<Mutex<Option<(Uuid, String, floe_app::StartTurn)>>>,
+        cancelled: Arc<Mutex<Option<(Uuid, String, floe_app::CancelRun)>>>,
+        queries: Arc<Mutex<Vec<(Uuid, String, floe_app::ReadConversation)>>>,
+        events: Arc<Mutex<Vec<(Uuid, String, floe_app::ReadConversationEvents)>>>,
+        receipt: Arc<Mutex<Option<RunReceipt>>>,
+        event_read: Arc<Mutex<Option<EventRead>>>,
+        failure: Arc<Mutex<Option<floe_app::ServiceError>>>,
+    }
+
+    impl floe_app::ConversationQueries for Services {
+        fn read_conversation(
+            &self,
+            caller: &floe_app::CallerContext,
+            request: floe_app::ReadConversation,
+        ) -> Result<Option<RunReceipt>, floe_app::ServiceError> {
+            request.validate()?;
+            self.queries.lock().unwrap().push((
+                caller.person_id(),
+                caller.device_id().into(),
+                request,
+            ));
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            Ok(self.receipt.lock().unwrap().clone())
+        }
+    }
+
+    impl floe_app::ConversationEvents for Services {
+        fn read_conversation_events(
+            &self,
+            caller: &floe_app::CallerContext,
+            request: floe_app::ReadConversationEvents,
+        ) -> Result<EventRead, floe_app::ServiceError> {
+            request.validate()?;
+            self.events.lock().unwrap().push((
+                caller.person_id(),
+                caller.device_id().into(),
+                request,
+            ));
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            Ok(self
+                .event_read
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(EventRead::ResyncRequired { snapshot_cursor: 4 }))
+        }
+    }
+
+    fn receipt(person_id: Uuid) -> RunReceipt {
+        RunReceipt {
+            run_id: floe_app::RunId::new(),
+            command_id: floe_app::CommandId::new(),
+            session_id: Uuid::new_v4(),
+            principal: person_id.to_string(),
+            request_digest: [1; 32],
+            state: RunState::Completed,
+            output: Some("answer".into()),
+            coverage: serde_json::from_str("\"independent\"").unwrap(),
+            issue: None,
+            session_revision: 2,
+            aggregate_revision: 3,
+            executor_generation: 1,
+            continuation_of: None,
+            continuation_executor_generation: None,
+            continuation_level: 0,
+            retry_of: None,
+            profile: floe_app::ProfileSelection::Auto,
+        }
+    }
+
+    #[test]
+    fn query_services_receive_verified_identity_and_preserve_owner_results() {
+        let person_id = Uuid::new_v4();
+        let services = Services::default();
+        let receipt = receipt(person_id);
+        *services.receipt.lock().unwrap() = Some(receipt.clone());
+        let host = floe_app::AppHost::bootstrap_claim(
+            services.clone(),
+            floe_app::LocalIdentityClaim {
+                person_id,
+                device_id: "mac-local".into(),
+            },
+        )
+        .unwrap();
+        let query = |query| {
+            query_with_host(
+                &host,
+                AppQueryRequestDto {
+                    schema_version: floe_protocol::APP_WIRE_VERSION,
+                    request_id: Uuid::new_v4(),
+                    query,
+                },
+            )
+        };
+        let command_id = receipt.command_id.as_uuid();
+        let run_id = receipt.run_id.as_uuid();
+        assert!(
+            matches!(query(AppQueryDto::ConversationGetCommand { command_id }).unwrap(),
+            AppQueryResultDto::CommandReceipt { receipt } if receipt.command_id == command_id)
+        );
+        assert!(
+            matches!(query(AppQueryDto::ConversationGetRun { run_id }).unwrap(),
+            AppQueryResultDto::RunSnapshot { run } if run.run_id == run_id)
+        );
+        assert!(
+            matches!(query(AppQueryDto::ConversationGetMessage { message_id: run_id }).unwrap(),
+            AppQueryResultDto::Message { message } if message.message_id == run_id && message.text == "answer")
+        );
+        assert_eq!(
+            *services.queries.lock().unwrap(),
+            vec![
+                (
+                    person_id,
+                    "mac-local".into(),
+                    floe_app::ReadConversation::Command { command_id }
+                ),
+                (
+                    person_id,
+                    "mac-local".into(),
+                    floe_app::ReadConversation::Run { run_id }
+                ),
+                (
+                    person_id,
+                    "mac-local".into(),
+                    floe_app::ReadConversation::Message { message_id: run_id }
+                ),
+            ]
+        );
+        *services.receipt.lock().unwrap() = None;
+        assert!(
+            matches!(query(AppQueryDto::ConversationGetCommand { command_id }).unwrap(), AppQueryResultDto::UnknownCommand { command_id: actual } if actual == command_id)
+        );
+        assert_eq!(
+            query(AppQueryDto::ConversationGetRun { run_id })
+                .unwrap_err()
+                .code,
+            AppWireErrorCodeDto::NotFound
+        );
+        *services.failure.lock().unwrap() = Some(floe_app::ServiceError::AccessDenied);
+        assert_eq!(
+            query(AppQueryDto::ConversationGetRun { run_id })
+                .unwrap_err()
+                .code,
+            AppWireErrorCodeDto::AccessDenied
+        );
+        let calls = services.queries.lock().unwrap().len();
+        assert_eq!(
+            query(AppQueryDto::ConversationGetRun {
+                run_id: Uuid::nil()
+            })
+            .unwrap_err()
+            .code,
+            AppWireErrorCodeDto::Validation
+        );
+        assert_eq!(services.queries.lock().unwrap().len(), calls);
+        assert!(services.cancelled.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn event_service_preserves_cursor_identity_values_and_errors() {
+        let person_id = Uuid::new_v4();
+        let services = Services::default();
+        let host = floe_app::AppHost::bootstrap_claim(
+            services.clone(),
+            floe_app::LocalIdentityClaim {
+                person_id,
+                device_id: "mac-local".into(),
+            },
+        )
+        .unwrap();
+        let read = |runtime_epoch, cursor, limit| {
+            events_with_host(
+                &host,
+                AppEventsRequestDto {
+                    schema_version: floe_protocol::APP_WIRE_VERSION,
+                    request_id: Uuid::new_v4(),
+                    runtime_epoch,
+                    cursor,
+                    limit,
+                },
+            )
+        };
+        let AppEventsResultDto::ResyncRequired {
+            runtime_epoch,
+            snapshot_cursor,
+        } = read(None, None, 2).unwrap()
+        else {
+            panic!("expected resync");
+        };
+        assert_eq!(snapshot_cursor, 4);
+        let receipt = receipt(person_id);
+        *services.event_read.lock().unwrap() = Some(EventRead::Events {
+            next_cursor: 5,
+            events: vec![floe_app::ConversationEvent {
+                cursor: 5,
+                aggregate_revision: 3,
+                payload: EventPayload::CommandUpdated {
+                    command_id: receipt.command_id,
+                    run_id: receipt.run_id,
+                    session_revision: 2,
+                },
+            }],
+        });
+        assert!(
+            matches!(read(Some(runtime_epoch), Some(4), 1).unwrap(), AppEventsResultDto::Events {
+            next_cursor: 5, events, ..
+        } if events.len() == 1 && events[0].cursor == 5 && events[0].runtime_epoch == runtime_epoch)
+        );
+        let captured = services.events.lock().unwrap().clone();
+        assert_eq!(
+            captured[1],
+            (
+                person_id,
+                "mac-local".into(),
+                floe_app::ReadConversationEvents {
+                    runtime_epoch: Some(runtime_epoch),
+                    cursor: Some(4),
+                    limit: 1
+                }
+            )
+        );
+        assert_eq!(
+            read(Some(runtime_epoch), Some(4), 0).unwrap_err().code,
+            AppWireErrorCodeDto::Validation
+        );
+        assert_eq!(services.events.lock().unwrap().len(), captured.len());
+        *services.failure.lock().unwrap() = Some(floe_app::ServiceError::Unavailable);
+        assert_eq!(
+            read(None, None, 1).unwrap_err().code,
+            AppWireErrorCodeDto::Unavailable
+        );
+        assert!(services.cancelled.lock().unwrap().is_none());
     }
 
     impl floe_app::HostServices for Services {
@@ -540,11 +771,9 @@ mod tests {
     #[test]
     fn start_turn_uses_verified_host_identity_and_returns_durable_receipt() {
         let person_id = Uuid::new_v4();
+        let services = Services::default();
         let host = floe_app::AppHost::bootstrap_claim(
-            Services {
-                captured: Mutex::new(None),
-                cancelled: Mutex::new(None),
-            },
+            services.clone(),
             floe_app::LocalIdentityClaim {
                 person_id,
                 device_id: "mac-local".into(),
@@ -579,13 +808,8 @@ mod tests {
         };
         assert_eq!(receipt.command_id, command_id);
         assert_eq!(receipt.session_revision, Some(8));
-        let (captured_person, captured_device, captured) = host
-            .legacy_services()
-            .captured
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
+        let (captured_person, captured_device, captured) =
+            services.captured.lock().unwrap().clone().unwrap();
         assert_eq!(captured_person, person_id);
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.session_id, session_id);
@@ -600,11 +824,9 @@ mod tests {
     #[test]
     fn cancel_run_uses_verified_host_identity() {
         let person_id = Uuid::new_v4();
+        let services = Services::default();
         let host = floe_app::AppHost::bootstrap_claim(
-            Services {
-                captured: Mutex::new(None),
-                cancelled: Mutex::new(None),
-            },
+            services.clone(),
             floe_app::LocalIdentityClaim {
                 person_id,
                 device_id: "mac-local".into(),
@@ -636,13 +858,8 @@ mod tests {
                 outcome: AppCancelRunOutcomeDto::Accepted,
             } if runtime_epoch > 0
         ));
-        let (captured_person, captured_device, captured) = host
-            .legacy_services()
-            .cancelled
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
+        let (captured_person, captured_device, captured) =
+            services.cancelled.lock().unwrap().clone().unwrap();
         assert_eq!(captured_person, person_id);
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.run_id, run_id);

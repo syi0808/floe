@@ -20,7 +20,6 @@ use floe_context::{
     validate_people_view, validate_wellbeing_view, validate_work_context_view,
 };
 use floe_execution::limits::{CallLimiter, CallLimits};
-use floe_inference::SavedServerConnection;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
@@ -122,15 +121,14 @@ impl ServerSourceClient {
     /// server connection, if it has one. Pure: no network, no model profile
     /// discovery. Absence means local-only; a foreign or malformed stored
     /// connection fails closed.
-    pub fn prepare(
-        saved: Option<SavedServerConnection>,
+    pub fn from_current_connection(
+        store: &impl floe_inference::SavedConnectionStore,
         person_id: &str,
         device_id: &str,
     ) -> Result<Option<Self>, AgentFailure> {
-        saved
-            .map(|stored| {
-                PreparedServerSource::admit(stored, person_id, device_id).map(Self::new)
-            })
+        store
+            .load()?
+            .map(|stored| PreparedServerSource::admit(stored, person_id, device_id).map(Self::new))
             .transpose()
     }
 
@@ -633,6 +631,7 @@ impl ServerSourceClient {
 
 #[cfg(test)]
 mod tests {
+    use floe_inference::SavedServerConnection;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -902,20 +901,32 @@ mod tests {
     fn prepare_binds_saved_connection_without_network_or_model_state() {
         // Absence is local-only, not an error.
         assert!(
-            ServerSourceClient::prepare(None, PERSON, DEVICE)
-                .unwrap()
-                .is_none()
-        );
-        let prepared = ServerSourceClient::prepare(Some(saved("http://127.0.0.1:8431")), PERSON, DEVICE)
+            ServerSourceClient::from_current_connection(
+                &crate::control::CurrentSavedConnectionStore::fixed(None),
+                PERSON,
+                DEVICE
+            )
             .unwrap()
-            .unwrap();
+            .is_none()
+        );
+        let prepared = ServerSourceClient::from_current_connection(
+            &crate::control::CurrentSavedConnectionStore::fixed(Some(saved(
+                "http://127.0.0.1:8431",
+            ))),
+            PERSON,
+            DEVICE,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(prepared.source().client_id(), "paired-client");
         assert_eq!(prepared.source().person_id(), PERSON);
         assert_eq!(prepared.source().device_id(), DEVICE);
         // A foreign pairing fails closed instead of preparing a client.
         assert_eq!(
-            ServerSourceClient::prepare(
-                Some(saved("http://127.0.0.1:8431")),
+            ServerSourceClient::from_current_connection(
+                &crate::control::CurrentSavedConnectionStore::fixed(Some(saved(
+                    "http://127.0.0.1:8431"
+                ))),
                 PERSON,
                 "other-device"
             )
@@ -925,7 +936,12 @@ mod tests {
         let mut malformed = saved("http://127.0.0.1:8431");
         malformed.base_url = "http://not-loopback.invalid".into();
         assert_eq!(
-            ServerSourceClient::prepare(Some(malformed), PERSON, DEVICE).err(),
+            ServerSourceClient::from_current_connection(
+                &crate::control::CurrentSavedConnectionStore::fixed(Some(malformed)),
+                PERSON,
+                DEVICE
+            )
+            .err(),
             Some(AgentFailure::InvalidInput)
         );
     }

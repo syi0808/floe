@@ -23,17 +23,16 @@ use floe_day::CalendarTimelineGrant;
 use floe_day::{CalendarBatch, CalendarConnection, CalendarRecord};
 use floe_execution::ExecutionScope;
 use floe_kernel::PersonId;
-use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
-// BOUNDARY(stage-3): the Schedule Expert still reaches the provider adapter directly.
-// The acquisition must arrive through an owner-defined source port.
 use floe_provider_adapters::control::{
-    PreparedServerSource, RemoteAuthorizationClient, calendar_query_sha256, parse_calendar_challenge,
+    PreparedServerSource, RemoteAuthorizationClient, calendar_query_sha256,
+    parse_calendar_challenge,
 };
 use floe_provider_adapters::sources::native_acquisition::{
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
     NativeCalendarBatch, NativeCalendarFailure, NativeEventSchedule,
 };
 use floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess;
+use floe_vault::{EncryptedAgentVault, RemoteCalendarGrantBinding, VaultKeyProvider};
 use uuid::Uuid;
 
 use crate::local_context::LocalContextHost;
@@ -45,7 +44,6 @@ pub(in crate::vault_host) mod agent;
 pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
 
 use super::super::CompositeDependencyResolver;
-use super::super::expert_compat::EndpointConnectionStore;
 use crate::vault_host::{personal_grants, remote_views};
 
 /// The endpoint the delegating Run invokes for the Schedule Expert.
@@ -59,7 +57,7 @@ pub(crate) struct ScheduleEndpoint<Keys> {
     core: Arc<FloeCore>,
     vault: Arc<EncryptedAgentVault<Keys>>,
     local_context: Arc<LocalContextHost>,
-    connections: EndpointConnectionStore,
+    connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
 }
 
 impl<Keys> ScheduleEndpoint<Keys> {
@@ -67,7 +65,7 @@ impl<Keys> ScheduleEndpoint<Keys> {
         core: Arc<FloeCore>,
         vault: Arc<EncryptedAgentVault<Keys>>,
         local_context: Arc<LocalContextHost>,
-        connections: EndpointConnectionStore,
+        connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
     ) -> Self {
         Self {
             core,
@@ -94,15 +92,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             if selected.ambiguous {
                 return Err(AgentFailure::AccessReviewRequired);
             }
-            // Canonical Schedule composition, prepared here because an actual
-            // delegated endpoint runs: the stored credential is loaded from
-            // the injected store and admitted for source and model use.
-            // Inference selects the profile per the run's intent; the plan
-            // only states the execution class. No pre-resolved route exists.
             let person_id = self.vault.person_id();
-            let stored = floe_inference::SavedConnectionStore::load(&self.connections)?;
-            let source_client = ServerSourceClient::prepare(
-                stored.clone(),
+            let source_client = ServerSourceClient::from_current_connection(
+                &self.connections,
                 &person_id.to_string(),
                 &context.device_id,
             )?;
@@ -119,8 +111,8 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             // The Expert decided where it may reason; the host only states it.
             let intent = schedule::ScheduleExecutionIntent::from_reasoning(plan.reasoning);
             let provider =
-                floe_provider_adapters::models::RootModelProvider::for_saved_connection_scoped(
-                    stored,
+                floe_provider_adapters::models::RootModelProvider::from_current_connection_scoped(
+                    &self.connections,
                     &person_id.to_string(),
                     &context.device_id,
                     floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
