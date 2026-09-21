@@ -12,15 +12,15 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 ## Current checkpoint
 
-**Active: 3-B — AppHost Composition Closure.**
+**Active: 3-A residual closure — remove caller-zero Schedule agent-turn compatibility.**
 
-Use [the 3-B execution plan](stage-3/3-b.md) as the authoritative task document.
+Use [the 3-A execution plan](stage-3/3-a.md), especially its `Residual closure authority` / R0-R4 section, as the authoritative task document.
 
-3-A is complete and frozen: canonical `PreparedFoundationTransport` drives the existing native Foundation transport, and delegated Experts, the Schedule endpoint, and the Knowledge Learner all execute through the one Inference-owned path. See [the frozen 3-A plan and report](stage-3/3-a.md).
+The first-pass 3-A core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`: canonical Foundation transport, delegated Experts, the production Schedule endpoint and the Knowledge Learner all use the Inference-owned path. A post-closure review found one caller-zero Schedule agent-turn runtime retained only by tests; 3-A is narrowly reopened to delete that residual compatibility before 3-B starts.
 
 ## Progress
 
-- [x] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (complete · frozen)
+- [ ] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (core convergence complete; residual closure active)
 - [ ] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md)
 - [ ] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md)
 - [ ] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md)
@@ -66,9 +66,11 @@ Flutter
 
 Outer layers translate intent, provide concrete adapter implementations and present results. They do not regain business ownership.
 
-## Reviewed remaining debt
+## Baseline review before 3-A
 
-The Stage 3 baseline review found these live production seams.
+The inventory below is retained as **historical planning input from before the first-pass 3-A implementation**. It does not describe the current `main` after `8bdd506...`. Current 3-A status is the narrow residual closure above; after it closes, this section must be replaced or rewritten to describe only remaining 3-B through 3-F debt.
+
+The original Stage 3 baseline review found these live production seams.
 
 ### Domain inference callers outside canonical Inference
 
