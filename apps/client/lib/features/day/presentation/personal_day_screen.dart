@@ -1,3 +1,5 @@
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 import 'package:intl/intl.dart';
 
 import 'dart:async';
@@ -36,7 +38,7 @@ import 'package:floe_client/features/connections/presentation/connector_screen.d
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/features/settings/presentation/settings_screen.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
@@ -67,6 +69,8 @@ class PersonalDayScreen extends StatefulWidget {
     required this.gateway,
     required this.query,
     this.agentGateway,
+    this.pairingGateway,
+    this.remoteAccessGateway,
     this.serverClient,
     this.androidContext,
     this.appleContext,
@@ -74,7 +78,9 @@ class PersonalDayScreen extends StatefulWidget {
   });
   final DayGateway gateway;
   final DayQuery query;
-  final AgentFixtureStreamingGateway? agentGateway;
+  final AgentConversationGateway? agentGateway;
+  final RemotePairingGateway? pairingGateway;
+  final RemoteAccessGateway? remoteAccessGateway;
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
@@ -268,6 +274,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Widget _workspace(bool narrow) {
     if (destination == _DestinationView.connections) {
       return ConnectorScreen(
+        remoteAccessGateway: widget.remoteAccessGateway,
         gateway: widget.gateway is CalendarGateway
             ? widget.gateway as CalendarGateway
             : null,
@@ -290,6 +297,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     }
     if (destination == _DestinationView.settings) {
       return SettingsScreen(
+        pairingGateway: widget.pairingGateway,
         client: widget.serverClient,
         agentVaultGateway: widget.agentGateway is NativeAgentVaultGateway
             ? widget.agentGateway as NativeAgentVaultGateway

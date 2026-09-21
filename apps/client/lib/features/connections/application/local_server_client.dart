@@ -394,23 +394,6 @@ class LocalServerClient {
     return store.write(jsonEncode(value.toJson()));
   }
 
-  Map<String, Object?> authorityRoute(ServerConnection connection) {
-    _requireConnectionIdentity(connection);
-    return {
-      'base_url': connection.address,
-      'bearer_token': connection.token,
-      'purpose': InferencePurpose.everydayAssistance.wireName,
-      'external': false,
-      'allow_external': false,
-      'pairing': {
-        'client_id': connection.clientId,
-        'person_id': connection.personId,
-        'device_id': connection.deviceId,
-      },
-      'calendar_connections': const <Object?>[],
-    };
-  }
-
   void _requireConnectionIdentity(ServerConnection connection) {
     if (connection.personId != personId || connection.deviceId != deviceId) {
       throw const ServerConnectionException('connection_identity_mismatch');
@@ -514,23 +497,6 @@ class LocalServerClient {
       throw const ServerConnectionException('invalid_response');
     }
   }
-
-  Map<String, Object?> pairingRoute({
-    required String address,
-    required String clientId,
-  }) => {
-    'base_url': normalizeAddress(address),
-    'bearer_token': '',
-    'purpose': InferencePurpose.everydayAssistance.wireName,
-    'external': false,
-    'allow_external': false,
-    'pairing': {
-      'client_id': clientId,
-      'person_id': personId,
-      'device_id': deviceId,
-    },
-    'calendar_connections': const <Object?>[],
-  };
 
   Future<ServerConnectorCatalog> connectorCatalog(
     ServerConnection connection,

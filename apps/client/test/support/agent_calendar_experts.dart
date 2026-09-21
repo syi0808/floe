@@ -295,7 +295,7 @@ final class CalendarExpertTransport {
 
 class TestCalendarExpertGateway extends TestVaultGateway
     implements AgentRegistryGateway, AgentCalendarExpertGateway {
-  TestCalendarExpertGateway() : super(personId: registryPerson) {
+  TestCalendarExpertGateway() : super(personId: registryPerson, personal: true) {
     state = AgentVaultState.ready;
     native = NativeAgentVaultGateway(transport.call, deviceId: 'test-device');
   }

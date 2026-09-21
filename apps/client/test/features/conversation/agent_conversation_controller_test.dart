@@ -4,7 +4,9 @@ import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+
+import '../../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';

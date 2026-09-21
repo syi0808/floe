@@ -1,7 +1,8 @@
+import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/features/connections/presentation/server_connector_panel.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,6 +35,7 @@ void main() {
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
+          authorization: _Authorization(),
           connector: const ServerConnector(
             id: 'home_assistant.states',
             name: 'Home Assistant',
@@ -91,6 +93,7 @@ void main() {
       await tester.pumpWidget(
         _host(
           ServerConnectorPanel(
+            authorization: _Authorization(),
             connector: _oauthConnector(),
             connection: _connection,
             client: client,
@@ -100,7 +103,6 @@ void main() {
               opened = uri;
               return true;
             },
-            pollInterval: const Duration(milliseconds: 1),
           ),
         ),
       );
@@ -125,13 +127,13 @@ void main() {
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
+          authorization: _Authorization(),
           connector: _oauthConnector(),
           connection: _connection,
           client: _ConnectorClient(startResult: pending, pollResult: pending),
           onBack: () {},
           onChanged: () async {},
           authorizationLauncher: (_) async => true,
-          pollInterval: const Duration(days: 1),
         ),
       ),
     );
@@ -158,13 +160,13 @@ void main() {
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
+          authorization: _Authorization(),
           connector: _oauthConnector(),
           connection: _connection,
           client: client,
           onBack: () {},
           onChanged: () async {},
           authorizationLauncher: (_) async => true,
-          pollInterval: const Duration(days: 1),
         ),
       ),
     );
@@ -182,15 +184,15 @@ void main() {
     tester,
   ) async {
     final actions = <Map<String, Object?>>[];
-    final gateway = NativeAgentVaultGateway((request) async {
+    final gateway = NativeRemoteAccessGateway((request) async {
       final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'release') return _grantSuccess(request);
-      final action = Map<String, Object?>.from(operation['action']! as Map);
+      if (operation['kind'] == 'read_result') return _grantSuccess(request);
+      final action = operation;
       actions.add(action);
       final kind = action['kind'];
-      final payload = kind == 'remote_calendar_grant_preview'
+      final payload = kind == 'calendar_grant_preview'
           ? {
-              'remote_calendar_preview': {
+              'calendar_preview': {
                 'schema_version': 1,
                 'person_id': _connection.personId,
                 'connector_id': 'calendar.google',
@@ -206,7 +208,7 @@ void main() {
               },
             }
           : {
-              'remote_calendar_grant': {
+              'calendar_grant': {
                 'schema_version': 1,
                 'person_id': _connection.personId,
                 'grant_id': '00000000-0000-4000-8000-000000000010',
@@ -224,18 +226,19 @@ void main() {
               },
             };
       return _grantSuccess(request, payload);
-    }, deviceId: _connection.deviceId);
+    });
     final first = _calendarConnector('00000000-0000-4000-8000-000000000011');
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
+          authorization: _Authorization(),
           connector: first,
           connection: _connection,
           client: LocalServerClient(
             store: MemoryServerCredentials(),
             deviceId: _connection.deviceId,
           ),
-          agentVaultGateway: gateway,
+          remoteAccessGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
@@ -267,13 +270,14 @@ void main() {
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
+          authorization: _Authorization(),
           connector: second,
           connection: _connection,
           client: LocalServerClient(
             store: MemoryServerCredentials(),
             deviceId: _connection.deviceId,
           ),
-          agentVaultGateway: gateway,
+          remoteAccessGateway: gateway,
           onBack: () {},
           onChanged: () async {},
         ),
@@ -296,6 +300,7 @@ void main() {
     await tester.pumpWidget(
       _host(
         ServerConnectorPanel(
+          authorization: _Authorization(),
           connector: const ServerConnector(
             id: 'github.repository',
             name: 'GitHub',
@@ -355,11 +360,9 @@ Map<String, dynamic> _grantSuccess(
   Map<String, dynamic> request, [
   Map<String, Object?> payload = const {},
 ]) => {
-  'request_id': request['request_id'],
+  'operation_id':
+      (request['operation'] as Map)['operation_id'] ?? request['request_id'],
   'done': true,
-  'events': <Object?>[],
-  'next_sequence': 0,
-  'state': 'ready',
   ...payload,
 };
 
@@ -440,4 +443,33 @@ final class _ConnectorClient extends LocalServerClient {
     cancelledAttempt = attemptId;
     return cancelResult ?? startResult;
   }
+}
+
+final class _Authorization implements ConnectorAuthorizationGateway {
+  @override
+  Future<AuthorizationDirective> startAuthorization({
+    required ServerConnection connection,
+    required String connectorId,
+    required ServerConnectorAttempt attempt,
+  }) async => attempt.status == ServerConnectorStatus.connected
+      ? const AuthorizationSettled(state: 'connected')
+      : OpenAuthorizationPage(
+          authorizationUrl: attempt.authorizationUrl!,
+          pollAfter: const Duration(milliseconds: 1),
+        );
+
+  @override
+  Future<AuthorizationDirective> observeAuthorization({
+    required ServerConnection connection,
+    required String connectorId,
+    required ServerConnectorAttempt attempt,
+  }) async => attempt.status == ServerConnectorStatus.connected
+      ? const AuthorizationSettled(state: 'connected')
+      : const ObserveAgain(pollAfter: Duration(days: 1));
+
+  @override
+  Future<void> cancelAuthorization({
+    required ServerConnection connection,
+    required String connectorId,
+  }) async {}
 }

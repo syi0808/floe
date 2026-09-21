@@ -288,6 +288,8 @@ void main() {
                   'retry_policy': 'never',
                   'retryable': false,
                   'recovery_action': 'reopen_vault',
+                  'reload_required': false,
+                  'seal_session': false,
                   'correlation_request_id': result['request_id'],
                 };
               case 6:

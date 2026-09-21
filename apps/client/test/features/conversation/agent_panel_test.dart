@@ -2,7 +2,9 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+
+import '../../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -55,7 +57,7 @@ void main() {
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
-        final gateway = TestVaultGateway();
+        final gateway = TestVaultGateway(personal: true);
         final controller = AgentController(gateway: gateway, personId: 'test');
         addTearDown(controller.dispose);
         await controller.load();
@@ -76,7 +78,7 @@ void main() {
   testWidgets(
     'interrupted and failed sessions show explicit recovery and read-only reload',
     (tester) async {
-      final gateway = TestAgentGateway()..failLoad = true;
+      final gateway = TestAgentGateway(personal: true)..failLoad = true;
       final controller = AgentController(gateway: gateway, personId: 'test');
       addTearDown(controller.dispose);
       await controller.load();
@@ -101,7 +103,7 @@ void main() {
   testWidgets('session load failure still allows a new conversation', (
     tester,
   ) async {
-    final gateway = TestVaultGateway()
+    final gateway = TestVaultGateway(personal: true)
       ..state = AgentVaultState.ready
       ..loadError = const AgentVaultException(
         'policy_denied',
@@ -150,11 +152,12 @@ void main() {
     testWidgets('${failure.key} shows actionable recovery guidance', (
       tester,
     ) async {
-      final gateway = TestAgentGateway()..responseFailure = failure.key;
+      final gateway = TestAgentGateway(personal: true)
+        ..responseFailure = failure.key;
       final controller = AgentController(gateway: gateway, personId: 'test');
       addTearDown(controller.dispose);
       await controller.load();
-      final run = controller.send(AgentFixturePrompt.today);
+      final run = controller.sendText(AgentFixturePrompt.today.sampleText);
       await tester.pump(const Duration(milliseconds: 100));
       await run;
       await tester.pumpWidget(
@@ -168,13 +171,13 @@ void main() {
   testWidgets('vault-backed model failure is not shown as a storage failure', (
     tester,
   ) async {
-    final gateway = TestVaultGateway()
+    final gateway = TestVaultGateway(personal: true)
       ..responseFailure = 'server_model_invalid_output'
       ..omitSessionOnFailure = true;
     final controller = AgentController(gateway: gateway, personId: 'test');
     addTearDown(controller.dispose);
     await controller.load();
-    final run = controller.send(AgentFixturePrompt.today);
+    final run = controller.sendText(AgentFixturePrompt.today.sampleText);
     await tester.pump(const Duration(milliseconds: 100));
     await run;
 
@@ -195,7 +198,7 @@ void main() {
   testWidgets('stale context shows generic refresh guidance without reload', (
     tester,
   ) async {
-    final gateway = TestAgentGateway()
+    final gateway = TestAgentGateway(personal: true)
       ..loadError = const AgentVaultException(
         'stale_context',
         recoveryAction: 'refresh_context',
@@ -219,7 +222,7 @@ void main() {
   testWidgets('source review guidance opens the explicit review surface', (
     tester,
   ) async {
-    final gateway = TestAgentGateway()
+    final gateway = TestAgentGateway(personal: true)
       ..loadError = const AgentVaultException(
         'capability_unavailable',
         recoveryAction: 'review_source',
@@ -256,7 +259,7 @@ void main() {
           app(
             PersonalDayScreen(
               gateway: FakeDayGateway(),
-              agentGateway: TestAgentGateway(),
+              agentGateway: TestAgentGateway(personal: true),
               query: DayQuery(
                 personId: 'test',
                 date: date,
@@ -291,7 +294,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final vault = TestVaultGateway();
+      final vault = TestVaultGateway(personal: true);
       final day = _VaultBackedDayGateway(vault)..saved = [];
       final date = DateTime(2026, 9, 7, 9);
       await tester.pumpWidget(
@@ -342,7 +345,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final gateway = TestVaultGateway();
+      final gateway = TestVaultGateway(personal: true);
       await gateway.createVault('test');
       final date = DateTime(2026, 9, 7, 9);
       await tester.pumpWidget(

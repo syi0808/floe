@@ -1,9 +1,11 @@
+import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/features/connections/presentation/local_server_panel.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 import 'package:floe_client/app/local_identity.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,38 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/server_credentials.dart';
 
 void main() {
+  testWidgets(
+    'approved token is released only after verified secure persistence',
+    (tester) async {
+      final store = _FailingCredentials();
+      final client = _PairingClient(store: store);
+      final gateway = _PairingGateway()..approved = true;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: LocalServerPanel(client: client, pairingGateway: gateway),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Pair this device'));
+      await tester.pumpAndSettle();
+      expect(store.value, isNull);
+      expect(gateway.releases, 0);
+      expect(find.text('Connected to Floe server'), findsNothing);
+      store.failWrite = false;
+      await tester.tap(find.byKey(const Key('server-pairing-retry')));
+      await tester.pumpAndSettle();
+      expect((await client.connection())?.token, 't' * 32);
+      expect((await client.connection())?.personId, defaultLocalPersonId);
+      expect((await client.connection())?.deviceId, 'local-client');
+      expect(gateway.releases, 1);
+      expect(find.text('Connected to Floe server'), findsOneWidget);
+    },
+  );
+
   testWidgets(
     'stalled Keychain reads stop waiting without forgetting credentials',
     (tester) async {
@@ -202,7 +236,11 @@ void main() {
 }
 
 final class _PairingClient extends LocalServerClient {
-  _PairingClient() : super(store: MemoryServerCredentials());
+  _PairingClient({ServerCredentialStore? store})
+    : super(store: store ?? MemoryServerCredentials());
+
+  @override
+  Future<void> checkConnection(ServerConnection connection) async {}
 
   Map<String, Object?>? cancelBody;
 
@@ -238,31 +276,36 @@ final class _PairingClient extends LocalServerClient {
 }
 
 final class _PairingGateway implements RemotePairingGateway {
+  bool approved = false;
+  int releases = 0;
   @override
-  Future<RemoteOwnerPublicKey> prepareRemotePairing({
-    required String personId,
-  }) async => RemoteOwnerPublicKey.fromJson(_pairingIssuer);
+  Future<void> releaseApprovedPairing(String pairingId) async {
+    releases++;
+  }
+
+  @override
+  Future<RemoteOwnerPublicKey> prepareRemotePairing() async =>
+      RemoteOwnerPublicKey.fromJson(_pairingIssuer);
 
   @override
   Future<RemotePairingStatus> confirmRemotePairing({
-    required String personId,
-    required Map<String, Object?> route,
+    required PairingTarget target,
     required RemotePairingChallenge challenge,
     required String pollingProof,
   }) async => _pairingStatus('local_confirmed');
 
   @override
   Future<RemotePairingStatus> remotePairingStatus({
-    required String personId,
-    required Map<String, Object?> route,
+    required PairingTarget target,
     required String pairingId,
     required String pollingProof,
-  }) async => _pairingStatus('pending');
+  }) async => approved
+      ? _pairingStatus('approved', token: 't' * 32)
+      : _pairingStatus('pending');
 
   @override
   Future<RemotePairingStatus> finalizeRemotePairing({
-    required String personId,
-    required Map<String, Object?> route,
+    required PairingTarget target,
     required String pairingId,
     required String pollingProof,
     required RemotePairingChallenge challenge,
@@ -271,12 +314,13 @@ final class _PairingGateway implements RemotePairingGateway {
 
 RemotePairingStatus _pairingStatus(String status, {String? token}) =>
     RemotePairingStatus(
-      schemaVersion: 1,
+      operationId: 'operation',
       pairingId: '00000000-0000-4000-8000-000000000002',
       status: status,
       personId: defaultLocalPersonId,
       deviceId: 'local-client',
       token: token,
+      clientId: token == null ? null : '00000000-0000-4000-8000-000000000002',
     );
 
 const _pairingIssuer = {
@@ -294,3 +338,12 @@ const _pairingProducer = {
   'public_key': 'producer-public-key',
   'fingerprint': 'producer-fingerprint',
 };
+
+final class _FailingCredentials extends MemoryServerCredentials {
+  bool failWrite = true;
+  @override
+  Future<void> write(String value) async {
+    if (failWrite) throw StateError('Secure store unavailable');
+    await super.write(value);
+  }
+}

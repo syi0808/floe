@@ -11,8 +11,9 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
-import 'package:floe_client/features/connections/application/pairing_operation_gateway.dart';
-import 'package:floe_client/features/connections/presentation/connector_status_presentation.dart';
+import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_owner_operation.dart';
+import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
 import 'package:floe_client/features/connections/presentation/server_connector_panel.dart'
     show connectorErrorMessage;
 
@@ -21,11 +22,9 @@ class LocalServerPanel extends StatefulWidget {
     super.key,
     required this.client,
     this.pairingGateway,
-    this.pairingOperations,
   });
   final LocalServerClient client;
   final RemotePairingGateway? pairingGateway;
-  final PairingOperationGateway? pairingOperations;
   @override
   State<LocalServerPanel> createState() => _LocalServerPanelState();
 }
@@ -40,6 +39,9 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
   String status = 'Loading saved connection…';
   bool busy = true;
   int generation = 0;
+  Future<void> Function()? retryPairing;
+  Future<void>? pairingDrive;
+  int drivingGeneration = 0;
 
   @override
   void initState() {
@@ -87,9 +89,8 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
     }
     final base = LocalServerClient.normalizeAddress(address.text);
     final attempt = ++generation;
-    final issuer = await gateway.prepareRemotePairing(
-      personId: widget.client.personId,
-    );
+    final issuer = await gateway.prepareRemotePairing();
+    if (!mounted || attempt != generation) return;
     final response = await widget.client.startPairingStrict(
       base,
       issuerKeyId: issuer.keyId,
@@ -117,105 +118,150 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       issuer: RemoteOwnerPublicKey.fromJson(response.issuer),
       expiresAtUnixMs: response.expiresAt.millisecondsSinceEpoch,
     );
-    final route = widget.client.pairingRoute(
-      address: base,
-      clientId: response.pairingId,
-    );
-    try {
-      await gateway.confirmRemotePairing(
-        personId: widget.client.personId,
-        route: route,
-        challenge: challenge,
-        pollingProof: response.proof,
-      );
-    } on Object {
-      await widget.client.request(
-        base,
-        '/pair/cancel',
-        body: {
-          'schema_version': 1,
-          'pairing_id': response.pairingId,
-          'proof': response.proof,
-        },
-      );
-      rethrow;
-    }
+    final target = PairingTarget(base);
     pairingAddress = base;
     pairing = response;
     proof = response.proof;
     code = response.code;
+    var confirmed = false;
+    retryPairing = () {
+      if (drivingGeneration == attempt && pairingDrive != null) {
+        return pairingDrive!;
+      }
+      drivingGeneration = attempt;
+      final pending = _drive(
+        attempt,
+        target,
+        response.proof,
+        challenge,
+        confirm: () async {
+          if (confirmed) return;
+          await gateway.confirmRemotePairing(
+            target: target,
+            challenge: challenge,
+            pollingProof: response.proof,
+          );
+          confirmed = true;
+        },
+      );
+      pairingDrive = pending;
+      return pending.whenComplete(() {
+        if (drivingGeneration == attempt) pairingDrive = null;
+      });
+    };
     status = 'Compare this code and approve in the server dashboard.';
     setState(() {});
-    unawaited(_drive(attempt, base, response.proof, route, challenge));
+    unawaited(retryPairing!());
   });
 
-  /// Relays observed pairing status until Connections says the Operation
-  /// settled.
-  ///
-  /// The expiry, the retry cadence, the generation guard and the approved
-  /// identity check belong to Rust Connections; this loop observes, displays
-  /// and relays only.
   Future<void> _drive(
     int attempt,
-    String base,
+    PairingTarget target,
     String pendingProof,
-    Map<String, Object?> route,
-    RemotePairingChallenge challenge,
-  ) async {
+    RemotePairingChallenge challenge, {
+    required Future<void> Function() confirm,
+  }) async {
     final gateway = widget.pairingGateway;
-    final operations = widget.pairingOperations;
-    if (gateway == null || operations == null) return;
+    if (gateway == null) return;
+    bool current() => mounted && attempt == generation;
     try {
-      while (mounted && attempt == generation) {
-        final directive = await operations.observePairing(
-          personId: widget.client.personId,
+      await confirm();
+      for (var observation = 0; observation < 240 && current(); observation++) {
+        final report = await gateway.remotePairingStatus(
+          target: target,
           pairingId: challenge.pairingId,
           pollingProof: pendingProof,
-          route: route,
         );
-        if (!mounted || attempt != generation) return;
-        switch (directive) {
-          case PairingObserveAgain(:final pollAfter):
-            await Future<void>.delayed(pollAfter);
-          case PairingSettled(state: 'approved', :final clientId, :final token):
-            final finalized = await gateway.finalizeRemotePairing(
-              personId: widget.client.personId,
-              route: route,
-              pairingId: challenge.pairingId,
-              pollingProof: pendingProof,
-              challenge: challenge,
-            );
-            if (finalized.status != 'approved' || finalized.token == null) {
-              throw const ServerConnectionException('invalid_response');
-            }
-            final saved = ServerConnection(
-              address: base,
-              token: token ?? finalized.token!,
-              clientId: clientId ?? finalized.pairingId,
-              personId: widget.client.personId,
-              deviceId: widget.client.deviceId,
-            );
-            await widget.client.checkConnection(saved);
-            if (!mounted || attempt != generation) return;
-            await widget.client.save(saved);
-            if (!mounted || attempt != generation) return;
-            setState(() {
-              connection = saved;
-              proof = null;
-              code = null;
-              pairing = null;
-              address.text = base;
-              status = 'Connected to Floe server';
-            });
-            return;
-          case PairingSettled(:final state):
-            _finishPairing(pairingSettlementMessage(state));
-            return;
+        if (!current()) return;
+        if (report.pairingId != challenge.pairingId ||
+            report.personId != widget.client.personId ||
+            report.deviceId != widget.client.deviceId) {
+          throw const ServerConnectionException('connection_identity_mismatch');
         }
+        if (report.status == 'approved') {
+          final finalized = await gateway.finalizeRemotePairing(
+            target: target,
+            pairingId: challenge.pairingId,
+            pollingProof: pendingProof,
+            challenge: challenge,
+          );
+          if (!current()) return;
+          if (finalized.status != 'approved' ||
+              finalized.token == null ||
+              finalized.clientId != challenge.pairingId ||
+              finalized.pairingId != challenge.pairingId ||
+              finalized.personId != widget.client.personId ||
+              finalized.deviceId != widget.client.deviceId) {
+            throw const ServerConnectionException(
+              'connection_identity_mismatch',
+            );
+          }
+          final saved = ServerConnection(
+            address: target.baseUrl,
+            token: finalized.token!,
+            clientId: finalized.clientId!,
+            personId: finalized.personId,
+            deviceId: finalized.deviceId,
+          );
+          await widget.client.save(saved);
+          final persisted = await widget.client.connection();
+          if (persisted == null ||
+              persisted.address != saved.address ||
+              persisted.token != saved.token ||
+              persisted.clientId != saved.clientId ||
+              persisted.personId != saved.personId ||
+              persisted.deviceId != saved.deviceId) {
+            throw const ServerConnectionException('invalid_saved_connection');
+          }
+          await widget.client.checkConnection(persisted);
+          await gateway.releaseApprovedPairing(challenge.pairingId);
+          if (!current()) return;
+          setState(() {
+            connection = persisted;
+            proof = null;
+            code = null;
+            pairing = null;
+            retryPairing = null;
+            address.text = target.baseUrl;
+            status = 'Connected to Floe server';
+          });
+          return;
+        }
+        if (!{'pending', 'local_confirmed'}.contains(report.status)) {
+          _finishPairing(switch (report.status) {
+            'rejected' => 'Pairing was rejected in the server dashboard.',
+            'repair_required' =>
+              'The server asked to pair again. Start a new request.',
+            _ => 'Pairing expired. Start a new connection request.',
+          });
+          return;
+        }
+        await Future<void>.delayed(const Duration(seconds: 1));
       }
+      if (current()) {
+        setState(
+          () =>
+              status = 'Pairing observation timed out. Retry the same request.',
+        );
+      }
+    } on RemoteOperationPending {
+      if (current()) {
+        setState(
+          () => status =
+              'Pairing result needs reconciliation. Retry the same request.',
+        );
+      }
+    } on AgentVaultException catch (failure) {
+      if (current()) setState(() => status = _error(failure.failure));
     } on ServerConnectionException catch (failure) {
-      if (mounted && attempt == generation) {
-        _finishPairing(connectorErrorMessage(failure.code));
+      if (current()) {
+        setState(() => status = connectorErrorMessage(failure.code));
+      }
+    } on Object {
+      if (current()) {
+        setState(
+          () => status = 'Pairing is not saved yet. Retry the same request.',
+        );
       }
     }
   }
@@ -226,34 +272,14 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       proof = null;
       code = null;
       pairing = null;
+      retryPairing = null;
       status = message;
     });
   }
 
-  Future<void> _abortPairing(String message) async {
-    final base = pairingAddress;
-    final pendingProof = proof;
-    final pairingId = pairing?.pairingId;
-    generation++;
-    _finishPairing(message);
-    if (base == null || pendingProof == null) return;
-    try {
-      await widget.client.request(
-        base,
-        '/pair/cancel',
-        body: {
-          'schema_version': 1,
-          'pairing_id': pairingId,
-          'proof': pendingProof,
-        },
-      );
-    } on Object {
-      // The server expires abandoned pairings even when cancellation fails.
-    }
-  }
-
   Future<void> _cancel({bool notify = true}) async {
     generation++;
+    retryPairing = null;
     final pendingProof = proof;
     final base = pairingAddress;
     final pairingId = pairing?.pairingId;
@@ -303,6 +329,12 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           const Text(
             'Connect Floe to your server for assisted features. Service credentials stay on the server; app access is saved in Keychain.',
           ),
+          if (retryPairing != null)
+            FloeButton.text(
+              key: const Key('server-pairing-retry'),
+              onPressed: busy ? null : () => _run(retryPairing!),
+              child: const Text('Retry pairing result'),
+            ),
           const SizedBox(height: 20),
           FloeInput(
             key: const Key('server-address'),

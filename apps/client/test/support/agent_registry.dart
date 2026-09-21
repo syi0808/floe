@@ -37,7 +37,7 @@ Map<String, dynamic> registryFixture() => {
 
 final class TestRegistryGateway extends TestVaultGateway
     implements AgentRegistryGateway {
-  TestRegistryGateway() : super(personId: registryPerson) {
+  TestRegistryGateway() : super(personId: registryPerson, personal: true) {
     state = AgentVaultState.ready;
   }
   Map<String, dynamic>? snapshot = registryFixture();

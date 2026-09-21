@@ -36,6 +36,26 @@ flutter pub get
 flutter run -d macos
 ```
 
+Build native FFI and Flutter from the same source snapshot (`cargo build -p floe-ffi`
+before native Flutter tests). Pairing uses the schema-2 Connections owner ABI;
+protected grant operations use the separate Access owner ABI and load the saved
+connection in Rust, not from a Flutter request route. Approved credentials are
+persisted and verified before releasing their bounded Rust result.
+
+From the repository root, `tools/validation/check-local-model.sh` runs the Swift
+host suite plus current provider-adapter and Inference tests.
+`tools/validation/run-local-model-smoke.sh --availability` checks the bundled
+FoundationModels transport; supported hosts can also run `--exercise` and
+`--exercise-learner`. The smoke example belongs to `floe-app`.
+
+`flutter test integration/local_server_pairing_test.dart` (from `apps/client`)
+requires a buildable Go server and the debug FFI dylib. It uses a fresh temporary
+profile, final Rust pairing envelopes and memory-only credential persistence,
+then checks direct server authorization/revocation. It does not write the shared
+server Keychain slot or claim a live protected Access success through that slot.
+Current validation results and remaining blockers are recorded only in
+`docs/refactoring/stage-3/3-d.md`.
+
 To start the local server and macOS client together from the repository root:
 
 ```sh

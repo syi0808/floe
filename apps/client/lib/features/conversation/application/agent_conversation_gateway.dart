@@ -1,4 +1,4 @@
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 final class AgentConversationTurnRequest {
   const AgentConversationTurnRequest({

@@ -1,12 +1,13 @@
 import 'dart:async';
 
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import '../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 import 'agent_gateway.dart';
 
 class TestVaultGateway extends TestAgentGateway implements AgentVaultGateway {
-  TestVaultGateway({super.personId});
+  TestVaultGateway({super.personId, super.personal});
   AgentVaultState state = AgentVaultState.missing;
   int creates = 0;
   int unlocks = 0;

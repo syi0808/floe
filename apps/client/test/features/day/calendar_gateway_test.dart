@@ -1,10 +1,11 @@
+import '../../support/app_host.dart';
+
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
-import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
@@ -107,15 +108,15 @@ void main() {
           },
         },
       ];
-    final gateway = await NativeDayGateway.open(
+    final gateway = await TestAppHost.open(
       libraryPath: library.path,
       databasePath: '${directory.path}/calendar.db',
       calendarAdapter: adapter,
       deviceId: 'device-1',
     );
     try {
-      await gateway.selectCalendars(adapter.inventory, publicationQuery);
-      final snapshot = await gateway.syncCalendar(publicationQuery);
+      await gateway.day.selectCalendars(adapter.inventory, publicationQuery);
+      final snapshot = await gateway.day.syncCalendar(publicationQuery);
 
       expect(snapshot.calendar!.provider, 'event_kit');
       expect(snapshot.calendar!.revision, greaterThan(0));
@@ -145,7 +146,7 @@ void main() {
             provider: 'event_kit',
           ),
         );
-      final gateway = await NativeDayGateway.open(
+      final gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
@@ -153,12 +154,12 @@ void main() {
         deviceId: 'device-1',
       );
       try {
-        await gateway.selectCalendars(
+        await gateway.day.selectCalendars(
           adapter.inventory,
           query,
           includeAll: true,
         );
-        final snapshot = await gateway.syncCalendar(query);
+        final snapshot = await gateway.day.syncCalendar(query);
 
         expect(snapshot.calendar!.error, isNull);
         expect(
@@ -183,7 +184,7 @@ void main() {
       );
       final adapter = FixtureCalendarAdapter()
         ..inventory = [const CalendarChoice('fixture', 'Test calendar')];
-      final gateway = await NativeDayGateway.open(
+      final gateway = await TestAppHost.open(
         libraryPath: File('../../target/debug/libfloe_ffi.dylib').absolute.path,
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
@@ -191,7 +192,10 @@ void main() {
         deviceId: 'test-device',
       );
       try {
-        var snapshot = await gateway.selectCalendars(adapter.inventory, query);
+        var snapshot = await gateway.day.selectCalendars(
+          adapter.inventory,
+          query,
+        );
         expect(
           snapshot.items.whereType<EventItem>().where(
             (event) => event.canModify,
@@ -199,13 +203,13 @@ void main() {
           isEmpty,
         );
         adapter.records.first['can_modify'] = true;
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         final event = snapshot.items.whereType<EventItem>().firstWhere(
           (event) => !event.isAllDay,
         );
         expect(event.provider, 'event_kit');
         expect(event.canModify, isTrue);
-        final cached = await gateway.loadDay(query);
+        final cached = await gateway.day.loadDay(query);
         expect(
           cached.items
               .whereType<EventItem>()
@@ -214,7 +218,7 @@ void main() {
           isTrue,
         );
         adapter.records.first['can_modify'] = false;
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(
           snapshot.items.whereType<EventItem>().where(
             (event) => event.canModify,
@@ -236,7 +240,7 @@ void main() {
     );
     final directory = await Directory.systemTemp.createTemp('floe-scope-');
     final adapter = FixtureCalendarAdapter();
-    Future<NativeDayGateway> open() => NativeDayGateway.open(
+    Future<TestAppHost> open() => TestAppHost.open(
       libraryPath: library.path,
       databasePath: '${directory.path}/scope.db',
       calendarAdapter: adapter,
@@ -245,30 +249,30 @@ void main() {
     );
     var gateway = await open();
     try {
-      await gateway.selectCalendars(adapter.inventory, query);
-      await gateway.syncCalendar(query);
+      await gateway.day.selectCalendars(adapter.inventory, query);
+      await gateway.day.syncCalendar(query);
       adapter.inventory = [
         ...adapter.inventory,
         const CalendarChoice('new', 'New', provider: 'fixture'),
       ];
-      var snapshot = await gateway.syncCalendar(query);
+      var snapshot = await gateway.day.syncCalendar(query);
       expect(snapshot.calendar!.includeAll, isFalse);
       expect(snapshot.calendar!.selectedCalendarIds, ['fixture']);
       expect(snapshot.items, hasLength(2));
-      await gateway.selectCalendars(
+      await gateway.day.selectCalendars(
         [adapter.inventory.first],
         query,
         includeAll: true,
       );
-      snapshot = await gateway.syncCalendar(query);
+      snapshot = await gateway.day.syncCalendar(query);
       expect(snapshot.items, hasLength(4));
       final identifiers = snapshot.items.map((item) => item.id).toSet();
       await gateway.close();
       gateway = await open();
-      snapshot = await gateway.loadDay(query);
+      snapshot = await gateway.day.loadDay(query);
       expect(snapshot.calendar!.includeAll, isTrue);
       adapter.inventory = [adapter.inventory.last];
-      snapshot = await gateway.syncCalendar(query);
+      snapshot = await gateway.day.syncCalendar(query);
       expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
       expect(
         snapshot.calendar!.connectedCalendars
@@ -297,7 +301,7 @@ void main() {
       }
       final directory = await Directory.systemTemp.createTemp('floe-multiple-');
       final adapter = FixtureCalendarAdapter();
-      Future<NativeDayGateway> open() => NativeDayGateway.open(
+      Future<TestAppHost> open() => TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
@@ -311,8 +315,8 @@ void main() {
       ];
       adapter.inventory = calendars;
       try {
-        await gateway.selectCalendars(calendars, query);
-        var snapshot = await gateway.syncCalendar(query);
+        await gateway.day.selectCalendars(calendars, query);
+        var snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.items, hasLength(4));
         expect(
           snapshot.items
@@ -322,11 +326,11 @@ void main() {
           {'Home', 'Work'},
         );
         final identifiers = snapshot.items.map((item) => item.id).toSet();
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
         await gateway.close();
         gateway = await open();
-        snapshot = await gateway.loadDay(query);
+        snapshot = await gateway.day.loadDay(query);
         expect(snapshot.calendar!.selectedCalendarIds, ['home', 'work']);
         expect(
           snapshot.calendar!.connectedCalendars.map(
@@ -336,7 +340,7 @@ void main() {
         );
         adapter.records = [];
         adapter.deniedCalendarId = 'work';
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.calendar!.error, 'permission_denied');
         expect(snapshot.items, hasLength(2));
         expect(
@@ -345,13 +349,13 @@ void main() {
           ),
           isTrue,
         );
-        snapshot = await gateway.selectCalendars([calendars.first], query);
+        snapshot = await gateway.day.selectCalendars([calendars.first], query);
         expect(snapshot.items, isEmpty);
         expect(
           snapshot.items.every((item) => identifiers.contains(item.id)),
           isTrue,
         );
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.items, isEmpty);
         expect(snapshot.calendar!.error, isNull);
       } finally {
@@ -371,7 +375,7 @@ void main() {
       }
       final directory = await Directory.systemTemp.createTemp('floe-calendar-');
       final adapter = FixtureCalendarAdapter();
-      var gateway = await NativeDayGateway.open(
+      var gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
@@ -379,33 +383,36 @@ void main() {
         deviceId: 'test-device',
       );
       try {
-        await gateway.selectCalendar((await gateway.calendars()).single, query);
-        var snapshot = await gateway.syncCalendar(query);
+        await gateway.day.selectCalendar(
+          (await gateway.day.calendars()).single,
+          query,
+        );
+        var snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.items, hasLength(2));
         final event = snapshot.items.whereType<EventItem>().first;
         expect(event.externalId, isNotNull);
         expect(event.sourceLabel, 'Fixture · Test calendar');
         final identifiers = snapshot.items.map((item) => item.id).toSet();
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
         adapter.denied = true;
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.calendar!.error, 'permission_denied');
         expect(snapshot.items, hasLength(2));
         await gateway.close();
-        gateway = await NativeDayGateway.open(
+        gateway = await TestAppHost.open(
           libraryPath: library.path,
           databasePath: '${directory.path}/calendar.db',
           calendarAdapter: adapter,
           clock: () => query.now,
           deviceId: 'test-device',
         );
-        snapshot = await gateway.loadDay(query);
+        snapshot = await gateway.day.loadDay(query);
         expect(snapshot.calendar!.error, 'permission_denied');
         expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
         adapter.denied = false;
         adapter.records = [];
-        snapshot = await gateway.syncCalendar(query);
+        snapshot = await gateway.day.syncCalendar(query);
         expect(snapshot.items, isEmpty);
         expect(snapshot.calendar!.error, isNull);
       } finally {

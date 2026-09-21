@@ -1,3 +1,6 @@
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -8,7 +11,7 @@ import 'package:floe_client/features/actions/application/calendar_action_gateway
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/day/presentation/personal_day_screen.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
@@ -22,9 +25,10 @@ class FloeApp extends StatefulWidget {
     super.key,
     required this.gateway,
     this.calendarActions,
-    this.agentFixture,
     this.query,
     this.agentGateway,
+    this.pairingGateway,
+    this.remoteAccessGateway,
     this.serverClient,
     this.androidContext,
     this.appleContext,
@@ -39,10 +43,10 @@ class FloeApp extends StatefulWidget {
   /// Proposal, approval and execution of calendar actions.
   final CalendarActionExecutionGateway? calendarActions;
 
-  /// The synthetic sample conversation.
-  final AgentFixtureStreamingGateway? agentFixture;
   final DayQuery? query;
-  final AgentFixtureStreamingGateway? agentGateway;
+  final AgentConversationGateway? agentGateway;
+  final RemotePairingGateway? pairingGateway;
+  final RemoteAccessGateway? remoteAccessGateway;
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
@@ -77,6 +81,8 @@ class _FloeAppState extends State<FloeApp> {
         gateway: widget.gateway,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
+        pairingGateway: widget.pairingGateway,
+        remoteAccessGateway: widget.remoteAccessGateway,
         serverClient: widget.serverClient,
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,

@@ -60,8 +60,6 @@ final class FloeNativeBindings {
       .lookupFunction<FloeCallNative, FloeCallDart>(
         'floe_core_calendar_actions',
       );
-  late final FloeCallDart agentFixture = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_fixture');
   late final FloeCallDart agentVault = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_vault');
   late final FloeCallDart commandV2 = _library
@@ -70,12 +68,16 @@ final class FloeNativeBindings {
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_query_v2');
   late final FloeCallDart eventsV2 = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_events_v2');
+  late final FloeCallDart remotePairingV2 = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>(
+        'floe_core_remote_pairing_v2',
+      );
+  late final FloeCallDart remoteAccessV2 = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>(
+        'floe_core_remote_access_v2',
+      );
   late final FloeCallDart localContext = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_local_context');
-  late final FloeCallDart agentFixtureRun = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>(
-        'floe_core_agent_fixture_run',
-      );
   late final FloeFreeStringDart freeString;
   late final FloeFreeCoreDart freeCore;
   late final FloeProtocolVersionDart protocolVersion;

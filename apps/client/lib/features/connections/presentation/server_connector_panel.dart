@@ -1,3 +1,6 @@
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -30,7 +33,7 @@ class ServerConnectorPanel extends StatefulWidget {
     required this.client,
     required this.onBack,
     required this.onChanged,
-    this.agentVaultGateway,
+    this.remoteAccessGateway,
     required this.authorization,
     this.authorizationLauncher = _launchConnectorAuthorization,
   });
@@ -40,7 +43,7 @@ class ServerConnectorPanel extends StatefulWidget {
   final LocalServerClient client;
   final VoidCallback onBack;
   final Future<void> Function() onChanged;
-  final NativeAgentVaultGateway? agentVaultGateway;
+  final RemoteAccessGateway? remoteAccessGateway;
   final ConnectorAuthorizationLauncher authorizationLauncher;
   final ConnectorAuthorizationGateway authorization;
 
@@ -166,15 +169,13 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     var next = directive;
     while (mounted) {
       switch (next) {
-        case OpenAuthorizationPage(
-          :final authorizationUrl,
-          :final pollAfter,
-        ):
-          if (!await widget.authorizationLauncher(Uri.parse(authorizationUrl))) {
+        case OpenAuthorizationPage(:final authorizationUrl, :final pollAfter):
+          if (!await widget.authorizationLauncher(
+            Uri.parse(authorizationUrl),
+          )) {
             if (mounted) {
               setState(
-                () => error =
-                    'Could not open the authorization page. Cancel this attempt and try again.',
+                () => error = 'Could not open the authorization page. Cancel this attempt and try again.',
               );
             }
             return;
@@ -345,7 +346,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                   connector: widget.connector,
                   connection: widget.connection,
                   client: widget.client,
-                  gateway: widget.agentVaultGateway!,
+                  gateway: widget.remoteAccessGateway!,
                 ),
               ],
               SizedBox(height: FloeSpace.lg),
@@ -464,7 +465,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
   );
 
   bool get _showConnectionGrants =>
-      widget.agentVaultGateway != null &&
+      widget.remoteAccessGateway != null &&
       widget.connector.status == ServerConnectorStatus.connected &&
       widget.connector.connectionId != null &&
       (widget.connector.id == 'calendar.google' ||
@@ -483,7 +484,7 @@ final class _ServerConnectionGrants extends StatefulWidget {
   final ServerConnector connector;
   final ServerConnection connection;
   final LocalServerClient client;
-  final NativeAgentVaultGateway gateway;
+  final RemoteAccessGateway gateway;
 
   @override
   State<_ServerConnectionGrants> createState() =>
@@ -516,8 +517,6 @@ final class _ServerConnectionGrantsState
   }
 
   String get connectionId => widget.connector.connectionId!;
-  Map<String, Object?> get route =>
-      widget.client.authorityRoute(widget.connection);
   List<String> get views => _remoteViewsFor(widget.connector.id);
   bool get isCalendar =>
       widget.connector.id == 'calendar.google' ||
@@ -556,8 +555,6 @@ final class _ServerConnectionGrantsState
       throw const FormatException('connection_changed');
     }
     final preview = await widget.gateway.previewRemoteCalendarGrant(
-      personId: widget.connection.personId,
-      route: route,
       connectorId: widget.connector.id,
       connectionId: connectionId,
       resource: resource,
@@ -574,8 +571,6 @@ final class _ServerConnectionGrantsState
       throw const FormatException('connection_changed');
     }
     final overview = await widget.gateway.reviewRemoteCalendarGrant(
-      personId: widget.connection.personId,
-      route: route,
       connectorId: widget.connector.id,
       connectionId: connectionId,
       resource: preview.resource,
@@ -595,10 +590,14 @@ final class _ServerConnectionGrantsState
       throw const FormatException('connection_changed');
     }
     final paused = await widget.gateway.pauseRemoteCalendarGrant(
-      personId: widget.connection.personId,
       grantId: overview.grantId,
       expectedAuthority: overview.grantAuthority,
     );
+    if (paused.grantId != overview.grantId ||
+        paused.connectionId != connectionId ||
+        overview.connectionId != connectionId) {
+      throw const FormatException('connection_changed');
+    }
     if (mounted) setState(() => calendarOverview = paused);
   });
 
@@ -608,8 +607,6 @@ final class _ServerConnectionGrantsState
       throw const FormatException('connection_changed');
     }
     final preview = await widget.gateway.previewRemoteViewGrant(
-      personId: widget.connection.personId,
-      route: route,
       viewId: viewId,
       connectorId: widget.connector.id,
       connectionId: connectionId,
@@ -628,8 +625,6 @@ final class _ServerConnectionGrantsState
       throw const FormatException('connection_changed');
     }
     final overview = await widget.gateway.reviewRemoteViewGrant(
-      personId: widget.connection.personId,
-      route: route,
       viewId: preview.viewId,
       connectorId: widget.connector.id,
       connectionId: connectionId,
@@ -641,7 +636,8 @@ final class _ServerConnectionGrantsState
       expectedProviderIdentity: preview.providerIdentity,
       expectedRecipient: preview.recipient,
     );
-    if (!_stable(overview.connectionId)) {
+    if (!_stable(overview.connectionId) ||
+        overview.connectionRevision != preview.connectionRevision) {
       throw const FormatException('connection_changed');
     }
     if (mounted) setState(() => viewOverview = overview);
@@ -655,10 +651,15 @@ final class _ServerConnectionGrantsState
       throw const FormatException('connection_changed');
     }
     final paused = await widget.gateway.pauseRemoteViewGrant(
-      personId: widget.connection.personId,
       grantId: overview.grantId,
       expectedAuthority: overview.grantAuthority,
     );
+    if (paused.grantId != overview.grantId ||
+        !_stable(paused.connectionId) ||
+        !_stable(overview.connectionId) ||
+        paused.connectionRevision != overview.connectionRevision) {
+      throw const FormatException('connection_changed');
+    }
     if (mounted) setState(() => viewOverview = paused);
   });
 
@@ -826,7 +827,6 @@ String _grantError(String code) => switch (code) {
   'conflict' => 'This permission changed elsewhere. Refresh Connections.',
   _ => 'The connection permission could not be updated.',
 };
-
 
 String _scopeLabel(String value) => switch (value) {
   'owner' => 'Repository owner',

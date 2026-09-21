@@ -1,8 +1,13 @@
+import '../../support/native_agent_fixture_gateway.dart';
+
 import 'dart:io';
 
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import '../../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/features/experts/domain/agent_expert_result.dart';
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
+
+import '../../support/fixture_agent_controller.dart';
+
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,7 +71,7 @@ void main() {
     final directory = await Directory.systemTemp.createTemp(
       'floe-attempt-test-',
     );
-    final gateway = await NativeDayGateway.open(
+    final gateway = await NativeAgentFixtureGateway.open(
       libraryPath: library.path,
       databasePath: '${directory.path}/fixture.db',
       deviceId: 'test-device',
@@ -129,12 +134,12 @@ void main() {
       final directory = await Directory.systemTemp.createTemp(
         'floe-agent-stream-',
       );
-      final gateway = await NativeDayGateway.open(
+      final gateway = await NativeAgentFixtureGateway.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/fixture.db',
         deviceId: 'test-device',
       );
-      final controller = AgentController(
+      final controller = FixtureAgentController(
         gateway: gateway,
         personId: localPersonId,
       );
@@ -179,12 +184,12 @@ void main() {
       final directory = await Directory.systemTemp.createTemp(
         'floe-agent-test-',
       );
-      NativeDayGateway? gateway;
+      NativeAgentFixtureGateway? gateway;
       addTearDown(() async {
         await gateway?.close();
         await directory.delete(recursive: true);
       });
-      gateway = await NativeDayGateway.open(
+      gateway = await NativeAgentFixtureGateway.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/fixture.db',
         deviceId: 'test-device',
@@ -240,7 +245,7 @@ void main() {
       );
       await gateway.close();
       gateway = null;
-      gateway = await NativeDayGateway.open(
+      gateway = await NativeAgentFixtureGateway.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/fixture.db',
         deviceId: 'test-device',

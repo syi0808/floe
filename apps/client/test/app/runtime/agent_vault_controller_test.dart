@@ -1,7 +1,8 @@
 import 'dart:async';
 
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import '../../support/fixture_agent_controller.dart';
+import '../../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,7 +11,10 @@ import '../../support/agent_vault_gateway.dart';
 void main() {
   test('secure storage setup and unlock happen automatically', () async {
     final gateway = TestVaultGateway();
-    final controller = AgentController(gateway: gateway, personId: 'test');
+    final controller = FixtureAgentController(
+      gateway: gateway,
+      personId: 'test',
+    );
     addTearDown(controller.dispose);
     await controller.load();
     expect(controller.vaultState, AgentVaultState.ready);
@@ -34,7 +38,10 @@ void main() {
 
   test('automatic reload waits for an in-flight vault lock', () async {
     final gateway = TestVaultGateway();
-    final controller = AgentController(gateway: gateway, personId: 'test');
+    final controller = FixtureAgentController(
+      gateway: gateway,
+      personId: 'test',
+    );
     addTearDown(controller.dispose);
     await controller.load();
     final closing = controller.closeView();
@@ -50,7 +57,10 @@ void main() {
     'closing during a turn clears immediately and never republishes completion',
     () async {
       final gateway = TestVaultGateway()..hold = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.unlock(create: true);
       final turn = controller.send(AgentFixturePrompt.today);
@@ -71,7 +81,10 @@ void main() {
     'key failure removes presented messages and cannot create a replacement',
     () async {
       final gateway = TestVaultGateway();
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.unlock(create: true);
       await controller.send(AgentFixturePrompt.today);
@@ -93,7 +106,10 @@ void main() {
       final gateway = TestVaultGateway()
         ..responseFailure = 'server_model_invalid_output'
         ..omitSessionOnFailure = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
 
@@ -109,7 +125,10 @@ void main() {
 
   test('closing during unlock seals delayed loaded messages', () async {
     final gateway = TestVaultGateway()..resumeGate = Completer<void>();
-    final controller = AgentController(gateway: gateway, personId: 'test');
+    final controller = FixtureAgentController(
+      gateway: gateway,
+      personId: 'test',
+    );
     addTearDown(controller.dispose);
     final unlocking = controller.unlock(create: true);
     await Future<void>.delayed(Duration.zero);

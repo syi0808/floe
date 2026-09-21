@@ -1,9 +1,43 @@
 import 'dart:async';
 
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
+import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
+import 'package:floe_client/app/runtime/app_read_model.dart';
+import 'package:floe_client/app/runtime/floe_client.dart';
 
-class TestAgentGateway implements AgentFixtureStreamingGateway {
-  TestAgentGateway({this.personId = 'test'});
+import '../support/agent_fixture_gateway.dart';
+
+class TestAgentGateway
+    implements
+        AgentFixtureStreamingGateway,
+        AgentConversationGateway,
+        ConversationRuntimeProvider {
+  TestAgentGateway({this.personId = 'test', this.personal = false});
+  final bool personal;
+
+  @override
+  late final ConversationRuntimeGateway conversationRuntime =
+      _TestConversationRuntime(this);
+
+  AgentSession _personal(AgentFixtureResult result) {
+    if (personal) saved!['data_classes'] = ['personal'];
+    return _result().session;
+  }
+
+  @override
+  Future<AgentSession> startConversation(String personId) async =>
+      _personal(await startAgentFixture(personId));
+  @override
+  Future<AgentSession> resumeConversation(String personId) async =>
+      _personal(await resumeAgentFixture(personId));
+  @override
+  Future<AgentSession> loadConversation(
+    String personId,
+    String sessionId,
+  ) async => _personal(await loadAgentFixture(personId, sessionId));
+  @override
+  Future<AgentSession> recoverConversation(AgentSession session) async =>
+      _personal(await recoverAgentFixture(session));
 
   final String personId;
   Map<String, Object?>? saved;
@@ -208,4 +242,66 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
         ? responseRecoveryAction
         : null,
   });
+}
+
+final class _TestConversationRuntime implements ConversationRuntimeGateway {
+  _TestConversationRuntime(this.owner);
+  final TestAgentGateway owner;
+  @override
+  final AppReadModel readModel = AppReadModel();
+
+  @override
+  Future<void> synchronizeConversation(AgentSession session) async {
+    if (readModel.conversation.syncState == AppReadSyncState.uninitialized) {
+      readModel.bootstrap(
+        cursor: const AppEventCursor(runtimeEpoch: 7, cursor: 0),
+      );
+    }
+  }
+
+  @override
+  Future<ConversationTurnCompletion> runConversationTurn(
+    AgentConversationTurnRequest request, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
+    owner.begins++;
+    final failure = owner.responseFailure;
+    final run = AppRunSnapshot(
+      runId: 'test-run-${owner.begins}',
+      sessionId: request.session.id,
+      revision: 1,
+      runtimeEpoch: 7,
+      executorGeneration: 1,
+      state: AppRunState.finished,
+      progress: failure == null ? 'completed' : 'failed',
+      report: AppTurnReport(
+        execution: failure == null ? 'completed' : 'failed',
+        reply: failure == null ? 'generated' : 'not_produced',
+        issues: failure == null
+            ? []
+            : [
+                AppWireIssue(
+                  'unavailable',
+                  'Test owner failure',
+                  metadata: {
+                    'reason_code': failure,
+                    'recovery_action': owner.responseRecoveryAction ?? 'none',
+                    'reload_required': owner.omitSessionOnFailure.toString(),
+                  },
+                ),
+              ],
+        finalMessageRef: null,
+      ),
+    );
+    readModel.applyRunSnapshot(run);
+    onRun(run);
+    return ConversationTurnCompletion(run: run, session: request.session);
+  }
+
+  @override
+  Future<void> cancelConversationTurn(
+    AgentConversationTurnRequest request,
+  ) async {
+    owner.stops++;
+  }
 }

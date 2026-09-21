@@ -1,4 +1,4 @@
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/settings/presentation/settings_screen.dart';
@@ -40,71 +40,49 @@ void main() {
     'active': true,
   };
 
-  final route = <String, Object?>{
-    'base_url': 'http://127.0.0.1:8080',
-    'bearer_token': 'saved-pairing-token',
-    'purpose': 'everyday_assistance',
-    'external': false,
-    'allow_external': false,
-    'pairing': {
-      'client_id': 'saved-client',
-      'person_id': 'person-1',
-      'device_id': 'device-1',
-    },
-    'calendar_connections': <Object?>[],
-  };
-
   test(
     'inspection is read-only and review/status preserve explicit approval',
     () async {
       final calls = <Map<String, Object?>>[];
-      final gateway = NativeAgentVaultGateway((request) async {
+      final gateway = NativeRemoteAccessGateway((request) async {
         final operation = Map<String, Object?>.from(
           request['operation']! as Map,
         );
-        if (operation['kind'] == 'release') {
+        if (operation['kind'] == 'read_result') {
           return {
-            'request_id': request['request_id'],
+            'operation_id':
+                (request['operation'] as Map)['operation_id'] ??
+                request['request_id'],
             'done': true,
-            'events': <Object?>[],
-            'next_sequence': 0,
           };
         }
-        final action = Map<String, Object?>.from(operation['action']! as Map);
+        final action = operation;
         calls.add(action);
         Map<String, dynamic> success(Map<String, Object?> payload) => {
-          'request_id': request['request_id'],
+          'operation_id':
+              (request['operation'] as Map)['operation_id'] ??
+              request['request_id'],
           'done': true,
-          'events': <Object?>[],
-          'next_sequence': 0,
           ...payload,
         };
         switch (action['kind']) {
-          case 'remote_authority_inspect_producer':
-            return success({
-              'remote_producer': producer,
-              'remote_owner': owner,
-            });
-          case 'remote_authority_review_and_enroll':
-            return success({'remote_enrollment': pending});
-          case 'remote_authority_enrollment_status':
-            return success({'remote_enrollment': approved});
+          case 'inspect_producer':
+            return success({'producer': producer, 'owner': owner});
+          case 'review_and_enroll':
+            return success({'enrollment': pending});
+          case 'enrollment_status':
+            return success({'enrollment': approved});
           default:
             throw StateError('unexpected action ${action['kind']}');
         }
-      }, deviceId: 'device-1');
+      });
 
-      final inspection = await gateway.inspectRemoteProducer(
-        personId: 'person-1',
-        route: route,
-      );
+      final inspection = await gateway.inspectRemoteProducer();
       expect(inspection.producer.fingerprint, 'producer-fingerprint');
       expect(inspection.ownerFingerprint, 'owner-fingerprint');
       expect(calls, hasLength(1));
 
       final status = await gateway.reviewAndEnrollRemoteProducer(
-        personId: 'person-1',
-        route: route,
         producer: inspection.producer,
       );
       expect(status.localConfirmed, isTrue);
@@ -112,47 +90,48 @@ void main() {
       expect(status.active, isFalse);
 
       final refreshed = await gateway.remoteEnrollmentStatus(
-        personId: 'person-1',
-        route: route,
         enrollmentId: status.enrollmentId,
       );
       expect(refreshed.adminApproved, isTrue);
       expect(refreshed.active, isTrue);
       expect(calls.map((request) => request['kind']), [
-        'remote_authority_inspect_producer',
-        'remote_authority_review_and_enroll',
-        'remote_authority_enrollment_status',
+        'inspect_producer',
+        'review_and_enroll',
+        'enrollment_status',
       ]);
     },
   );
 
-  test('saved pairing is copied into the authority route and mismatched identity fails', () {
-    final client = LocalServerClient(
-      personId: 'person-1',
-      deviceId: 'device-1',
-      store: _MemoryCredentialStore(),
-    );
-    final connection = ServerConnection(
-      address: 'http://127.0.0.1:8080',
-      token: 'saved-pairing-token',
-      clientId: 'saved-client',
-      personId: 'person-1',
-      deviceId: 'device-1',
-    );
-    final authority = client.authorityRoute(connection);
-    expect(authority['pairing'], route['pairing']);
-    expect(() {
-      client.authorityRoute(
-        ServerConnection(
-          address: connection.address,
-          token: connection.token,
-          clientId: connection.clientId,
-          personId: 'other-person',
-          deviceId: connection.deviceId,
-        ),
+  test(
+    'saved pairing remains storage-only and mismatched identity fails',
+    () async {
+      final client = LocalServerClient(
+        personId: 'person-1',
+        deviceId: 'device-1',
+        store: _MemoryCredentialStore(),
       );
-    }, throwsA(isA<ServerConnectionException>()));
-  });
+      final connection = ServerConnection(
+        address: 'http://127.0.0.1:8080',
+        token: 'saved-pairing-token-with-at-least-32-characters',
+        clientId: 'saved-client',
+        personId: 'person-1',
+        deviceId: 'device-1',
+      );
+      await client.save(connection);
+      expect((await client.connection())?.clientId, connection.clientId);
+      expect(() {
+        client.save(
+          ServerConnection(
+            address: connection.address,
+            token: connection.token,
+            clientId: connection.clientId,
+            personId: 'other-person',
+            deviceId: connection.deviceId,
+          ),
+        );
+      }, throwsA(isA<ServerConnectionException>()));
+    },
+  );
 
   testWidgets('settings does not render the removed authority enrollment', (
     tester,

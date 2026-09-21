@@ -1,8 +1,8 @@
+import '../../support/app_host.dart';
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/app/runtime/app_runtime.dart';
-import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/actions/infrastructure/native_calendar_action_gateway.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -81,7 +81,7 @@ void main() {
     );
     final directory = await Directory.systemTemp.createTemp('floe-actions-');
     final adapter = FixtureCalendarAdapter()..records = [];
-    Future<NativeDayGateway> open() => NativeDayGateway.open(
+    Future<TestAppHost> open() => TestAppHost.open(
       libraryPath: library.path,
       databasePath: '${directory.path}/actions.db',
       calendarAdapter: adapter,
@@ -90,10 +90,13 @@ void main() {
     );
     var gateway = await open();
     try {
-      await gateway.selectCalendars(adapter.inventory, query);
-      expect(await gateway.loadCalendarActions(query.personId), isEmpty);
+      await gateway.day.selectCalendars(adapter.inventory, query);
+      expect(
+        await gateway.actions.loadCalendarActions(query.personId),
+        isEmpty,
+      );
       final now = DateTime.now().toUtc();
-      Future<CalendarAction> propose() => gateway.proposeCalendarAction(
+      Future<CalendarAction> propose() => gateway.actions.proposeCalendarAction(
         personId: query.personId,
         calendarId: 'fixture',
         title: 'Focus',
@@ -110,7 +113,7 @@ void main() {
         const Duration(minutes: 15),
       );
       await expectLater(
-        gateway.decideCalendarAction(
+        gateway.actions.decideCalendarAction(
           personId: query.personId,
           actionId: pending.id,
           decision: CalendarActionDecision.approve,
@@ -125,11 +128,12 @@ void main() {
       );
       await gateway.close();
       gateway = await open();
-      final restored = (await gateway.loadCalendarActions(query.personId))
-          .single;
+      final restored = (await gateway.actions.loadCalendarActions(
+        query.personId,
+      )).single;
       expect(restored.status, CalendarActionStatus.pending);
       expect(restored.executionId, pending.executionId);
-      expect((await gateway.loadDay(query)).items, isEmpty);
+      expect((await gateway.day.loadDay(query)).items, isEmpty);
       expect(adapter.records, isEmpty);
     } finally {
       await gateway.close();

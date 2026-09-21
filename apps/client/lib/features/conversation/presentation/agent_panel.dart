@@ -14,7 +14,7 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 

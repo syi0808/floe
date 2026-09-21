@@ -9,7 +9,7 @@ import 'package:floe_client/features/conversation/application/conversation_runti
 import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/experts/domain/agent_expert_result.dart';
@@ -34,7 +34,7 @@ enum AgentProgress {
 
 final class AgentController extends ChangeNotifier {
   factory AgentController({
-    required AgentFixtureStreamingGateway gateway,
+    required AgentConversationGateway gateway,
     required String personId,
     Duration loadTimeout = const Duration(seconds: 10),
   }) => AgentController._(gateway, personId, loadTimeout);
@@ -107,7 +107,7 @@ final class AgentController extends ChangeNotifier {
     _conversationRuntime?.readModel.addListener(_notify);
   }
 
-  final AgentFixtureStreamingGateway gateway;
+  final AgentConversationGateway gateway;
   final String personId;
   final Duration loadTimeout;
   AgentSession? session;
@@ -126,7 +126,6 @@ final class AgentController extends ChangeNotifier {
   bool _disposed = false;
   bool _stopRequested = false;
   AgentSession? _runSession;
-  AgentFixturePrompt? _lastPrompt;
   String? _lastConversationText;
   String? _lastConversationRunId;
   AgentConversationTurnRequest? _conversationRun;
@@ -344,9 +343,7 @@ final class AgentController extends ChangeNotifier {
 
   bool get usesVault => gateway is AgentVaultGateway;
   bool get isGeneralConversation =>
-      usesVault &&
-      session?.scope == null &&
-      session?.dataClasses.singleOrNull == 'personal';
+      session?.scope == null && session?.dataClasses.singleOrNull == 'personal';
   bool get isConnectedConversation => isGeneralConversation;
   bool get isPersonalConversation => isGeneralConversation;
 
@@ -376,9 +373,9 @@ final class AgentController extends ChangeNotifier {
       !needsReload &&
       !needsRecovery &&
       session != null &&
-      (!isGeneralConversation ||
-          (_conversationRuntime?.readModel.conversation.canSend(session!.id) ??
-              false));
+      isGeneralConversation &&
+      (_conversationRuntime?.readModel.conversation.canSend(session!.id) ??
+          false);
   bool get canContinue =>
       canSend &&
       session?.continuation != null &&
@@ -389,9 +386,9 @@ final class AgentController extends ChangeNotifier {
       !canContinue &&
       failure != null &&
       recoveryAction == 'retry_read' &&
-      (isGeneralConversation
-          ? _lastConversationText != null && _lastConversationRunId != null
-          : _lastPrompt != null);
+      isGeneralConversation &&
+      _lastConversationText != null &&
+      _lastConversationRunId != null;
 
   Future<void> load({bool newSession = false}) async {
     if (_disposed) return;
@@ -420,24 +417,16 @@ final class AgentController extends ChangeNotifier {
           throw const AgentVaultException('vault_unavailable');
         }
       }
-      if (gateway case final AgentConversationGateway conversation) {
-        final saved = newSession
-            ? await conversation
-                  .startConversation(personId)
-                  .timeout(loadTimeout)
-            : await conversation
-                  .resumeConversation(personId)
-                  .timeout(loadTimeout);
-        _acceptSession(saved);
-        await _conversationRuntime
-            ?.synchronizeConversation(saved)
-            .timeout(loadTimeout);
-      } else {
-        final result = newSession
-            ? await gateway.startAgentFixture(personId).timeout(loadTimeout)
-            : await gateway.resumeAgentFixture(personId).timeout(loadTimeout);
-        _acceptSession(result.session);
-      }
+      final conversation = gateway;
+      final saved = newSession
+          ? await conversation.startConversation(personId).timeout(loadTimeout)
+          : await conversation
+                .resumeConversation(personId)
+                .timeout(loadTimeout);
+      _acceptSession(saved);
+      await _conversationRuntime
+          ?.synchronizeConversation(saved)
+          .timeout(loadTimeout);
       needsReload = false;
     } on Object catch (error, stackTrace) {
       _recordError('load', error, stackTrace);
@@ -461,15 +450,10 @@ final class AgentController extends ChangeNotifier {
     _notify();
     try {
       final original = session!;
-      if (isGeneralConversation && gateway is AgentConversationGateway) {
-        final saved = await (gateway as AgentConversationGateway)
-            .recoverConversation(original);
-        _acceptSession(saved);
-        await _conversationRuntime?.synchronizeConversation(saved);
-      } else {
-        final result = await gateway.recoverAgentFixture(original);
-        _acceptSession(result.session);
-      }
+
+      final saved = await gateway.recoverConversation(original);
+      _acceptSession(saved);
+      await _conversationRuntime?.synchronizeConversation(saved);
       needsReload = false;
     } on Object catch (error, stackTrace) {
       _recordError('recover', error, stackTrace, sessionId: session?.id);
@@ -488,14 +472,10 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> retry() async {
     if (!canRetry) return;
-    if (isGeneralConversation) {
-      await _sendConversationText(
-        _lastConversationText!,
-        retryOf: _lastConversationRunId,
-      );
-    } else {
-      await send(_lastPrompt!);
-    }
+    await _sendConversationText(
+      _lastConversationText!,
+      retryOf: _lastConversationRunId,
+    );
   }
 
   Future<void> continueTurn() async {
@@ -527,7 +507,6 @@ final class AgentController extends ChangeNotifier {
     if (!canSend ||
         _disposed ||
         !isGeneralConversation ||
-        gateway is! AgentConversationGateway ||
         _conversationRuntime == null ||
         !acceptsConversationText(normalized)) {
       return;
@@ -595,71 +574,6 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
-  Future<void> send(AgentFixturePrompt prompt) async {
-    if (!canSend || _disposed || isGeneralConversation) return;
-    final original = session!;
-    _runSession = original;
-    _lastPrompt = prompt;
-    _begin();
-    _stopRequested = false;
-    _clearFailure();
-    progress = AgentProgress.model;
-    _notify();
-    var done = false;
-    var started = false;
-    try {
-      var update = await gateway.beginAgentFixtureRun(original, prompt);
-      started = true;
-      var sequence = 0;
-      while (true) {
-        _validateUpdate(original, update, sequence);
-        _acceptEvents(update.events);
-        sequence = update.nextSequence;
-        if (_stopRequested) progress = AgentProgress.stopping;
-        _notify();
-        if (update.done) {
-          done = true;
-          _runSession = null;
-          if (update.session case final saved?) {
-            _acceptSession(saved);
-            if (update.failure == null) {
-              needsReload = false;
-            } else {
-              _failFromUpdate(update);
-            }
-          } else {
-            _failFromUpdate(update, fallback: 'storage_unavailable');
-          }
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        update = await gateway.pollAgentFixtureRun(original, sequence);
-      }
-    } on Object catch (error, stackTrace) {
-      _recordError('fixture_turn', error, stackTrace, sessionId: original.id);
-      _failFromError(error, 'transport_unavailable');
-    } finally {
-      try {
-        if (!done && started) {
-          var update = await gateway.stopAgentFixtureRun(original);
-          for (var attempt = 0; !update.done && attempt < 25; attempt++) {
-            await Future<void>.delayed(const Duration(milliseconds: 80));
-            update = await gateway.pollAgentFixtureRun(original, 0);
-          }
-          done = update.done;
-        }
-        if (done && started) await gateway.releaseAgentFixtureRun(original);
-      } on Object {
-        needsReload = true;
-        failure ??= 'transport_unavailable';
-      }
-      _runSession = null;
-      _end();
-      progress = AgentProgress.idle;
-      _notify();
-    }
-  }
-
   Future<void> stop() async {
     final original = _runSession;
     if (original == null || _stopRequested) return;
@@ -669,8 +583,6 @@ final class AgentController extends ChangeNotifier {
     try {
       if (_conversationRun case final request?) {
         await _conversationRuntime?.cancelConversationTurn(request);
-      } else {
-        await gateway.stopAgentFixtureRun(original);
       }
     } on Object {
       failure = 'transport_unavailable';
@@ -693,54 +605,7 @@ final class AgentController extends ChangeNotifier {
         .whereType<AgentTextMessage>()
         .where((message) => message.kind == AgentMessageKind.user)
         .lastOrNull;
-    if (saved.dataClasses.singleOrNull == 'personal') {
-      _lastPrompt = null;
-      _lastConversationText = lastUser?.text;
-    } else {
-      _lastPrompt = AgentFixturePrompt.values
-          .where((prompt) => prompt.sampleText == lastUser?.text)
-          .firstOrNull;
-      _lastConversationText = null;
-    }
-  }
-
-  void _acceptEvents(List<AgentEvent> events) {
-    for (final event in _sealed ? <AgentEvent>[] : events) {
-      switch (event.event) {
-        case AgentMessageCommitted(:final message):
-          messages = [...messages, message];
-        case AgentModelAttempt(:final scopeId, :final state, :final attempt):
-          if (state == 'started') {
-            progress = attempt == 2
-                ? AgentProgress.correcting
-                : scopeId == event.sessionId
-                ? AgentProgress.model
-                : AgentProgress.expertModel;
-          }
-        case AgentModelStarted():
-          progress = AgentProgress.model;
-        case AgentCapabilityStarted():
-          progress = AgentProgress.capability;
-        case AgentDelegationStarted():
-          progress = AgentProgress.expertModel;
-        case AgentStarted() || AgentFinished():
-          break;
-      }
-    }
-  }
-
-  void _validateUpdate(
-    AgentSession original,
-    AgentRunUpdate update,
-    int sequence,
-  ) {
-    if (update.sessionId != original.id ||
-        update.expectedRevision != original.revision ||
-        update.nextSequence != sequence + update.events.length ||
-        update.events.any((event) => event.sessionId != original.id) ||
-        update.session != null && update.session!.id != original.id) {
-      throw const FormatException('Agent run sequence mismatch.');
-    }
+    _lastConversationText = lastUser?.text;
   }
 
   void _notify() {
@@ -769,7 +634,9 @@ final class AgentController extends ChangeNotifier {
       if (state != AgentVaultState.ready) {
         throw const AgentVaultException('vault_unavailable');
       }
-      _acceptSession((await vault.resumeAgentFixture(personId)).session);
+      final saved = await gateway.resumeConversation(personId);
+      _acceptSession(saved);
+      await _conversationRuntime?.synchronizeConversation(saved);
       needsReload = false;
     } on Object catch (error) {
       _failFromError(error, 'vault_unavailable');
@@ -794,7 +661,6 @@ final class AgentController extends ChangeNotifier {
     connectionController.clear();
     session = null;
     messages = [];
-    _lastPrompt = null;
     _lastConversationRunId = null;
     vaultState = AgentVaultState.locked;
     _notify();
@@ -850,21 +716,6 @@ final class AgentController extends ChangeNotifier {
       retryPolicy: source?.retryPolicy,
       reloadRequired: source?.reloadRequired,
       sealSession: source?.sealSession,
-    );
-  }
-
-  void _failFromUpdate(AgentRunUpdate update, {String? fallback}) {
-    _fail(
-      update.failureReasonCode ?? update.failure ?? fallback ?? 'unknown',
-      recoveryAction: update.recoveryAction,
-      domain: update.failureDomain,
-      category: update.failureCategory,
-      safeActions: update.failureSafeActions,
-      affectedRefs: update.failureAffectedRefs,
-      incidentId: update.failureIncidentId,
-      retryPolicy: update.failureRetryPolicy,
-      reloadRequired: update.failureReloadRequired,
-      sealSession: update.failureSealSession,
     );
   }
 

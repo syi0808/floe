@@ -14,7 +14,6 @@ import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_facade.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
@@ -79,7 +78,6 @@ Future<void> _start() async {
     final runtime = await AppRuntime.openDefault(deviceId: device.id);
     final gateway = NativeDayGateway(runtime, calendarAdapter);
     final calendarActions = CalendarActionFacade(runtime);
-    final agentFixture = AgentFixtureFacade(runtime);
     CalendarAcquisitionService? calendarAcquisition;
     if (Platform.isIOS || androidNative != null) {
       final reader = Platform.isIOS
@@ -230,8 +228,9 @@ Future<void> _start() async {
       FloeApp(
         gateway: gateway,
         calendarActions: calendarActions,
-        agentFixture: agentFixture,
         agentGateway: runtime.vault,
+        pairingGateway: runtime.pairing,
+        remoteAccessGateway: runtime.remoteAccess,
         serverClient: serverClient,
         androidContext: androidContext,
         appleContext: appleContext,

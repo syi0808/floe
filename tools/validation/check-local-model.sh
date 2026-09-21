@@ -8,4 +8,5 @@ xcrun swiftc -swift-version 6 -warnings-as-errors \
   tools/validation/LocalModelHostTests.swift \
   -o target/validation/local-model-host-tests
 target/validation/local-model-host-tests
-CARGO_INCREMENTAL=0 cargo test -p floe-infra --lib local_model
+CARGO_INCREMENTAL=0 cargo test -p floe-provider-adapters
+CARGO_INCREMENTAL=0 cargo test -p floe-inference

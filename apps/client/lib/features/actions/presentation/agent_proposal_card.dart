@@ -8,7 +8,7 @@ import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 class AgentProposalCard extends StatelessWidget {
   const AgentProposalCard({

@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+
 import 'package:floe_client/app/local_identity.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
@@ -37,6 +40,14 @@ final class AppRuntime {
 
   late final FloeClient client = FloeClient(_transport);
   late final AppReadModel readModel = AppReadModel();
+  late final RemoteAccessGateway remoteAccess = NativeRemoteAccessGateway(
+    remoteAccessV2,
+  );
+  late final RemotePairingGateway pairing = NativeRemotePairingGateway(
+    remotePairingV2,
+    expectedPersonId: defaultLocalPersonId,
+    expectedDeviceId: deviceId,
+  );
   late final AgentVaultGateway vault = NativeAgentVaultGateway(
     _vaultRequest,
     deviceId: deviceId,
@@ -46,9 +57,17 @@ final class AppRuntime {
 
   LocalContextTransport get localContextTransport => _transport;
 
+  Future<Map<String, dynamic>> remotePairingV2(Map<String, dynamic> request) =>
+      _transport.remotePairingV2(request);
+
+  Future<Map<String, dynamic>> remoteAccessV2(Map<String, dynamic> request) =>
+      _transport.remoteAccessV2(request);
+
   static Future<AppRuntime> openDefault({required String deviceId}) async =>
       AppRuntime._(
-        await _open(NativeTransport.openDefault(personId: defaultLocalPersonId)),
+        await _open(
+          NativeTransport.openDefault(personId: defaultLocalPersonId),
+        ),
         deviceId,
       );
 

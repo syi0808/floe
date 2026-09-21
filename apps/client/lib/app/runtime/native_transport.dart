@@ -257,6 +257,16 @@ final class NativeTransport implements AppWireTransport, LocalContextTransport {
     Duration timeout = const Duration(seconds: 3),
   }) => _appWireRequest('events_v2', request, timeout);
 
+  Future<Map<String, dynamic>> remotePairingV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _appWireRequest('remote_pairing_v2', request, timeout);
+
+  Future<Map<String, dynamic>> remoteAccessV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _appWireRequest('remote_access_v2', request, timeout);
+
   Future<Map<String, dynamic>> _appWireRequest(
     String operation,
     Map<String, dynamic> request,
@@ -752,12 +762,12 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
           'load_day' => bindings.loadDay(handle, input),
           'execute' => bindings.execute(handle, input),
           'calendar_actions' => bindings.calendarActions(handle, input),
-          'agent_fixture' => bindings.agentFixture(handle, input),
-          'agent_fixture_run' => bindings.agentFixtureRun(handle, input),
           'agent_vault' => bindings.agentVault(handle, input),
           'command_v2' => bindings.commandV2(handle, input),
           'query_v2' => bindings.queryV2(handle, input),
           'events_v2' => bindings.eventsV2(handle, input),
+          'remote_pairing_v2' => bindings.remotePairingV2(handle, input),
+          'remote_access_v2' => bindings.remoteAccessV2(handle, input),
           'local_context' => bindings.localContext(handle, input),
           _ => throw StateError('Unknown core operation: $operation'),
         };

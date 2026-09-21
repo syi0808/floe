@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+
+import '../../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
 import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
@@ -33,10 +35,10 @@ void main() {
       );
 
       expect(transport.commandKinds, ['conversation.start_turn']);
-      expect(
-        (transport.commandRequests.single['command'] as Map)['profile'],
-        {'kind': 'explicit', 'profile_id': 'local-fast'},
-      );
+      expect((transport.commandRequests.single['command'] as Map)['profile'], {
+        'kind': 'explicit',
+        'profile_id': 'local-fast',
+      });
       expect(transport.queryKinds, everyElement('conversation.get_run'));
       expect(transport.eventReads, greaterThanOrEqualTo(3));
       expect(observed, [AppRunState.executing, AppRunState.finished]);

@@ -31,6 +31,47 @@ void main() {
         await support.delete(recursive: true);
       });
 
+      for (final owner in [
+        transport.remotePairingV2,
+        transport.remoteAccessV2,
+      ]) {
+        await expectLater(
+          owner({
+            'schema_version': 2,
+            'request_id': '00000000-0000-4000-8000-000000000109',
+            'operation': {
+              'kind': 'read_result',
+              'operation_id': '00000000-0000-4000-8000-000000000110',
+              'release': false,
+            },
+          }),
+          throwsA(
+            isA<NativeTransportException>().having(
+              (error) => error.code,
+              'code',
+              'not_found',
+            ),
+          ),
+        );
+        await expectLater(
+          owner({
+            'schema_version': 2,
+            'request_id': '00000000-0000-4000-8000-000000000111',
+            'operation': {
+              'kind': 'prepare',
+              'route': {'bearer_token': 'forbidden'},
+            },
+          }),
+          throwsA(
+            isA<NativeTransportException>().having(
+              (error) => error.code,
+              'code',
+              'validation',
+            ),
+          ),
+        );
+      }
+
       await expectLater(
         client.getCommand('00000000-0000-4000-8000-000000000103'),
         throwsA(

@@ -1,5 +1,6 @@
-import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/conversation/application/agent_fixture_gateway.dart';
+import '../../support/fixture_agent_controller.dart';
+import '../../support/agent_fixture_gateway.dart';
+
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,7 +10,10 @@ import '../../support/agent_vault_gateway.dart';
 void main() {
   test('vault status failure does not disable a fresh start', () async {
     final gateway = TestVaultGateway()..unavailable = true;
-    final controller = AgentController(gateway: gateway, personId: 'test');
+    final controller = FixtureAgentController(
+      gateway: gateway,
+      personId: 'test',
+    );
     addTearDown(controller.dispose);
 
     await controller.load();
@@ -24,7 +28,7 @@ void main() {
 
   test('session load timeout releases the new conversation escape', () async {
     final gateway = TestAgentGateway()..hangLoad = true;
-    final controller = AgentController(
+    final controller = FixtureAgentController(
       gateway: gateway,
       personId: 'test',
       loadTimeout: const Duration(milliseconds: 10),
@@ -47,7 +51,10 @@ void main() {
     'preambles remain ordered progress messages rather than final answers',
     () async {
       final gateway = TestAgentGateway()..hold = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
       final run = controller.send(AgentFixturePrompt.today);
@@ -78,7 +85,10 @@ void main() {
     'durable attempt events distinguish Expert reasoning and correction',
     () async {
       final gateway = TestAgentGateway()..hold = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
       final run = controller.send(AgentFixturePrompt.today);
@@ -117,7 +127,10 @@ void main() {
 
   test('progress is visible before completion and stop retains only committed messages', () async {
     final gateway = TestAgentGateway()..hold = true;
-    final controller = AgentController(gateway: gateway, personId: 'test');
+    final controller = FixtureAgentController(
+      gateway: gateway,
+      personId: 'test',
+    );
     addTearDown(controller.dispose);
     await controller.load();
     final run = controller.send(AgentFixturePrompt.today);
@@ -140,7 +153,10 @@ void main() {
     'read-only reload resolves lost transport before another turn',
     () async {
       final gateway = TestAgentGateway()..failPoll = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
       await controller.send(AgentFixturePrompt.today);
@@ -163,7 +179,10 @@ void main() {
       final gateway = TestAgentGateway();
       await gateway.startAgentFixture('test');
       gateway.saved!['active_turn'] = 'abandoned';
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
       expect(controller.needsRecovery, isTrue);
@@ -181,7 +200,10 @@ void main() {
     'dispose stops and releases an active run without later notifications',
     () async {
       final gateway = TestAgentGateway()..hold = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       await controller.load();
       final run = controller.send(AgentFixturePrompt.today);
       await Future<void>.delayed(Duration.zero);
@@ -197,7 +219,10 @@ void main() {
     'load errors do not manufacture retry intent across controller restart',
     () async {
       final gateway = TestAgentGateway()..failLoad = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       await controller.load();
       expect(controller.needsReload, isTrue);
       gateway.failLoad = false;
@@ -206,7 +231,10 @@ void main() {
       await controller.send(AgentFixturePrompt.followUp);
       expect(controller.failure, 'model_unavailable');
       controller.dispose();
-      final restored = AgentController(gateway: gateway, personId: 'test');
+      final restored = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(restored.dispose);
       await restored.load();
       expect(restored.canRetry, isFalse);
@@ -221,7 +249,10 @@ void main() {
         ..includeSessionWithFailure = true
         ..responseFailure = 'capability_unavailable'
         ..responseRecoveryAction = 'review_source';
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
       await controller.send(AgentFixturePrompt.today);
@@ -240,7 +271,10 @@ void main() {
         ..omitSessionOnFailure = true
         ..responseFailure = 'deadline_exceeded'
         ..responseRecoveryAction = 'none';
-      final controller = AgentController(gateway: gateway, personId: 'test');
+      final controller = FixtureAgentController(
+        gateway: gateway,
+        personId: 'test',
+      );
       addTearDown(controller.dispose);
       await controller.load();
       await controller.send(AgentFixturePrompt.today);
@@ -255,7 +289,10 @@ void main() {
       ..includeSessionWithFailure = true
       ..responseFailure = 'capability_unavailable'
       ..responseRecoveryAction = 'retry_read';
-    final controller = AgentController(gateway: gateway, personId: 'test');
+    final controller = FixtureAgentController(
+      gateway: gateway,
+      personId: 'test',
+    );
     addTearDown(controller.dispose);
     await controller.load();
     await controller.send(AgentFixturePrompt.today);

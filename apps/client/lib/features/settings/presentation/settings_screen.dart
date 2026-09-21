@@ -1,3 +1,5 @@
+import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -37,6 +39,7 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.client,
     this.agentVaultGateway,
+    this.pairingGateway,
     this.actionController,
     this.agentController,
     this.androidContext,
@@ -47,6 +50,7 @@ class SettingsScreen extends StatefulWidget {
 
   final LocalServerClient? client;
   final NativeAgentVaultGateway? agentVaultGateway;
+  final RemotePairingGateway? pairingGateway;
   final CalendarActionController? actionController;
   final AgentController? agentController;
   final AndroidContextApi? androidContext;
@@ -107,6 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _SettingsPage.remoteServer => _RemoteServerSettings(
       client: widget.client,
       agentVaultGateway: widget.agentVaultGateway,
+      pairingGateway: widget.pairingGateway,
     ),
   };
 
@@ -216,20 +221,19 @@ class _RemoteServerSettings extends StatelessWidget {
   const _RemoteServerSettings({
     required this.client,
     required this.agentVaultGateway,
+    required this.pairingGateway,
   });
 
   final LocalServerClient? client;
   final NativeAgentVaultGateway? agentVaultGateway;
+  final RemotePairingGateway? pairingGateway;
 
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       if (client case final serverClient?)
-        LocalServerPanel(
-          client: serverClient,
-          pairingGateway: agentVaultGateway,
-        )
+        LocalServerPanel(client: serverClient, pairingGateway: pairingGateway)
       else
         const FloeSquircle(
           padding: EdgeInsets.all(FloeSpace.lg),

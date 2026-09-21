@@ -1,6 +1,7 @@
+import '../../support/app_host.dart';
+
 import 'dart:io';
 
-import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
@@ -25,13 +26,13 @@ void main() {
         now: now,
         timezoneOffsetSeconds: 0,
       );
-      final gateway = await NativeDayGateway.open(
+      final gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${temporaryDirectory.path}/floe.db',
         clock: () => now,
         deviceId: 'local-00000000-0000-4000-8000-000000000011',
       );
-      final snapshot = await gateway.selectCalendars(const [
+      final snapshot = await gateway.day.selectCalendars(const [
         CalendarChoice(
           'android-selected',
           'Selected Android calendars',
@@ -71,13 +72,13 @@ void main() {
         now: now,
         timezoneOffsetSeconds: 0,
       );
-      var gateway = await NativeDayGateway.open(
+      var gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${temporaryDirectory.path}/floe.db',
         clock: () => now,
         deviceId: 'paired-device',
       );
-      var snapshot = await gateway.bindCalendarConnection(
+      var snapshot = await gateway.day.bindCalendarConnection(
         connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
         connectionRevision: 7,
         deviceId: 'paired-device',
@@ -101,13 +102,13 @@ void main() {
       expect(snapshot.calendar!.selectedCalendarIds, ['primary@example.test']);
       await gateway.close();
 
-      gateway = await NativeDayGateway.open(
+      gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${temporaryDirectory.path}/floe.db',
         clock: () => now,
         deviceId: 'paired-device',
       );
-      snapshot = await gateway.loadDay(query);
+      snapshot = await gateway.day.loadDay(query);
       expect(
         snapshot.calendar!.connectionId,
         '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
@@ -137,13 +138,13 @@ void main() {
         now: now,
         timezoneOffsetSeconds: 0,
       );
-      var gateway = await NativeDayGateway.open(
+      var gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${temporaryDirectory.path}/floe.db',
         clock: () => now,
         deviceId: 'paired-device',
       );
-      await gateway.bindCalendarConnection(
+      await gateway.day.bindCalendarConnection(
         connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
         connectionRevision: 7,
         deviceId: 'paired-device',
@@ -157,7 +158,7 @@ void main() {
         ],
         query: query,
       );
-      final switched = await gateway.bindCalendarConnection(
+      final switched = await gateway.day.bindCalendarConnection(
         connectionId: '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
         connectionRevision: 11,
         deviceId: 'paired-device',
@@ -182,13 +183,13 @@ void main() {
       ]);
       await gateway.close();
 
-      gateway = await NativeDayGateway.open(
+      gateway = await TestAppHost.open(
         libraryPath: library.path,
         databasePath: '${temporaryDirectory.path}/floe.db',
         clock: () => now,
         deviceId: 'paired-device',
       );
-      final restored = await gateway.loadDay(query);
+      final restored = await gateway.day.loadDay(query);
       expect(
         restored.calendar!.connectionId,
         '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
@@ -221,16 +222,16 @@ void main() {
       timezoneOffsetSeconds: 0,
     );
 
-    var gateway = await NativeDayGateway.open(
+    var gateway = await TestAppHost.open(
       libraryPath: library.path,
       databasePath: databasePath,
       clock: () => now,
       deviceId: 'test-device',
     );
-    expect((await gateway.loadDay(query)).items, isEmpty);
+    expect((await gateway.day.loadDay(query)).items, isEmpty);
 
-    final capture = await gateway.submitCapture('Rust 연결 확인', query);
-    var snapshot = await gateway.classifyCapture(
+    final capture = await gateway.day.submitCapture('Rust 연결 확인', query);
+    var snapshot = await gateway.day.classifyCapture(
       capture,
       const TaskDraft(title: 'Rust 연결 확인'),
       query,
@@ -239,15 +240,15 @@ void main() {
     expect(task.title, 'Rust 연결 확인');
     expect(task.isCompleted, isFalse);
 
-    snapshot = await gateway.setTaskCompleted(task, true, query);
+    snapshot = await gateway.day.setTaskCompleted(task, true, query);
     task = snapshot.items.single as TaskItem;
     expect(task.isCompleted, isTrue);
-    snapshot = await gateway.setTaskCompleted(task, false, query);
+    snapshot = await gateway.day.setTaskCompleted(task, false, query);
     task = snapshot.items.single as TaskItem;
     expect(task.isCompleted, isFalse);
 
-    final eventCapture = await gateway.submitCapture('아침 점검', query);
-    snapshot = await gateway.classifyCapture(
+    final eventCapture = await gateway.day.submitCapture('아침 점검', query);
+    snapshot = await gateway.day.classifyCapture(
       eventCapture,
       EventDraft(
         title: '아침 점검',
@@ -259,8 +260,8 @@ void main() {
     final event = snapshot.items.whereType<EventItem>().single;
     expect(snapshot.nowEventId, event.id);
 
-    final noteCapture = await gateway.submitCapture('연결 메모', query);
-    snapshot = await gateway.classifyCapture(
+    final noteCapture = await gateway.day.submitCapture('연결 메모', query);
+    snapshot = await gateway.day.classifyCapture(
       noteCapture,
       const NoteDraft(content: '연결 메모'),
       query,
@@ -268,29 +269,29 @@ void main() {
     expect(snapshot.items.whereType<NoteItem>().single.title, '연결 메모');
     await gateway.close();
 
-    gateway = await NativeDayGateway.open(
+    gateway = await TestAppHost.open(
       libraryPath: library.path,
       databasePath: databasePath,
       clock: () => now,
       deviceId: 'test-device',
     );
-    snapshot = await gateway.loadDay(query);
+    snapshot = await gateway.day.loadDay(query);
     expect(snapshot.items, hasLength(3));
     task = snapshot.items.whereType<TaskItem>().single;
     expect(task.title, 'Rust 연결 확인');
     for (final item in List<DayItem>.of(snapshot.items)) {
-      snapshot = await gateway.deleteItem(item, query);
+      snapshot = await gateway.day.deleteItem(item, query);
     }
     expect(snapshot.items, isEmpty);
     await gateway.close();
 
-    gateway = await NativeDayGateway.open(
+    gateway = await TestAppHost.open(
       libraryPath: library.path,
       databasePath: databasePath,
       clock: () => now,
       deviceId: 'test-device',
     );
-    expect((await gateway.loadDay(query)).items, isEmpty);
+    expect((await gateway.day.loadDay(query)).items, isEmpty);
     await gateway.close();
     await temporaryDirectory.delete(recursive: true);
   });

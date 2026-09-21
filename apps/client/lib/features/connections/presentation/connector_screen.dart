@@ -1,3 +1,5 @@
+import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
+
 import 'dart:async';
 
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -44,6 +46,7 @@ class ConnectorScreen extends StatefulWidget {
     this.calendarSources,
     this.calendarSourceChanges,
     this.agentVaultGateway,
+    this.remoteAccessGateway,
     this.connectorAuthorization,
     this.appleContext,
     this.macOSContext,
@@ -55,6 +58,7 @@ class ConnectorScreen extends StatefulWidget {
   final DayQuery query;
   final CalendarConnection? connection;
   final Future<void> Function() onChanged;
+
   /// The Operation owner for connector authorization. Supplied by the app.
   final ConnectorAuthorizationGateway? connectorAuthorization;
   final LocalServerClient? serverClient;
@@ -63,6 +67,7 @@ class ConnectorScreen extends StatefulWidget {
   final AgentController? agentController;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
+  final RemoteAccessGateway? remoteAccessGateway;
   final NativeAgentVaultGateway? agentVaultGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
@@ -378,7 +383,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         connector: serverConnector,
         connection: serverConnection!,
         client: widget.serverClient!,
-        agentVaultGateway: widget.agentVaultGateway,
+        remoteAccessGateway: widget.remoteAccessGateway,
         authorization: widget.connectorAuthorization!,
         onBack: () => setState(() => selectedServerConnectorId = null),
         onChanged: _loadCatalog,
