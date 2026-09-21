@@ -43,8 +43,8 @@ Journal corruption or mismatched durable identity fails closed as storage/recove
 
 A continuation child does not supersede a parent's pending batch merely by existing. The child must durably claim the **exact same validated batch and starting cursor** before takeover.
 
-This is the final active 2-B.1 P0; the implementation plan is
-[2-B.1 Cross-run Resume Lineage](../refactoring/stage-2/2-b1.md). Once that plan is completed and frozen, this invariant remains here as stable architecture rather than being copied into another status document.
+This invariant was proven by the completed/frozen
+[2-B.1 Cross-run Resume Lineage](../refactoring/stage-2/2-b1.md) work and remains here as stable architecture rather than being copied into another status document.
 
 ## Model attempts and budgets
 

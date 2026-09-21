@@ -1,6 +1,6 @@
 # Stage 2 — Canonical Internal Runtime
 
-**Status: active**
+**Status: complete · frozen**
 
 Stage 2 answers: **does the actual internal runtime go through the owners established in Stage 1?**
 
@@ -29,15 +29,19 @@ Detailed work is split into the execution plans linked below. This overview owns
 - [x] **2-C — Delegation ownership convergence** — [execution plan](stage-2/2-c.md)
 - [x] **2-D — Internal compatibility cleanup** — [execution plan](stage-2/2-d.md)
 - [x] **2-E — Internal public-surface closure** — [execution plan](stage-2/2-e.md)
-- [ ] **2-F — Stage 2 final validation** — [execution plan](stage-2/2-f.md)
+- [x] **2-F — Stage 2 final validation** — [execution plan](stage-2/2-f.md)
 
-## Current checkpoint
+## Closure
 
-**Active: 2-F — Stage 2 final validation.**
+Stage 2 is closed. 2-F proved the combined 2-A through 2-E result is one sound
+canonical internal runtime: the General Conversation root goes through
+`ConversationModelProjection` / `InferenceService` / `ContextToolService` /
+`TaskCoordinator` with recovery/authority/accounting invariants preserved, zero
+internal legacy ports, and the 2-E public-surface closure intact.
 
-2-E is complete/frozen: owner crate roots expose real owner APIs (`adapters`/`turn`/`ports`/`application` topologies hidden, wrong-owner migration aliases removed, App-only composition reduced to crate-private), with no renamed-equivalent wrappers; delegated Expert/Schedule compatibility stays for Stage 3-A and outer FFI/Flutter/remote-route compatibility stays for Stage 3.
-
-Use [the 2-F execution plan](stage-2/2-f.md) as the authoritative task document.
+There is no active Stage 2 checkpoint. Continue with
+[Stage 3](stage-3.md); the next checkpoint is
+[3-A — Remaining Root and Domain Caller Convergence](stage-3/3-a.md).
 
 ## Target internal architecture
 

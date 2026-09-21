@@ -1,6 +1,6 @@
 # Runtime architecture
 
-This document describes the canonical internal runtime and the remaining transition boundaries. Progress is not tracked here; see [Stage 2](../refactoring/stage-2.md).
+This document describes the canonical internal runtime and the remaining transition boundaries. Progress is not tracked here; see [Stage 3](../refactoring/stage-3.md).
 
 ## General Conversation
 
@@ -29,7 +29,7 @@ Responsibilities do not collapse across this chain:
 - Access owns exact-recipient processing/dispatch/release authority.
 - Provider adapters resolve private credentials and execute transport.
 
-During Stage 2, canonical `InferenceService : ModelPort` production cutover is still active work. A legacy caller does not make App or Provider the semantic owner.
+The canonical `InferenceService : ModelPort` production cutover is complete and is the current General Conversation reality. A legacy caller does not make App or Provider the semantic owner.
 
 ### Tool path
 
@@ -46,7 +46,7 @@ Agent Runtime Engine
 
 Tool availability is a source/authority property, not a model-route property. The Tool result carries its own evidence/coverage rather than relying on an App-side side channel.
 
-The production Context Tool cutover belongs to Stage 2-B.3.
+The production Context Tool cutover completed in Stage 2-B.3 and is the current Tool reality, alongside the canonical Delegation path through `TaskCoordinator : DelegationPort`.
 
 ### Expert delegation
 
@@ -66,7 +66,7 @@ App run_general_turn
   -> Manager synthesis
 ```
 
-Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: the root turn serves `TaskCoordinator` as its `DelegationPort` directly, and every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Delegated legacy Expert endpoints prepare their temporary model/source compatibility from a constructor-injected saved-connection store (host keychain in production, fixed fixture in tests), admitted per execution against the invocation principal and context device id.
+Experts are agents with identity and Task lifecycle, not provider-native Tools. Stable Task identity, assignment/eligibility, cancellation and A2A semantics belong to Experts. App holds no run-id endpoint authority: the root turn serves `TaskCoordinator` as its `DelegationPort` directly, and every endpoint invocation is self-sufficient — session, device, AgentContext, and output bound arrive in the explicit execution context, and the Manager delegation message is the Expert assignment. One canonical delegation request digest covers principal/parent linkage, selected agent + revision, message, context refs, and execution context; TaskId and InvocationKey stay stable identity fields checked exactly alongside it. Delegated legacy Expert endpoints prepare their temporary model/source compatibility from a constructor-injected saved-connection store (host keychain in production, fixed fixture in tests), admitted per execution against the invocation principal and context device id. Converging that delegated Expert/domain runtime onto the canonical owners belongs to Stage 3-A.
 
 ## Consequential actions
 
@@ -100,4 +100,4 @@ Flutter / native / server caller
 
 Outer callers may express user intent, including an explicit user-selected model profile where the product exposes one. They must not carry raw bearer tokens, arbitrary model endpoints, resolved internal route bundles or Access policy flags.
 
-That outer cutover is Stage 3 work; it must not be pulled back into Stage 2 as compatibility ownership.
+That outer cutover is active Stage 3 work; it must not be pulled back into the frozen Stage 2 as compatibility ownership.

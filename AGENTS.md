@@ -19,8 +19,8 @@
 
 # Active refactoring instructions
 
-- Use [Stage 2](docs/refactoring/stage-2.md) as the active progress overview and read only the linked execution plan for the current Stage 2 step. [Stage 1](docs/refactoring/stage-1.md) is completed ownership context; [Stage 3](docs/refactoring/stage-3.md) and its linked execution plans are future product-boundary work.
-- Stage 2 is the active progress source of truth. Its step-specific documents under `docs/refactoring/stage-2/` contain concrete execution plans. Follow the current checkpoint, vertical-cutover order, freeze rules and P0/P1/P2 triage. Do not recreate a versioned plan bundle, migration ledger, STATUS file, or parallel task board.
+- Use [Stage 3](docs/refactoring/stage-3.md) as the active progress overview and read only the linked execution plan for the current Stage 3 step. [Stage 1](docs/refactoring/stage-1.md) is completed ownership context and [Stage 2](docs/refactoring/stage-2.md) is the completed/frozen internal runtime.
+- Stage 3 is the active progress source of truth. Its step-specific documents under `docs/refactoring/stage-3/` contain concrete execution plans. Follow the current checkpoint and step order. Do not recreate a versioned plan bundle, migration ledger, STATUS file, or parallel task board.
 - One coding agent performs the refactoring sequentially. Keep one active change set in one workspace; build-tool parallelism is allowed.
 - The Manager still selects Experts through A2A, and product Run/Task concurrency and cancellation scopes remain independent.
 - Preserve current user changes. Check actual HEAD and working tree before editing; do not reset to historical plan commits.
@@ -28,8 +28,8 @@
 # Stage execution policy
 
 - Stage 1 ownership is closed. Do not reopen it for normal caller cutover, API cleanup or product-boundary work.
-- Stage 2 converges the canonical internal runtime. Prefer a minimum sound foundation, then vertical owner cutover, old-path removal and integrated hardening.
-- Use Stage 2 triage: P0 blocks only for authority/data-release risk, duplicate effects, budget/identity corruption, loss of durable pending work followed by re-planning, or ownership direction that blocks the next cutover. P1 waits for integrated hardening; P2 waits for cleanup.
+- Stage 2 converged the canonical internal runtime and is closed/frozen. Do not reopen it for product-boundary work; Stage 3 carries that runtime through the remaining callers.
+- Stage 2 triage (P0/P1/P2) closed with the frozen Stage 2 slices; do not repurpose it to gate or delay Stage 3 product-boundary work.
 - Stage 3 owns AppHost/FFI/Flutter/native/server product-boundary cutover, remaining root/domain callers, outer compatibility deletion and end-to-end product validation.
 - A short compile break may be resolved inside the same contract change set. Do not accumulate unrelated broken targets or add wrappers merely to preserve an old caller.
 - Preserve authorization, exact-recipient consent, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery.
@@ -47,4 +47,4 @@
 - Preserve authorization, exact-recipient consent, key identity, provenance, CAS, durable pre-dispatch intent, cancellation direction and uncertain external-write recovery. Do not weaken checks or regression assertions to make a build pass.
 - Query, preview, observer timeout and screen disposal are not implicit Run cancellation. Do not hold a global Vault transaction while waiting for model or provider I/O.
 - Refactoring instructions alone do not authorize push, deployment or external-account changes; follow the user's explicit scope for the current task.
-- Keep product requirements, current architecture, current refactoring stages and historical evidence separate. Start with [Stage 2](docs/refactoring/stage-2.md) for active execution; [docs/architecture/README.md](docs/architecture/README.md) describes architecture-document ownership. Historical plans in Git history do not override the current Stage documents.
+- Keep product requirements, current architecture, current refactoring stages and historical evidence separate. Start with [Stage 3](docs/refactoring/stage-3.md) for active execution; [docs/architecture/README.md](docs/architecture/README.md) describes architecture-document ownership. Historical plans in Git history do not override the current Stage documents.

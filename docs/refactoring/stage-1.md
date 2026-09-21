@@ -6,7 +6,7 @@ Stage 1 answers one question: **which module owns each piece of Floe's business 
 
 The purpose was to establish the modular monolith physically before attempting every caller cutover. Stage 1 moved business semantics out of App and mixed runtime surfaces into the module that owns them.
 
-See [Stage 2](stage-2.md) for the active internal-runtime cutover and [Stage 3](stage-3.md) for product-boundary and final-composition work.
+See [Stage 2](stage-2.md) for the completed internal-runtime cutover and [Stage 3](stage-3.md) for the active product-boundary and final-composition work.
 
 ## Target ownership
 

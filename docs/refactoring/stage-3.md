@@ -1,10 +1,20 @@
 # Stage 3 — Product Boundary and Final Composition
 
-**Status: future**
+**Status: active**
 
 Stage 3 answers: **do product callers and wire boundaries also follow the canonical architecture built in Stage 2?**
 
+Stage 2's internal exit gate is complete: the canonical internal runtime is frozen
+and 2-F closed it with zero code changes. Stage 3 is now the active refactor source
+of truth.
+
 Detailed work is split into the execution plans linked below. This overview owns the Stage 3 progress checkboxes.
+
+## Current checkpoint
+
+**Active: 3-A — Remaining Root and Domain Caller Convergence.**
+
+Use [the 3-A execution plan](stage-3/3-a.md) as the authoritative task document.
 
 ## Progress
 
@@ -15,7 +25,7 @@ Detailed work is split into the execution plans linked below. This overview owns
 - [ ] **3-E — Outer compatibility deletion** — [execution plan](stage-3/3-e.md)
 - [ ] **3-F — End-to-end product validation** — [execution plan](stage-3/3-f.md)
 
-Stage 3 starts only after Stage 2's internal exit gate is green.
+Stage 3 started after Stage 2's internal exit gate went green in 2-F.
 
 ## Product-boundary rule
 

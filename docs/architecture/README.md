@@ -2,7 +2,7 @@
 
 This directory describes Floe's **current semantic ownership and repository boundaries**. It is the first source to read when a code task needs architectural context.
 
-The physical Rust workspace has already moved to the approved modular-monolith package layout. Stage 2 is still active because some production callers have not yet converged on the canonical owner services. Do not confuse a transitional caller with ownership: temporary compatibility does not transfer policy to App, FFI, Flutter or an adapter.
+The physical Rust workspace has already moved to the approved modular-monolith package layout. Stage 2 is complete: the internal General Conversation runtime goes through the canonical owner services. Remaining product-boundary callers (AppHost, FFI, Flutter, native/server, plus delegated Expert/Schedule legacy runtime) converge in Stage 3. Do not confuse a transitional caller with ownership: temporary compatibility does not transfer policy to App, FFI, Flutter or an adapter.
 
 ## Layer map
 
@@ -47,8 +47,8 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 | Authority, provenance, crash recovery and side-effect invariants | [Authority and recovery](authority-recovery.md) |
 | Allowed Rust dependency edges | [Dependency policy](../../tools/architecture/module-dependencies.json) |
 | Why a durable decision exists | [ADR index](../decisions/README.md) |
-| Active caller cutover | [Stage 2](../refactoring/stage-2.md) |
-| Product-boundary cutover after Stage 2 | [Stage 3](../refactoring/stage-3.md) |
+| Completed internal-runtime cutover | [Stage 2](../refactoring/stage-2.md) (complete · frozen) |
+| Active product-boundary cutover | [Stage 3](../refactoring/stage-3.md) |
 
 ## Source-of-truth rules
 
@@ -60,6 +60,6 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 
 ## Current transition
 
-Stage 1 completed semantic ownership placement. Stage 2 is converging the real internal runtime on that ownership, including canonical model, Context Tool and Expert delegation paths. Stage 3 will then remove outer product-boundary routing/compatibility from AppHost, FFI, Flutter, native and server callers.
+Stage 1 completed semantic ownership placement. Stage 2 converged the real internal runtime on that ownership, including canonical model, Context Tool and Expert delegation paths. Stage 3 now removes outer product-boundary routing/compatibility from AppHost, FFI, Flutter, native and server callers.
 
-The active checkpoint and exact remaining work belong only in [Stage 2](../refactoring/stage-2.md); this file intentionally does not copy its progress checklist.
+The active checkpoint and exact remaining work belong only in [Stage 3](../refactoring/stage-3.md); this file intentionally does not copy its progress checklist.
