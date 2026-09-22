@@ -26,6 +26,22 @@ Canonical automated uncertainty coverage (Tier B, no real Calendar access) is
 The test uses the admitted Actions owner and a test-only native adapter; it does
 not replace the separately authorized real EventKit procedure above.
 
+The opt-in App test
+`vault_host::tests::native_actions::authorized_eventkit_response_loss_recovers_exact_disposable_event`
+uses the same admitted Actions owner with the actual copied-bundle EventKit
+adapter. It is ignored by default. After explicit authorization, build the App
+test executable, place a copy in the copied debug app's `Contents/MacOS`, and run
+only this test with `--exact --ignored --nocapture`. Set
+`FLOE_EVENTKIT_VALIDATION_AUTHORIZATION` to
+`iCloud · Floe Validation/Floe S3 — disposable/create-recover-cleanup` and
+`FLOE_EVENTKIT_VALIDATION_ROOT` to a new mode-0700 private evidence directory
+containing `calendar.json` with the previously reviewed exact `calendar_id`.
+The test persists `proposal.json`, `uncertain.json`, `recovered.json` and the
+durable Actions database there. Its Vault keys are memory-only; it proves real
+Calendar behavior, not Keychain behavior. Do not reuse the directory to repeat a
+write or delete it while uncertainty remains. A passing test still requires
+`inspect.swift` exact inspection, cleanup and `--verify-absent` separately.
+
 `check-native.sh` runs pure native payload/conflict/default-gate assertions without
 reading Calendar. `core-check.c` hosts the real Rust C ABI in a private validation
 bundle/DB through the final `command_v2/query_v2/events_v2` entry points. Compile it
