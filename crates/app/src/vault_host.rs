@@ -35,8 +35,6 @@ use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement};
 use floe_kernel::PersonId;
 use floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint;
-#[cfg(not(target_os = "macos"))]
-use floe_provider_adapters::sources::{CalendarAcquisitionMode, CalendarAcquisitionRequest};
 #[cfg(not(target_os = "android"))]
 use floe_vault::KeyringVaultKeys as PlatformVaultKeys;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};

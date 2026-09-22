@@ -102,7 +102,7 @@ impl NativeCalendarSubjectSource for DeviceCalendarSubject<'_> {
         &self,
         request: NativeSubjectRequest,
     ) -> Result<NativeSubjectObservation, AgentFailure> {
-        use floe_provider_adapters::sources::{
+        use floe_provider_adapters::sources::native_acquisition::{
             CalendarAcquisitionMode, CalendarAcquisitionRequest,
         };
 
