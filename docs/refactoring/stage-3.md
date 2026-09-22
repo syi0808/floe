@@ -14,7 +14,7 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 **Active: 3-D — Flutter, Native and Server Caller Cutover.**
 
-Use [the 3-D execution plan](stage-3/3-d.md) for the active change set. The Flutter caller cutover and harness repairs are implemented, but 3-D is not closed: its [Agent report](stage-3/3-d.md#agent-report) records the remaining full-Flutter/server validation blockers and iOS environment limitation. 3-C is **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
+Use [the 3-D execution plan](stage-3/3-d.md) for the active change set. Flutter caller cutover, full Flutter validation and macOS/iOS simulator packaging now pass, but 3-D is not closed: its [Agent report](stage-3/3-d.md#agent-report) records the user-deferred Go compilation blocker and consequent missing live pairing/Access/revocation evidence. 3-C is **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
 
 3-A is **complete · frozen**. Core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`; residual closure on execution baseline `beb6a624b0e912fe94faa1ea7628c72a96c8283b` deleted the caller-zero Schedule agent-turn runtime and its legacy model quarantine. Schedule now has only the canonical Expert endpoint model path. Owner regressions and proposal fixtures no longer require the deleted runtime; see [the residual closure report](stage-3/3-a.md#residual-closure-agent-report).
 
@@ -90,7 +90,7 @@ Pairing and remote Access now have separate typed Rust protocol/FFI services adm
 
 The separate AgentFixture runtime in `crates/app/src/agent_fixture.rs`, driven through the vault host, now has no production Flutter caller. Explicit Rust/Flutter test helpers still use its ABI; final Rust compatibility deletion remains 3-E work after 3-D closure. Production Conversation uses fixture-neutral shared models and has no synthetic fallback. Its remaining unrelated AgentVault session/management callers are classified in the 3-D report. This compatibility is not retained for Schedule tests and is not part of the completed 3-A residual.
 
-Canonical Foundation transport is implemented. 3-D has verified the macOS release bundle, both dylib loads and supported local-model smoke; iPhone/iPad packaging is not claimed green because the installed Xcode cannot resolve an iOS build destination. Build artifacts from the same source snapshot and use an explicitly selected fresh development profile when stored meaning changes.
+Canonical Foundation transport is implemented. 3-D has verified the macOS release bundle, both dylib loads, supported local-model smoke and universal iOS simulator packaging. Physical-device FoundationModels execution is not inferred from simulator packaging. Build artifacts from the same source snapshot and use an explicitly selected fresh development profile when stored meaning changes.
 
 ### Validation-harness repair and remaining gates
 
@@ -99,7 +99,7 @@ Canonical Foundation transport is implemented. 3-D has verified the macOS releas
 - `tools/validation/check-local-model.sh` validates current provider-adapter and Inference packages; the smoke script uses the actual `floe-app` example;
 - `apps/client/integration/local_server_pairing_test.dart` uses current Connections imports and the real native pairing owner gateway, with explicitly memory-only test credential persistence.
 
-The repaired pairing integration cannot execute while the baseline Go package extraction fails to compile. Full Flutter validation also retains baseline failures. These are unresolved 3-D gates, not reasons to weaken assertions or skip protected Access/revocation evidence. Keep 3-D active; do not start 3-E.
+Full Flutter validation is green. The repaired pairing integration reaches the Go build but cannot exercise pairing while the baseline server package extraction fails to compile. The user explicitly deferred repairing that Go failure. Server validation and live protected Access/revocation evidence remain unresolved 3-D gates, not reasons to weaken assertions or skip evidence. Keep 3-D active; do not start 3-E.
 
 ## Execution order
 
