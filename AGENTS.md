@@ -17,6 +17,18 @@
 - Do not treat historical slice numbers, old validation matrices, removed crate paths or implementation-status prose inside ADRs as current state.
 - If a task changes a durable architecture boundary, update the corresponding current architecture document in the same change set. If it changes the reason for a durable decision, amend or supersede the ADR rather than adding a second progress document.
 
+# Engineering posture and architecture convergence
+
+- Floe is pre-stable and under active development. Internal backward compatibility is not a default goal unless the current product requirement, an external protocol, or durable user data explicitly requires it.
+- Optimize for the simplest correct final system, not the smallest diff. If the current ownership, contract, lifecycle or dependency structure is the root cause, change that structure instead of routing around it.
+- Keep one semantic owner and one canonical runtime path for each concept. A completed change must not leave competing internal authorities, old/new execution paths or duplicate representations merely for transition convenience.
+- Adapters belong at real provider, OS, storage, transport or other external boundaries. An adapter between competing internal designs is exceptional and must have explicit scope, a removal condition and a bounded lifetime.
+- When replacing an internal contract, migrate the in-scope callers, delete the obsolete path, search for residual symbols/branches and verify the resulting architecture in the same change set.
+- Avoid speculative abstractions, forwarding-only layers, migration-only optional state and unnecessary public/FFI surface. New indirection or state must represent a real boundary, owner, policy or demonstrated variation.
+- Stop local patching and reassess the design when a change would require duplicated authority, a second internal compatibility path, public/FFI widening only to bridge old callers, migration-only optionality, dependency-direction violations or provider-specific data leaking into an owner contract.
+- Repository-wide invariants are defined in [architecture invariants](docs/architecture/invariants.md); the development rationale and change policy are in [architecture evolution](docs/development/architecture-evolution.md).
+- For architecture-affecting work, follow the repo-local [architecture-change skill](.agents/skills/architecture-change/SKILL.md). For code/build/runtime changes, finish with the [code-change-verification skill](.agents/skills/code-change-verification/SKILL.md).
+
 # Active refactoring instructions
 
 - Use [Stage 3](docs/refactoring/stage-3.md) as the active progress overview and read only the linked execution plan for the current Stage 3 step. [Stage 1](docs/refactoring/stage-1.md) is completed ownership context and [Stage 2](docs/refactoring/stage-2.md) is the completed/frozen internal runtime.

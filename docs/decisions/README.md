@@ -23,6 +23,7 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0006 — Slice-driven delivery](0006-slice-driven-delivery.md)
 - [0007 — EventKit Calendar read](0007-eventkit-calendar-read.md)
 - [0008 — Unified Calendar read](0008-unified-calendar-read.md)
+- [0029 — Pre-stable architecture convergence](0029-pre-stable-architecture-convergence.md)
 
 ### Inference and agent runtime
 

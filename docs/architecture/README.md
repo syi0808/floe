@@ -42,6 +42,7 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 
 | Need | Document |
 |---|---|
+| Repository-wide ownership, path and boundary invariants | [Architecture invariants](invariants.md) |
 | Exact owner/package responsibilities | [Modules and ownership](modules.md) |
 | General Conversation model/tool/delegation flow | [Runtime](runtime.md) |
 | Authority, provenance, crash recovery and side-effect invariants | [Authority and recovery](authority-recovery.md) |
@@ -56,6 +57,7 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 - `tools/architecture/module-dependencies.json` is the **allowed dependency policy**, not a manually copied current graph.
 - `tools/architecture/check_boundaries.py` compares manifests with that policy and requires the current target packages and paths.
 - These architecture documents describe stable ownership and explicitly call out active transitions.
+- `invariants.md` defines cross-cutting final-state properties; [architecture evolution](../development/architecture-evolution.md) defines how changes converge back to those properties.
 - Stage documents own execution status. ADRs own rationale. Neither replaces current architecture documentation.
 
 ## Current transition
