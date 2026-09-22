@@ -14,7 +14,7 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 **Current: 3-F — End-to-End Product Validation.**
 
-3-E is **complete · frozen**. Its [Agent report](stage-3/3-e.md#agent-report) records E0 → E7 caller cutover, owner-prefixed local AppWire services, caller-zero outer ABI/fixture/legacy Conversation deletion, and all final gates on implementation snapshot `c83a6fbcfa6d77f080fe22514808e8befb24f314`. Closure after that snapshot is documentation only. 3-F is the next checkpoint; its implementation and additional evidence collection have **not started**.
+3-E is **complete · frozen**. Its [Agent report](stage-3/3-e.md#agent-report) records E0 → E7 caller cutover, owner-prefixed local AppWire services, caller-zero outer ABI/fixture/legacy Conversation deletion, and all final gates on implementation snapshot `c83a6fbcfa6d77f080fe22514808e8befb24f314`. Closure after that snapshot is documentation only. 3-F is **active**; its [Agent report](stage-3/3-f.md#agent-report) owns the validation evidence and remaining blockers. Stage 3 is not yet eligible to freeze.
 
 3-D remains **complete · frozen**: its [Residual closure Agent report](stage-3/3-d.md#residual-closure-agent-report) records coherent Go owner extraction, real Flutter pairing, protected Rust Access success and revocation failure through a test-owned current saved-connection store, and all final gates on source snapshot `864a39fbd5e5205b4afc5de993c9c4db822716a6`. 3-C remains **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
 
@@ -101,7 +101,7 @@ Canonical Foundation transport is implemented. 3-D verified the macOS release bu
 - `tools/validation/check-local-model.sh` validates current provider-adapter and Inference packages; the smoke script uses the actual `floe-app` example;
 - `apps/client/integration/local_server_pairing_test.dart` uses current Connections imports and the real native pairing owner gateway, with explicitly memory-only test credential persistence.
 
-3-D residual closure repaired the Go extraction without owner → application dependencies or duplicate Console/state aliases. Go race/vet/build and isolated Keychain smoke pass. The Flutter integration completes strict native pairing, exact memory-store persistence, release and server revocation; the separate provider integration proves canonical protected Rust Access succeeds through the exact paired current saved connection and fails closed after server revocation. Neither test overwrites the shared saved-connection Keychain slot. 3-E reran these regressions along with Rust, architecture, Flutter, macOS, iOS simulator, native and supported local-model gates on its recorded final implementation snapshot; all pass. 3-F remains unstarted.
+3-D residual closure repaired the Go extraction without owner → application dependencies or duplicate Console/state aliases. Go race/vet/build and isolated Keychain smoke pass. The Flutter integration completes strict native pairing, exact memory-store persistence, release and server revocation; the separate provider integration proves canonical protected Rust Access succeeds through the exact paired current saved connection and fails closed after server revocation. Neither test overwrites the shared saved-connection Keychain slot. 3-E reran these regressions along with Rust, architecture, Flutter, macOS, iOS simulator, native and supported local-model gates on its recorded final implementation snapshot; all pass. Current validation belongs to the active 3-F report.
 
 ## Execution order
 
@@ -122,7 +122,7 @@ Canonical Foundation transport is implemented. 3-D verified the macOS release bu
 
 3-E  delete caller-zero compatibility (complete · frozen)
 
-3-F  final Apple-first product validation (current checkpoint; not started)
+3-F  final Apple-first product validation (active; freeze blocked)
 ~~~
 
 Do not skip directly to 3-E because a symbol is named `legacy`, `compat`, `RemoteRoute` or `v2`. Caller ownership and the final product contract determine deletion.
