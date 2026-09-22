@@ -12,7 +12,7 @@ persists, and projects the canonical mirror. No JavaScript runtime, credentials,
 model, background agent, or external write operation is introduced.
 
 EventKit is the preferred candidate because it exposes calendars already connected
-to macOS without a separate OAuth service. This decision did not itself establish live provider acceptance. Current implementation and product-boundary validation are tracked by current source, architecture and Stage documents rather than this ADR.
+to macOS without a separate OAuth service. This decision did not itself establish live provider acceptance. Current implementation and product-boundary validation are determined by current source, architecture and the client/native validation runbooks rather than this ADR.
 
 ## Permission exception approved by the user
 
