@@ -14,40 +14,24 @@ use std::{
 
 use chrono::{TimeZone, Utc};
 use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::AgentContext;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::Cancellation;
-use floe_agent_contract::CapabilityDescriptor;
 use floe_agent_contract::CapabilityExecution;
 use floe_agent_contract::CapabilityExecutionState;
-use floe_agent_contract::InferencePolicyDecision;
 use floe_agent_contract::ProviderReplay;
 use floe_agent_contract::SessionProtection;
 use floe_context_contract::ContextIssueReason;
-use floe_context_contract::DataClass;
 use floe_context_contract::EpistemicStatus;
-use floe_context_contract::ModelPlacement;
 use floe_context_contract::PersonalMemoryKind;
-use floe_context_contract::TransferConsent;
+use floe_context_contract::{DataClass, ModelPlacement};
 use floe_conversation::AgentBudget;
-use floe_conversation::AgentCommand;
-use floe_conversation::AgentEventKind;
 use floe_conversation::AgentMessage;
 use floe_conversation::AgentOutcome;
-use floe_conversation::AgentRuntime;
 use floe_conversation::AgentSession;
 use floe_conversation::AgentUsage;
-use floe_conversation::CapabilityHost;
-use floe_conversation::CapabilityInvocation;
-use floe_conversation::GovernedSessionRepository;
-use floe_conversation::ModelRequest;
-use floe_conversation::ModelResponse;
-use floe_conversation::ModelRunner;
 use floe_conversation::SessionStore;
 use floe_execution::budget::ModelUsage;
 use floe_inference::ModelAttemptRecord;
 use floe_inference::ModelAttemptState;
-use floe_inference::ModelStep;
 use floe_kernel::PersonId;
 use floe_knowledge::KNOWLEDGE_VERSION;
 use floe_knowledge::KnowledgeActor;
@@ -1823,194 +1807,4 @@ async fn vault_lock_child() {
         EncryptedAgentVault::open(Path::new(&root), person, Keys::default()).await,
         Err(AgentFailure::Conflict)
     ));
-}
-
-struct LocalModel {
-    keys: Keys,
-    revoke: bool,
-    calls: AtomicUsize,
-}
-
-impl ModelRunner for LocalModel {
-    fn placement(&self) -> ModelPlacement {
-        ModelPlacement::DeviceLocal
-    }
-
-    async fn generate(&self, _: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.revoke {
-            self.keys.0.blocked.store(true, Ordering::SeqCst);
-        }
-        Ok(ModelResponse {
-            replay: None,
-            schema_version: AGENT_VERSION,
-            output: vec![ModelStep::Answer {
-                text: "synthetic-private-answer".into(),
-            }],
-            used_tokens: 10,
-            cost_micros: 0,
-        })
-    }
-}
-
-struct NoCapabilities;
-
-impl CapabilityHost for NoCapabilities {
-    fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
-        vec![]
-    }
-
-    async fn invoke(&self, _: CapabilityInvocation) -> Result<String, AgentFailure> {
-        panic!("No capability may be replayed during vault recovery")
-    }
-}
-
-fn local_policy() -> InferencePolicyDecision {
-    InferencePolicyDecision {
-        purpose: "synthetic-vault-test".into(),
-        data_classes: vec![DataClass::Personal],
-        allowed_placements: vec![ModelPlacement::DeviceLocal],
-        performance_class: "fixture".into(),
-        projection_version: 1,
-        external_transfer_consent: TransferConsent::NotGranted,
-        bounded_sensitive_projection: false,
-    }
-}
-
-#[tokio::test]
-async fn runtime_fails_closed_on_key_loss_and_recovers_without_model_replay() {
-    let root = private_root();
-    let person = PersonId::new();
-    let keys = Keys::default();
-    let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
-        .await
-        .unwrap();
-    let session = vault.create_session().await.unwrap();
-    let model = LocalModel {
-        keys: keys.clone(),
-        revoke: true,
-        calls: AtomicUsize::new(0),
-    };
-    let policy = local_policy();
-    let command = AgentCommand {
-        schema_version: AGENT_VERSION,
-        person_id: person,
-        session_id: session.id,
-        expected_revision: 0,
-        text: "synthetic-private-question".into(),
-    };
-    let context = AgentContext {
-        projection_version: 1,
-        persona: None,
-        optional_context_issues: vec![],
-        memories: vec![],
-        evidence: vec![],
-    };
-    let mut events = vec![];
-    let runtime = AgentRuntime {
-        store: &vault,
-        model: &model,
-        capabilities: &NoCapabilities,
-        policy: &policy,
-        budget: AgentBudget::default(),
-    };
-    assert_eq!(
-        runtime
-            .run_turn(
-                command.clone(),
-                context.clone(),
-                Cancellation::default(),
-                |event| events.push(event)
-            )
-            .await,
-        Err(AgentFailure::VaultUnavailable)
-    );
-    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    assert!(!events.iter().any(|event| matches!(
-        event.event,
-        AgentEventKind::Finished {
-            outcome: AgentOutcome::Completed,
-            ..
-        }
-    )));
-    assert!(!events.iter().any(|event| matches!(
-        event.event,
-        AgentEventKind::MessageCommitted {
-            message: AgentMessage::Assistant { .. },
-            ..
-        }
-    )));
-    assert_eq!(
-        runtime
-            .run_turn(
-                command.clone(),
-                context.clone(),
-                Cancellation::default(),
-                |_| {}
-            )
-            .await,
-        Err(AgentFailure::VaultUnavailable)
-    );
-    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    drop(vault);
-    keys.0.blocked.store(false, Ordering::SeqCst);
-    let reopened = EncryptedAgentVault::open(root.path(), person, keys.clone())
-        .await
-        .unwrap();
-    let interrupted = SessionStore::load(&reopened, person, session.id)
-        .await
-        .unwrap();
-    assert!(interrupted.active_turn.is_some());
-    assert_eq!(interrupted.messages.len(), 1);
-    let runtime = AgentRuntime {
-        store: &reopened,
-        model: &model,
-        capabilities: &NoCapabilities,
-        policy: &policy,
-        budget: AgentBudget::default(),
-    };
-    let recovered = runtime
-        .recover_interrupted(person, session.id, interrupted.revision)
-        .await
-        .unwrap();
-    assert_eq!(recovered.messages, interrupted.messages);
-    assert_eq!(
-        recovered.last_outcome,
-        Some(AgentOutcome::Halted {
-            reason: AgentFailure::Interrupted
-        })
-    );
-    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        SessionStore::load(&reopened, person, session.id)
-            .await
-            .unwrap(),
-        recovered
-    );
-    let model = LocalModel {
-        keys,
-        revoke: false,
-        calls: AtomicUsize::new(0),
-    };
-    let runtime = AgentRuntime {
-        store: &reopened,
-        model: &model,
-        capabilities: &NoCapabilities,
-        policy: &policy,
-        budget: AgentBudget::default(),
-    };
-    let completed = runtime
-        .run_turn(
-            AgentCommand {
-                expected_revision: recovered.revision,
-                ..command
-            },
-            context,
-            Cancellation::default(),
-            |_| {},
-        )
-        .await
-        .unwrap();
-    assert_eq!(completed.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(completed.messages.len(), 3);
 }

@@ -5,7 +5,7 @@
 //! registered for it in `floe-experts-builtin`; this file only decides which
 //! endpoints exist and which readers back the host port they use.
 
-use super::expert_compat::{
+use super::expert_host::{
     CapturingRecorder, ConversationContextReader, ConversationContextReaderApi, ExpertModelHost,
     PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
     PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
@@ -409,8 +409,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::CalendarContextView>> {
         Box::pin(async move {
-            self
-                .personal_views(request, ASSISTANT_CONSUMER)
+            self.personal_views(request, ASSISTANT_CONSUMER)
                 .calendar_views(request.deadline, &request.cancellation)
                 .await
         })
@@ -421,8 +420,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::WorkContextView>> {
         Box::pin(async move {
-            self
-                .personal_views(request, ASSISTANT_CONSUMER)
+            self.personal_views(request, ASSISTANT_CONSUMER)
                 .work_context_views(request.deadline, &request.cancellation)
                 .await
         })
@@ -433,8 +431,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::PeopleView> {
         Box::pin(async move {
-            self
-                .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
                 .people_view(request.deadline, &request.cancellation)
                 .await
         })
@@ -446,8 +443,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         people: &'a floe_context::PeopleView,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::ConfirmedInteractionView>> {
         Box::pin(async move {
-            self
-                .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
                 .confirmed_interaction_views(people, request.deadline, &request.cancellation)
                 .await
         })
@@ -458,8 +454,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<'a, floe_context::WellbeingView> {
         Box::pin(async move {
-            self
-                .personal_views(request, ASSISTANT_CONSUMER)
+            self.personal_views(request, ASSISTANT_CONSUMER)
                 .wellbeing_view(request.deadline, &request.cancellation)
                 .await
         })

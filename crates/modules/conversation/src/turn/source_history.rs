@@ -9,7 +9,7 @@
 use floe_agent_contract::{AgentFailure, HistoryMessageSize, SourceHistoryBoundary};
 use uuid::Uuid;
 
-use crate::turn::{AgentMessage, ModelRequest};
+use crate::turn::AgentMessage;
 
 fn crosses_boundary(message: &AgentMessage, boundary: &dyn SourceHistoryBoundary) -> bool {
     match message {
@@ -40,16 +40,7 @@ pub fn carries_source_history(
         .any(|message| crosses_boundary(message, boundary))
 }
 
-/// Drop the source-derived history this turn is not authorized for.
-///
-/// A replay receipt describes the request that produced it, so a request whose
-/// history changed cannot reuse one.
-pub fn project_source_history(request: &mut ModelRequest, boundary: &dyn SourceHistoryBoundary) {
-    if project_messages(&mut request.messages, request.turn_id, boundary) {
-        request.replay.clear();
-    }
-}
-
+#[cfg(test)]
 fn project_messages(
     messages: &mut Vec<AgentMessage>,
     turn_id: Uuid,

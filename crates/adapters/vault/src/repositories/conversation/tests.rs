@@ -6,6 +6,9 @@ use std::{
 };
 
 use crate::{VaultConversationAdmissionRequest, VaultKey};
+use floe_agent_contract::prompts::{
+    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
+};
 use floe_agent_contract::{
     AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture, ContextEnvelope,
     ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
@@ -13,9 +16,6 @@ use floe_agent_contract::{
     ModelResponse, ModelStep, ModelUsage, PinnedToolRevision, ProjectionRef, RoleSpec,
     RuntimeContext, ScopedInstructions, ToolCall, ToolDescriptor, ToolPort, ToolResult,
     ValidatedModelBatch,
-};
-use floe_agent_contract::prompts::{
-    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_conversation::SessionStore;
 use floe_conversation::{
@@ -973,11 +973,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         delegation_context: None,
     };
     let call = ToolCall {
-        call_id: floe_agent_runtime::stable_call_id(
-            batch.execution_id,
-            batch.batch_id,
-            0,
-        ),
+        call_id: floe_agent_runtime::stable_call_id(batch.execution_id, batch.batch_id, 0),
         invocation_key: floe_agent_runtime::stable_invocation_key(
             batch.execution_id,
             batch.batch_id,
@@ -1701,12 +1697,157 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
         .await
         .unwrap();
     assert!(matches!(
-        floe_conversation::continuation(
-            repository.as_ref(),
-            child_run_id,
-            &person_id.to_string()
-        )
-        .await,
+        floe_conversation::continuation(repository.as_ref(), child_run_id, &person_id.to_string())
+            .await,
         Err(AgentFailure::StorageUnavailable)
     ));
+}
+
+struct KeyRevokingModel {
+    keys: Keys,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for KeyRevokingModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.keys.0.lock().unwrap().clear();
+        Box::pin(async move {
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: vec![ModelStep::Answer {
+                    text: "must not publish after key loss".into(),
+                    artifacts: vec![],
+                }],
+                usage: ModelUsage {
+                    tokens: 10,
+                    cost_micros: 0,
+                },
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn canonical_runtime_key_loss_recovers_confirmed_history_without_model_replay() {
+    use std::sync::atomic::Ordering;
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let original_keys = keys.0.lock().unwrap().clone();
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let service = build_service(Arc::clone(&repository));
+    let model = KeyRevokingModel {
+        keys: keys.clone(),
+        calls: Default::default(),
+    };
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        Default::default(),
+    );
+    turn.principal = person.to_string();
+    for _ in 0..2 {
+        assert_eq!(
+            service
+                .run_turn(
+                    turn.clone(),
+                    ConversationPorts {
+                        projection: &PROJECTOR,
+                        model: &model,
+                        tools: &NoTools,
+                        delegation: &NoDelegation,
+                        validator: &Validator,
+                    }
+                )
+                .await,
+            Err(AgentFailure::VaultUnavailable)
+        );
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    }
+    drop(service);
+    drop(repository);
+    drop(vault);
+    assert!(matches!(
+        EncryptedAgentVault::open(root.path(), person, keys.clone()).await,
+        Err(AgentFailure::VaultUnavailable)
+    ));
+    *keys.0.lock().unwrap() = original_keys.clone();
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(root.path(), person, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let interrupted = reopened.load(person, session.id).await.unwrap();
+    assert!(interrupted.active_turn.is_some());
+    assert!(matches!(
+        interrupted.messages.as_slice(),
+        [AgentMessage::User { .. }]
+    ));
+    reopened.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&reopened)));
+    let interrupted = reopened.load(person, session.id).await.unwrap();
+    let recovered = floe_conversation::recovered_session(
+        repository.as_ref(),
+        reopened.as_ref(),
+        person,
+        floe_conversation::RecoveryRequest {
+            principal: person.to_string(),
+            session_id: session.id,
+            expected_session_revision: interrupted.revision,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(recovered.messages, interrupted.messages);
+    assert_eq!(
+        recovered.last_outcome,
+        Some(floe_conversation::AgentOutcome::Halted {
+            reason: AgentFailure::Interrupted
+        })
+    );
+    assert!(recovered.active_turn.is_none());
+    assert_eq!(reopened.load(person, session.id).await.unwrap(), recovered);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*keys.0.lock().unwrap(), original_keys);
+    let service = build_service(repository);
+    let model = Model::default();
+    turn.command_id = floe_agent_contract::CommandId::new();
+    turn.expected_session_revision = recovered.revision;
+    let completed = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                projection: &PROJECTOR,
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        reopened
+            .load(person, session.id)
+            .await
+            .unwrap()
+            .messages
+            .len(),
+        3
+    );
 }

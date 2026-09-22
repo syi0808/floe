@@ -8,13 +8,15 @@
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 use floe_agent_contract::{
-    AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage,
-    ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement, ExpertReasoningStep,
-    ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry, InferencePolicyDecision,
-    InvocationKey, ModelConversation, ModelConversationEntry, ModelPlacement, ModelRequest,
-    ModelStep, ToolCall, ToolDescriptor, ToolResult, TransferConsent,
+    AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage, ExpertModelAnswer,
+    ExpertModelCall, ExpertModelRequirement, ExpertReasoningStep, ExpertStep, ExpertStepOutcome,
+    ExpertTranscriptEntry, InferencePolicyDecision, InvocationKey, ModelConversation,
+    ModelConversationEntry, ModelPlacement, ModelRequest, ModelStep, ToolCall, ToolDescriptor,
+    ToolResult, TransferConsent,
 };
-use floe_context::{AttentionView, CalendarContextView, NativeContextView, PeopleView, WellbeingView};
+use floe_context::{
+    AttentionView, CalendarContextView, NativeContextView, PeopleView, WellbeingView,
+};
 use floe_inference::{InferenceExecutionConstraint, InferenceExecutor};
 use floe_kernel::{PersonId, TaskId};
 use floe_provider_adapters::sources::ServerSourceClient;
@@ -49,9 +51,7 @@ pub(super) fn expert_policy() -> InferencePolicyDecision {
 ///
 /// The mapping is 1:1 by construction: the Expert states a class, Inference
 /// selects a profile satisfying it. No provider is named here.
-fn execution_constraint(
-    requirement: ExpertModelRequirement,
-) -> InferenceExecutionConstraint {
+fn execution_constraint(requirement: ExpertModelRequirement) -> InferenceExecutionConstraint {
     match requirement {
         ExpertModelRequirement::Any => InferenceExecutionConstraint::Any,
         ExpertModelRequirement::DeviceOnly => InferenceExecutionConstraint::DeviceOnly,
@@ -280,8 +280,8 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
                     text: call.assignment,
                 }],
             };
-            let projection = floe_context::assemble_context_projection(
-                floe_context::ContextProjectionInput {
+            let projection =
+                floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
                     role: floe_context::ContextProjectionRole::Expert,
                     purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
                     response_contract: "One answer to the Expert assignment.",
@@ -294,8 +294,7 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
                     authorized_history_dependencies: &dependencies,
                     input_data_classes: call.policy.data_classes.clone(),
                     max_output_bytes: call.max_output_bytes,
-                },
-            )?;
+                })?;
             let child = self.child_scope(
                 call.deadline,
                 call.max_tokens,
@@ -352,8 +351,8 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
             let catalog = expert_catalog(&step.capabilities)?;
             let conversation = expert_conversation(step.transcript, &catalog)?;
             let dependencies = self.captured_dependencies()?;
-            let projection = floe_context::assemble_context_projection(
-                floe_context::ContextProjectionInput {
+            let projection =
+                floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
                     role: floe_context::ContextProjectionRole::Expert,
                     purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
                     response_contract: "One Expert reasoning step.",
@@ -366,8 +365,7 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
                     authorized_history_dependencies: &dependencies,
                     input_data_classes: step.policy.data_classes.clone(),
                     max_output_bytes: step.max_output_bytes,
-                },
-            )?;
+                })?;
             let child = self.child_scope(
                 step.deadline,
                 step.remaining_tokens,
@@ -399,12 +397,10 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
                     .map(|step| match step {
                         ModelStep::Preamble { text } => Ok(ExpertStep::Preamble { text }),
                         ModelStep::Answer { text, .. } => Ok(ExpertStep::Answer { text }),
-                        ModelStep::CallTool { tool_id, input, .. } => {
-                            Ok(ExpertStep::Call {
-                                capability_id: tool_id,
-                                input,
-                            })
-                        }
+                        ModelStep::CallTool { tool_id, input, .. } => Ok(ExpertStep::Call {
+                            capability_id: tool_id,
+                            input,
+                        }),
                         // An Expert has no one to delegate to.
                         ModelStep::Delegate { .. } => Err(AgentFailure::CapabilityDenied),
                     })
@@ -593,7 +589,6 @@ impl PersonalViewSource<'_> {
             Err(error) => Err(error),
         }
     }
-
 }
 
 pub(super) async fn read_context_source(
@@ -918,16 +913,14 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<NativeContextView, AgentFailure>> + Send + 'a>> {
         let handle = uuid::Uuid::new_v5(&self.person_id.0, b"floe.tasks");
-        Box::pin(
-            floe_context::task_context_view(
-                &self.core.store,
-                self.person_id,
-                handle,
-                chrono::Utc::now(),
-                16,
-                8 * 1024,
-            ),
-        )
+        Box::pin(floe_context::task_context_view(
+            &self.core.store,
+            self.person_id,
+            handle,
+            chrono::Utc::now(),
+            16,
+            8 * 1024,
+        ))
     }
 }
 
@@ -975,7 +968,10 @@ mod tests {
             'a,
             Result<floe_agent_contract::ModelResponse, AgentFailure>,
         > {
-            self.calls.lock().unwrap().push((request.clone(), constraint));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((request.clone(), constraint));
             let next = self.script.lock().unwrap().pop_front().unwrap();
             Box::pin(async move {
                 Ok(floe_agent_contract::ModelResponse {
@@ -1346,12 +1342,14 @@ mod tests {
         let scope = test_scope();
         // Transcript references a capability the step did not declare.
         let mut undeclared = test_step();
-        undeclared.transcript.push(ExpertTranscriptEntry::Capability {
-            call_id: Uuid::new_v4(),
-            capability_id: "calendar.write".into(),
-            input: "{}".into(),
-            result: "done".into(),
-        });
+        undeclared
+            .transcript
+            .push(ExpertTranscriptEntry::Capability {
+                call_id: Uuid::new_v4(),
+                capability_id: "calendar.write".into(),
+                input: "{}".into(),
+                result: "done".into(),
+            });
         // Non-read-only and wrong-schema capabilities are denied like the
         // legacy transport denied them.
         let mut writable = test_step();

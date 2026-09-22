@@ -328,14 +328,9 @@ mod tests {
         GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
         ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
-    use floe_agent_contract::{DataClass, ModelPlacement, TransferConsent};
-    use floe_agent_contract::{ModelReplay, ProviderReplay};
-    use floe_context::{AgentContext, InferencePolicyDecision};
-    use floe_conversation::{
-        AgentBudget, AgentMessage, ModelRequest, SessionStore, prompts::manager_prompt,
-    };
+    use floe_agent_contract::{ModelConversation, ModelConversationEntry};
+    use floe_conversation::{AgentBudget, AgentMessage, SessionStore};
     use floe_execution::Cancellation;
-    use floe_kernel::AGENT_VERSION;
 
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -385,57 +380,56 @@ mod tests {
         }
     }
 
-    fn projection_request(
-        person_id: PersonId,
-        session_id: Uuid,
-        turn_id: Uuid,
-        messages: Vec<AgentMessage>,
-    ) -> ModelRequest {
-        ModelRequest {
-            usage: floe_inference::UsageLedger::default(),
-            replay: vec![ModelReplay {
-                call_id: Uuid::new_v4(),
-                replay: ProviderReplay {
-                    call_ids: vec!["call".into()],
-                    preamble: "".into(),
-                    gateway: "test".into(),
-                    purpose: "test".into(),
-                    external: false,
-                    source: "test".into(),
-                    provider_call_id: "call".into(),
-                    items: serde_json::json!([]),
+    fn projection_request(turn_id: Uuid, messages: &[AgentMessage]) -> ModelConversation {
+        let mut conversation = ModelConversation {
+            history: vec![],
+            current_turn: vec![],
+        };
+        for message in messages {
+            let entry = match message {
+                AgentMessage::User { turn_id, text } => ModelConversationEntry::User {
+                    message_id: *turn_id,
+                    text: text.clone(),
                 },
-            }],
-            schema_version: AGENT_VERSION,
-            prompt: manager_prompt(None).unwrap(),
-            person_id,
-            session_id,
-            turn_id,
-            policy: InferencePolicyDecision {
-                purpose: "test".into(),
-                data_classes: vec![DataClass::Personal],
-                allowed_placements: vec![ModelPlacement::DeviceLocal],
-                performance_class: "test".into(),
-                projection_version: 1,
-                external_transfer_consent: TransferConsent::NotGranted,
-                bounded_sensitive_projection: false,
-            },
-            context: AgentContext {
-                projection_version: 1,
-                persona: None,
-                optional_context_issues: vec![],
-                memories: vec![],
-                evidence: vec![],
-            },
-            messages,
-            capabilities: vec![],
-            active_agents: vec![],
-            remaining_tokens: 100,
-            remaining_cost_micros: 100,
-            max_output_bytes: 4096,
-            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-            cancellation: Cancellation::default(),
+                AgentMessage::Assistant { turn_id, text } => ModelConversationEntry::Assistant {
+                    message_id: *turn_id,
+                    text: text.clone(),
+                },
+                AgentMessage::Compaction {
+                    turn_id, summary, ..
+                } => ModelConversationEntry::Assistant {
+                    message_id: *turn_id,
+                    text: summary.clone(),
+                },
+                _ => panic!("unexpected history entry"),
+            };
+            if message.turn_id() == turn_id {
+                conversation.current_turn.push(entry);
+            } else {
+                conversation.history.push(entry);
+            }
         }
+        conversation
+    }
+
+    async fn project_history(
+        vault: &Vault,
+        session_id: Uuid,
+        conversation: &ModelConversation,
+        resolver: Option<&dyn floe_context::DependencyResolver>,
+    ) -> floe_conversation::ProjectedModelConversation {
+        floe_conversation::project_model_conversation_history(
+            &ContextEvidenceReader::new(vault, session_id),
+            session_id,
+            conversation,
+            resolver,
+            &floe_context::DependencyAuthorization {
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                cancellation: Cancellation::default(),
+            },
+        )
+        .await
+        .unwrap()
     }
 
     fn root() -> tempfile::TempDir {
@@ -1281,23 +1275,23 @@ mod tests {
                 text: "new request".into(),
             },
         ];
-        let mut denied = projection_request(person, session.id, current_turn, messages.clone());
-        governed
-            .project_model_request(&mut denied, None)
-            .await
-            .unwrap();
-        assert_eq!(denied.messages.len(), 2);
-        assert!(denied.replay.is_empty());
-        let mut allowed = projection_request(person, session.id, current_turn, messages);
-        governed
-            .project_model_request(&mut allowed, Some(&AllowDependency))
-            .await
-            .unwrap();
-        assert_eq!(allowed.messages.len(), 3);
-        assert!(allowed.replay.is_empty());
-
+        let conversation = projection_request(current_turn, &messages);
+        let denied = project_history(&vault, session.id, &conversation, None).await;
+        assert_eq!(denied.conversation.history.len(), 1);
+        assert_eq!(denied.conversation.current_turn, conversation.current_turn);
+        assert!(denied.authorized_history_dependencies.is_empty());
+        let allowed =
+            project_history(&vault, session.id, &conversation, Some(&AllowDependency)).await;
+        assert_eq!(allowed.conversation, conversation);
+        assert_eq!(allowed.authorized_history_dependencies.len(), 1);
+        for dependency in allowed.authorized_history_dependencies {
+            governed
+                .record_dependency(current_turn, dependency)
+                .await
+                .unwrap();
+        }
         let mut committed = session;
-        committed.messages = allowed.messages;
+        committed.messages = messages;
         committed.revision = 2;
         governed.compare_and_swap(&committed, 1).await.unwrap();
         assert!(matches!(
@@ -1355,11 +1349,9 @@ mod tests {
         drop(vault);
         let reopened = Vault::open(root.path(), person, keys).await.unwrap();
         let current_turn = Uuid::new_v4();
-        let mut request = projection_request(
-            person,
-            session.id,
+        let request = projection_request(
             current_turn,
-            vec![
+            &vec![
                 compaction,
                 AgentMessage::User {
                     turn_id: current_turn,
@@ -1367,12 +1359,9 @@ mod tests {
                 },
             ],
         );
-        reopened
-            .governed_general_store(session.id)
-            .project_model_request(&mut request, None)
-            .await
-            .unwrap();
-        assert_eq!(request.messages.len(), 1);
+        let projected = project_history(&reopened, session.id, &request, None).await;
+        assert!(projected.conversation.history.is_empty());
+        assert_eq!(projected.conversation.current_turn, request.current_turn);
 
         let mut dependent_session = reopened.create_session().await.unwrap();
         let archived_independent_turn = Uuid::new_v4();
@@ -1421,11 +1410,9 @@ mod tests {
             .unwrap();
         let dependent_compaction = compacted.session.messages[0].clone();
         let current_turn = Uuid::new_v4();
-        let mut request = projection_request(
-            person,
-            dependent_session.id,
+        let request = projection_request(
             current_turn,
-            vec![
+            &vec![
                 dependent_compaction,
                 AgentMessage::User {
                     turn_id: current_turn,
@@ -1433,11 +1420,8 @@ mod tests {
                 },
             ],
         );
-        reopened
-            .governed_general_store(dependent_session.id)
-            .project_model_request(&mut request, None)
-            .await
-            .unwrap();
-        assert_eq!(request.messages.len(), 1);
+        let projected = project_history(&reopened, dependent_session.id, &request, None).await;
+        assert!(projected.conversation.history.is_empty());
+        assert_eq!(projected.conversation.current_turn, request.current_turn);
     }
 }

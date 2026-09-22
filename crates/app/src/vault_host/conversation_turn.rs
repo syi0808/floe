@@ -1,20 +1,15 @@
 use std::{future::Future, pin::Pin};
 
+use crate::ConversationTurnRequest;
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
 use floe_conversation::{AgentBudget, AgentEvent, SessionStore};
-#[cfg(test)]
-use floe_agent_contract::CapabilityDescriptor;
-#[cfg(test)]
-use floe_conversation::{AgentCommand, AgentRuntime, CapabilityHost, CapabilityInvocation};
 use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
-use floe_experts_builtin::BuiltinContextSource;
-use floe_kernel::AGENT_VERSION;
-use crate::ConversationTurnRequest;
 #[cfg(test)]
 use floe_experts::{A2ATaskState, BuiltinExpertSetupReceipt, EXPERT_RESULT_MEDIA_TYPE};
+use floe_experts_builtin::BuiltinContextSource;
 #[cfg(test)]
 use floe_experts_builtin::commitments::{
     CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
@@ -41,6 +36,7 @@ use floe_experts_builtin::work_context::{WorkContextExpertResult, run_work_conte
 use floe_experts_builtin::{
     BuiltinExpertKind, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
 };
+use floe_kernel::AGENT_VERSION;
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
@@ -53,8 +49,8 @@ use super::personal_grants;
 use super::remote_views;
 
 pub(super) mod engine_ports;
-pub(super) mod expert_compat;
 pub(super) mod expert_dispatch;
+pub(super) mod expert_host;
 
 const FINALIZATION_TOKENS: u64 = 1_024;
 const FINALIZATION_COST_MICROS: u64 = 10_000;
@@ -223,9 +219,10 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             floe_conversation::ManagerConfig {
                 role_spec: floe_agent_contract::RoleSpec {
                     role_id: "manager".into(),
-                    instructions:
-                        floe_conversation::prompts::manager_prompt(context.persona.as_ref())?
-                            .render(),
+                    instructions: floe_conversation::prompts::manager_prompt(
+                        context.persona.as_ref(),
+                    )?
+                    .render(),
                     output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
                 },
                 purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
@@ -406,20 +403,6 @@ impl floe_access::DependencyResolver for CompositeDependencyResolver<'_> {
 }
 
 #[cfg(test)]
-struct NoCapabilities;
-
-#[cfg(test)]
-impl CapabilityHost for NoCapabilities {
-    fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
-        vec![]
-    }
-
-    async fn invoke(&self, _: CapabilityInvocation) -> Result<String, AgentFailure> {
-        Err(AgentFailure::CapabilityDenied)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::{
         collections::HashMap,
@@ -435,17 +418,16 @@ mod tests {
     use crate::LocalContextCommand;
     // Canonical Expert host under test: the shared-Inference executor, policy
     // and source host the delegated endpoints prepare.
-    use super::expert_compat::{
-        PersonalAttentionReader, PersonalAttentionReaderApi, ResultRecorder,
-        StoreResultRecorder, expert_policy,
-    };
     use super::expert_dispatch::ConversationExperts;
+    use super::expert_host::{
+        PersonalAttentionReader, PersonalAttentionReaderApi, ResultRecorder, StoreResultRecorder,
+        expert_policy,
+    };
     use floe_agent_contract::ModelPlacement;
+    use floe_agent_contract::{ModelRequest, ModelResponse};
     use floe_context::AttentionView;
-    use floe_conversation::{AgentMessage, ModelRequest, ModelResponse, ModelRunner};
-    use floe_inference::ModelStep;
+    use floe_conversation::AgentMessage;
     use floe_execution::Cancellation;
-    use floe_experts_builtin::prompts::focus_expert_prompt;
     use floe_provider_adapters::sources::native_acquisition::{
         AttentionAcquisitionMode, AttentionAcquisitionResult,
     };
@@ -657,7 +639,10 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 answers: Mutex::new(
-                    answers.into_iter().map(|answer| answer.to_string()).collect(),
+                    answers
+                        .into_iter()
+                        .map(|answer| answer.to_string())
+                        .collect(),
                 ),
             }
         }
@@ -682,7 +667,10 @@ mod tests {
             'a,
             Result<floe_agent_contract::ModelResponse, AgentFailure>,
         > {
-            self.calls.lock().unwrap().push((request.clone(), constraint));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((request.clone(), constraint));
             let answer = self
                 .answers
                 .lock()
@@ -718,21 +706,6 @@ mod tests {
             ledger.work_lease(),
             floe_agent_contract::TraceContext::new(Uuid::new_v4()),
         )
-    }
-
-    fn read_capability(id: &str) -> CapabilityDescriptor {
-        CapabilityDescriptor {
-            schema_version: AGENT_VERSION,
-            id: id.into(),
-            version: "1.0.0".into(),
-            read_only: true,
-            output_data_class: DataClass::Personal,
-            input_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            })),
-        }
     }
 
     fn tool_scope() -> floe_execution::ExecutionScope {
@@ -815,8 +788,6 @@ mod tests {
         }
     }
 
-    struct PositiveFakeModel;
-
     struct UnavailableMemoryReader(AgentFailure);
 
     impl floe_knowledge::MemoryContextReader for UnavailableMemoryReader {
@@ -833,40 +804,140 @@ mod tests {
         source: floe_agent_contract::ContextSource,
     }
 
-    impl ModelRunner for OptionalSourceModel {
-        fn placement(&self) -> ModelPlacement {
-            ModelPlacement::DeviceLocal
-        }
-
-        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-            assert!(request.context.memories.is_empty());
-            assert_eq!(request.context.optional_context_issues.len(), 1);
-            assert_eq!(
-                request.context.optional_context_issues[0].source,
-                self.source
-            );
-            let asks_memory = request.messages.iter().any(|message| {
-                matches!(
-                    message,
-                    AgentMessage::User { text, .. } if text == "What do you remember about me?"
-                )
-            });
-            self.requests.lock().unwrap().push(request);
-            Ok(ModelResponse {
-                replay: None,
-                schema_version: AGENT_VERSION,
-                output: vec![ModelStep::Answer {
-                    text: if asks_memory {
-                        "Saved memory is unavailable; I cannot inspect it right now."
-                    } else {
-                        "Hello! How can I help?"
-                    }
-                    .into(),
-                }],
-                used_tokens: 1,
-                cost_micros: 0,
+    impl floe_agent_contract::ModelPort for OptionalSourceModel {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a floe_execution::ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            Box::pin(async move {
+                let context = &request.projection.envelope.contextual_data;
+                assert!(context.memories.is_empty());
+                assert_eq!(context.optional_context_issues.len(), 1);
+                assert_eq!(context.optional_context_issues[0].source, self.source);
+                let asks_memory = request.projection.envelope.conversation.current_turn.iter().any(|message| {
+                    matches!(message, floe_agent_contract::ModelConversationEntry::User { text, .. } if text == "What do you remember about me?")
+                });
+                let attempt_id = request.attempt_id;
+                self.requests.lock().unwrap().push(request);
+                Ok(ModelResponse {
+                    attempt_id,
+                    steps: vec![floe_agent_contract::ModelStep::Answer {
+                        text: if asks_memory {
+                            "Saved memory is unavailable; I cannot inspect it right now."
+                        } else {
+                            "Hello! How can I help?"
+                        }
+                        .into(),
+                        artifacts: vec![],
+                    }],
+                    usage: floe_agent_contract::ModelUsage {
+                        tokens: 1,
+                        cost_micros: 0,
+                    },
+                })
             })
         }
+    }
+
+    struct NoDispatch;
+
+    impl floe_agent_contract::ToolPort for NoDispatch {
+        fn invoke<'a>(
+            &'a self,
+            _: floe_agent_contract::ToolCall,
+            _: &'a floe_execution::ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<floe_agent_contract::ToolResult, AgentFailure>>
+        {
+            Box::pin(async { panic!("No tool is admitted in this test") })
+        }
+    }
+
+    impl floe_agent_contract::DelegationPort for NoDispatch {
+        fn delegate<'a>(
+            &'a self,
+            _: floe_agent_contract::DelegationRequest,
+            _: &'a floe_execution::ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::TaskReceipt, AgentFailure>,
+        > {
+            Box::pin(async { panic!("No delegation is admitted in this test") })
+        }
+    }
+
+    async fn run_optional_source_turn(
+        vault: &Arc<EncryptedAgentVault<AttentionTestKeys>>,
+        session: &floe_conversation::AgentSession,
+        context: AgentContext,
+        model: &OptionalSourceModel,
+        text: &str,
+    ) -> floe_conversation::AgentSession {
+        let person_id = session.person_id;
+        let local_context = LocalContextHost::default();
+        let resolver = personal_grants::PersonalDependencyResolver {
+            vault: vault.as_ref(),
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let projection = floe_conversation::ConversationModelProjection::new(
+            floe_vault::ContextEvidenceReader::new(vault.as_ref(), session.id),
+            resolver,
+            session.id,
+            context,
+            session.data_classes.clone(),
+            vec![],
+        )
+        .unwrap();
+        let repository = Arc::new(floe_vault::VaultConversationRepository::new(Arc::clone(
+            vault,
+        )));
+        let service = floe_conversation::ConversationService::new(
+            repository,
+            floe_conversation::ManagerConfig {
+                role_spec: floe_agent_contract::RoleSpec {
+                    role_id: "manager".into(),
+                    instructions: "Answer safely.".into(),
+                    output_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT.into(),
+                },
+                purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+                max_iterations: 4,
+                max_output_bytes: 16384,
+                max_run_duration: std::time::Duration::from_secs(10),
+                budget: floe_execution::budget::BudgetConfig::new(16384, 1000000),
+            },
+        )
+        .unwrap();
+        let receipt = service
+            .run_turn(
+                floe_conversation::TurnRequest {
+                    command_id: floe_agent_contract::CommandId::new(),
+                    session_id: session.id,
+                    expected_session_revision: session.revision,
+                    principal: person_id.to_string(),
+                    prompt: text.into(),
+                    mode: floe_conversation::TurnMode::New,
+                    retry_of: None,
+                    profile: floe_conversation::ProfileSelection::Auto,
+                    allowed_catalog: Default::default(),
+                    replay: vec![],
+                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                    cancellation: Cancellation::default(),
+                    delegation_context: None,
+                },
+                floe_conversation::ConversationPorts {
+                    projection: &projection,
+                    model,
+                    tools: &NoDispatch,
+                    delegation: &NoDispatch,
+                    validator: &engine_ports::ManagerPayloadValidator,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.state, floe_conversation::RunState::Completed);
+        vault.load(person_id, session.id).await.unwrap()
     }
 
     #[tokio::test]
@@ -874,17 +945,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
-        let vault =
+        let vault = Arc::new(
             EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
                 .await
-                .unwrap();
-        let local_context = LocalContextHost::default();
-        let liveness = personal_grants::PersonalDependencyLiveness {
-            local_context: &local_context,
-            person_id,
-            device_id: "test-device",
-        };
-        let policy = expert_policy();
+                .unwrap(),
+        );
+        vault.activate_conversation_executor().await.unwrap();
         let model = OptionalSourceModel {
             requests: Mutex::new(Vec::new()),
             source: floe_agent_contract::ContextSource::Memory,
@@ -899,28 +965,8 @@ mod tests {
                 let context = conversation_context(&UnavailableMemoryReader(failure))
                     .await
                     .unwrap();
-                let store = vault.governed_general_store_with_liveness(session.id, &liveness);
-                let completed = AgentRuntime {
-                    store: &store,
-                    model: &model,
-                    capabilities: &NoCapabilities,
-                    policy: &policy,
-                    budget: AgentBudget::default(),
-                }
-                .run_turn(
-                    AgentCommand {
-                        schema_version: AGENT_VERSION,
-                        person_id,
-                        session_id: session.id,
-                        expected_revision: 0,
-                        text: text.into(),
-                    },
-                    context,
-                    Cancellation::default(),
-                    |_| {},
-                )
-                .await
-                .unwrap();
+                let completed =
+                    run_optional_source_turn(&vault, &session, context, &model, text).await;
                 assert_eq!(
                     completed.last_outcome,
                     Some(floe_conversation::AgentOutcome::Completed)
@@ -969,12 +1015,14 @@ mod tests {
         let vault_root = root.path().join("vault");
         fs::create_dir(&vault_root).unwrap();
         fs::set_permissions(&vault_root, fs::Permissions::from_mode(0o700)).unwrap();
-        let vault =
+        let vault = Arc::new(
             EncryptedAgentVault::create(&vault_root, person_id, AttentionTestKeys::default())
                 .await
-                .unwrap();
+                .unwrap(),
+        );
+        vault.activate_conversation_executor().await.unwrap();
         let session = vault.create_session().await.unwrap();
-        let mut context = conversation_context(&vault).await.unwrap();
+        let mut context = conversation_context(vault.as_ref()).await.unwrap();
         let views = optional_task_views(&core, person_id, &mut context)
             .await
             .unwrap();
@@ -990,53 +1038,13 @@ mod tests {
             requests: Mutex::new(vec![]),
             source: floe_agent_contract::ContextSource::Tasks,
         };
-        let policy = expert_policy();
-        let store = vault.governed_general_store(session.id);
-        let completed = AgentRuntime {
-            store: &store,
-            model: &model,
-            capabilities: &NoCapabilities,
-            policy: &policy,
-            budget: AgentBudget::default(),
-        }
-        .run_turn(
-            AgentCommand {
-                schema_version: AGENT_VERSION,
-                person_id,
-                session_id: session.id,
-                expected_revision: 0,
-                text: "Hello".into(),
-            },
-            context,
-            Cancellation::default(),
-            |_| {},
-        )
-        .await
-        .unwrap();
+        let completed = run_optional_source_turn(&vault, &session, context, &model, "Hello").await;
         assert_eq!(
             completed.last_outcome,
             Some(floe_conversation::AgentOutcome::Completed)
         );
         assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
         assert_eq!(model.requests.lock().unwrap().len(), 1);
-    }
-
-    impl ModelRunner for PositiveFakeModel {
-        fn placement(&self) -> ModelPlacement {
-            ModelPlacement::DeviceLocal
-        }
-
-        async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-            Ok(ModelResponse {
-                replay: None,
-                schema_version: 1,
-                output: vec![ModelStep::Answer {
-                    text: "Attention response".into(),
-                }],
-                used_tokens: 1,
-                cost_micros: 0,
-            })
-        }
     }
 
     const COMMITMENTS_AGENT_ID: &str = BuiltinExpertKind::Commitments.package_id();
@@ -1374,7 +1382,6 @@ mod tests {
             vec![floe_access::ATTENTION_ASSISTANT_CONSUMER]
         );
 
-        let policy = expert_policy();
         let liveness = personal_grants::PersonalDependencyLiveness {
             local_context: &local_context,
             person_id,
@@ -1389,8 +1396,6 @@ mod tests {
         let recorder = StoreResultRecorder { store: &store };
         let turn_id = Uuid::new_v4();
         let call_id = Uuid::new_v4();
-        // What the legacy session-CAS half below needs: an attention read
-        // whose dependency the recorder bound to this turn and call.
         let (attention_view, attention_dependency) = reader
             .read(
                 person_id,
@@ -1431,50 +1436,17 @@ mod tests {
             person_id,
             device_id: "test-device",
         };
-        let fake_model = PositiveFakeModel;
-        let mut request = ModelRequest {
-            usage: floe_inference::UsageLedger::default(),
-            replay: vec![],
-            schema_version: AGENT_VERSION,
-            prompt: focus_expert_prompt(),
-            person_id,
-            session_id: session.id,
-            turn_id,
-            policy: policy.clone(),
-            context: AgentContext {
-                projection_version: 1,
-                persona: None,
-                optional_context_issues: vec![],
-                memories: vec![],
-                evidence: vec![],
-            },
-            messages: admitted.messages.clone(),
-            capabilities: vec![read_capability("attention.coarse.read")],
-            active_agents: vec![],
-            remaining_tokens: 1_000,
-            remaining_cost_micros: 1_000,
-            max_output_bytes: 8 * 1024,
+        let authorization = floe_context::DependencyAuthorization {
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
             cancellation: Cancellation::default(),
         };
-        store
-            .revalidate_current_coverage(&request, &resolver)
-            .await
-            .unwrap();
-        store
-            .project_model_request(&mut request, Some(&resolver))
-            .await
-            .unwrap();
-        let fence_request = request.clone();
-        let response = fake_model.generate(request).await.unwrap();
-        store
-            .revalidate_current_coverage(&fence_request, &resolver)
-            .await
-            .unwrap();
-        assert!(matches!(
-            response.output.as_slice(),
-            [ModelStep::Answer { .. }]
-        ));
+        floe_context::revalidate_turn_coverage(
+            store.committed_turn_coverage(turn_id).await.unwrap(),
+            &resolver,
+            &authorization,
+        )
+        .await
+        .unwrap();
 
         let mut completed = admitted.clone();
         completed.revision = 2;
@@ -1641,8 +1613,7 @@ mod tests {
                 descriptor.definition_revision,
                 floe_context::MANAGER_TOOL_DEFINITION_REVISION
             );
-            let schema: serde_json::Value =
-                serde_json::from_str(&descriptor.input_schema).unwrap();
+            let schema: serde_json::Value = serde_json::from_str(&descriptor.input_schema).unwrap();
             assert_eq!(schema["additionalProperties"], false);
             assert!(descriptor.input_schema.len() < 1024);
         }
@@ -1864,11 +1835,10 @@ mod tests {
                 .unwrap();
                 let now = chrono::Utc::now();
                 let consumer = request.consumer().clone();
-                let processing =
-                    floe_context_contract::ProcessingRestriction::ApprovedRecipient {
-                        recipient: "gateway-local".into(),
-                        categories: vec![floe_context_contract::GrantDataCategory::Metadata],
-                    };
+                let processing = floe_context_contract::ProcessingRestriction::ApprovedRecipient {
+                    recipient: "gateway-local".into(),
+                    categories: vec![floe_context_contract::GrantDataCategory::Metadata],
+                };
                 let dependency = floe_context_contract::ContextDependency::try_new(
                     person_id,
                     floe_context_contract::GrantId::new(),
@@ -1942,10 +1912,9 @@ mod tests {
                 definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
                 input: input.into(),
             };
-            let result =
-                floe_agent_contract::ToolPort::invoke(&tools, call.clone(), &scope)
-                    .await
-                    .unwrap();
+            let result = floe_agent_contract::ToolPort::invoke(&tools, call.clone(), &scope)
+                .await
+                .unwrap();
             assert_eq!(result.call_id, call.call_id);
             assert!(result.text.contains("m1"), "{tool_id}: {}", result.text);
             assert!(result.artifacts.is_empty());
@@ -2227,10 +2196,7 @@ mod tests {
             cards: test_expert_cards(),
             grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
                 person_id,
-                &[
-                    BuiltinContextSource::Mail,
-                    BuiltinContextSource::Calendar,
-                ],
+                &[BuiltinContextSource::Mail, BuiltinContextSource::Calendar],
             ))),
             task_runners: &[],
         };
@@ -2381,7 +2347,6 @@ mod tests {
                 .to_string(),
             )
             .await;
-
         });
         let answer = serde_json::json!({
             "summary": "Four bounded sources support the delivery commitment.",
@@ -3407,10 +3372,7 @@ mod tests {
                     message_id: Uuid::new_v4(),
                     text: "how am I doing?".into(),
                 },
-                floe_agent_contract::ModelConversationEntry::ToolExchange {
-                    call,
-                    result,
-                },
+                floe_agent_contract::ModelConversationEntry::ToolExchange { call, result },
             ],
         )
         .await;
@@ -3467,20 +3429,20 @@ mod tests {
         assert_eq!(
             floe_agent_contract::ModelPort::generate(
                 &service,
-                    floe_agent_contract::ModelRequest {
-                        attempt_id: Uuid::new_v4(),
-                        principal: fixture.person_id.to_string(),
-                        projection,
-                        catalog: floe_agent_contract::AllowedCatalog::default(),
-                        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
-                        consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
-                        preferred_profile_id: None,
-                        replay: vec![],
-                    },
-                    &scope,
-                )
-                .await
-                .err(),
+                floe_agent_contract::ModelRequest {
+                    attempt_id: Uuid::new_v4(),
+                    principal: fixture.person_id.to_string(),
+                    projection,
+                    catalog: floe_agent_contract::AllowedCatalog::default(),
+                    purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+                    consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+                    preferred_profile_id: None,
+                    replay: vec![],
+                },
+                &scope,
+            )
+            .await
+            .err(),
             Some(AgentFailure::AccessReviewRequired)
         );
         assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
@@ -3523,7 +3485,9 @@ mod tests {
                         floe_access::PersonalAccessConfiguration {
                             connector: floe_access::ATTENTION_CONNECTOR.into(),
                             device_id: "test-device".into(),
-                            change: floe_access::PersonalAccessChange::SetEnabled { enabled: false },
+                            change: floe_access::PersonalAccessChange::SetEnabled {
+                                enabled: false,
+                            },
                         },
                         Cancellation::default(),
                     )
@@ -3549,10 +3513,7 @@ mod tests {
                     message_id: Uuid::new_v4(),
                     text: "how am I doing?".into(),
                 },
-                floe_agent_contract::ModelConversationEntry::ToolExchange {
-                    call,
-                    result,
-                },
+                floe_agent_contract::ModelConversationEntry::ToolExchange { call, result },
             ],
         )
         .await;
@@ -3578,28 +3539,27 @@ mod tests {
         let provider = B2DeviceProvider {
             transport: transport.clone(),
         };
-        let service =
-            floe_inference::InferenceService::new(provider, revoking, B2AllowAuthority);
+        let service = floe_inference::InferenceService::new(provider, revoking, B2AllowAuthority);
         let (ledger, scope) = b2_scope();
         // Admit and consume succeed; the grant is revoked mid-flight; the
         // post-response revalidation denies and suppresses the content.
         assert_eq!(
             floe_agent_contract::ModelPort::generate(
                 &service,
-                    floe_agent_contract::ModelRequest {
-                        attempt_id: Uuid::new_v4(),
-                        principal: fixture.person_id.to_string(),
-                        projection,
-                        catalog: floe_agent_contract::AllowedCatalog::default(),
-                        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
-                        consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
-                        preferred_profile_id: None,
-                        replay: vec![],
-                    },
-                    &scope,
-                )
-                .await
-                .err(),
+                floe_agent_contract::ModelRequest {
+                    attempt_id: Uuid::new_v4(),
+                    principal: fixture.person_id.to_string(),
+                    projection,
+                    catalog: floe_agent_contract::AllowedCatalog::default(),
+                    purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+                    consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+                    preferred_profile_id: None,
+                    replay: vec![],
+                },
+                &scope,
+            )
+            .await
+            .err(),
             Some(AgentFailure::PolicyDenied)
         );
         assert_eq!(transport.calls.load(Ordering::SeqCst), 1);

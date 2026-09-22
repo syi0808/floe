@@ -16,7 +16,7 @@ use floe_context::{
 };
 use uuid::Uuid;
 
-use crate::turn::{AgentMessage, ModelRequest};
+use crate::turn::AgentMessage;
 
 /// What a projection is applied against.
 pub struct HistoryProjection<'a> {
@@ -52,47 +52,6 @@ pub fn narrow_by_source_boundary(
     }
 }
 
-/// Apply the decision to the transcript, and report every dependency the
-/// current turn now stands on.
-///
-/// The replay is always discarded: a receipt describes the request that
-/// produced it, and this request is not that one.
-pub fn project_history_into(
-    request: &mut ModelRequest,
-    projection: HistoryProjection<'_>,
-    mut record: impl FnMut(Uuid, &[ContextDependency]) -> Result<(), AgentFailure>,
-) -> Result<bool, AgentFailure> {
-    let messages = std::mem::take(&mut request.messages);
-    let mut retained = Vec::with_capacity(messages.len());
-    let mut filtered = false;
-    let mut recorded: Vec<Uuid> = Vec::new();
-    for message in messages {
-        let turn_id = message.turn_id();
-        if projection.current_turn == Some(turn_id) {
-            retained.push(message);
-            continue;
-        }
-        let decision = projection.decisions.get(&turn_id);
-        let retain_derived = decision.is_some_and(|decision| decision.retain_derived);
-        if retain_derived {
-            if let Some(decision) = decision
-                && !recorded.contains(&turn_id)
-            {
-                recorded.push(turn_id);
-                record(turn_id, &decision.authorized_dependencies)?;
-            }
-            retained.push(message);
-        } else if matches!(message, AgentMessage::User { .. }) {
-            retained.push(message);
-        } else {
-            filtered = true;
-        }
-    }
-    request.messages = retained;
-    request.replay.clear();
-    Ok(filtered)
-}
-
 /// A typed history projection: the filtered conversation plus the exact
 /// dependencies its retained history reauthorized under.
 pub struct ProjectedModelConversation {
@@ -112,9 +71,7 @@ fn history_entry_identity(entry: &ModelConversationEntry) -> Uuid {
         | ModelConversationEntry::Preamble { message_id, .. }
         | ModelConversationEntry::Assistant { message_id, .. } => *message_id,
         ModelConversationEntry::ToolExchange { call, .. } => call.call_id,
-        ModelConversationEntry::DelegationExchange { request, .. } => {
-            request.task_id.as_uuid()
-        }
+        ModelConversationEntry::DelegationExchange { request, .. } => request.task_id.as_uuid(),
     }
 }
 
@@ -263,8 +220,9 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async move { Ok(()) })
         }
     }
@@ -276,8 +234,9 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async move { Err(AgentFailure::PolicyDenied) })
         }
     }
@@ -437,12 +396,10 @@ mod tests {
             ],
         };
         // Even denied coverage cannot remove current-turn entries.
-        let reader = MapReader::with(vec![
-            (
-                stale_id,
-                DependencyCoverage::dependent(dependency(person())).unwrap(),
-            ),
-        ]);
+        let reader = MapReader::with(vec![(
+            stale_id,
+            DependencyCoverage::dependent(dependency(person())).unwrap(),
+        )]);
 
         let projected = project_model_conversation_history(
             &reader,
@@ -467,10 +424,15 @@ mod tests {
         };
         let reader = MapReader::with(vec![]);
 
-        let projected =
-            project_model_conversation_history(&reader, Uuid::new_v4(), &conversation, None, &authorization())
-                .await
-                .unwrap();
+        let projected = project_model_conversation_history(
+            &reader,
+            Uuid::new_v4(),
+            &conversation,
+            None,
+            &authorization(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(projected.conversation.history.len(), 1);
         assert!(matches!(

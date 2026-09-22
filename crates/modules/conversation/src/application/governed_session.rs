@@ -9,14 +9,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use floe_agent_contract::{AgentFailure, BoxFuture, SessionProtection};
 use floe_agent_contract::{ContextDependency, DependencyCoverage};
-use floe_context::{
-    CoverageMessageFact, CoverageRegistry, DependencyAuthorization, DependencyLiveness,
-    DependencyResolver, EvidenceReader,
-};
+use floe_context::{CoverageMessageFact, CoverageRegistry, DependencyLiveness};
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
-use crate::turn::{AgentMessage, AgentSession, ModelRequest, SessionStore};
+use crate::turn::{AgentMessage, AgentSession, SessionStore};
 
 /// The storage a governed Session turn needs, and nothing more.
 ///
@@ -57,30 +54,6 @@ pub struct GovernedSessionStore<'a, Repository> {
     session_id: Uuid,
     coverage: CoverageRegistry,
     liveness: Option<&'a dyn DependencyLiveness>,
-}
-
-/// The committed coverage of this Session's turns, as Context reads it.
-struct SessionEvidence<'a, Repository> {
-    repository: &'a Repository,
-    session_id: Uuid,
-}
-
-impl<Repository: GovernedSessionRepository> EvidenceReader for SessionEvidence<'_, Repository> {
-    async fn read_turn_coverage(
-        &self,
-        session_id: Uuid,
-        turn_id: Uuid,
-    ) -> Result<DependencyCoverage, AgentFailure> {
-        if session_id.is_nil() || turn_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        if session_id != self.session_id {
-            return Err(AgentFailure::Conflict);
-        }
-        self.repository
-            .read_turn_coverage(session_id, turn_id)
-            .await
-    }
 }
 
 impl<'a, Repository: GovernedSessionRepository> GovernedSessionStore<'a, Repository> {
@@ -181,90 +154,6 @@ impl<'a, Repository: GovernedSessionRepository> GovernedSessionStore<'a, Reposit
         self.repository
             .read_turn_coverage(self.session_id, turn_id)
             .await
-    }
-
-    pub async fn project_model_request(
-        &self,
-        request: &mut ModelRequest,
-        resolver: Option<&dyn DependencyResolver>,
-    ) -> Result<(), AgentFailure> {
-        self.project_model_request_with_coverage(request, resolver)
-            .await
-            .map(|_| ())
-    }
-
-    /// Re-admit the coverage the current turn already stands on.
-    pub async fn revalidate_current_coverage(
-        &self,
-        request: &ModelRequest,
-        resolver: &dyn DependencyResolver,
-    ) -> Result<(), AgentFailure> {
-        if request.session_id != self.session_id {
-            return Err(AgentFailure::Conflict);
-        }
-        let coverage = match self.coverage.turn_coverage(request.turn_id)? {
-            Some(value) => value,
-            None => {
-                self.repository
-                    .read_turn_coverage(self.session_id, request.turn_id)
-                    .await?
-            }
-        };
-        floe_context::revalidate_turn_coverage(coverage, resolver, &authorization(request)).await
-    }
-
-    /// Project the transcript this model attempt may see.
-    ///
-    /// Context decides what each recorded turn still authorizes; this applies
-    /// that decision: a Person's own message always stays, anything derived
-    /// from a source that no longer re-admits is dropped, and any replay is
-    /// discarded once the transcript it replayed against has changed.
-    pub async fn project_model_request_with_coverage(
-        &self,
-        request: &mut ModelRequest,
-        resolver: Option<&dyn DependencyResolver>,
-    ) -> Result<bool, AgentFailure> {
-        if request.session_id != self.session_id {
-            return Err(AgentFailure::Conflict);
-        }
-        let evidence = SessionEvidence {
-            repository: self.repository,
-            session_id: self.session_id,
-        };
-        let decisions = floe_context::project_history(
-            &evidence,
-            self.session_id,
-            request.messages.iter().map(AgentMessage::turn_id),
-            resolver,
-            &authorization(request),
-        )
-        .await?;
-        let current_turn = request.turn_id;
-        super::history_projection::project_history_into(
-            request,
-            super::history_projection::HistoryProjection {
-                decisions: &decisions,
-                current_turn: None,
-            },
-            |_, dependencies| {
-                for dependency in dependencies {
-                    self.coverage
-                        .record_dependency(current_turn, dependency.clone(), None)
-                        .map_err(|error| match error {
-                            AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
-                            error => error,
-                        })?;
-                }
-                Ok(())
-            },
-        )
-    }
-}
-
-fn authorization(request: &ModelRequest) -> DependencyAuthorization {
-    DependencyAuthorization {
-        deadline: request.deadline,
-        cancellation: request.cancellation.clone(),
     }
 }
 

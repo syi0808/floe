@@ -27,7 +27,7 @@ use floe_vault::{CalendarGrantAdmission, EncryptedAgentVault, VaultKeyProvider};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::super::super::expert_compat::ExpertModelHost;
+use super::super::super::expert_host::ExpertModelHost;
 use crate::FloeCore;
 
 pub struct CalendarExpertEndpointRequest {
