@@ -28,6 +28,9 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+#[path = "support/live_model.rs"]
+mod live_model;
+
 #[derive(Clone, Default)]
 struct MemoryKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
 
@@ -69,6 +72,18 @@ fn window() -> RemoteCallWindow {
 
 #[tokio::test]
 async fn live_pairing_current_connection_access_is_denied_after_server_revocation() {
+    exercise_live_server(None).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly approved existing Codex OAuth credential and model"]
+async fn live_codex_model_uses_canonical_inference_and_exact_recipient() {
+    let model = std::env::var("FLOE_VALIDATION_CODEX_MODEL").expect("approved configured model");
+    assert!(!model.trim().is_empty());
+    exercise_live_server(Some(model)).await;
+}
+
+async fn exercise_live_server(model: Option<String>) {
     let temporary = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let server_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../server");
@@ -159,6 +174,20 @@ async fn live_pairing_current_connection_access_is_denied_after_server_revocatio
         .await
         .unwrap();
     let csrf = state["csrf"].as_str().unwrap();
+    if let Some(model) = &model {
+        let configured = client
+            .post(format!("{base_url}/manage/api/provider"))
+            .header(header::ORIGIN, &base_url)
+            .header(header::COOKIE, &cookie)
+            .header("X-Floe-CSRF", csrf)
+            .json(&json!({"provider":"codex_oauth", "classes": {
+                "balanced": {"model":model, "reasoning_effort":"medium"}
+            }}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(configured.status(), StatusCode::OK);
+    }
     let vault_directory = tempfile::tempdir().unwrap();
     std::fs::set_permissions(
         vault_directory.path(),
@@ -287,6 +316,18 @@ async fn live_pairing_current_connection_access_is_denied_after_server_revocatio
         ),
         Err(AgentFailure::PolicyDenied)
     ));
+    let generated = if model.is_some() {
+        live_model::assert_remote_profile(&saved).await;
+        let denied = live_model::attempt(&saved).await;
+        assert_eq!(denied.result.unwrap_err(), AgentFailure::PolicyDenied);
+        assert_eq!(denied.usage.attempts, 0);
+        let mut consented = saved.clone();
+        consented.allow_external = true;
+        consented.external_recipients = vec!["chatgpt.com".into()];
+        Some((live_model::attempt(&consented).await, consented))
+    } else {
+        None
+    };
     let revoked = client
         .post(format!("{base_url}/manage/api/client/delete"))
         .header(header::ORIGIN, &base_url)
@@ -313,4 +354,11 @@ async fn live_pairing_current_connection_access_is_denied_after_server_revocatio
         inspect_remote_authority(&endpoint, None, &window()).await,
         Err(AgentFailure::CredentialExpired)
     );
+    if let Some((outcome, consented)) = generated {
+        let after_revoke = live_model::attempt(&consented).await;
+        assert!(after_revoke.result.is_err());
+        assert_eq!(after_revoke.usage.attempts, 0);
+        live_model::assert_generated(outcome);
+        println!("LIVE_CODEX_CANONICAL_INFERENCE_CONSENT_GENERATION_REVOCATION_PASSED");
+    }
 }

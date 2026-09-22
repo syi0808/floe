@@ -73,6 +73,14 @@ credential through `CurrentSavedConnectionStore::fixed`. It proves protected
 Rust Access inspection succeeds, then rejects both fresh and previously prepared
 transports after server revocation. This test also runs in the macOS Rust
 workspace suite; it never reads or writes the shared saved-connection Keychain slot.
+Its separately ignored `live_codex_model_uses_canonical_inference_and_exact_recipient`
+test requires explicit operator approval and an already-configured, unexpired
+Codex OAuth credential. With `FLOE_VALIDATION_CODEX_MODEL` set to the approved
+existing model, run that exact test with `-- --exact --ignored --nocapture`.
+It configures only a disposable loopback server, uses fictional input through
+canonical Inference/Access, verifies exact `chatgpt.com` consent and usage, and
+revokes only its disposable paired client. It is not a Flutter Conversation test
+and does not set up, refresh deliberately, or rotate an external account.
 Current end-to-end validation results and remaining blockers are recorded only in
 `docs/refactoring/stage-3/3-f.md`; 3-D and 3-E are frozen historical evidence.
 
