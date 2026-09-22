@@ -154,6 +154,13 @@ pub async fn attempt(saved: &SavedServerConnection) -> Outcome {
 }
 
 pub fn assert_generated(outcome: Outcome) {
+    println!(
+        "real_model_attempts={} settled_tokens={} estimated_tokens={} failure={:?}",
+        outcome.usage.attempts,
+        outcome.usage.tokens,
+        outcome.usage.estimated_tokens,
+        outcome.result.as_ref().err()
+    );
     let response = outcome.result.expect("real configured Codex generation");
     assert_eq!(response.attempt_id, outcome.attempt_id);
     assert_eq!(outcome.usage.attempts, 1);
@@ -171,9 +178,5 @@ pub fn assert_generated(outcome: Outcome) {
             .steps
             .iter()
             .all(|step| matches!(step, ModelStep::Answer { .. } | ModelStep::Preamble { .. }))
-    );
-    println!(
-        "real_model_attempts={} settled_tokens={}",
-        outcome.usage.attempts, outcome.usage.tokens
     );
 }
