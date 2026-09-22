@@ -33,7 +33,7 @@ pub fn host_error(value: HostError) -> ErrorDto {
         HostError::IdentityUnavailable => {
             error(ErrorCodeDto::Internal, "local host identity is unavailable")
         }
-        HostError::Closing | HostError::UnsupportedCaller | HostError::Shutdown => {
+        HostError::Closing | HostError::Shutdown => {
             error(ErrorCodeDto::Internal, "host is unavailable")
         }
     }

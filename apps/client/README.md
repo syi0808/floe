@@ -37,7 +37,11 @@ flutter run -d macos
 ```
 
 Build native FFI and Flutter from the same source snapshot (`cargo build -p floe-ffi`
-before native Flutter tests). Pairing uses the schema-2 Connections owner ABI;
+before native Flutter tests). Local Vault, Conversation sessions, Experts, Access,
+Knowledge, Connections, Day, Actions and Context use owner-prefixed typed intents
+on the existing `command_v2/query_v2` AppWire. Rust derives Person/device authority
+from the verified product profile; there is no generic AgentVault/fixture ABI or
+unverified host fallback. Pairing uses the schema-2 Connections owner ABI;
 protected grant operations use the separate Access owner ABI and load the saved
 connection in Rust, not from a Flutter request route. Approved credentials are
 persisted and verified before releasing their bounded Rust result.
@@ -150,7 +154,7 @@ Run this command from the repository root. Logs are written under `.floe-debug/`
 filtered with `FLOE_LOG`, for example `FLOE_LOG=debug ./scripts/run-agent-debug.sh`.
 
 The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
-dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with
+dedicated FFI isolate. `NativeDayGateway` exchanges admitted Day command/query envelopes with
 the Rust core, which owns all Turso reads and writes. Local data is stored under
 the app's Application Support directory.
 

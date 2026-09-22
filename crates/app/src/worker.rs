@@ -5,8 +5,6 @@
 //! parses a request into one of these and projects the result back out, so that
 //! the queue, the job map and the dispatcher never speak a protocol.
 
-use std::collections::BTreeMap;
-
 use floe_agent_contract::AgentFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
@@ -203,6 +201,7 @@ pub enum WorkerAction {
 ///
 /// This is scheduling only: submit a command, read how far it got, stop it, or
 /// let the vault go.
+#[cfg(test)]
 pub enum WorkerOperation {
     Submit { action: Box<WorkerAction> },
     Poll { after_sequence: usize },
@@ -263,17 +262,6 @@ impl WorkerAction {
     }
 }
 
-impl WorkerOperation {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Submit { action } => action.name(),
-            Self::Poll { .. } => "poll",
-            Self::Stop => "stop",
-            Self::Release => "release",
-        }
-    }
-}
-
 /// How far one command got, and everything it produced.
 ///
 /// Every slot is an owner's own value; a caller decides how to say it.
@@ -282,7 +270,9 @@ pub struct WorkerResult {
     pub request_id: Uuid,
     pub person_id: PersonId,
     pub stage: String,
+    #[cfg(test)]
     pub events: Vec<floe_conversation::AgentEvent>,
+    #[cfg(test)]
     pub next_sequence: usize,
     pub done: bool,
     pub state: Option<VaultState>,
@@ -306,9 +296,6 @@ pub struct WorkerResult {
     pub calendar_actions: Option<crate::CalendarActionsResult>,
     pub failure: Option<AgentFailure>,
 }
-
-/// One trace field a worker result reports about itself.
-pub type WorkerTrace = BTreeMap<&'static str, String>;
 
 impl WorkerAction {
     pub(crate) fn remote_caller(&self) -> Option<&crate::CallerContext> {

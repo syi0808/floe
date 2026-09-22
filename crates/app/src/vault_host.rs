@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use crate::WorkerOperation;
 #[cfg(target_os = "android")]
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use crate::{
@@ -60,22 +62,12 @@ const AGENT_VAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
 const MAX_VAULT_JOBS: usize = 64;
 const MAX_IN_FLIGHT_VAULT_JOBS: usize = 8;
 
-pub struct VaultBridge {
+pub(crate) struct VaultBridge {
     root: PathBuf,
     core: Arc<FloeCore>,
     worker: RefCell<Option<Worker>>,
     local_context: Arc<LocalContextHost>,
     app_events: Arc<crate::events::AppEventBuffer>,
-}
-
-/// A vault request that could not complete, and where it stopped.
-///
-/// Which stage a request reached is what a caller needs to report it; turning
-/// that into an error on a wire is the caller's own business.
-pub struct VaultRequestFailure {
-    pub failure: AgentFailure,
-    pub request_id: Uuid,
-    pub stage: &'static str,
 }
 
 impl VaultBridge {
@@ -91,27 +83,6 @@ impl VaultBridge {
             local_context,
             app_events: Arc::new(crate::events::AppEventBuffer::default()),
         }
-    }
-
-    /// Run one request against this Person's vault worker.
-    ///
-    /// The operation is still the worker's own envelope, which R003 07
-    /// replaces; what this no longer does is read it off the wire or decide
-    /// what a failure looks like on one.
-    pub fn request(
-        &self,
-        person: PersonId,
-        request_id: Uuid,
-        operation: WorkerOperation,
-    ) -> Result<WorkerResult, VaultRequestFailure> {
-        let stage = operation.name();
-        self.worker()
-            .and_then(|worker| worker.request(person, request_id, operation))
-            .map_err(|failure| VaultRequestFailure {
-                failure,
-                request_id,
-                stage,
-            })
     }
 
     pub(crate) fn remote_request(
@@ -844,6 +815,7 @@ impl Worker {
         })
     }
 
+    #[cfg(test)]
     fn request(
         &self,
         person: PersonId,
@@ -1013,7 +985,9 @@ impl Worker {
             request_id: id,
             person_id: person,
             stage: job.action.name().into(),
+            #[cfg(test)]
             events: progress.events[after_sequence..].to_vec(),
+            #[cfg(test)]
             next_sequence: progress.events.len(),
             done: progress.done,
             state: progress.state,

@@ -6,7 +6,6 @@ pub enum HostError {
     IdentityUnavailable,
     InvalidRequest,
     Closing,
-    UnsupportedCaller,
     Shutdown,
 }
 

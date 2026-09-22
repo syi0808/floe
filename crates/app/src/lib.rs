@@ -140,14 +140,15 @@ pub use session_services::{
 };
 pub use turn_request::ConversationTurnRequest;
 #[cfg(unix)]
-pub use vault_host::{VaultBridge, VaultRequestFailure};
-#[cfg(unix)]
 pub use vault_services::{
     VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult,
 };
+#[cfg(test)]
+pub(crate) use worker::WorkerOperation;
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
     CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation,
     MemoryReviewDecision, MemoryReviewResult, RemoteCalendarGrantPreview, RemoteGrantOverview,
-    RemotePairingChallenge, VaultState, WorkerAction, WorkerOperation, WorkerResult,
+    RemotePairingChallenge, VaultState,
 };
+pub(crate) use worker::{WorkerAction, WorkerResult};

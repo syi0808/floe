@@ -1086,11 +1086,6 @@ pub(crate) fn host_failure(failure: floe_app::HostError) -> AppWireErrorDto {
             "app host is unavailable",
             None,
         ),
-        floe_app::HostError::UnsupportedCaller => wire_error(
-            AppWireErrorCodeDto::UnsupportedVersion,
-            "app wire is unavailable for this host",
-            None,
-        ),
         floe_app::HostError::IdentityUnavailable => wire_error(
             AppWireErrorCodeDto::Unavailable,
             "local caller identity is unavailable",
