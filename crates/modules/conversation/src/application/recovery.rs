@@ -778,6 +778,8 @@ mod tests {
                 continuation_level: 0,
                 retry_of: None,
                 profile: crate::ProfileSelection::Auto,
+                attempt_refs: vec![],
+                task_refs: vec![],
             },
             transcript: vec![AgentMessage {
                 message_id: command_id.as_uuid(),

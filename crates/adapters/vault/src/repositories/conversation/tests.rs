@@ -544,6 +544,8 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap();
     assert_eq!(receipt.state, RunState::Completed);
     assert_eq!(receipt.session_revision, 2);
+    assert_eq!(receipt.attempt_refs.len(), 1);
+    assert!(receipt.task_refs.is_empty());
     assert_eq!(
         floe_conversation::get_command(
             repository.as_ref(),

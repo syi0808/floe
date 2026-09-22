@@ -41,6 +41,8 @@ impl AppEventBuffer {
                 state: receipt.state,
                 generated_reply: receipt.output.is_some(),
                 issue: receipt.issue,
+                attempt_refs: receipt.attempt_refs.clone(),
+                task_refs: receipt.task_refs.clone(),
             }),
         );
     }
@@ -138,6 +140,8 @@ mod tests {
             continuation_level: 0,
             retry_of: None,
             profile: floe_conversation::ProfileSelection::Auto,
+            attempt_refs: vec![],
+            task_refs: vec![],
         }
     }
 

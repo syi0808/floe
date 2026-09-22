@@ -163,6 +163,8 @@ pub struct RunReceipt {
     pub continuation_level: u8,
     pub retry_of: Option<RunId>,
     pub profile: ProfileSelection,
+    pub attempt_refs: Vec<Uuid>,
+    pub task_refs: Vec<Uuid>,
 }
 
 impl RunReceipt {
@@ -181,6 +183,22 @@ impl RunReceipt {
             || self.continuation_level > 3
             || self.retry_of == Some(self.run_id)
             || self.profile.validate().is_err()
+            || self.attempt_refs.len() > 64
+            || self.task_refs.len() > 64
+            || self.attempt_refs.iter().any(Uuid::is_nil)
+            || self.task_refs.iter().any(Uuid::is_nil)
+            || self
+                .attempt_refs
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.attempt_refs.len()
+            || self
+                .task_refs
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.task_refs.len()
             || self.coverage.validate().is_err()
             || self
                 .output

@@ -981,8 +981,8 @@ fn run_snapshot(receipt: RunReceipt, runtime_epoch: u64) -> AppRunSnapshotDto {
             RunState::Interrupted => "interrupted",
         }
         .into(),
-        task_refs: Vec::new(),
-        attempt_refs: Vec::new(),
+        task_refs: receipt.task_refs,
+        attempt_refs: receipt.attempt_refs,
         report,
     }
 }
@@ -1025,8 +1025,8 @@ fn run_event_snapshot(run: RunEventRecord, runtime_epoch: u64) -> AppRunSnapshot
             RunState::Interrupted => "interrupted",
         }
         .into(),
-        task_refs: Vec::new(),
-        attempt_refs: Vec::new(),
+        task_refs: run.task_refs,
+        attempt_refs: run.attempt_refs,
         report,
     }
 }
@@ -1594,6 +1594,8 @@ mod tests {
             continuation_level: 0,
             retry_of: None,
             profile: floe_app::ProfileSelection::Auto,
+            attempt_refs: vec![Uuid::from_u128(2)],
+            task_refs: vec![Uuid::from_u128(3)],
         }
     }
 
@@ -1627,10 +1629,13 @@ mod tests {
             matches!(query(AppQueryDto::ConversationGetCommand { command_id }).unwrap(),
             AppQueryResultDto::CommandReceipt { receipt } if receipt.command_id == command_id)
         );
-        assert!(
-            matches!(query(AppQueryDto::ConversationGetRun { run_id }).unwrap(),
-            AppQueryResultDto::RunSnapshot { run } if run.run_id == run_id)
-        );
+        assert!(matches!(
+            query(AppQueryDto::ConversationGetRun { run_id }).unwrap(),
+            AppQueryResultDto::RunSnapshot { run }
+                if run.run_id == run_id
+                    && run.attempt_refs == [Uuid::from_u128(2)]
+                    && run.task_refs == [Uuid::from_u128(3)]
+        ));
         assert!(
             matches!(query(AppQueryDto::ConversationGetMessage { message_id: run_id }).unwrap(),
             AppQueryResultDto::Message { message } if message.message_id == run_id && message.text == "answer")

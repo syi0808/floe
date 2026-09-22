@@ -461,6 +461,17 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         | AgentFailure::ServerModelTimeout
         | AgentFailure::InvalidModelOutput
         | AgentFailure::LocalModelInvalidOutput
+        | AgentFailure::ServerModelInvalidOutput
+            if stage == "conversation_session" =>
+        {
+            AgentVaultRecoveryActionDto::None
+        }
+        AgentFailure::ModelUnavailable
+        | AgentFailure::LocalModelUnavailable
+        | AgentFailure::ServerModelUnavailable
+        | AgentFailure::ServerModelTimeout
+        | AgentFailure::InvalidModelOutput
+        | AgentFailure::LocalModelInvalidOutput
         | AgentFailure::ServerModelInvalidOutput => AgentVaultRecoveryActionDto::RetryRead,
         AgentFailure::AccessReviewRequired
             if matches!(
@@ -850,6 +861,22 @@ mod tests {
         assert_eq!(session_policy.reason_code, "session_integrity");
         assert_eq!(
             session_policy.safe_actions,
+            vec![AgentFailureSafeAction::StartNewSession]
+        );
+
+        let failed_session = failure_envelope(
+            &AgentFailure::LocalModelInvalidOutput,
+            "conversation_session",
+            "request",
+        );
+        assert_eq!(
+            failed_session.recovery_action,
+            AgentVaultRecoveryActionDto::None
+        );
+        assert_eq!(failed_session.retry_policy, AgentRetryPolicy::Never);
+        assert!(!failed_session.retryable);
+        assert_eq!(
+            failed_session.safe_actions,
             vec![AgentFailureSafeAction::StartNewSession]
         );
 

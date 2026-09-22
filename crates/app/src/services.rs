@@ -361,6 +361,8 @@ pub struct RunEventRecord {
     pub state: RunState,
     pub generated_reply: bool,
     pub issue: Option<AgentFailure>,
+    pub attempt_refs: Vec<Uuid>,
+    pub task_refs: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -29,6 +29,10 @@ Responsibilities do not collapse across this chain:
 - Access owns exact-recipient processing/dispatch/release authority.
 - Provider adapters resolve private credentials and execute transport.
 
+Product Run snapshots project model-attempt and delegated-Task references from Conversation's
+durable intent journal. The refs remain derived read data: FFI does not manufacture them, and
+Inference and Experts retain ownership of attempt and Task semantics.
+
 The canonical `InferenceService : ModelPort` production cutover is complete and is the current General Conversation reality. App and Provider composition do not own model semantics.
 
 ### Host composition

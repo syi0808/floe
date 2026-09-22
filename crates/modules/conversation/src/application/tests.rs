@@ -148,6 +148,8 @@ impl ConversationRepository for MemoryRepository {
                 continuation_level,
                 retry_of: request.retry_of,
                 profile: request.profile,
+                attempt_refs: vec![],
+                task_refs: vec![],
             };
             receipt.validate()?;
             let admitted = AdmittedTurn {

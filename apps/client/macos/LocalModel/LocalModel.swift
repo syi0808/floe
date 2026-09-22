@@ -286,17 +286,6 @@ struct GeneratedLearnerAnswer {
   var proposal: GeneratedLearnerProposal?
 }
 
-#if os(macOS)
-@available(macOS 26.0, *)
-#elseif os(iOS)
-@available(iOS 26.0, *)
-#endif
-@Generable
-private enum GeneratedStep {
-  case answer(text: String)
-  case call(capabilityID: String, input: String)
-}
-
 func foundationModelAvailability() -> String {
   #if os(macOS)
   guard #available(macOS 26.0, *) else { return "unsupported_os" }
@@ -329,11 +318,11 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
   #else
   throw LocalModelFailure("model_unavailable")
   #endif
-  let session = LanguageModelSession(model: .default, tools: [], instructions: input.instructions)
   do {
     let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: input.maxResponseTokens)
     switch learnerPromptClassification(input.prompt) {
     case .learner:
+      let session = LanguageModelSession(model: .default, tools: [], instructions: input.instructions)
       let response = try await session.respond(to: input.prompt, generating: GeneratedLearnerAnswer.self,
         options: options)
       let text = try learnerOutputText(response.content)
@@ -343,8 +332,28 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
     case .general:
       break
     }
-    if !hasAvailableActions(input.prompt) {
-      let response = try await session.respond(to: input.prompt, generating: GeneratedAnswer.self,
+    let actionTools = try nativeActionTools(input.prompt)
+    let nativeInstructions = actionTools.isEmpty ? input.instructions : input.instructions + """
+
+      Use a tool only when the current user request strictly requires external evidence or expert
+      judgment. Never call a tool for a greeting, general conversation, or when the current user
+      explicitly says not to use tools or delegate. Otherwise answer the user directly.
+      """
+    let session = LanguageModelSession(model: .default, tools: actionTools,
+                                       instructions: nativeInstructions)
+    guard let currentUserRequest = currentUserRequest(input.prompt) else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    let nativePrompt = """
+      Current user request:
+      \(currentUserRequest)
+
+      The canonical request context follows as JSON. Use it to answer the exact current request.
+
+      \(input.prompt)
+      """
+    if actionTools.isEmpty {
+      let response = try await session.respond(to: nativePrompt, generating: GeneratedAnswer.self,
         options: options)
       let text = response.content.text
       guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -352,17 +361,19 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
       }
       return LocalModelStep(kind: "answer", text: text, capabilityID: nil, input: nil)
     }
-    let response = try await session.respond(to: input.prompt, generating: GeneratedStep.self,
+    let response = try await session.respond(to: nativePrompt, generating: GeneratedAnswer.self,
       options: options)
-    let content = response.content
-    switch content {
-    case .answer(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-      return LocalModelStep(kind: "answer", text: text, capabilityID: nil, input: nil)
-    case .call(let capabilityID, let callInput) where !capabilityID.isEmpty:
-      return LocalModelStep(kind: "call", text: nil, capabilityID: capabilityID, input: callInput)
-    default:
+    let text = response.content.text
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw LocalModelFailure("invalid_model_output")
     }
+    return LocalModelStep(kind: "answer", text: text, capabilityID: nil, input: nil)
+  } catch let error as LanguageModelSession.ToolCallError {
+    guard let action = error.underlyingError as? NativeActionRequest else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    return LocalModelStep(kind: "call", text: nil, capabilityID: action.capabilityID,
+                          input: action.input)
   } catch let error as LanguageModelSession.GenerationError {
     switch error {
     case .exceededContextWindowSize: throw LocalModelFailure("budget_exceeded")
@@ -539,13 +550,140 @@ private func learnerEpistemicStatusName(_ value: GeneratedLearnerEpistemicStatus
   }
 }
 
-func hasAvailableActions(_ prompt: String) -> Bool {
+func currentUserRequest(_ prompt: String) -> String? {
   guard let data = prompt.data(using: .utf8),
         let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let scoped = root["scoped_instructions"] as? [String: Any] else { return false }
-  let capabilities = scoped["available_capabilities"] as? [Any] ?? []
-  let agents = scoped["active_agents"] as? [Any] ?? []
-  return !capabilities.isEmpty || !agents.isEmpty
+        let conversation = root["conversation"] as? [String: Any],
+        let currentTurn = conversation["current_turn"] as? [[String: Any]],
+        let content = currentTurn.last(where: { $0["role"] as? String == "user" })?["content"]
+          as? String, !content.isEmpty else { return nil }
+  return content
+}
+
+func currentUserActionRestrictions(_ prompt: String) -> (tools: Bool, delegation: Bool) {
+  let request = currentUserRequest(prompt)?.lowercased() ?? ""
+  let tools = ["do not use tools", "don't use tools", "do not call tools", "don't call tools",
+               "without using tools"].contains { request.contains($0) }
+  let delegation = ["do not delegate", "don't delegate", "without delegating", "tools or delegate"]
+    .contains { request.contains($0) }
+  return (tools, delegation)
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private struct NativeActionRequest: Error, Sendable {
+  let capabilityID: String
+  let input: String
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private struct NativeActionTool: Tool {
+  let name: String
+  let description: String
+  let parameters: GenerationSchema
+  let capabilityID: String
+
+  func call(arguments: GeneratedContent) async throws -> String {
+    throw NativeActionRequest(capabilityID: capabilityID, input: arguments.jsonString)
+  }
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+func nativeActionTools(_ prompt: String) throws -> [any Tool] {
+  guard let data = prompt.data(using: .utf8),
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let scoped = root["scoped_instructions"] as? [String: Any] else {
+    throw LocalModelFailure("invalid_model_output")
+  }
+  let capabilities = scoped["available_capabilities"] as? [[String: Any]] ?? []
+  let restrictions = currentUserActionRestrictions(prompt)
+  var tools: [any Tool] = []
+  for (index, capability) in (restrictions.tools ? [] : capabilities).enumerated() {
+    guard let capabilityID = capability["id"] as? String, !capabilityID.isEmpty else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    let inputSchema = capability["input_schema"] as? [String: Any] ?? ["type": "object"]
+    let rootSchema = try dynamicSchema(inputSchema, name: "arguments_\(index)")
+    tools.append(NativeActionTool(
+      name: "floe_capability_\(index)",
+      description: "Call the exact Floe capability \(capabilityID) only when the user request requires it.",
+      parameters: try GenerationSchema(root: rootSchema, dependencies: []),
+      capabilityID: capabilityID
+    ))
+  }
+  let experts = scoped["active_experts"] as? [[String: Any]] ?? []
+  let expertIDs = experts.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }.sorted()
+  if !restrictions.delegation && !expertIDs.isEmpty {
+    let schema: [String: Any] = [
+      "type": "object",
+      "properties": [
+        "agent_id": ["type": "string", "enum": expertIDs],
+        "message": ["type": "string"],
+        "context_refs": ["type": "array", "items": ["type": "string"]],
+      ],
+      "required": ["agent_id", "message"],
+    ]
+    tools.append(NativeActionTool(
+      name: "floe_delegate",
+      description: "Delegate only when the user request requires one of the available Floe experts.",
+      parameters: try GenerationSchema(
+        root: dynamicSchema(schema, name: "delegation_arguments"), dependencies: []),
+      capabilityID: "floe.a2a.delegate"
+    ))
+  }
+  return tools
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+private func dynamicSchema(_ schema: [String: Any], name: String) throws -> DynamicGenerationSchema {
+  switch schema["type"] as? String {
+  case "object", nil:
+    let properties = schema["properties"] as? [String: [String: Any]] ?? [:]
+    let required = Set(schema["required"] as? [String] ?? [])
+    return DynamicGenerationSchema(
+      name: name,
+      properties: try properties.keys.sorted().map { property in
+        DynamicGenerationSchema.Property(
+          name: property,
+          schema: try dynamicSchema(properties[property]!, name: "\(name)_\(property)"),
+          isOptional: !required.contains(property)
+        )
+      }
+    )
+  case "array":
+    guard let items = schema["items"] as? [String: Any] else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    return DynamicGenerationSchema(arrayOf: try dynamicSchema(items, name: "\(name)_item"))
+  case "string":
+    if let choices = schema["enum"] as? [String], !choices.isEmpty {
+      return DynamicGenerationSchema(type: String.self, guides: [.anyOf(choices)])
+    }
+    return DynamicGenerationSchema(type: String.self)
+  case "integer":
+    return DynamicGenerationSchema(type: Int.self)
+  case "number":
+    return DynamicGenerationSchema(type: Double.self)
+  case "boolean":
+    return DynamicGenerationSchema(type: Bool.self)
+  default:
+    throw LocalModelFailure("invalid_model_output")
+  }
 }
 
 private let foundationHost = LocalModelHost(availability: foundationModelAvailability,

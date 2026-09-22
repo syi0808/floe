@@ -175,6 +175,31 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
         }
         Ok(())
     }
+
+    async fn attach_run_references(
+        &self,
+        mut receipt: RunReceipt,
+    ) -> Result<RunReceipt, AgentFailure> {
+        let entries = self.vault.conversation_journal(receipt.run_id).await?;
+        for entry in entries {
+            let event = serde_json::from_str::<JournalEvent>(&entry.payload)
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+            if entry.kind != journal_event_kind(&event) {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            match event {
+                JournalEvent::ModelIntent { attempt_id, .. } => {
+                    receipt.attempt_refs.push(attempt_id);
+                }
+                JournalEvent::DelegationIntent { request } => {
+                    receipt.task_refs.push(request.task_id.as_uuid());
+                }
+                _ => {}
+            }
+        }
+        receipt.validate()?;
+        Ok(receipt)
+    }
 }
 
 impl<Keys: VaultKeyProvider + 'static> ConversationRepository
@@ -229,9 +254,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                         transcript,
                     }))
                 }
-                VaultConversationAdmission::Existing(record) => {
-                    Ok(TurnAdmission::Existing(run_receipt(record)?))
-                }
+                VaultConversationAdmission::Existing(record) => Ok(TurnAdmission::Existing(
+                    self.attach_run_references(run_receipt(record)?).await?,
+                )),
             }
         })
     }
@@ -243,11 +268,16 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         Box::pin(async move {
             query.validate()?;
             self.verify_principal(&query.principal)?;
-            self.vault
+            let Some(record) = self
+                .vault
                 .conversation_run_by_command(query.command_id)
                 .await?
-                .map(run_receipt)
-                .transpose()
+            else {
+                return Ok(None);
+            };
+            Ok(Some(
+                self.attach_run_references(run_receipt(record)?).await?,
+            ))
         })
     }
 
@@ -304,7 +334,8 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             terminal.validate()?;
             let state = vault_state(terminal.state);
             let appended_messages = terminal_messages(run_id, &terminal)?;
-            self.vault
+            let record = self
+                .vault
                 .finish_conversation_run(
                     run_id,
                     expected_aggregate_revision,
@@ -316,8 +347,8 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                         appended_messages,
                     },
                 )
-                .await
-                .and_then(run_receipt)
+                .await?;
+            self.attach_run_references(run_receipt(record)?).await
         })
     }
 
@@ -329,7 +360,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             let Some(record) = self.vault.conversation_run(run_id).await? else {
                 return Ok(None);
             };
-            let receipt = run_receipt(record)?;
+            let receipt = self.attach_run_references(run_receipt(record)?).await?;
             let session = floe_conversation::SessionStore::load(
                 self.vault.as_ref(),
                 self.vault.person_id(),
@@ -352,11 +383,12 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         run_id: RunId,
     ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>> {
         Box::pin(async move {
-            self.vault
-                .conversation_run(run_id)
-                .await?
-                .map(run_receipt)
-                .transpose()
+            let Some(record) = self.vault.conversation_run(run_id).await? else {
+                return Ok(None);
+            };
+            Ok(Some(
+                self.attach_run_references(run_receipt(record)?).await?,
+            ))
         })
     }
 
@@ -396,18 +428,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 .map(|entry| {
                     let event = serde_json::from_str::<JournalEvent>(&entry.payload)
                         .map_err(|_| AgentFailure::StorageUnavailable)?;
-                    let expected_kind = match &event {
-                        JournalEvent::ModelIntent { .. }
-                        | JournalEvent::ToolIntent { .. }
-                        | JournalEvent::DelegationIntent { .. } => "intent",
-                        JournalEvent::ModelResult { .. }
-                        | JournalEvent::ToolResult { .. }
-                        | JournalEvent::DelegationResult { .. } => "result",
-                        JournalEvent::Output { .. } => "output",
-                        JournalEvent::Checkpoint { .. }
-                        | JournalEvent::ValidatedBatch { .. }
-                        | JournalEvent::BatchProgress { .. } => "checkpoint",
-                    };
+                    let expected_kind = journal_event_kind(&event);
                     if entry.kind != expected_kind {
                         return Err(AgentFailure::StorageUnavailable);
                     }
@@ -418,6 +439,21 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 })
                 .collect()
         })
+    }
+}
+
+fn journal_event_kind(event: &JournalEvent) -> &'static str {
+    match event {
+        JournalEvent::ModelIntent { .. }
+        | JournalEvent::ToolIntent { .. }
+        | JournalEvent::DelegationIntent { .. } => "intent",
+        JournalEvent::ModelResult { .. }
+        | JournalEvent::ToolResult { .. }
+        | JournalEvent::DelegationResult { .. } => "result",
+        JournalEvent::Output { .. } => "output",
+        JournalEvent::Checkpoint { .. }
+        | JournalEvent::ValidatedBatch { .. }
+        | JournalEvent::BatchProgress { .. } => "checkpoint",
     }
 }
 
@@ -500,6 +536,8 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         continuation_level: record.continuation_level,
         retry_of: record.retry_of,
         profile: record.profile,
+        attempt_refs: vec![],
+        task_refs: vec![],
     };
     receipt.validate()?;
     Ok(receipt)
