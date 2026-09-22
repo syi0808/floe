@@ -1278,6 +1278,7 @@ struct VaultExecutionResult {
     remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
+    run_receipt: Option<floe_conversation::RunReceipt>,
 }
 
 impl VaultExecutionResult {
@@ -1324,6 +1325,7 @@ fn finish_job(
     if let Ok(mut progress) = job.progress.lock() {
         match result {
             Ok(result) => {
+                let run_receipt = result.run_receipt;
                 progress.state = Some(result.state);
                 progress.session = result.session;
                 progress.registry = result.registry;
@@ -1342,6 +1344,10 @@ fn finish_job(
                 progress.remote_view_preview = result.remote_view_preview;
                 progress.personal_access = result.personal_access;
                 progress.calendar_actions = result.calendar_actions;
+                progress.done = true;
+                if let Some(receipt) = run_receipt {
+                    job.app_events.publish_run(&receipt);
+                }
             }
             Err(failure) => {
                 progress.state = Some(
@@ -1473,7 +1479,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
             Some(Ok(receipt)) => Some(receipt.clone()),
             Some(Err(_)) | None => None,
         });
-    if let Some(admitted) = admitted
+    let run_receipt = if let Some(admitted) = admitted
         && let Ok(Some(receipt)) = floe_conversation::get_run(
             vault.conversation_repository.as_ref(),
             floe_conversation::RunQuery {
@@ -1483,10 +1489,13 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         )
         .await
     {
-        job.app_events.publish_run(&receipt);
-    }
+        Some(receipt)
+    } else {
+        None
+    };
     Ok(VaultExecutionResult {
         session: Some(session),
+        run_receipt,
         ..VaultExecutionResult::ready()
     })
 }

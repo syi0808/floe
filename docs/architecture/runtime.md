@@ -123,6 +123,10 @@ The existing schema-2 `command_v2/query_v2` carry owner-prefixed intents, not wo
 
 Async local results bind the exact intent and originating Person/device/runtime epoch/owner. Observation and accepted-decode-before-release retain the same operation identity across uncertain acknowledgements, and do not imply cancellation. Flutter has separate owner gateways and mechanical correlation only, not a generic request bus. Day preserves Person ownership and repository CAS. Actions selects the authoritative encrypted/core repository inside App, rejects agent-origin mirrors, and preserves durable intent and lookup-only uncertain-write recovery without client fallback. Context injects admitted identity while retaining native request/epoch/fingerprint evidence; broker disposal is not Run cancellation.
 
+App publishes a terminal Conversation Run event only after the owning turn job is marked complete.
+A product caller may therefore read the terminal Session immediately without racing the owner slot
+that just produced the Run.
+
 Pairing and remote Access have separate owner-oriented protocol envelopes and typed `RemotePairingCommands` / `RemoteAccessCommands` services. Their FFI entry points admit each request through `AppHost::request(request_id)`; FFI validates/converts structure and never supplies caller identity or decides authority. Pairing derives Person/device from `CallerContext` and client identity from the exact pending pairing ID. Connections and the key holder validate challenge, issuer and report identity.
 
 After pairing, producer inspection/enrollment and Calendar/View grant operations receive only review/source/grant intent. Provider-owned `RemoteAuthorityEndpoint::from_current_connection` and `ServerSourceClient::from_current_connection` reload the shared current store and admit the verified Person/device before preparing transport. App sees non-secret admitted client identity, not raw saved credentials. Access retains producer pinning and exact source/revision/provider/recipient/grant checks; source catalogs stay lazy and separate from model discovery.
