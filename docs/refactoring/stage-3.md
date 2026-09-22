@@ -12,9 +12,9 @@ This document is the Stage 3 progress source of truth. The linked step documents
 
 ## Current checkpoint
 
-**Active: 3-D — Flutter, Native and Server Caller Cutover.**
+**Active: 3-E — Outer Compatibility Deletion.**
 
-Use [the 3-D execution plan](stage-3/3-d.md) for the active change set. Flutter caller cutover, full Flutter validation and macOS/iOS simulator packaging now pass, but 3-D is not closed: its [Agent report](stage-3/3-d.md#agent-report) records the user-deferred Go compilation blocker and consequent missing live pairing/Access/revocation evidence. 3-C is **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
+3-E is activated as the next checkpoint; its implementation has not started. Use [the 3-E execution plan](stage-3/3-e.md) for the next change set. 3-D is **complete · frozen**: its [Residual closure Agent report](stage-3/3-d.md#residual-closure-agent-report) records coherent Go owner extraction, real Flutter pairing, protected Rust Access success and revocation failure through a test-owned current saved-connection store, and all final gates on source snapshot `864a39fbd5e5205b4afc5de993c9c4db822716a6`. 3-C remains **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
 
 3-A is **complete · frozen**. Core convergence landed at `8bdd50628819119331c8c1b67307eaee8392bab9`; residual closure on execution baseline `beb6a624b0e912fe94faa1ea7628c72a96c8283b` deleted the caller-zero Schedule agent-turn runtime and its legacy model quarantine. Schedule now has only the canonical Expert endpoint model path. Owner regressions and proposal fixtures no longer require the deleted runtime; see [the residual closure report](stage-3/3-a.md#residual-closure-agent-report).
 
@@ -23,7 +23,7 @@ Use [the 3-D execution plan](stage-3/3-d.md) for the active change set. Flutter 
 - [x] **3-A — Remaining root/domain caller convergence** — [execution plan](stage-3/3-a.md) (complete · frozen; residual closure complete)
 - [x] **3-B — AppHost composition closure** — [execution plan](stage-3/3-b.md) (complete · frozen)
 - [x] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md) (complete · frozen)
-- [ ] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md)
+- [x] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md) (complete · frozen; residual closure complete)
 - [ ] **3-E — Outer compatibility deletion** — [execution plan](stage-3/3-e.md)
 - [ ] **3-F — End-to-end product validation** — [execution plan](stage-3/3-f.md)
 
@@ -70,7 +70,7 @@ Outer layers translate intent, provide concrete adapter implementations and pres
 
 General Conversation, delegated built-in Experts, the production Schedule endpoint and the isolated Knowledge Learner execute models through canonical Inference. Domain prompt, policy and budget semantics remain with their owners. `PreparedFoundationTransport` reaches the existing bundled native transport using the canonical attempt identity. These are closed 3-A boundaries, not remaining migration work.
 
-The remaining debt belongs to 3-D through 3-F:
+The remaining debt belongs to 3-E and 3-F; the closed product boundaries are recorded here for ownership context:
 
 ### Closed canonical App composition
 
@@ -92,14 +92,14 @@ The separate AgentFixture runtime in `crates/app/src/agent_fixture.rs`, driven t
 
 Canonical Foundation transport is implemented. 3-D has verified the macOS release bundle, both dylib loads, supported local-model smoke and universal iOS simulator packaging. Physical-device FoundationModels execution is not inferred from simulator packaging. Build artifacts from the same source snapshot and use an explicitly selected fresh development profile when stored meaning changes.
 
-### Validation-harness repair and remaining gates
+### Closed validation-harness repair
 
 3-D repaired the stale validation entry points discovered on the baseline:
 
 - `tools/validation/check-local-model.sh` validates current provider-adapter and Inference packages; the smoke script uses the actual `floe-app` example;
 - `apps/client/integration/local_server_pairing_test.dart` uses current Connections imports and the real native pairing owner gateway, with explicitly memory-only test credential persistence.
 
-Full Flutter validation is green. The repaired pairing integration reaches the Go build but cannot exercise pairing while the baseline server package extraction fails to compile. The user explicitly deferred repairing that Go failure. Server validation and live protected Access/revocation evidence remain unresolved 3-D gates, not reasons to weaken assertions or skip evidence. Keep 3-D active; do not start 3-E.
+3-D residual closure repaired the Go extraction without owner → application dependencies or duplicate Console/state aliases. Go race/vet/build and isolated Keychain smoke pass. The Flutter integration completes strict native pairing, exact memory-store persistence, release and server revocation; the separate provider integration proves canonical protected Rust Access succeeds through the exact paired current saved connection and fails closed after server revocation. Neither test overwrites the shared saved-connection Keychain slot. Final Rust, architecture, Flutter, macOS, iOS simulator, native and supported local-model gates pass from the recorded source snapshot. 3-E remains a separate, not-yet-started implementation checkpoint.
 
 ## Execution order
 
@@ -114,9 +114,9 @@ Full Flutter validation is green. The repaired pairing integration reaches the G
 
 3-B  AppHost composition closure (complete · frozen)
 
-3-C  protocol / FFI product-contract cutover
+3-C  protocol / FFI product-contract cutover (complete · frozen)
 
-3-D  Flutter / native / server real-caller cutover
+3-D  Flutter / native / server real-caller cutover (complete · frozen)
 
 3-E  delete caller-zero compatibility
 
