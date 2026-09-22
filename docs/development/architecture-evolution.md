@@ -2,7 +2,7 @@
 
 Floe is still in active pre-stable development. Product requirements can change quickly, and agent-assisted implementation is used to move from a product decision to working code with high throughput. This makes structural discipline more important, not less important.
 
-This document defines how Floe should change when requirements invalidate existing design assumptions. Current structure belongs in [architecture](../architecture/README.md); final-state properties belong in [architecture invariants](../architecture/invariants.md); durable rationale belongs in ADRs; active refactoring checkpoints belong in Stage documents.
+This document defines how Floe should change when requirements invalidate existing design assumptions. Current structure belongs in [architecture](../architecture/README.md); final-state properties belong in [architecture invariants](../architecture/invariants.md); durable rationale belongs in ADRs; temporary migration sequencing belongs in a task-specific execution plan when one is needed.
 
 ## Why this policy exists
 
@@ -77,7 +77,7 @@ Use the smallest relevant context and in this order:
 2. the architecture document for the affected owner,
 3. repository-wide architecture invariants,
 4. an ADR only when the rationale for a durable decision is needed,
-5. an active Stage/execution plan when the work is part of an existing migration.
+5. the current task's authoritative execution plan when a staged migration is already in progress.
 
 Do not start by recursively reading historical plans. Old implementation paths, validation counts and slice descriptions are evidence, not current state.
 
@@ -199,7 +199,7 @@ A repository plan must define the final target, ordered checkpoints, deletion/re
 
 ## Temporary complexity must be bounded
 
-Architecture work may need temporary dual definitions or compile failures while the cutover is in progress. Temporary complexity is acceptable only when the same active plan names how and when it disappears.
+Architecture work may need temporary dual definitions or compile failures while the cutover is in progress. Temporary complexity is acceptable only when the same authoritative task plan names how and when it disappears.
 
 "TODO remove later" is not a removal plan.
 
@@ -208,7 +208,7 @@ If a temporary compatibility layer is genuinely required, record at least:
 - why direct replacement is blocked,
 - exact remaining consumers,
 - removal condition,
-- responsible active checkpoint or bounded lifetime.
+- responsible task checkpoint or bounded lifetime.
 
 Do not encode temporary migration state into permanent domain contracts when a local execution-plan state can express it instead.
 

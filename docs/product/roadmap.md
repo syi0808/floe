@@ -1,6 +1,6 @@
 # Capability roadmap
 
-This is a **capability direction**, not an implementation progress board or a sequential refactoring gate. Active engineering order belongs to [Stage 3](../refactoring/stage-3.md); [Stage 2](../refactoring/stage-2.md) is complete.
+This is a **capability direction**, not an implementation progress board or sequential delivery gate. Current engineering order comes from the product task at hand; current structure is defined by source and [Architecture](../architecture/README.md).
 
 ## Current product foundation
 

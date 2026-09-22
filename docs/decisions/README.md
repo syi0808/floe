@@ -7,7 +7,7 @@ ADRs explain durable decisions and their rationale. They are not the source of t
 1. Start with [current architecture](../architecture/README.md).
 2. Open an ADR only when the reason for a current boundary or invariant is needed.
 3. Follow each ADR's `Amends`, `Extends` and `Supersedes` links before applying an older decision.
-4. Treat implementation-status or slice-status language inside older ADRs as historical context unless the current architecture or active refactoring documents confirm it.
+4. Treat implementation-status or slice-status language inside older ADRs as historical context unless current source and architecture confirm it.
 
 ADR status should describe the **decision**, not whether code, tests or live acceptance are complete. New ADRs should use a simple status such as `proposed`, `accepted`, `rejected` or `superseded`.
 

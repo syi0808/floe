@@ -125,6 +125,6 @@ Documentation explains semantics and intent. It should not become a second manua
 
 When these signals appear, follow .agents/skills/architecture-change/SKILL.md rather than adding another workaround.
 
-## Relationship to active work
+## Relationship to execution plans
 
-Stage and execution-plan documents may temporarily describe states that do not yet satisfy every final-state invariant. They own the ordered migration while work is active. Completion of an architecture-changing step requires convergence back to the invariants above unless the plan explicitly records a bounded exception with a removal condition.
+A task-specific execution plan may temporarily describe states that do not yet satisfy every final-state invariant. It owns only the bounded migration sequence. Completion of an architecture-changing task requires convergence back to the invariants above unless the plan records an explicit bounded exception with a removal condition.

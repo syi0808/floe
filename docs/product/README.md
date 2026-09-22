@@ -51,4 +51,4 @@ Apple platforms are the current implementation priority, but long-term experienc
 - [Integrations, privacy and distribution](integrations-and-privacy.md)
 - [Capability roadmap](roadmap.md)
 
-Implementation ownership belongs to [current architecture](../architecture/README.md). Active refactoring belongs to [Stage 3](../refactoring/stage-3.md); [Stage 2](../refactoring/stage-2.md) is complete/frozen. Historical planning bundles and slice plans live in Git history.
+Implementation ownership belongs to [current architecture](../architecture/README.md). Historical planning bundles, migration plans and validation checkpoints live in Git history.

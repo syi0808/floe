@@ -1,6 +1,6 @@
 # Runtime architecture
 
-This document describes the canonical internal runtime and the remaining transition boundaries. Progress is not tracked here; see [Stage 3](../refactoring/stage-3.md).
+This document describes the canonical runtime and current product boundaries.
 
 ## General Conversation
 
@@ -58,7 +58,7 @@ Agent Runtime Engine
 
 Tool availability is a source/authority property, not a model-route property. The Tool result carries its own evidence/coverage rather than relying on an App-side side channel.
 
-The production Context Tool cutover completed in Stage 2-B.3 and is the current Tool reality, alongside the canonical Delegation path through `TaskCoordinator : DelegationPort`.
+The production Context Tool path is canonical, alongside the canonical Delegation path through `TaskCoordinator : DelegationPort`.
 
 ### Expert delegation
 

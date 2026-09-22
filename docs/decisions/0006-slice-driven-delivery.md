@@ -1,9 +1,9 @@
 # ADR 0006: Deliver through connected vertical slices
 
 - **Date:** 2026-09-04
-- **Status:** accepted as historical product delivery rationale; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md) and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md). For the current refactor, execution order is superseded by [Stage 2 — Canonical Internal Runtime](../refactoring/stage-2.md), with [Stage 1](../refactoring/stage-1.md) recording completed ownership and [Stage 3](../refactoring/stage-3.md) defining the final product-boundary cutover.
+- **Status:** accepted as historical product delivery rationale; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md) and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md). The later repository-wide migration sequence is historical and preserved in Git history; current source and architecture supersede implementation-status claims.
 
-> Current refactor: one coding agent completes canonical internal owner cutovers in Stage 2 before Stage 3 closes the outer product boundary and end-to-end product validation. The Stage 2 Current checkpoint, not this historical ADR, owns the active sequence. The historical decision below does not require a live demonstration after every structural change or declare any old acceptance gate passed. Product requirements and safety conditions remain in force.
+> Historical execution note: the later repository-wide migration used a single sequential coding agent and explicit checkpoints. That sequence is archived in Git history and is not current execution policy. Product requirements and safety conditions below remain in force.
 
 ## Context
 
@@ -25,7 +25,7 @@ mix implementation breadth with evidence that components work together.
 - Use fixtures to establish contracts, then validate real integrations before
   accepting a slice. A mock-only demonstration is not integration completion.
 - The historical delivery process tracked status and acceptance evidence separately
-  from requirements. Current refactoring status is owned only by Stage 2.
+  from requirements. Current implementation status is determined from source, architecture and current validation runbooks.
 - Keep at most one slice in Implementing, Integrated, or Verified at a time.
   An earlier slice may remain in Dogfooding while the next is implemented.
 

@@ -50,8 +50,7 @@ cheaply.
   contracts; a fixed evaluation corpus measures false memory, false merge,
   grounding and unnecessary advice before live-model evidence is accepted.
 
-The detailed historical slice scope and acceptance criteria are preserved in Git history.
-Current execution order is owned by [Stage 2](../refactoring/stage-2.md).
+The detailed historical slice scope, migration sequence and acceptance criteria are preserved in Git history. Current implementation order comes from the product task at hand and current architecture.
 
 ## Consequences
 

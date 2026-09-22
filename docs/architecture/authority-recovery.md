@@ -1,6 +1,6 @@
 # Authority and recovery invariants
 
-These invariants survive refactoring. They are architectural safety properties, not a progress checklist.
+These are durable architectural safety properties, not a progress checklist.
 
 ## Authority is explicit and owner-scoped
 
@@ -45,8 +45,7 @@ Journal corruption or mismatched durable identity fails closed as storage/recove
 
 A continuation child does not supersede a parent's pending batch merely by existing. The child must durably claim the **exact same validated batch and starting cursor** before takeover.
 
-This invariant was proven by the completed/frozen
-[2-B.1 Cross-run Resume Lineage](../refactoring/stage-2/2-b1.md) work and remains here as stable architecture rather than being copied into another status document.
+This invariant is part of the stable architecture: a child may take over only after durably binding the exact validated batch and starting cursor.
 
 ## Model attempts and budgets
 

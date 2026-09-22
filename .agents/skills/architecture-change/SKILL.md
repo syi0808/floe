@@ -7,7 +7,7 @@ description: Use for Floe changes that affect semantic ownership, dependency dir
 
 Use this workflow to keep high-velocity implementation from preserving obsolete internal designs. The objective is a coherent final architecture, not a minimal diff.
 
-If an active Stage/execution plan already defines checkpoint order, deletion gates or report format, follow that plan first. This skill supplements the plan with repository-wide architecture discipline; do not create a parallel plan.
+If the current task already has an authoritative execution plan defining checkpoint order, deletion gates or report format, follow that plan first. This skill supplements the plan with repository-wide architecture discipline; do not create a parallel plan.
 
 ## 1. Establish the baseline
 
@@ -18,7 +18,7 @@ Before editing:
 3. inspect the source, manifests and tests that currently implement the affected path,
 4. read docs/architecture/README.md, docs/architecture/invariants.md, and only the owner-specific architecture document needed for the task,
 5. read an ADR only when the reason for a durable boundary is needed,
-6. if the task belongs to active refactoring, read the current Stage checkpoint and only its linked execution plan.
+6. if the current task has an authoritative execution plan, read that plan and only the additional context it explicitly requires.
 
 Do not use historical plans as current implementation truth.
 
@@ -85,7 +85,7 @@ The plan must define the target state, ordered cutover, deletion gate, residual 
 
 ## 6. Execute toward one path
 
-Prefer this sequence unless the active plan requires a safer order:
+Prefer this sequence unless the task's authoritative plan requires a safer order:
 
 1. establish the canonical contract at the correct owner,
 2. implement the canonical behavior,
@@ -119,7 +119,7 @@ Search as applicable for:
 - test fixtures still using the obsolete path,
 - comments/docs that describe the removed route as current.
 
-Every remaining match must be either unrelated, deliberately historical, or explicitly justified by the active plan.
+Every remaining match must be either unrelated, deliberately historical, or explicitly justified by the task's authoritative plan.
 
 ## 9. Documentation convergence
 
@@ -127,14 +127,14 @@ In the same change set:
 
 - update docs/architecture/* when current ownership/path/boundary changes,
 - amend/supersede/add an ADR only when the durable decision or rationale changes,
-- update the active execution plan when execution status/checkpoints change,
+- update the task-specific execution plan when its status/checkpoints change,
 - do not copy progress state into architecture docs or ADRs.
 
 One fact should keep one authoritative home.
 
 ## 10. Verification handoff
 
-After implementation and residual audit, use the code-change-verification skill for the affected surfaces plus any stronger verification required by the active execution plan.
+After implementation and residual audit, use the code-change-verification skill for the affected surfaces plus any stronger verification required by the task's authoritative execution plan.
 
 Passing tests alone is not completion. Confirm that the final system also has one owner/path and that obsolete transition surface is gone.
 

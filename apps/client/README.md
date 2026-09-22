@@ -81,8 +81,7 @@ It configures only a disposable loopback server, uses fictional input through
 canonical Inference/Access, verifies exact `OpenAI (Codex OAuth)` recipient consent and usage, and
 revokes only its disposable paired client. It is not a Flutter Conversation test
 and does not set up, refresh deliberately, or rotate an external account.
-Current end-to-end validation results and remaining blockers are recorded only in
-`docs/refactoring/stage-3/3-f.md`; 3-D and 3-E are frozen historical evidence.
+Current validation commands and supported Apple build expectations are maintained in this guide and the repository validation tools; historical migration reports live in Git history.
 
 To start the local server and macOS client together from the repository root:
 
@@ -192,8 +191,7 @@ disconnect/cache deletion, recurrence metadata and original-zone formatting requ
 work and are not falsely exposed as implemented. The existing task collection and capture
 classification flows remain functional rather than being replaced by static demo content.
 
-Historical S1 acceptance snapshots have been removed from the active documentation tree.
-Current Apple product-boundary validation belongs to [Stage 3 end-to-end validation](../../docs/refactoring/stage-3/3-f.md).
+Historical acceptance snapshots are not part of the active documentation tree. Use the commands below plus the repository validation tools for current Apple product-boundary checks.
 
 ## Validation commands
 

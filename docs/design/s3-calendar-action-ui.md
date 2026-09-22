@@ -56,5 +56,5 @@ ambiguous states remain accessible through the card; never rely only on a toast.
 The simplified review is implemented in Flutter. Production decisions and state
 remain bound to the Rust ledger. All app builds include Calendar create. Review the
 surface with the Flutter preview and design-feedback mode. Presentation checks do not
-replace the product-boundary, authority and recovery validation required by
-[Stage 3 end-to-end validation](../refactoring/stage-3/3-f.md).
+replace the product-boundary, authority and recovery validation defined by
+[current architecture](../architecture/README.md), [authority/recovery invariants](../architecture/authority-recovery.md), and the current client validation runbook.

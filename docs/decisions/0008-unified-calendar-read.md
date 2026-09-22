@@ -56,4 +56,4 @@ late reads cannot resurrect disconnected data across reconnect.
 
 ## Evidence boundary
 
-This ADR defines the accepted product and data contract; it does not claim that any particular source snapshot, fixture suite or live-provider scenario is currently passing. Current implementation reality is determined from source and [current architecture](../architecture/README.md), while product-boundary validation belongs to [Stage 3](../refactoring/stage-3/3-f.md). Historical S1 acceptance snapshots remain available in Git history.
+This ADR defines the accepted product and data contract; it does not claim that any particular source snapshot, fixture suite or live-provider scenario is currently passing. Current implementation reality is determined from source and [current architecture](../architecture/README.md); current client validation commands live in [the client guide](../../apps/client/README.md). Historical acceptance snapshots remain available in Git history.
