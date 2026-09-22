@@ -214,7 +214,8 @@ pub(crate) fn service_failure(failure: floe_kernel::AgentFailure) -> crate::Serv
 /// worker, bound to the verified local identity.
 pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let identity = crate::bootstrap::local_identity_for_database(std::path::Path::new(path))
-        .map_err(AppOpenError::Host)?;
+        .map_err(AppOpenError::Host)?
+        .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?;
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
@@ -233,10 +234,7 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         #[cfg(unix)]
         agent_vault: vault_host::VaultBridge::new(path, core, local_context),
     };
-    match identity {
-        Some(identity) => AppHost::bootstrap_claim(services, identity).map_err(AppOpenError::Host),
-        None => Ok(AppHost::legacy(services)),
-    }
+    AppHost::bootstrap_claim(services, identity).map_err(AppOpenError::Host)
 }
 
 #[derive(Clone, Debug)]
@@ -257,15 +255,6 @@ impl AppComposition {
 
     pub fn agent_runs(&self) -> &agent_run::AgentRuns {
         &self.agent_runs
-    }
-
-    pub fn local_context(&self) -> &crate::local_context::LocalContextHost {
-        &self.local_context
-    }
-
-    #[cfg(unix)]
-    pub fn agent_vault(&self) -> &vault_host::VaultBridge {
-        &self.agent_vault
     }
 }
 

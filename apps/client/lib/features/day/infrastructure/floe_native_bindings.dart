@@ -33,12 +33,6 @@ final class FloeNativeBindings {
     open = _library.lookupFunction<FloeOpenNative, FloeOpenDart>(
       'floe_core_open',
     );
-    loadDay = _library.lookupFunction<FloeCallNative, FloeCallDart>(
-      'floe_core_load_day',
-    );
-    execute = _library.lookupFunction<FloeCallNative, FloeCallDart>(
-      'floe_core_execute',
-    );
     freeString = _library
         .lookupFunction<FloeFreeStringNative, FloeFreeStringDart>(
           'floe_string_free',
@@ -54,14 +48,6 @@ final class FloeNativeBindings {
 
   final DynamicLibrary _library;
   late final FloeOpenDart open;
-  late final FloeCallDart loadDay;
-  late final FloeCallDart execute;
-  late final FloeCallDart calendarActions = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>(
-        'floe_core_calendar_actions',
-      );
-  late final FloeCallDart agentVault = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_vault');
   late final FloeCallDart commandV2 = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_command_v2');
   late final FloeCallDart queryV2 = _library
@@ -76,8 +62,6 @@ final class FloeNativeBindings {
       .lookupFunction<FloeCallNative, FloeCallDart>(
         'floe_core_remote_access_v2',
       );
-  late final FloeCallDart localContext = _library
-      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_local_context');
   late final FloeFreeStringDart freeString;
   late final FloeFreeCoreDart freeCore;
   late final FloeProtocolVersionDart protocolVersion;

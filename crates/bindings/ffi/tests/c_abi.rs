@@ -4,11 +4,32 @@ use floe_ffi::*;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+const PERSON: &str = "00000000-0000-4000-8000-000000000001";
+
 struct Core(*mut FloeHandle);
 
 impl Core {
     fn open(path: &str) -> Self {
-        let path = CString::new(path).unwrap();
+        let supplied = std::path::Path::new(path);
+        let product_path = supplied
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::file_name)
+            .is_some_and(|name| name == "people");
+        let profile;
+        let path = if product_path {
+            supplied
+        } else {
+            let root = supplied.parent().unwrap();
+            let identity = root.join("local_device_id");
+            if !identity.exists() {
+                std::fs::write(identity, "mac-local").unwrap();
+            }
+            profile = root.join("people").join(PERSON).join("floe.db");
+            std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+            &profile
+        };
+        let path = CString::new(path.to_str().unwrap()).unwrap();
         let mut error = std::ptr::null_mut();
         let handle = unsafe { floe_core_open(path.as_ptr(), &mut error) };
         if !error.is_null() {
@@ -20,23 +41,30 @@ impl Core {
 
     fn execute(&self, request: Value) -> Value {
         let request = CString::new(request.to_string()).unwrap();
-        take_json(unsafe { floe_core_execute(self.0, request.as_ptr()) })
+        take_json(unsafe { floe_core_command_v2(self.0, request.as_ptr()) })
     }
 
-    fn load(&self, request: Value) -> Value {
-        let request = CString::new(request.to_string()).unwrap();
-        take_json(unsafe { floe_core_load_day(self.0, request.as_ptr()) })
+    fn load(&self, day: Value) -> Value {
+        self.query_v2(query(json!({"kind":"day.snapshot", "day":day})))
     }
-
-    fn actions(&self, person_id: &str, operation: Value) -> Value {
-        let request = CString::new(
-            json!({
-                "schema_version": 1, "person_id": person_id, "operation": operation
-            })
-            .to_string(),
-        )
-        .unwrap();
-        take_json(unsafe { floe_core_calendar_actions(self.0, request.as_ptr()) })
+    fn context(&self, operation: Value, read: bool) -> Value {
+        if read {
+            self.query_v2(query(json!({"kind":"context.read", "query":operation})))
+        } else {
+            self.command_v2(intent(json!({"kind":"context.apply", "command":operation})))
+        }
+    }
+    fn observe(&self, mut response: Value, read_kind: &str) -> Value {
+        let operation_id = response["result"]["operation_id"].clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while response["status"] == "ok" && response["result"]["done"] != true {
+            assert!(std::time::Instant::now() < deadline, "{response}");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            response = self.query_v2(query(
+                json!({"kind":read_kind, "operation_id":operation_id, "release":false}),
+            ));
+        }
+        response
     }
 
     fn agent(&self, person_id: &str, operation: Value) -> Value {
@@ -56,17 +84,6 @@ impl Core {
             "session_id": session["id"], "expected_revision": session["revision"], "operation": operation,
         }).to_string()).unwrap();
         take_json(unsafe { floe_core_agent_fixture_run(self.0, request.as_ptr()) })
-    }
-
-    fn local_context(&self, person_id: &str, operation: Value) -> Value {
-        let request = CString::new(
-            json!({
-                "schema_version": 1, "person_id": person_id, "operation": operation
-            })
-            .to_string(),
-        )
-        .unwrap();
-        take_json(unsafe { floe_core_local_context(self.0, request.as_ptr()) })
     }
 
     fn query_v2(&self, request: Value) -> Value {
@@ -165,96 +182,6 @@ fn product_open_binds_native_identity_before_database_side_effects() {
     assert!(!missing_database.exists());
 }
 
-#[test]
-fn local_context_abi_is_ephemeral_person_and_device_bound() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = Core::open(directory.path().join("floe.db").to_str().unwrap());
-    let person_id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().timestamp_millis();
-    let published = core.local_context(
-        &person_id,
-        json!({
-            "kind": "publish",
-            "device_id": "mac-local",
-            "view": {
-                "schema_version": 1,
-                "view_id": "attention.coarse",
-                "source_handle": "attention:macos_local",
-                "observed_at_unix_ms": now - 1,
-                "expires_at_unix_ms": now + 60_000,
-                "state": "focused",
-                "confidence_millis": 800,
-                "evidence_handles": ["activity:coarse"]
-            }
-        }),
-    );
-    assert_eq!(published["status"], "ok");
-    let read = core.local_context(
-        &person_id,
-        json!({"kind": "read", "view_id": "attention.coarse"}),
-    );
-    assert_eq!(read["data"]["device_id"], "mac-local");
-    assert_eq!(read["data"]["view"]["state"], "focused");
-    let revoked = core.local_context(
-        &person_id,
-        json!({
-            "kind": "revoke",
-            "device_id": "mac-local",
-            "view_id": "attention.coarse"
-        }),
-    );
-    assert_eq!(revoked["data"]["removed_count"], 1);
-    let missing = core.local_context(
-        &person_id,
-        json!({"kind": "read", "view_id": "attention.coarse"}),
-    );
-    assert_eq!(
-        missing["error"]["metadata"]["agent_failure"],
-        "capability_unavailable"
-    );
-}
-
-#[test]
-fn native_calendar_publication_requires_the_current_exact_connection() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = Core::open(directory.path().join("floe.db").to_str().unwrap());
-    let person = Uuid::new_v4().to_string();
-    let connection_id = Uuid::new_v4().to_string();
-    data(&core.execute(command(&person, json!({
-        "type": "set_calendar_scope", "connection_id": connection_id,
-        "connection_revision": 1, "device_id": "iphone", "provider": "event_kit", "scope": "selected",
-        "calendars": [{"calendar_id": "home", "calendar_name": "Home"}]
-    }))));
-    let now = chrono::Utc::now().timestamp_millis();
-    let publication = json!({
-        "kind": "publish_calendar_observation", "device_id": "iphone", "connection_id": connection_id,
-        "connection_revision": 1, "provider": "event_kit", "calendar_ids": ["home"],
-        "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 60_000,
-        "range_start_unix_ms": now - 60_000, "range_end_unix_ms": now + 60_000,
-        "batches": [{"calendar_id": "home", "records": [], "failure": null}]
-    });
-    assert_eq!(
-        core.local_context(&person, publication.clone())["status"],
-        "ok"
-    );
-    let mut relabelled = publication.clone();
-    relabelled["connection_id"] = json!(Uuid::new_v4().to_string());
-    assert_eq!(
-        core.local_context(&person, relabelled)["error"]["metadata"]["agent_failure"],
-        "stale_context"
-    );
-    let mut stale = publication.clone();
-    stale["connection_revision"] = json!(2);
-    assert_eq!(
-        core.local_context(&person, stale)["error"]["metadata"]["agent_failure"],
-        "stale_context"
-    );
-    assert_eq!(
-        core.local_context(&Uuid::new_v4().to_string(), publication)["error"]["metadata"]["agent_failure"],
-        "capability_unavailable"
-    );
-}
-
 impl Drop for Core {
     fn drop(&mut self) {
         unsafe { floe_core_free(self.0) };
@@ -277,54 +204,6 @@ fn day() -> Value {
         "timezone_offset_seconds": 0,
         "now": "2026-09-02T10:30:00Z"
     })
-}
-
-#[cfg(unix)]
-#[test]
-fn vault_bridge_reports_status_without_keys_and_rejects_untrusted_commands() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("vault-boundary.db");
-    let core = Core::open(path.to_str().unwrap());
-    let person = Uuid::new_v4().to_string();
-    let id = Uuid::new_v4().to_string();
-    let request = |operation: Value| {
-        let request = CString::new(
-            json!({"schema_version":1,"person_id":person,"request_id":id,"operation":operation})
-                .to_string(),
-        )
-        .unwrap();
-        take_json(unsafe { floe_core_agent_vault(core.0, request.as_ptr()) })
-    };
-    let mut response = request(json!({"kind":"submit","action":{"kind":"status"}}));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while data(&response)["done"] != true {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        response = request(json!({"kind":"poll","after_sequence":0}));
-    }
-    assert_eq!(data(&response)["state"], "missing");
-    assert!(
-        !directory
-            .path()
-            .join("vault-boundary.db.agent-vaults")
-            .exists()
-    );
-    assert_eq!(request(json!({"kind":"poll","after_sequence":0})), response);
-    assert_eq!(
-        request(json!({"kind":"poll","after_sequence":1}))["status"],
-        "error"
-    );
-    request(json!({"kind":"release"}));
-    let malformed = request(
-        json!({"kind":"submit","action":{"kind":"session","operation":{"kind":"turn","session_id":Uuid::new_v4().to_string(),"expected_revision":0,"prompt":"today","text":"secret-marker-do-not-echo"}}}),
-    );
-    assert_eq!(malformed["status"], "error");
-    assert!(!malformed.to_string().contains("secret-marker"));
-    let wrong_version = CString::new(json!({"schema_version":99,"person_id":person,"request_id":id,"operation":{"kind":"submit","action":{"kind":"status"}}}).to_string()).unwrap();
-    assert_eq!(
-        take_json(unsafe { floe_core_agent_vault(core.0, wrong_version.as_ptr()) })["error"]["code"],
-        "unsupported_version"
-    );
 }
 
 #[test]
@@ -379,10 +258,7 @@ fn async_agent_progress_is_replayable_bounded_and_cancellable_without_blocking_c
         "conflict"
     );
     let before = std::time::Instant::now();
-    assert_eq!(
-        data(&core.load(json!({"schema_version":1,"person_id":person,"day":day()})))["items"],
-        json!([])
-    );
+    assert_eq!(data(&core.load(day()))["items"], json!([]));
     assert!(before.elapsed() < std::time::Duration::from_millis(400));
     data(&core.agent_run(&person, session, json!({"kind":"stop"})));
     let stopped = poll_until(&core, &person, session, |update| update["done"] == true);
@@ -531,24 +407,33 @@ fn agent_fixture_bridge_resumes_typed_events_but_does_not_accept_personal_text_o
         data(&next)["session"]["messages"].as_array().unwrap().len(),
         5
     );
-    assert_eq!(
-        data(&core.load(json!({"schema_version": 1, "person_id": person, "day": day()})))["items"],
-        json!([])
-    );
+    assert_eq!(data(&core.load(day()))["items"], json!([]));
 }
 
-fn command(person_id: &str, command: Value) -> Value {
-    json!({
-        "schema_version": 1,
-        "person_id": person_id,
-        "day": day(),
-        "command": command
-    })
+fn command(mutation: Value) -> Value {
+    intent(json!({"kind":"day.mutate", "day":day(), "mutation":mutation}))
+}
+
+fn intent(command: Value) -> Value {
+    json!({"schema_version":2, "request_id":Uuid::new_v4(), "command_id":Uuid::new_v4(), "command":command})
+}
+
+fn query(query: Value) -> Value {
+    json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":query})
 }
 
 fn data(response: &Value) -> &Value {
     assert_eq!(response["status"], "ok", "{response}");
-    &response["data"]
+    if response["schema_version"] == 1 {
+        return &response["data"];
+    }
+    let result = &response["result"];
+    match result["kind"].as_str() {
+        Some("day_mutation") => &result["mutation"],
+        Some("day_snapshot") => &result["snapshot"],
+        Some("context_applied" | "context_read") => &result["context"],
+        _ => result,
+    }
 }
 
 fn changed(response: &Value) -> (&str, u64) {
@@ -560,287 +445,122 @@ fn changed(response: &Value) -> (&str, u64) {
 }
 
 #[test]
-fn calendar_decisions_are_person_scoped_durable_and_never_create() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("actions.db");
-    let person = Uuid::new_v4().to_string();
-    let other = Uuid::new_v4().to_string();
-    let core = Core::open(path.to_str().unwrap());
-    data(&core.execute(command(
-        &person,
-        json!({
-        "type": "set_calendar_scope",
-            "connection_id": "00000000-0000-4000-8000-000000000010",
-            "connection_revision": 1,
-            "device_id": "fixture-device",
-            "provider": "fixture", "scope": "selected",
-            "calendars": [{"calendar_id": "target", "calendar_name": "Target"}]
-        }),
-    )));
-    let now = chrono::Utc::now();
-    let proposal = json!({
-        "kind": "propose", "calendar_id": "target", "title": " Focus ",
-        "starts_at": (now + chrono::Duration::hours(1)).to_rfc3339(),
-        "ends_at": (now + chrono::Duration::hours(2)).to_rfc3339(),
-        "timezone": "Asia/Seoul"
-    });
-    let response = core.actions(&person, proposal.clone());
-    let action = &data(&response)["actions"][0];
-    assert_eq!(action["state"]["status"], "pending");
-    assert_eq!(action["title"], "Focus");
-    assert_eq!(action["calendar_name"], "Target");
-    let action_id = action["id"].clone();
-    let decision = json!({"kind": "decide", "action_id": action_id, "decision": "approve"});
-    assert_eq!(
-        core.actions(&other, decision.clone())["error"]["code"],
-        "not_found"
-    );
-    assert_eq!(
-        data(&core.actions(&other, json!({"kind": "list"})))["actions"],
-        json!([])
-    );
-    let approved = core.actions(&person, decision.clone());
-    assert_eq!(data(&approved)["actions"][0]["state"]["status"], "approved");
-    assert!(!data(&approved)["actions"][0]["approved_at"].is_null());
-    assert_eq!(core.actions(&person, decision)["error"]["code"], "conflict");
-    let rejected = core.actions(&person, proposal);
-    let rejected_id = data(&rejected)["actions"][0]["id"].clone();
-    let rejected = core.actions(
-        &person,
-        json!({"kind": "decide", "action_id": rejected_id, "decision": "reject"}),
-    );
-    assert_eq!(data(&rejected)["actions"][0]["state"]["status"], "rejected");
-    drop(core);
-    let core = Core::open(path.to_str().unwrap());
-    let restored = core.actions(&person, json!({"kind": "get", "action_id": action_id}));
-    assert_eq!(data(&restored), data(&approved));
-    assert_eq!(
-        data(&core.actions(&person, json!({"kind": "list"})))["actions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    assert_eq!(
-        data(&core.load(json!({"schema_version": 1, "person_id": person, "day": day()})))["items"],
-        json!([])
-    );
-}
-
-#[test]
-fn action_authority_defaults_to_ask_and_rejects_legacy_mutation() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("authority.db");
-    let person = Uuid::new_v4().to_string();
-    let core = Core::open(path.to_str().unwrap());
-
-    assert_eq!(
-        data(&core.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
-        "ask"
-    );
-    let denied = core.actions(
-        &person,
-        json!({"kind": "set_authority", "calendar_create": "allow"}),
-    );
-    assert_eq!(denied["status"], "error");
-    assert_eq!(denied["error"]["code"], "validation");
-    assert_eq!(
-        data(&core.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
-        "ask"
-    );
-    drop(core);
-
-    let reopened = Core::open(path.to_str().unwrap());
-    assert_eq!(
-        data(&reopened.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
-        "ask"
-    );
-}
-
-#[test]
-fn calendar_action_boundary_rejects_execution_and_caller_authority() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = Core::open(directory.path().join("invalid.db").to_str().unwrap());
-    let person = Uuid::new_v4().to_string();
-    for operation in [
-        json!({"kind": "execute", "action_id": Uuid::new_v4()}),
-        json!({"kind": "list", "now": "2020-01-01T00:00:00Z"}),
-        json!({"kind": "list", "allow_create": true}),
-        json!({"kind": "decide", "action_id": Uuid::new_v4(), "decision": "maybe"}),
-        json!({"kind": "get", "action_id": "invalid"}),
-    ] {
-        assert_eq!(
-            core.actions(&person, operation)["error"]["code"],
-            "validation"
-        );
-    }
-    assert_eq!(
-        core.actions("invalid", json!({"kind": "list"}))["error"]["code"],
-        "validation"
-    );
-    let request = CString::new(
-        json!({"schema_version": 999, "person_id": person, "operation": {"kind": "list"}})
-            .to_string(),
-    )
-    .unwrap();
-    let response = take_json(unsafe { floe_core_calendar_actions(core.0, request.as_ptr()) });
-    assert_eq!(response["error"]["code"], "unsupported_version");
-    let response =
-        take_json(unsafe { floe_core_calendar_actions(std::ptr::null_mut(), request.as_ptr()) });
-    assert_eq!(response["error"]["code"], "validation");
-}
-
-#[test]
 fn complete_command_surface_round_trips_and_persists() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("person.db");
-    let person_id = Uuid::new_v4().to_string();
     let core = Core::open(path.to_str().unwrap());
 
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "submit_capture",
-            "input": "Captured note",
-            "occurred_at": "2026-09-02T09:00:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "submit_capture",
+        "input": "Captured note",
+        "occurred_at": "2026-09-02T09:00:00Z"
+    })));
     let capture = &data(&response)["capture"];
     let capture_id = capture["id"].as_str().unwrap();
     let capture_revision = capture["revision"].as_u64().unwrap();
 
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "classify_capture",
-            "capture_id": capture_id,
-            "expected_revision": capture_revision,
-            "classification": {"kind": "note", "content": "Captured note"},
-            "occurred_at": "2026-09-02T09:01:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "classify_capture",
+        "capture_id": capture_id,
+        "expected_revision": capture_revision,
+        "classification": {"kind": "note", "content": "Captured note"},
+        "occurred_at": "2026-09-02T09:01:00Z"
+    })));
     assert_eq!(data(&response)["changed_item"]["source"]["kind"], "capture");
 
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "create_event",
-            "title": "Review",
-            "schedule": {
-                "kind": "timed",
-                "starts_at": "2026-09-02T10:00:00Z",
-                "ends_at": "2026-09-02T11:00:00Z",
-                "timezone": "UTC"
-            },
-            "occurred_at": "2026-09-02T08:00:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "create_event",
+        "title": "Review",
+        "schedule": {
+            "kind": "timed",
+            "starts_at": "2026-09-02T10:00:00Z",
+            "ends_at": "2026-09-02T11:00:00Z",
+            "timezone": "UTC"
+        },
+        "occurred_at": "2026-09-02T08:00:00Z"
+    })));
     let (event_id, event_revision) = changed(&response);
     let event_id = event_id.to_owned();
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "update_event",
-            "event_id": event_id,
-            "expected_revision": event_revision,
-            "title": "Review updated",
-            "schedule": {
-                "kind": "timed",
-                "starts_at": "2026-09-02T10:00:00Z",
-                "ends_at": "2026-09-02T11:30:00Z",
-                "timezone": "UTC"
-            },
-            "occurred_at": "2026-09-02T08:10:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "update_event",
+        "event_id": event_id,
+        "expected_revision": event_revision,
+        "title": "Review updated",
+        "schedule": {
+            "kind": "timed",
+            "starts_at": "2026-09-02T10:00:00Z",
+            "ends_at": "2026-09-02T11:30:00Z",
+            "timezone": "UTC"
+        },
+        "occurred_at": "2026-09-02T08:10:00Z"
+    })));
     assert_eq!(data(&response)["changed_item"]["title"], "Review updated");
 
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "create_task",
-            "title": "Ship",
-            "deadline": "2026-09-02T10:00:00Z",
-            "priority": "normal",
-            "occurred_at": "2026-09-02T08:00:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "create_task",
+        "title": "Ship",
+        "deadline": "2026-09-02T10:00:00Z",
+        "priority": "normal",
+        "occurred_at": "2026-09-02T08:00:00Z"
+    })));
     let (task_id, task_revision) = changed(&response);
     let task_id = task_id.to_owned();
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "set_task_completion",
-            "task_id": task_id,
-            "expected_revision": task_revision,
-            "completed": true,
-            "occurred_at": "2026-09-02T10:35:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "set_task_completion",
+        "task_id": task_id,
+        "expected_revision": task_revision,
+        "completed": true,
+        "occurred_at": "2026-09-02T10:35:00Z"
+    })));
     let completed_revision = data(&response)["changed_item"]["revision"]
         .as_u64()
         .unwrap();
     assert!(!data(&response)["changed_item"]["completed_at"].is_null());
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "set_task_completion",
-            "task_id": task_id,
-            "expected_revision": completed_revision,
-            "completed": false,
-            "occurred_at": "2026-09-02T10:36:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "set_task_completion",
+        "task_id": task_id,
+        "expected_revision": completed_revision,
+        "completed": false,
+        "occurred_at": "2026-09-02T10:36:00Z"
+    })));
     let reopened_revision = data(&response)["changed_item"]["revision"]
         .as_u64()
         .unwrap();
     assert!(data(&response)["changed_item"]["completed_at"].is_null());
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "update_task",
-            "task_id": task_id,
-            "expected_revision": reopened_revision,
-            "title": "Ship updated",
-            "deadline": null,
-            "priority": "high",
-            "occurred_at": "2026-09-02T10:37:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "update_task",
+        "task_id": task_id,
+        "expected_revision": reopened_revision,
+        "title": "Ship updated",
+        "deadline": null,
+        "priority": "high",
+        "occurred_at": "2026-09-02T10:37:00Z"
+    })));
     let updated_task_revision = data(&response)["changed_item"]["revision"]
         .as_u64()
         .unwrap();
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "delete_item",
-            "target": {"kind": "task", "id": task_id},
-            "expected_revision": updated_task_revision,
-            "occurred_at": "2026-09-02T10:38:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "delete_item",
+        "target": {"kind": "task", "id": task_id},
+        "expected_revision": updated_task_revision,
+        "occurred_at": "2026-09-02T10:38:00Z"
+    })));
     assert!(data(&response)["changed_item"].is_null());
 
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "create_note",
-            "content": "Manual note",
-            "occurred_at": "2026-09-02T08:00:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "create_note",
+        "content": "Manual note",
+        "occurred_at": "2026-09-02T08:00:00Z"
+    })));
     let (note_id, note_revision) = changed(&response);
     let note_id = note_id.to_owned();
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "update_note",
-            "note_id": note_id,
-            "expected_revision": note_revision,
-            "content": "Manual note updated",
-            "occurred_at": "2026-09-02T08:05:00Z"
-        }),
-    ));
+    let response = core.execute(command(json!({
+        "type": "update_note",
+        "note_id": note_id,
+        "expected_revision": note_revision,
+        "content": "Manual note updated",
+        "occurred_at": "2026-09-02T08:05:00Z"
+    })));
     assert_eq!(
         data(&response)["changed_item"]["content"],
         "Manual note updated"
@@ -848,100 +568,11 @@ fn complete_command_surface_round_trips_and_persists() {
 
     drop(core);
     let core = Core::open(path.to_str().unwrap());
-    let response = core.load(json!({
-        "schema_version": 1,
-        "person_id": person_id,
-        "day": day()
-    }));
+    let response = core.load(day());
     let items = data(&response)["items"].as_array().unwrap();
     assert!(items.iter().any(|item| item["title"] == "Review updated"));
     assert!(items.iter().any(|item| item["content"] == "Captured note"));
     assert!(!items.iter().any(|item| item["id"] == task_id));
-}
-
-#[test]
-fn abi_returns_typed_errors_for_bad_boundary_input() {
-    assert_eq!(floe_protocol_version(), 1);
-    unsafe {
-        floe_string_free(std::ptr::null_mut());
-        floe_core_free(std::ptr::null_mut());
-    }
-
-    let malformed = CString::new("{").unwrap();
-    let response =
-        take_json(unsafe { floe_core_load_day(std::ptr::null_mut(), malformed.as_ptr()) });
-    assert_eq!(response["status"], "error");
-    assert_eq!(response["error"]["code"], "validation");
-    assert_eq!(response["error"]["field"], "handle");
-
-    let directory = tempfile::tempdir().unwrap();
-    let core = Core::open(directory.path().join("person.db").to_str().unwrap());
-    let response = take_json(unsafe { floe_core_execute(core.0, malformed.as_ptr()) });
-    assert_eq!(response["error"]["field"], "request_json");
-
-    let response = core.load(json!({
-        "schema_version": 99,
-        "person_id": Uuid::new_v4().to_string(),
-        "day": day()
-    }));
-    assert_eq!(response["error"]["code"], "unsupported_version");
-
-    let person_id = Uuid::new_v4().to_string();
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "create_task",
-            "title": "Revision check",
-            "deadline": null,
-            "priority": "normal",
-            "occurred_at": "2026-09-02T10:30:00Z"
-        }),
-    ));
-    let task_id = data(&response)["changed_item"]["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let response = core.execute(command(
-        &person_id,
-        json!({
-            "type": "set_task_completion",
-            "task_id": task_id,
-            "expected_revision": 99,
-            "completed": true,
-            "occurred_at": "2026-09-02T10:31:00Z"
-        }),
-    ));
-    assert_eq!(response["error"]["code"], "conflict");
-    assert_eq!(response["error"]["metadata"]["expected"], "99");
-
-    let person_id = Uuid::new_v4().to_string();
-    let response = core.execute(json!({
-        "schema_version": 1,
-        "person_id": person_id,
-        "day": {
-            "date": "not-a-date",
-            "timezone_offset_seconds": 0,
-            "now": "2026-09-02T10:30:00Z"
-        },
-        "command": {
-            "type": "create_note",
-            "content": "must not persist",
-            "occurred_at": "2026-09-02T10:30:00Z"
-        }
-    }));
-    assert_eq!(response["status"], "error");
-    let response = core.load(json!({
-        "schema_version": 1,
-        "person_id": person_id,
-        "day": day()
-    }));
-    assert!(data(&response)["items"].as_array().unwrap().is_empty());
-
-    let invalid_utf8 = [0xff_u8, 0];
-    let mut error = std::ptr::null_mut();
-    let handle = unsafe { floe_core_open(invalid_utf8.as_ptr().cast(), &mut error) };
-    assert!(handle.is_null());
-    assert_eq!(take_json(error)["error"]["field"], "path");
 }
 
 #[test]
@@ -998,4 +629,196 @@ fn remote_owner_abis_validate_envelopes_and_preserve_request_correlation() {
             "validation"
         );
     }
+}
+
+#[test]
+fn context_identity_is_admitted_and_publications_are_ephemeral() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("context.db");
+    let core = Core::open(database.to_str().unwrap());
+    let now = chrono::Utc::now().timestamp_millis();
+    let publication = json!({"kind":"publish", "view":{
+        "schema_version":1, "view_id":"attention.coarse", "source_handle":"attention:macos_local",
+        "observed_at_unix_ms":now-1, "expires_at_unix_ms":now+60_000, "state":"focused",
+        "confidence_millis":800, "evidence_handles":["activity:coarse"]
+    }});
+    data(&core.context(publication.clone(), false));
+    let read = core.context(json!({"kind":"read", "view_id":"attention.coarse"}), true);
+    assert_eq!(data(&read)["device_id"], "mac-local");
+    assert_eq!(data(&read)["person_id"], PERSON);
+    assert_eq!(data(&read)["view"]["state"], "focused");
+    for field in ["person_id", "device_id", "bearer", "route"] {
+        let mut forged = publication.clone();
+        forged[field] = json!("foreign");
+        assert_eq!(core.context(forged, false)["error"]["code"], "validation");
+    }
+    let revoked = core.context(
+        json!({"kind":"revoke", "view_id":"attention.coarse"}),
+        false,
+    );
+    assert_eq!(data(&revoked)["removed_count"], 1);
+    assert_eq!(
+        core.context(json!({"kind":"read", "view_id":"attention.coarse"}), true)["error"]["metadata"]
+            ["agent_failure"],
+        "capability_unavailable"
+    );
+    data(&core.context(publication, false));
+    drop(core);
+    let reopened = Core::open(database.to_str().unwrap());
+    assert_eq!(
+        reopened.context(json!({"kind":"read", "view_id":"attention.coarse"}), true)["error"]["metadata"]
+            ["agent_failure"],
+        "capability_unavailable"
+    );
+}
+
+#[test]
+fn native_calendar_publication_requires_the_current_exact_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("calendar.db").to_str().unwrap());
+    let connection_id = Uuid::new_v4().to_string();
+    data(&core.execute(command(json!({"type":"set_calendar_scope", "connection_id":connection_id, "connection_revision":1, "provider":"event_kit", "scope":"selected", "calendars":[{"calendar_id":"home", "calendar_name":"Home"}]}))));
+    let now = chrono::Utc::now().timestamp_millis();
+    let publication = json!({"kind":"publish_calendar_observation", "connection_id":connection_id, "connection_revision":1, "provider":"event_kit", "calendar_ids":["home"], "observed_at_unix_ms":now-1, "expires_at_unix_ms":now+60_000, "range_start_unix_ms":now-60_000, "range_end_unix_ms":now+60_000, "batches":[{"calendar_id":"home", "records":[], "failure":null}]});
+    data(&core.context(publication.clone(), false));
+    for (field, value) in [
+        ("connection_id", json!(Uuid::new_v4())),
+        ("connection_revision", json!(2)),
+    ] {
+        let mut stale = publication.clone();
+        stale[field] = value;
+        assert_eq!(
+            core.context(stale, false)["error"]["metadata"]["agent_failure"],
+            "stale_context"
+        );
+    }
+    let mut foreign = publication;
+    foreign["person_id"] = json!(Uuid::new_v4());
+    assert_eq!(core.context(foreign, false)["error"]["code"], "validation");
+}
+
+#[test]
+fn owner_results_are_correlated_and_status_never_provisions_keys() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("status.db").to_str().unwrap());
+    let response = core.observe(
+        core.query_v2(query(json!({"kind":"vault.status"}))),
+        "vault.read_result",
+    );
+    let result = data(&response);
+    assert_eq!(result["state"], "missing");
+    let operation_id = result["operation_id"].clone();
+    let observed = core.query_v2(query(
+        json!({"kind":"vault.read_result", "operation_id":operation_id, "release":false}),
+    ));
+    assert_eq!(data(&observed), result);
+    let wrong_owner = core.query_v2(query(
+        json!({"kind":"actions.read_result", "operation_id":operation_id, "release":false}),
+    ));
+    assert_eq!(wrong_owner["error"]["code"], "not_found");
+    let released = core.query_v2(query(
+        json!({"kind":"vault.read_result", "operation_id":operation_id, "release":true}),
+    ));
+    assert_eq!(data(&released), result);
+    assert!(
+        !directory
+            .path()
+            .join("people")
+            .join(PERSON)
+            .join("floe.db.agent-vaults")
+            .exists()
+    );
+    for field in [
+        "person_id",
+        "device_id",
+        "bearer_token",
+        "endpoint",
+        "route",
+        "text",
+    ] {
+        let mut request = intent(json!({"kind":"vault.create"}));
+        request["command"][field] = json!("secret-marker-do-not-echo");
+        let denied = core.command_v2(request);
+        assert_eq!(denied["error"]["code"], "validation");
+        assert!(!denied.to_string().contains("secret-marker"));
+    }
+}
+
+#[test]
+fn actions_accept_intent_not_execution_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("actions.db").to_str().unwrap());
+    for operation in [
+        json!({"kind":"decide", "action_id":Uuid::new_v4(), "decision":"maybe"}),
+        json!({"kind":"execute", "action_id":"invalid"}),
+        json!({"kind":"set_authority", "calendar_create":"allow", "person_id":Uuid::new_v4()}),
+        json!({"kind":"direct", "allow_create":true}),
+    ] {
+        assert_eq!(
+            core.command_v2(intent(
+                json!({"kind":"actions.calendar", "operation":operation})
+            ))["error"]["code"],
+            "validation"
+        );
+    }
+    for field in ["now", "allow_create", "device_id", "person_id", "endpoint"] {
+        let mut request = query(json!({"kind":"actions.list"}));
+        request["query"][field] = json!(true);
+        assert_eq!(core.query_v2(request)["error"]["code"], "validation");
+    }
+    let authority = core.observe(
+        core.query_v2(query(json!({"kind":"actions.authority"}))),
+        "actions.read_result",
+    );
+    assert_eq!(data(&authority)["failure"]["kind"], "vault_unavailable");
+}
+
+#[test]
+fn abi_returns_typed_errors_for_bad_boundary_input_without_writes() {
+    assert_eq!(floe_protocol_version(), 1);
+    unsafe {
+        floe_string_free(std::ptr::null_mut());
+        floe_core_free(std::ptr::null_mut());
+    }
+    let malformed = CString::new("{").unwrap();
+    let response =
+        take_json(unsafe { floe_core_query_v2(std::ptr::null_mut(), malformed.as_ptr()) });
+    assert_eq!(response["error"]["field"], "handle");
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("person.db").to_str().unwrap());
+    let response = take_json(unsafe { floe_core_command_v2(core.0, malformed.as_ptr()) });
+    assert_eq!(response["error"]["field"], "request_json");
+    let mut wrong_version = query(json!({"kind":"day.snapshot", "day":day()}));
+    wrong_version["schema_version"] = json!(99);
+    assert_eq!(
+        core.query_v2(wrong_version)["error"]["code"],
+        "unsupported_version"
+    );
+    let mut invalid = command(
+        json!({"type":"create_note", "content":"must not persist", "occurred_at":"2026-09-02T10:30:00Z"}),
+    );
+    invalid["command"]["day"]["date"] = json!("not-a-date");
+    assert_eq!(core.execute(invalid)["status"], "error");
+    assert!(
+        data(&core.load(day()))["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let created = core.execute(command(json!({"type":"create_task", "title":"Revision check", "deadline":null, "priority":"normal", "occurred_at":"2026-09-02T10:30:00Z"})));
+    let task_id = data(&created)["changed_item"]["id"].clone();
+    let conflict = core.execute(command(json!({"type":"set_task_completion", "task_id":task_id, "expected_revision":99, "completed":true, "occurred_at":"2026-09-02T10:31:00Z"})));
+    assert_eq!(conflict["error"]["code"], "conflict");
+    assert_eq!(conflict["error"]["metadata"]["expected"], "99");
+    let invalid_utf8 = [0xff_u8, 0];
+    let mut error = std::ptr::null_mut();
+    let handle = unsafe { floe_core_open(invalid_utf8.as_ptr().cast(), &mut error) };
+    assert!(handle.is_null());
+    assert_eq!(take_json(error)["error"]["field"], "path");
+    let unverified = directory.path().join("unverified.db");
+    let path = CString::new(unverified.to_str().unwrap()).unwrap();
+    let handle = unsafe { floe_core_open(path.as_ptr(), &mut error) };
+    assert!(handle.is_null());
+    assert_eq!(take_json(error)["error"]["code"], "internal");
+    assert!(!unverified.exists());
 }

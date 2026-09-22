@@ -5,19 +5,18 @@ use floe_protocol::*;
 #[test]
 fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_keys() {
     let action = serde_json::json!({
-        "kind": "calendar_experts",
+        "kind": "experts.calendar.install",
         "setup": {
             "instance_id": "00000000-0000-4000-8000-000000000001",
             "expected_revision": 0,
             "setup_id": "00000000-0000-4000-8000-000000000002",
             "provider": "event_kit",
-            "device_id": "test-device",
             "calendar_ids": ["explicit-calendar"],
             "connection_scope": "selected",
             "connection_revision": 7
         }
     });
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    let parsed: AppCommandDto = serde_json::from_value(action.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), action);
     for field in [
         "enabled",
@@ -29,16 +28,16 @@ fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_
     ] {
         let mut forged = action.clone();
         forged["setup"][field] = serde_json::json!(true);
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
     }
     let view_change = serde_json::json!({
-        "kind": "registry", "change": {
+        "kind": "experts.registry.configure", "change": {
             "instance_id": "00000000-0000-4000-8000-000000000001",
             "expected_revision": 1,
             "target": {"kind": "calendar_view", "id": "00000000-0000-4000-8000-000000000002", "enabled": false}
         }
     });
-    let parsed: AgentVaultActionDto = serde_json::from_value(view_change.clone()).unwrap();
+    let parsed: AppCommandDto = serde_json::from_value(view_change.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), view_change);
 }
 
@@ -49,7 +48,6 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
         serde_json::json!({
             "kind": "set_scope",
             "provider": "event_kit",
-            "device_id": "test-device",
             "calendar_ids": ["home", "work"],
             "connection_scope": "all",
             "connection_revision": 8
@@ -57,7 +55,7 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
         serde_json::json!({"kind": "remove"}),
     ] {
         let action = serde_json::json!({
-            "kind": "calendar_access",
+            "kind": "access.calendar.configure",
             "change": {
                 "instance_id": "00000000-0000-4000-8000-000000000001",
                 "expected_revision": 4,
@@ -65,11 +63,11 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
                 "change": change
             }
         });
-        let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+        let parsed: AppCommandDto = serde_json::from_value(action.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), action);
     }
     let forged = serde_json::json!({
-        "kind": "calendar_access",
+        "kind": "access.calendar.configure",
         "change": {
             "instance_id": "00000000-0000-4000-8000-000000000001",
             "expected_revision": 4,
@@ -77,7 +75,7 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
             "change": {"kind": "remove", "keep_assignments": true}
         }
     });
-    assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
 }
 
 #[test]
@@ -87,17 +85,17 @@ fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operati
         "expected_revision": 7,
         "target": {"kind": "assignment", "id": "00000000-0000-4000-8000-000000000002", "enabled": false}
     });
-    let action = serde_json::json!({"kind": "registry", "change": change});
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    let action = serde_json::json!({"kind": "experts.registry.configure", "change": change});
+    let parsed: AppCommandDto = serde_json::from_value(action.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), action);
     for field in ["granted_view_handles", "private_state", "person_id"] {
         let mut forged = action.clone();
         forged["change"]["target"][field] = serde_json::json!([]);
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
     }
     let mut forged = action;
     forged["change"]["target"]["kind"] = serde_json::json!("grant_calendar");
-    assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
 }
 use serde_json::json;
 use uuid::Uuid;
@@ -108,7 +106,7 @@ fn calendar_scoped_conversation_actions_are_not_part_of_the_protocol() {
         json!({"kind": "calendar_session", "operation": {"kind": "start", "setup_id": Uuid::new_v4()}}),
         json!({"kind": "calendar_turn", "request": {"session_id": Uuid::new_v4()}}),
     ] {
-        assert!(serde_json::from_value::<AgentVaultActionDto>(action).is_err());
+        assert!(serde_json::from_value::<AppCommandDto>(action).is_err());
     }
 }
 
@@ -119,21 +117,20 @@ fn obsolete_conversation_turn_wire_is_rejected() {
         "request": {
             "session_id": Uuid::new_v4(),
             "expected_revision": 2,
-            "device_id": "test-device",
             "text": "Help me plan the afternoon"
         }
     });
-    assert!(serde_json::from_value::<AgentVaultActionDto>(action).is_err());
+    assert!(serde_json::from_value::<AppCommandDto>(action).is_err());
 }
 
 #[test]
 fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     let action = json!({
-        "kind": "inspect_proposal",
+        "kind": "actions.proposal.inspect",
         "session_id": Uuid::new_v4(),
         "invocation_id": Uuid::new_v4(),
     });
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    let parsed: AppQueryDto = serde_json::from_value(action.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), action);
     for field in [
         "person_id",
@@ -146,43 +143,41 @@ fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     ] {
         let mut forged = action.clone();
         forged[field] = json!(true);
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        assert!(serde_json::from_value::<AppQueryDto>(forged).is_err());
     }
 }
 
 #[test]
 fn memory_review_transport_accepts_only_user_decisions_on_candidate_ids() {
-    let inspect = json!({"kind": "memory_review"});
-    let parsed: AgentVaultActionDto = serde_json::from_value(inspect.clone()).unwrap();
+    let inspect = json!({"kind": "knowledge.memory.review"});
+    let parsed: AppQueryDto = serde_json::from_value(inspect.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), inspect);
 
     let decide = json!({
-        "kind": "memory_review",
-        "decision": {
-            "candidate_id": Uuid::new_v4(),
-            "decision": "approve"
-        }
+        "kind": "knowledge.memory.decide",
+        "candidate_id": Uuid::new_v4(),
+        "decision": "approve"
     });
-    let parsed: AgentVaultActionDto = serde_json::from_value(decide.clone()).unwrap();
+    let parsed: AppCommandDto = serde_json::from_value(decide.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), decide);
 
     for field in ["actor", "payload", "statement", "person_id", "execute"] {
         let mut forged = decide.clone();
-        forged["decision"][field] = json!("untrusted");
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        forged[field] = json!("untrusted");
+        assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
     }
 }
 
 #[test]
 fn memory_overview_transport_is_read_only() {
-    let inspect = json!({"kind": "memory"});
-    let parsed: AgentVaultActionDto = serde_json::from_value(inspect.clone()).unwrap();
+    let inspect = json!({"kind": "knowledge.memory.overview"});
+    let parsed: AppQueryDto = serde_json::from_value(inspect.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), inspect);
 
     for field in ["target_id", "statement", "delete", "actor", "person_id"] {
         let mut forged = inspect.clone();
         forged[field] = json!("untrusted");
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        assert!(serde_json::from_value::<AppQueryDto>(forged).is_err());
     }
 }
 
@@ -243,91 +238,6 @@ fn snapshot_has_a_versioned_stable_wire_shape() {
 }
 
 #[test]
-fn command_and_nested_union_tags_are_stable() {
-    let request = CommandRequestDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: "00000000-0000-0000-0000-000000000001".into(),
-        day: DayQueryDto {
-            date: "2026-09-02".into(),
-            timezone_offset_seconds: 32_400,
-            end_timezone_offset_seconds: None,
-            now: "2026-09-02T10:30:00Z".into(),
-        },
-        command: CommandDto::ClassifyCapture {
-            capture_id: "00000000-0000-0000-0000-000000000004".into(),
-            expected_revision: 0,
-            classification: ClassificationDto::Event {
-                title: "Review".into(),
-                schedule: EventScheduleDto::Timed {
-                    starts_at: "2026-09-02T11:00:00Z".into(),
-                    ends_at: "2026-09-02T12:00:00Z".into(),
-                    timezone: "Asia/Seoul".into(),
-                },
-            },
-            occurred_at: "2026-09-02T10:30:00Z".into(),
-        },
-    };
-
-    assert_eq!(
-        serde_json::to_value(request).unwrap(),
-        json!({
-            "schema_version": 1,
-            "person_id": "00000000-0000-0000-0000-000000000001",
-            "day": {
-                "date": "2026-09-02",
-                "timezone_offset_seconds": 32400,
-                "end_timezone_offset_seconds": null,
-                "now": "2026-09-02T10:30:00Z"
-            },
-            "command": {
-                "type": "classify_capture",
-                "capture_id": "00000000-0000-0000-0000-000000000004",
-                "expected_revision": 0,
-                "classification": {
-                    "kind": "event",
-                    "title": "Review",
-                    "schedule": {
-                        "kind": "timed",
-                        "starts_at": "2026-09-02T11:00:00Z",
-                        "ends_at": "2026-09-02T12:00:00Z",
-                        "timezone": "Asia/Seoul"
-                    }
-                },
-                "occurred_at": "2026-09-02T10:30:00Z"
-            }
-        })
-    );
-}
-
-#[test]
-fn load_day_request_has_a_stable_wire_shape() {
-    let request = LoadDayRequestDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: "00000000-0000-0000-0000-000000000001".into(),
-        day: DayQueryDto {
-            date: "2026-09-02".into(),
-            timezone_offset_seconds: 32_400,
-            end_timezone_offset_seconds: None,
-            now: "2026-09-02T10:30:00Z".into(),
-        },
-    };
-
-    assert_eq!(
-        serde_json::to_value(request).unwrap(),
-        json!({
-            "schema_version": 1,
-            "person_id": "00000000-0000-0000-0000-000000000001",
-            "day": {
-                "date": "2026-09-02",
-                "timezone_offset_seconds": 32400,
-                "end_timezone_offset_seconds": null,
-                "now": "2026-09-02T10:30:00Z"
-            }
-        })
-    );
-}
-
-#[test]
 fn capture_and_error_envelopes_have_explicit_tags() {
     let processing = CaptureProcessingDto::Classified {
         target: DomainRefDto::Task {
@@ -376,11 +286,11 @@ fn all_command_variants_round_trip_through_json() {
         timezone: "UTC".into(),
     };
     let commands = vec![
-        CommandDto::SubmitCapture {
+        DayMutationDto::SubmitCapture {
             input: "input".into(),
             occurred_at: at.clone(),
         },
-        CommandDto::ClassifyCapture {
+        DayMutationDto::ClassifyCapture {
             capture_id: "capture".into(),
             expected_revision: 0,
             classification: ClassificationDto::Note {
@@ -388,29 +298,29 @@ fn all_command_variants_round_trip_through_json() {
             },
             occurred_at: at.clone(),
         },
-        CommandDto::CreateEvent {
+        DayMutationDto::CreateEvent {
             title: "event".into(),
             schedule: timed.clone(),
             occurred_at: at.clone(),
         },
-        CommandDto::CreateTask {
+        DayMutationDto::CreateTask {
             title: "task".into(),
             deadline: None,
             priority: PriorityDto::Normal,
             occurred_at: at.clone(),
         },
-        CommandDto::CreateNote {
+        DayMutationDto::CreateNote {
             content: "note".into(),
             occurred_at: at.clone(),
         },
-        CommandDto::UpdateEvent {
+        DayMutationDto::UpdateEvent {
             event_id: "event".into(),
             expected_revision: 1,
             title: "event".into(),
             schedule: timed,
             occurred_at: at.clone(),
         },
-        CommandDto::UpdateTask {
+        DayMutationDto::UpdateTask {
             task_id: "task".into(),
             expected_revision: 1,
             title: "task".into(),
@@ -418,19 +328,19 @@ fn all_command_variants_round_trip_through_json() {
             priority: PriorityDto::High,
             occurred_at: at.clone(),
         },
-        CommandDto::UpdateNote {
+        DayMutationDto::UpdateNote {
             note_id: "note".into(),
             expected_revision: 1,
             content: "note".into(),
             occurred_at: at.clone(),
         },
-        CommandDto::SetTaskCompletion {
+        DayMutationDto::SetTaskCompletion {
             task_id: "task".into(),
             expected_revision: 1,
             completed: true,
             occurred_at: at.clone(),
         },
-        CommandDto::DeleteItem {
+        DayMutationDto::DeleteItem {
             target: DomainRefDto::Note { id: "note".into() },
             expected_revision: 1,
             occurred_at: at,
@@ -440,22 +350,38 @@ fn all_command_variants_round_trip_through_json() {
     for command in commands {
         let encoded = serde_json::to_string(&command).unwrap();
         assert_eq!(
-            serde_json::from_str::<CommandDto>(&encoded).unwrap(),
+            serde_json::from_str::<DayMutationDto>(&encoded).unwrap(),
             command
         );
     }
 }
 #[test]
 fn connections_transport_is_read_only() {
-    let action = json!({"kind": "connections"});
+    let action = json!({"kind": "connections.overview"});
     assert_eq!(
-        serde_json::from_value::<AgentVaultActionDto>(action).unwrap(),
-        AgentVaultActionDto::Connections {}
+        serde_json::from_value::<AppQueryDto>(action).unwrap(),
+        AppQueryDto::ConnectionsOverview {}
     );
     for forged in [
-        json!({"kind": "connections", "disconnect": true}),
-        json!({"kind": "connections", "credential": "secret"}),
+        json!({"kind": "connections.overview", "disconnect": true}),
+        json!({"kind": "connections.overview", "credential": "secret"}),
     ] {
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        assert!(serde_json::from_value::<AppQueryDto>(forged).is_err());
     }
+}
+
+#[test]
+fn admitted_day_envelopes_and_nested_tags_are_stable() {
+    let request_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+    let day = json!({"date":"2026-09-02", "timezone_offset_seconds":32400, "end_timezone_offset_seconds":null, "now":"2026-09-02T10:30:00Z"});
+    let mutation = json!({"type":"classify_capture", "capture_id":Uuid::new_v4(), "expected_revision":0, "classification":{"kind":"event", "title":"Review", "schedule":{"kind":"timed", "starts_at":"2026-09-02T11:00:00Z", "ends_at":"2026-09-02T12:00:00Z", "timezone":"Asia/Seoul"}}, "occurred_at":"2026-09-02T10:30:00Z"});
+    let command = json!({"schema_version":2, "request_id":request_id, "command_id":command_id, "command":{"kind":"day.mutate", "day":day, "mutation":mutation}});
+    let decoded: AppCommandRequestDto = serde_json::from_value(command.clone()).unwrap();
+    decoded.validate().unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), command);
+    let query = json!({"schema_version":2, "request_id":request_id, "query":{"kind":"day.snapshot", "day":day}});
+    let decoded: AppQueryRequestDto = serde_json::from_value(query.clone()).unwrap();
+    decoded.validate().unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), query);
 }

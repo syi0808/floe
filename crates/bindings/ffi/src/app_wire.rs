@@ -55,7 +55,7 @@ where
             })
         }
         AppCommandDto::ActionsCalendar { operation } => {
-            let command = crate::conversion::worker::calendar_action_operation(operation)
+            let command = crate::conversion::owners::calendar_action_operation(operation)
                 .map_err(structural_error)?;
             let result = host_request
                 .services()
@@ -162,7 +162,7 @@ where
         AppCommandDto::AccessPersonalConfigure { connector, change } => {
             let command = floe_app::LocalAccessCommand::Personal {
                 connector,
-                change: crate::conversion::worker::personal_access_change(&change),
+                change: crate::conversion::owners::personal_access_change(&change),
             };
             let result = host_request
                 .services()
@@ -175,7 +175,7 @@ where
         AppCommandDto::AccessContactsConfigure { connector, change } => {
             let command = floe_app::LocalAccessCommand::Contacts {
                 connector,
-                change: crate::conversion::worker::contacts_access_change(&change),
+                change: crate::conversion::owners::contacts_access_change(&change),
             };
             let result = host_request
                 .services()
@@ -727,9 +727,9 @@ fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultL
     floe_protocol::VaultLifecycleResultDto {
         operation_id: result.operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &result.operation_id.to_string(),
@@ -774,7 +774,7 @@ fn session_result(
     Ok(floe_protocol::ConversationSessionResultDto {
         operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         session: result
             .session
             .as_ref()
@@ -782,7 +782,7 @@ fn session_result(
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &operation_id.to_string(),
@@ -801,7 +801,7 @@ fn expert_result(
     Ok(floe_protocol::ExpertOperationResultDto {
         operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         registry: result
             .registry
             .as_ref()
@@ -815,7 +815,7 @@ fn expert_result(
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &operation_id.to_string(),
@@ -834,7 +834,7 @@ fn local_access_result(
     Ok(floe_protocol::LocalAccessResultDto {
         operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         calendar_experts: result
             .calendar_experts
             .as_ref()
@@ -843,12 +843,12 @@ fn local_access_result(
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         calendar_subject_preview: result
             .calendar_subject_preview
-            .map(crate::conversion::worker::subject_preview_dto),
+            .map(crate::conversion::owners::subject_preview_dto),
         personal_access: result
             .personal_access
-            .map(crate::conversion::worker::personal_access_dto),
+            .map(crate::conversion::owners::personal_access_dto),
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &operation_id.to_string(),
@@ -867,19 +867,19 @@ fn knowledge_result(
     Ok(floe_protocol::KnowledgeOperationResultDto {
         operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         memory: result
             .memory
-            .map(crate::conversion::worker::memory_dto)
+            .map(crate::conversion::owners::memory_dto)
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         memory_review: result
             .memory_review
-            .map(crate::conversion::worker::memory_review_dto)
+            .map(crate::conversion::owners::memory_review_dto)
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &operation_id.to_string(),
@@ -898,7 +898,7 @@ fn connections_result(
     Ok(floe_protocol::ConnectionsResultDto {
         operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         connections: result
             .connections
             .as_ref()
@@ -911,7 +911,7 @@ fn connections_result(
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &operation_id.to_string(),
@@ -930,16 +930,16 @@ fn action_result(
     Ok(floe_protocol::ActionOperationResultDto {
         operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        state: result.state.map(crate::conversion::owners::vault_state_dto),
         calendar_actions: result
             .calendar_actions
             .as_ref()
             .map(serde_json::to_value)
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
-        proposal: result.proposal.map(crate::conversion::worker::proposal_dto),
+        proposal: result.proposal.map(crate::conversion::owners::proposal_dto),
         failure: result.failure.as_ref().map(|failure| {
-            crate::conversion::worker::failure_envelope(
+            crate::conversion::owners::failure_envelope(
                 failure,
                 &result.stage,
                 &operation_id.to_string(),

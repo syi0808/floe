@@ -2687,13 +2687,14 @@ async fn sample_session(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    mod native_actions;
     use super::*;
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     // These regressions drive the worker the way the binding does, so the
     // fixtures they stand up are stated on the binding's wire.
     use crate::AgentFixturePrompt;
-    use floe_protocol::*;
     use floe_vault::VaultKey;
     use ring::signature::{self, Ed25519KeyPair, KeyPair};
     use serde_json::json;

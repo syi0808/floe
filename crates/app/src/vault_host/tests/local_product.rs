@@ -10,7 +10,7 @@ fn finish_local(
     finish_owner(worker, caller, operation_id, LocalOperationOwner::Vault)
 }
 
-fn finish_owner(
+pub(super) fn finish_owner(
     worker: &Worker,
     caller: &crate::CallerContext,
     operation_id: Uuid,

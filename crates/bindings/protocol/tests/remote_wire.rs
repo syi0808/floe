@@ -270,6 +270,6 @@ fn obsolete_remote_agent_vault_operations_are_not_aliases() {
         "remote_view_grant_status",
         "remote_view_grant_pause",
     ] {
-        assert!(serde_json::from_value::<AgentVaultActionDto>(json!({"kind": kind})).is_err());
+        assert!(serde_json::from_value::<AppCommandDto>(json!({"kind": kind})).is_err());
     }
 }

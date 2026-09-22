@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use super::*;
-use crate::bridge::{open_error, vault_request_failure};
+use crate::bridge::open_error;
 use serde::de::DeserializeOwned;
 
 #[cfg(unix)]
@@ -98,33 +98,6 @@ pub unsafe extern "C" fn floe_core_open(
 }
 
 #[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_local_context(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, local_context)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_load_day(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, load_day)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_execute(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, execute)
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn floe_protocol_version() -> u32 {
     PROTOCOL_VERSION
 }
@@ -161,15 +134,6 @@ pub unsafe extern "C" fn floe_core_events_v2(
 
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_calendar_actions(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, calendar_actions)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn floe_core_agent_fixture(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
@@ -184,39 +148,6 @@ pub unsafe extern "C" fn floe_core_agent_fixture_run(
     request_json: *const c_char,
 ) -> *mut c_char {
     invoke_json(handle_ptr, request_json, agent_fixture_run)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_agent_vault(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request: AgentVaultRequestDto =
-            serde_json::from_str(c_input(request_json, "request_json")?)
-                .map_err(|_| invalid("request_json", "invalid Agent vault request"))?;
-        let handle = handle.services();
-        #[cfg(unix)]
-        {
-            check_version(request.schema_version)?;
-            let result = handle
-                .agent_vault()
-                .request(
-                    parse_person(&request.person_id)?,
-                    parse_id(&request.request_id, "request_id", |id| id)?,
-                    crate::conversion::worker::worker_operation(request.operation)?,
-                )
-                .map_err(vault_request_failure)?;
-            crate::conversion::worker::worker_result(result).map_err(agent_failure)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (handle, request);
-            Err::<AgentVaultResultDto, _>(agent_failure(AgentFailure::VaultUnavailable))
-        }
-    })
 }
 
 #[unsafe(no_mangle)]

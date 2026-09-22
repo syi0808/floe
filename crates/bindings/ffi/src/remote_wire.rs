@@ -2,7 +2,7 @@ use crate::app_wire::{
     AppWireResult, host_failure, internal_error, request_validation, service_error,
 };
 use crate::bridge::FloeHandle;
-use crate::conversion::worker::*;
+use crate::conversion::owners::*;
 use floe_protocol::*;
 
 pub(crate) fn pairing(

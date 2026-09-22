@@ -82,44 +82,6 @@ pub enum RegistryConfigurationTargetDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct CalendarExpertSetupDto {
-    pub instance_id: Uuid,
-    pub expected_revision: u64,
-    pub setup_id: Uuid,
-    pub provider: CalendarProviderDto,
-    pub device_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: CalendarScopeDto,
-    pub connection_revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<SourceAuthority>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reviewed_native_subject_fingerprint: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CalendarAccessConfigurationDto {
-    pub instance_id: Uuid,
-    pub expected_revision: u64,
-    pub setup_id: Uuid,
-    pub change: CalendarAccessChangeDto,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CalendarSubjectPreviewRequestDto {
-    pub provider: CalendarProviderDto,
-    pub device_id: String,
-    pub connection_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: CalendarScopeDto,
-    pub connection_revision: u64,
-    pub source_authority: SourceAuthority,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CalendarSubjectPreviewDto {
     pub provider: CalendarProviderDto,
     pub device_id: String,
@@ -129,98 +91,6 @@ pub struct CalendarSubjectPreviewDto {
     pub connection_revision: u64,
     pub source_authority: SourceAuthority,
     pub native_subject_fingerprint: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum CalendarAccessChangeDto {
-    SetEnabled {
-        enabled: bool,
-    },
-    SetScope {
-        provider: CalendarProviderDto,
-        device_id: String,
-        calendar_ids: Vec<String>,
-        connection_scope: CalendarScopeDto,
-        connection_revision: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        source_authority: Option<SourceAuthority>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reviewed_native_subject_fingerprint: Option<String>,
-    },
-    Remove {},
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentVaultRequestDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub request_id: String,
-    pub operation: AgentVaultOperationDto,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AgentVaultOperationDto {
-    Submit { action: AgentVaultActionDto },
-    Poll { after_sequence: usize },
-    Stop {},
-    Release {},
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AgentVaultActionDto {
-    Status {},
-    Create {},
-    Unlock {},
-    Lock {},
-    Session {
-        operation: AgentFixtureOperationDto,
-    },
-    Registry {
-        change: Option<RegistryConfigurationDto>,
-    },
-    CalendarExperts {
-        setup: Option<CalendarExpertSetupDto>,
-    },
-    CalendarAccess {
-        change: CalendarAccessConfigurationDto,
-    },
-    CalendarSubjectPreview {
-        request: CalendarSubjectPreviewRequestDto,
-    },
-    PersonalAccess {
-        change: PersonalAccessConfigurationDto,
-    },
-    ContactsAccess {
-        change: ContactsAccessConfigurationDto,
-    },
-    CalendarAction {
-        operation: CalendarActionOperationDto,
-    },
-    InspectProposal {
-        session_id: String,
-        invocation_id: String,
-    },
-    ConversationSession {
-        operation: AgentConversationSessionOperationDto,
-    },
-    MemoryReview {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        decision: Option<AgentMemoryReviewDecisionDto>,
-    },
-    Memory {},
-    Connections {},
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PersonalAccessConfigurationDto {
-    pub connector: String,
-    pub device_id: String,
-    pub change: PersonalAccessChangeDto,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -252,14 +122,6 @@ pub struct FeasibilityGrantQueryDto {
     pub event_start_unix_ms: i64,
     pub event_end_unix_ms: i64,
     pub travel_mode: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContactsAccessConfigurationDto {
-    pub connector: String,
-    pub device_id: String,
-    pub change: ContactsAccessChangeDto,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -301,32 +163,11 @@ pub struct PersonalAccessOverviewDto {
     pub process_incarnation: Option<Uuid>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentMemoryReviewDecisionDto {
-    pub candidate_id: String,
-    pub decision: AgentMemoryReviewDecisionKindDto,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMemoryReviewDecisionKindDto {
     Approve,
     Reject,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AgentConversationSessionOperationDto {
-    Start {},
-    Resume {},
-    Get {
-        session_id: String,
-    },
-    Recover {
-        session_id: String,
-        expected_revision: u64,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -416,36 +257,6 @@ pub enum AgentVaultStateDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct AgentVaultResultDto {
-    pub request_id: String,
-    pub events: Vec<AgentEventDto>,
-    pub next_sequence: usize,
-    pub done: bool,
-    pub state: Option<AgentVaultStateDto>,
-    pub session: Option<AgentSessionDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<RegistryOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calendar_experts: Option<CalendarExpertOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calendar_subject_preview: Option<CalendarSubjectPreviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub personal_access: Option<PersonalAccessOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calendar_actions: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proposal: Option<AgentProposalInspectionDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_review: Option<AgentMemoryReviewOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory: Option<AgentMemoryOverviewDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connections: Option<Vec<ConnectorSnapshotDto>>,
-    pub failure: Option<AgentVaultFailureDto>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct AgentFixtureRequestDto {
     pub schema_version: u32,
     pub person_id: String,
@@ -516,14 +327,6 @@ pub struct AgentFixtureRunDto {
 pub struct AgentFixtureResultDto {
     pub session: AgentSessionDto,
     pub events: Vec<AgentEventDto>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CalendarActionRequestDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub operation: CalendarActionOperationDto,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

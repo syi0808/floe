@@ -17,7 +17,9 @@ pub struct CalendarExpertInstallDto {
     pub calendar_ids: Vec<String>,
     pub connection_scope: CalendarScopeDto,
     pub connection_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_authority: Option<SourceAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_native_subject_fingerprint: Option<String>,
 }
 

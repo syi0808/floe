@@ -446,10 +446,6 @@ mod tests {
     use floe_inference::ModelStep;
     use floe_execution::Cancellation;
     use floe_experts_builtin::prompts::focus_expert_prompt;
-    use floe_protocol::{
-        LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionResultDto,
-        LocalContextOperationDto, PersonalAccessChangeDto, PersonalAccessConfigurationDto,
-    };
     use floe_provider_adapters::sources::native_acquisition::{
         AttentionAcquisitionMode, AttentionAcquisitionResult,
     };

@@ -19,29 +19,16 @@ struct Lifecycle {
 
 pub struct AppHost<Services: HostServices> {
     services: Services,
-    caller: Option<CallerContext>,
+    caller: CallerContext,
     lifecycle: Mutex<Lifecycle>,
     drained: Condvar,
 }
 
 impl<Services: HostServices> AppHost<Services> {
-    pub fn legacy(services: Services) -> Self {
-        Self {
-            services,
-            caller: None,
-            lifecycle: Mutex::new(Lifecycle {
-                state: HostState::Open,
-                active_requests: 0,
-                shutdown_failure: None,
-            }),
-            drained: Condvar::new(),
-        }
-    }
-
     pub(crate) fn with_caller(services: Services, caller: CallerContext) -> Self {
         Self {
             services,
-            caller: Some(caller),
+            caller,
             lifecycle: Mutex::new(Lifecycle {
                 state: HostState::Open,
                 active_requests: 0,
@@ -55,7 +42,7 @@ impl<Services: HostServices> AppHost<Services> {
         if request_id.is_nil() {
             return Err(HostError::InvalidRequest);
         }
-        let caller = self.caller.as_ref().ok_or(HostError::UnsupportedCaller)?;
+        let caller = &self.caller;
         let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
         if lifecycle.state != HostState::Open {
             return Err(HostError::Closing);
@@ -198,16 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_host_cannot_admit_app_wire_requests() {
-        let shutdowns = Arc::new(AtomicUsize::new(0));
-        let host = AppHost::legacy(Services(shutdowns));
-        assert_eq!(
-            host.request(Uuid::new_v4()).err(),
-            Some(HostError::UnsupportedCaller)
-        );
-    }
-
-    #[test]
     fn shutdown_blocks_new_admission_and_drains_active_requests() {
         let shutdowns = Arc::new(AtomicUsize::new(0));
         let host =
@@ -239,29 +216,38 @@ mod tests {
     }
 
     #[test]
-    fn product_path_bootstrap_uses_native_identity_while_test_paths_stay_legacy() {
+    fn product_path_identity_is_verified_before_bootstrap() {
         let root = tempfile::tempdir().unwrap();
         let person_id = Uuid::new_v4();
         let person_directory = root.path().join("people").join(person_id.to_string());
         std::fs::create_dir_all(&person_directory).unwrap();
         std::fs::write(root.path().join("local_device_id"), "local-device-1").unwrap();
         let shutdowns = Arc::new(AtomicUsize::new(0));
-        let host = AppHost::bootstrap_local_or_legacy(
-            Services(Arc::clone(&shutdowns)),
-            &person_directory.join("floe.db"),
-        )
-        .unwrap();
+        let claim =
+            crate::bootstrap::local_identity_for_database(&person_directory.join("floe.db"))
+                .unwrap()
+                .unwrap();
+        let host = AppHost::bootstrap_claim(Services(Arc::clone(&shutdowns)), claim).unwrap();
         let request = host.request(Uuid::new_v4()).unwrap();
         assert_eq!(request.caller().person_id(), person_id);
         assert_eq!(request.caller().device_id(), "local-device-1");
         drop(request);
 
-        let legacy =
-            AppHost::bootstrap_local_or_legacy(Services(shutdowns), &root.path().join("test.db"))
-                .unwrap();
+        assert!(
+            crate::bootstrap::local_identity_for_database(&root.path().join("test.db"))
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
-            legacy.request(Uuid::new_v4()).err(),
-            Some(HostError::UnsupportedCaller)
+            AppHost::bootstrap_claim(
+                Services(shutdowns),
+                LocalIdentityClaim {
+                    person_id: Uuid::nil(),
+                    device_id: "device".into()
+                }
+            )
+            .err(),
+            Some(HostError::InvalidIdentity),
         );
     }
 }

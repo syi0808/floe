@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::calendar::{
-    CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
-    CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto,
-};
+use super::calendar::{CalendarConnectionDto, CalendarFailureDto, CalendarSourceDto};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -12,13 +9,6 @@ pub struct DayQueryDto {
     pub timezone_offset_seconds: i32,
     pub end_timezone_offset_seconds: Option<i32>,
     pub now: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LoadDayRequestDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub day: DayQueryDto,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,14 +143,6 @@ pub enum DomainRefDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CommandRequestDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub day: DayQueryDto,
-    pub command: CommandDto,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarRecordDto {
     pub can_modify: bool,
@@ -177,99 +159,6 @@ pub struct CalendarBatchDto {
     pub calendar_id: String,
     pub records: Vec<CalendarRecordDto>,
     pub failure: Option<CalendarFailureDto>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum CommandDto {
-    DisconnectCalendar {
-        expected_revision: u64,
-    },
-    SetCalendarScope {
-        connection_id: String,
-        connection_revision: u64,
-        device_id: String,
-        provider: CalendarProviderDto,
-        calendars: Vec<CalendarSelectionDto>,
-        scope: CalendarScopeDto,
-    },
-    DiscoverCalendars {
-        expected_revision: u64,
-        calendars: Vec<CalendarSelectionDto>,
-    },
-    ImportCalendarSources {
-        expected_revision: u64,
-        range: CalendarRangeDto,
-        batches: Vec<CalendarBatchDto>,
-        occurred_at: String,
-    },
-    ImportCalendar {
-        expected_revision: u64,
-        range: CalendarRangeDto,
-        records: Vec<CalendarRecordDto>,
-        occurred_at: String,
-    },
-    CalendarFailed {
-        expected_revision: u64,
-        failure: CalendarFailureDto,
-    },
-    SubmitCapture {
-        input: String,
-        occurred_at: String,
-    },
-    ClassifyCapture {
-        capture_id: String,
-        expected_revision: u64,
-        classification: ClassificationDto,
-        occurred_at: String,
-    },
-    CreateEvent {
-        title: String,
-        schedule: EventScheduleDto,
-        occurred_at: String,
-    },
-    CreateTask {
-        title: String,
-        deadline: Option<String>,
-        priority: PriorityDto,
-        occurred_at: String,
-    },
-    CreateNote {
-        content: String,
-        occurred_at: String,
-    },
-    UpdateEvent {
-        event_id: String,
-        expected_revision: u64,
-        title: String,
-        schedule: EventScheduleDto,
-        occurred_at: String,
-    },
-    UpdateTask {
-        task_id: String,
-        expected_revision: u64,
-        title: String,
-        deadline: Option<String>,
-        priority: PriorityDto,
-        occurred_at: String,
-    },
-    UpdateNote {
-        note_id: String,
-        expected_revision: u64,
-        content: String,
-        occurred_at: String,
-    },
-    SetTaskCompletion {
-        task_id: String,
-        expected_revision: u64,
-        completed: bool,
-        occurred_at: String,
-    },
-    DeleteItem {
-        target: DomainRefDto,
-        expected_revision: u64,
-        occurred_at: String,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

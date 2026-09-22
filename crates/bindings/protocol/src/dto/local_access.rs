@@ -28,7 +28,9 @@ pub enum CalendarGrantChangeDto {
         calendar_ids: Vec<String>,
         connection_scope: CalendarScopeDto,
         connection_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         source_authority: Option<SourceAuthority>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         reviewed_native_subject_fingerprint: Option<String>,
     },
     Remove {},

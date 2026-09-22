@@ -19,16 +19,6 @@ impl<Services: HostServices> AppHost<Services> {
         let caller = CallerContext::verified(identity, runtime_epoch())?;
         Ok(Self::with_caller(services, caller))
     }
-
-    pub fn bootstrap_local_or_legacy(
-        services: Services,
-        database_path: &Path,
-    ) -> Result<Self, HostError> {
-        let Some(identity) = local_identity_for_database(database_path)? else {
-            return Ok(Self::legacy(services));
-        };
-        Self::bootstrap_claim(services, identity)
-    }
 }
 
 fn runtime_epoch() -> u64 {

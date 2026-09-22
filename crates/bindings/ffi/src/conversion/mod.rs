@@ -2,6 +2,6 @@
 
 pub mod day;
 pub mod native;
-pub mod worker;
+pub mod owners;
 
 pub use day::*;

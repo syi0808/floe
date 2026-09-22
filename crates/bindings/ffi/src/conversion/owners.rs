@@ -1,19 +1,9 @@
-//! The worker's app wire, read and written once.
-//!
-//! Everything the host sends arrives as a request DTO and leaves here as the
-//! app's own worker command; everything a command produced leaves as a result
-//! DTO. Which owner runs a command, and what its answer means, is decided past
-//! this boundary — what is decided here is only how the two are said on a wire.
-
 use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
-    CalendarProposalInspection, CalendarSubjectPreview, CalendarSubjectRequest,
-    ContactsAccessChange, ContactsAccessConfiguration, ConversationSessionOperation,
-    FeasibilityGrantQuery, FixtureOperation, GrantState, MemoryReviewDecision, MemoryReviewResult,
-    PairingIssuer, PersonId, PersonalAccessChange, PersonalAccessConfiguration,
-    ProcessingRestriction, RemoteCalendarGrantPreview, RemoteEnrollmentStatus,
-    RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState, WorkerAction, WorkerOperation,
-    WorkerResult,
+    CalendarProposalInspection, CalendarSubjectPreview, ContactsAccessChange,
+    FeasibilityGrantQuery, GrantState, MemoryReviewResult, PairingIssuer, PersonId,
+    PersonalAccessChange, ProcessingRestriction, RemoteCalendarGrantPreview,
+    RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState,
 };
 use floe_protocol::wire::{WireResult, invalid};
 use floe_protocol::*;
@@ -166,23 +156,9 @@ fn calendar_action(action: floe_app::CalendarAction) -> AgentProposalActionDto {
     }
 }
 
-fn decode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, AgentFailure> {
-    serde_json::to_value(value)
-        .and_then(serde_json::from_value)
-        .map_err(|_| AgentFailure::InvalidInput)
-}
-
-fn encode_contracts<Input: Serialize, Output: DeserializeOwned>(
-    values: Vec<Input>,
-) -> Result<Vec<Output>, AgentFailure> {
-    values
-        .iter()
-        .map(decode_contract)
-        .collect::<Result<Vec<_>, _>>()
-}
-
 fn encode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, AgentFailure> {
-    decode_contract(value)
+    let value = serde_json::to_value(value).map_err(|_| AgentFailure::InvalidModelOutput)?;
+    serde_json::from_value(value).map_err(|_| AgentFailure::InvalidModelOutput)
 }
 
 pub(crate) fn failure_envelope(
@@ -521,14 +497,6 @@ fn feasibility_query(query: &FeasibilityGrantQueryDto) -> FeasibilityGrantQuery 
     }
 }
 
-fn personal_access(request: &PersonalAccessConfigurationDto) -> PersonalAccessConfiguration {
-    PersonalAccessConfiguration {
-        connector: request.connector.clone(),
-        device_id: request.device_id.clone(),
-        change: personal_access_change(&request.change),
-    }
-}
-
 pub(crate) fn personal_access_change(change: &PersonalAccessChangeDto) -> PersonalAccessChange {
     match change {
         PersonalAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
@@ -548,14 +516,6 @@ pub(crate) fn personal_access_change(change: &PersonalAccessChangeDto) -> Person
         PersonalAccessChangeDto::SetEnabled { enabled } => {
             PersonalAccessChange::SetEnabled { enabled: *enabled }
         }
-    }
-}
-
-fn contacts_access(request: &ContactsAccessConfigurationDto) -> ContactsAccessConfiguration {
-    ContactsAccessConfiguration {
-        connector: request.connector.clone(),
-        device_id: request.device_id.clone(),
-        change: contacts_access_change(&request.change),
     }
 }
 
@@ -739,49 +699,6 @@ pub(crate) fn remote_calendar_preview_dto(
     }
 }
 
-/// Report one command's outcome on the wire.
-pub fn worker_result(result: WorkerResult) -> Result<AgentVaultResultDto, AgentFailure> {
-    let request_id = result.request_id.to_string();
-    // A halted Session reports its own reason as the request's failure, so a
-    // caller is never told a turn succeeded when its outcome says otherwise.
-    let failure = result.failure.as_ref().or_else(|| {
-        match result
-            .session
-            .as_ref()
-            .and_then(|session| session.last_outcome.as_ref())
-        {
-            Some(floe_app::AgentOutcome::Halted { reason }) => Some(reason),
-            _ => None,
-        }
-    });
-    Ok(AgentVaultResultDto {
-        events: encode_contracts(result.events.clone())?,
-        next_sequence: result.next_sequence,
-        done: result.done,
-        state: result.state.map(vault_state_dto),
-        session: result.session.as_ref().map(encode_contract).transpose()?,
-        registry: result.registry.as_ref().map(encode_contract).transpose()?,
-        calendar_experts: result
-            .calendar_experts
-            .as_ref()
-            .map(encode_contract)
-            .transpose()?,
-        calendar_subject_preview: result.calendar_subject_preview.map(subject_preview_dto),
-        proposal: result.proposal.map(proposal_dto),
-        memory_review: result.memory_review.map(memory_review_dto).transpose()?,
-        memory: result.memory.map(memory_dto).transpose()?,
-        connections: result.connections.map(encode_contracts).transpose()?,
-        personal_access: result.personal_access.map(personal_access_dto),
-        calendar_actions: result
-            .calendar_actions
-            .as_ref()
-            .map(|actions| serde_json::to_value(actions).map_err(|_| AgentFailure::InvalidInput))
-            .transpose()?,
-        failure: failure.map(|failure| failure_envelope(failure, &result.stage, &request_id)),
-        request_id,
-    })
-}
-
 pub(crate) fn personal_access_dto(
     overview: floe_app::PersonalAccessOverview,
 ) -> PersonalAccessOverviewDto {
@@ -806,62 +723,6 @@ pub(crate) fn personal_access_dto(
         native_subject_fingerprint: overview.native_subject_fingerprint,
         process_incarnation: overview.process_incarnation,
     }
-}
-
-fn fixture_prompt(prompt: AgentFixturePromptDto) -> floe_app::AgentFixturePrompt {
-    match prompt {
-        AgentFixturePromptDto::Today => floe_app::AgentFixturePrompt::Today,
-        AgentFixturePromptDto::FollowUp => floe_app::AgentFixturePrompt::FollowUp,
-        AgentFixturePromptDto::RepeatedCall => floe_app::AgentFixturePrompt::RepeatedCall,
-        AgentFixturePromptDto::Unavailable => floe_app::AgentFixturePrompt::Unavailable,
-    }
-}
-
-fn fixture_operation(operation: AgentFixtureOperationDto) -> WireResult<FixtureOperation> {
-    Ok(match operation {
-        AgentFixtureOperationDto::Start {} => FixtureOperation::Start,
-        AgentFixtureOperationDto::Resume {} => FixtureOperation::Resume,
-        AgentFixtureOperationDto::Get { session_id } => FixtureOperation::Get {
-            session_id: parse_uuid(&session_id, "operation.session_id")?,
-        },
-        AgentFixtureOperationDto::Turn {
-            session_id,
-            expected_revision,
-            prompt,
-        } => FixtureOperation::Turn {
-            session_id: parse_uuid(&session_id, "operation.session_id")?,
-            expected_revision,
-            prompt: fixture_prompt(prompt),
-        },
-        AgentFixtureOperationDto::Recover {
-            session_id,
-            expected_revision,
-        } => FixtureOperation::Recover {
-            session_id: parse_uuid(&session_id, "operation.session_id")?,
-            expected_revision,
-        },
-    })
-}
-
-fn session_operation(
-    operation: AgentConversationSessionOperationDto,
-) -> WireResult<ConversationSessionOperation> {
-    Ok(match operation {
-        AgentConversationSessionOperationDto::Start {} => ConversationSessionOperation::Start,
-        AgentConversationSessionOperationDto::Resume {} => ConversationSessionOperation::Resume,
-        AgentConversationSessionOperationDto::Get { session_id } => {
-            ConversationSessionOperation::Get {
-                session_id: parse_uuid(&session_id, "operation.session_id")?,
-            }
-        }
-        AgentConversationSessionOperationDto::Recover {
-            session_id,
-            expected_revision,
-        } => ConversationSessionOperation::Recover {
-            session_id: parse_uuid(&session_id, "operation.session_id")?,
-            expected_revision,
-        },
-    })
 }
 
 fn proposal(
@@ -956,126 +817,10 @@ pub(crate) fn calendar_action_operation(
     })
 }
 
-fn subject_request(request: CalendarSubjectPreviewRequestDto) -> CalendarSubjectRequest {
-    CalendarSubjectRequest {
-        provider: super::day::calendar_provider_from_dto(request.provider),
-        device_id: request.device_id,
-        connection_id: request.connection_id,
-        calendar_ids: request.calendar_ids,
-        connection_scope: super::day::calendar_scope_from_dto(request.connection_scope),
-        connection_revision: request.connection_revision,
-        source_authority: request.source_authority,
-    }
-}
-
-/// Read one worker request off the wire as the app's own command.
-pub fn worker_operation(operation: AgentVaultOperationDto) -> WireResult<WorkerOperation> {
-    Ok(match operation {
-        AgentVaultOperationDto::Submit { action } => WorkerOperation::Submit {
-            action: Box::new(worker_action(action)?),
-        },
-        AgentVaultOperationDto::Poll { after_sequence } => WorkerOperation::Poll { after_sequence },
-        AgentVaultOperationDto::Stop {} => WorkerOperation::Stop,
-        AgentVaultOperationDto::Release {} => WorkerOperation::Release,
-    })
-}
-
-fn worker_action(action: AgentVaultActionDto) -> WireResult<WorkerAction> {
-    Ok(match action {
-        AgentVaultActionDto::Status {} => WorkerAction::Status,
-        AgentVaultActionDto::Create {} => WorkerAction::Create,
-        AgentVaultActionDto::Unlock {} => WorkerAction::Unlock,
-        AgentVaultActionDto::Lock {} => WorkerAction::Lock,
-        AgentVaultActionDto::Session { operation } => WorkerAction::Session {
-            operation: fixture_operation(operation)?,
-        },
-        AgentVaultActionDto::Registry { change } => WorkerAction::Registry {
-            change: change
-                .as_ref()
-                .map(decode_contract)
-                .transpose()
-                .map_err(|_| invalid("action.change", "invalid registry configuration"))?,
-        },
-        AgentVaultActionDto::CalendarExperts { setup } => WorkerAction::CalendarExperts {
-            setup: setup
-                .as_ref()
-                .map(decode_contract)
-                .transpose()
-                .map_err(|_| invalid("action.setup", "invalid calendar expert setup"))?
-                .map(Box::new),
-        },
-        AgentVaultActionDto::CalendarAccess { change } => WorkerAction::CalendarAccess {
-            change: Box::new(
-                decode_contract(&change)
-                    .map_err(|_| invalid("action.change", "invalid calendar access change"))?,
-            ),
-        },
-        AgentVaultActionDto::CalendarSubjectPreview { request } => {
-            WorkerAction::CalendarSubjectPreview {
-                request: Box::new(subject_request(request)),
-            }
-        }
-        AgentVaultActionDto::PersonalAccess { change } => WorkerAction::PersonalAccess {
-            change: Box::new(personal_access(&change)),
-        },
-        AgentVaultActionDto::ContactsAccess { change } => WorkerAction::ContactsAccess {
-            change: Box::new(contacts_access(&change)),
-        },
-        AgentVaultActionDto::CalendarAction { operation } => WorkerAction::CalendarAction {
-            operation: calendar_action_operation(operation)?,
-        },
-        AgentVaultActionDto::InspectProposal {
-            session_id,
-            invocation_id,
-        } => WorkerAction::InspectProposal {
-            session_id: parse_uuid(&session_id, "action.session_id")?,
-            invocation_id: parse_uuid(&invocation_id, "action.invocation_id")?,
-        },
-        AgentVaultActionDto::ConversationSession { operation } => {
-            WorkerAction::ConversationSession {
-                operation: session_operation(operation)?,
-            }
-        }
-        AgentVaultActionDto::MemoryReview { decision } => WorkerAction::MemoryReview {
-            decision: decision
-                .map(|decision| {
-                    Ok::<_, floe_protocol::ErrorDto>(MemoryReviewDecision {
-                        candidate_id: parse_uuid(&decision.candidate_id, "action.candidate_id")?,
-                        kind: match decision.decision {
-                            AgentMemoryReviewDecisionKindDto::Approve => {
-                                floe_app::KnowledgeDecisionKind::Approve
-                            }
-                            AgentMemoryReviewDecisionKindDto::Reject => {
-                                floe_app::KnowledgeDecisionKind::Reject
-                            }
-                        },
-                    })
-                })
-                .transpose()?,
-        },
-        AgentVaultActionDto::Memory {} => WorkerAction::Memory,
-        AgentVaultActionDto::Connections {} => WorkerAction::Connections,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use floe_app::AgentFailure;
-
-    #[test]
-    fn a_candidate_id_that_is_not_an_id_never_reaches_the_worker() {
-        let error = worker_action(AgentVaultActionDto::MemoryReview {
-            decision: Some(AgentMemoryReviewDecisionDto {
-                candidate_id: "invalid".into(),
-                decision: AgentMemoryReviewDecisionKindDto::Approve,
-            }),
-        })
-        .err()
-        .expect("an unparseable candidate id is rejected on the wire");
-        assert_eq!(error.code, ErrorCodeDto::Validation);
-        assert_eq!(error.field.as_deref(), Some("action.candidate_id"));
-    }
 
     #[test]
     fn failure_recovery_is_stage_aware_and_conservative() {
