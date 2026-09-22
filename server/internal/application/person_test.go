@@ -1,4 +1,4 @@
-package connections
+package application
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"floe/server/internal/authorization"
+	"floe/server/internal/connections"
 	"floe/server/internal/connectors/common"
 	"floe/server/internal/credentials"
 )
@@ -92,7 +93,7 @@ func TestForeignPersonCannotExecuteOwnedConnectorRuntime(test *testing.T) {
 	now := time.Now().UnixMilli()
 	runtime := &fakeContextRuntime{view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}}
 	fixture.console.mu.Lock()
-	fixture.console.work = map[string]WorkContextRuntime{fixtureConnectionID("github.issues"): runtime}
+	fixture.console.work = map[string]connections.WorkContextRuntime{fixtureConnectionID("github.issues"): runtime}
 	fixture.console.state.Clients["foreign"] = pairedClient{TokenHash: digest("foreign-token"), PersonID: otherFixturePersonID, DeviceID: "foreign-device"}
 	fixture.console.mu.Unlock()
 
@@ -132,7 +133,7 @@ func TestRevokingLastClientRemovesPersonConnectorLifecycle(test *testing.T) {
 	fixture.console.mu.Lock()
 	_, connectionRetained := fixture.console.state.Connections[record.ConnectionID]
 	runtimeRetained := len(fixture.console.work) != 0
-	fixture.console.lastPair = time.Time{}
+	fixture.pairingClock = fixture.pairingClock.Add(11 * time.Second)
 	fixture.console.mu.Unlock()
 	if connectionRetained || runtimeRetained || fixture.vault.values[credential] != "" {
 		test.Fatal("client revocation retained connector state, runtime, or credential")
@@ -186,7 +187,7 @@ func TestLastClientCleanupFailurePersistsTombstoneAndRetriesBeforePairing(test *
 			fixture.console.mu.Lock()
 			cleanup, pending := fixture.console.state.Cleanups[fixturePersonID]
 			_, clientRetained := fixture.console.state.Clients[clientID]
-			fixture.console.lastPair = time.Time{}
+			fixture.pairingClock = fixture.pairingClock.Add(11 * time.Second)
 			fixture.console.mu.Unlock()
 			if !pending || len(cleanup.Connections) != 1 || clientRetained {
 				test.Fatalf("cleanup tombstone was not committed: %#v", cleanup)
@@ -300,7 +301,7 @@ func TestExplicitDisconnectPersistsOAuthRuntimeAndVaultProgress(test *testing.T)
 	}
 	fixture.console.mu.Lock()
 	fixture.console.gmail = runtime
-	fixture.console.state.Connections[connectionID] = connectionRecord{
+	fixture.console.state.Connections[connectionID] = connections.Record{
 		ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID,
 		Scope: map[string]any{}, Credential: credential,
 	}
@@ -350,7 +351,7 @@ func TestPersistedConnectionRequiresLivePersonOwner(test *testing.T) {
 	fixture.console.mu.Lock()
 	connectionID := "00000000-0000-4000-8000-000000000051"
 	credential, _ := credentials.ConnectionName("FLOE_GMAIL_OAUTH", connectionID, fixturePersonID)
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
 	}
@@ -419,12 +420,12 @@ func TestPersistedCredentialMustMatchPersonAndConnection(test *testing.T) {
 	fixture := setup(test)
 	fixture.pair()
 	connectionID := "00000000-0000-4000-8000-000000000030"
-	wrongCredential, err := credentials.ConnectionName(githubTokenKey, "00000000-0000-4000-8000-000000000031", fixturePersonID)
+	wrongCredential, err := credentials.ConnectionName(connections.GithubTokenKey, "00000000-0000-4000-8000-000000000031", fixturePersonID)
 	if err != nil {
 		test.Fatal(err)
 	}
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{
+	fixture.console.state.Connections[connectionID] = connections.Record{
 		ConnectionID: connectionID, ConnectorID: "github.issues", PersonID: fixturePersonID,
 		Scope: map[string]any{"owner": "floe", "repository": "server"}, Credential: wrongCredential,
 	}

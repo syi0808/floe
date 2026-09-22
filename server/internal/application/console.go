@@ -2,28 +2,19 @@ package application
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"floe/server/internal/connections"
-	"floe/server/internal/pairing"
-	httptransport "floe/server/internal/transport/http"
-	"io"
-	"mime"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"floe/server/internal/authorization"
-	"floe/server/internal/connectors/common"
+	"floe/server/internal/connections"
 	"floe/server/internal/inference"
+	"floe/server/internal/pairing"
+	httptransport "floe/server/internal/transport/http"
 )
 
 var personIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -55,39 +46,6 @@ type AuthRuntime interface {
 	inference.CodexClient
 }
 
-type session struct {
-	csrf    string
-	expires time.Time
-}
-type pairing struct {
-	ID                  string    `json:"id"`
-	Code                string    `json:"code"`
-	Expires             time.Time `json:"expires"`
-	PersonID            string    `json:"person_id"`
-	DeviceID            string    `json:"device_id"`
-	IssuerKeyID         string    `json:"issuer_key_id"`
-	IssuerPublicKey     string    `json:"issuer_public_key"`
-	IssuerFingerprint   string    `json:"issuer_fingerprint"`
-	ProducerFingerprint string    `json:"producer_fingerprint"`
-	ProducerAudience    string    `json:"producer_audience"`
-	LocalConfirmed      bool      `json:"local_confirmed"`
-	AdminApproved       bool      `json:"admin_approved"`
-	status              string
-	enrollmentID        string
-	challengeID         string
-	challengeBytes      []byte
-	challengeB64        string
-	producerSignature   []byte
-	proof               string
-	token               string
-}
-
-type clientScope struct {
-	ClientID string
-	PersonID string
-	DeviceID string
-}
-
 // Console assembles the local server. It owns creation and lifetime; every
 // business decision belongs to the owner it delegates to.
 //
@@ -98,27 +56,29 @@ type Console struct {
 	directory, address    string
 	vault                 Vault
 	runtime               AuthRuntime
-	gmail                 ConnectorAuthRuntime
-	microsoftAuth         ConnectorOAuthRuntime
-	microsoftMail         CommunicationRuntime
-	work                  map[string]WorkContextRuntime
-	logistics             map[string]LogisticsRuntime
-	driveAuth             DriveAuthRuntime
-	githubAuth            DriveAuthRuntime
-	slackAuth             DriveAuthRuntime
-	calendarAuth          DriveAuthRuntime
-	microsoftCalendarAuth DriveAuthRuntime
-	microsoftTeamsAuth    DriveAuthRuntime
-	calendars             map[string]CalendarRuntime
+	gmail                 connections.ConnectorAuthRuntime
+	microsoftAuth         connections.ConnectorOAuthRuntime
+	microsoftMail         connections.CommunicationRuntime
+	work                  map[string]connections.WorkContextRuntime
+	logistics             map[string]connections.LogisticsRuntime
+	driveAuth             connections.DriveAuthRuntime
+	githubAuth            connections.DriveAuthRuntime
+	slackAuth             connections.DriveAuthRuntime
+	calendarAuth          connections.DriveAuthRuntime
+	microsoftCalendarAuth connections.DriveAuthRuntime
+	microsoftTeamsAuth    connections.DriveAuthRuntime
+	calendars             map[string]connections.CalendarRuntime
 	state                 diskState
 	gateway               *inference.Gateway
 	authorizationEngine   *authorization.Engine
 
 	// Owner-scoped state. None of these are shared between owners.
-	admissions  *authorization.Admissions
-	connections *connections.Registry
-	pairing     *pairing.Operations
-	sessions    *httptransport.Sessions
+	admissions    *authorization.Admissions
+	connections   *connections.Registry
+	pairing       *pairing.Operations
+	handler       *httptransport.Handler
+	internalToken string
+	unavailable   map[string]bool
 
 	testActive bool
 }
@@ -144,10 +104,10 @@ func (console *Console) latchTrustUnavailable() {
 	console.admissions.LatchTrustUnavailable()
 }
 
-func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
+func (console *Console) SetWorkContext(runtime connections.WorkContextRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	console.work = map[string]WorkContextRuntime{}
+	console.work = map[string]connections.WorkContextRuntime{}
 	if connectorID, ok := contextRuntimeConnectorID(runtime); ok {
 		if record, exists := console.connectionForConnector(connectorID); exists {
 			console.work[record.ConnectionID] = runtime
@@ -155,10 +115,10 @@ func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
 	}
 }
 
-func (console *Console) SetLogistics(runtime LogisticsRuntime) {
+func (console *Console) SetLogistics(runtime connections.LogisticsRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	console.logistics = map[string]LogisticsRuntime{}
+	console.logistics = map[string]connections.LogisticsRuntime{}
 	if connectorID, ok := contextRuntimeConnectorID(runtime); ok {
 		if record, exists := console.connectionForConnector(connectorID); exists {
 			console.logistics[record.ConnectionID] = runtime
@@ -179,7 +139,7 @@ func contextRuntimeConnectorID(runtime interface {
 	return connections.SnapshotConnectorID(snapshot)
 }
 
-func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
+func (console *Console) SetDriveAuth(runtime connections.DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("google_drive.files", runtime); err != nil {
@@ -190,7 +150,7 @@ func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
 	return console.rebuildConnectorRuntimes()
 }
 
-func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
+func (console *Console) SetCalendarAuth(runtime connections.DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("calendar.google", runtime); err != nil {
@@ -201,7 +161,7 @@ func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
 	return console.rebuildConnectorRuntimes()
 }
 
-func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error {
+func (console *Console) SetMicrosoftCalendarAuth(runtime connections.DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("calendar.microsoft", runtime); err != nil {
@@ -212,7 +172,7 @@ func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error
 	return console.rebuildConnectorRuntimes()
 }
 
-func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
+func (console *Console) SetMicrosoftTeamsAuth(runtime connections.DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("microsoft.teams", runtime); err != nil {
@@ -223,11 +183,11 @@ func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
 	return console.rebuildConnectorRuntimes()
 }
 
-func (console *Console) SetGitHubAuth(runtime DriveAuthRuntime) error {
+func (console *Console) SetGitHubAuth(runtime connections.DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("github.issues", runtime); err != nil {
-		if !console.hasLegacyConnectorCredential("github.issues", githubTokenKey) {
+		if !console.hasLegacyConnectorCredential("github.issues", connections.GithubTokenKey) {
 			return err
 		}
 	}
@@ -236,11 +196,11 @@ func (console *Console) SetGitHubAuth(runtime DriveAuthRuntime) error {
 	return console.rebuildConnectorRuntimes()
 }
 
-func (console *Console) SetSlackAuth(runtime DriveAuthRuntime) error {
+func (console *Console) SetSlackAuth(runtime connections.DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("slack.conversations", runtime); err != nil {
-		if !console.hasLegacyConnectorCredential("slack.conversations", slackTokenKey) {
+		if !console.hasLegacyConnectorCredential("slack.conversations", connections.SlackTokenKey) {
 			return err
 		}
 	}
@@ -258,7 +218,7 @@ func (console *Console) hasLegacyConnectorCredential(connectorID, namespace stri
 	return false
 }
 
-func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) error {
+func (console *Console) SetGmailAuth(runtime connections.ConnectorAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("gmail", runtime); err != nil {
@@ -270,7 +230,7 @@ func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) error {
 	return nil
 }
 
-func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime CommunicationRuntime) error {
+func (console *Console) SetMicrosoftMail(auth connections.ConnectorOAuthRuntime, runtime connections.CommunicationRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if err := console.bindConfiguredOAuthRuntime("microsoft.mail", auth); err != nil {
@@ -283,8 +243,8 @@ func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime Com
 	return nil
 }
 
-func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime ConnectorOAuthRuntime) error {
-	_, exists := clientConnectorDefinitionFor(connectorID)
+func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime connections.ConnectorOAuthRuntime) error {
+	_, exists := connections.DefinitionFor(connectorID)
 	if !exists || runtime == nil {
 		return nil
 	}
@@ -320,12 +280,12 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	if err != nil {
 		return nil, err
 	}
-	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}, remoteViewAdmissions: map[string]remoteViewAdmissionState{}}
+	console := &Console{directory: directory, address: address, internalToken: randomToken(), vault: vault, runtime: runtime, state: state, admissions: authorization.NewAdmissions(), connections: connections.NewRegistry()}
 	producer, producerError := loadProducerIdentity(filepath.Join(directory, "producer-identity.json"), !stateExists)
 	if producerError != nil {
 		console.admissions.LatchProducerUnavailable()
 	} else {
-		console.producer = producer
+		console.admissions.SetProducer(producer)
 	}
 	if !stateExists {
 		if saveError := console.save(state); saveError != nil {
@@ -343,8 +303,10 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	if state.TrustCorrupt {
 		console.admissions.LatchTrustUnavailable()
 	}
-	console.authorization = engine
+	console.authorizationEngine = engine
 	console.rebuild()
+	console.pairing = console.newPairing(false, nil)
+	console.handler = console.newHandler(digest(admin))
 	if err := console.recoverConnectionAttemptsLocked(); err != nil {
 		return nil, errors.New("connection attempt recovery unavailable")
 	}
@@ -400,26 +362,6 @@ func (console *Console) rebuild() {
 		}
 	}
 	console.gateway, _ = inference.New(config, console.internalToken, lookup, console.runtime)
-}
-
-func reply(writer http.ResponseWriter, status int, value any) {
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
-}
-
-func failure(writer http.ResponseWriter, status int, code string) {
-	reply(writer, status, map[string]any{"error": map[string]string{"code": code}})
-}
-
-func decode(writer http.ResponseWriter, request *http.Request, output any) bool {
-	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		return false
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16384))
-	decoder.DisallowUnknownFields()
-	return decoder.Decode(output) == nil && decoder.Decode(new(any)) == io.EOF
 }
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)

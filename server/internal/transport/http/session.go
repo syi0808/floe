@@ -1,76 +1,73 @@
-// HTTP and admin-UI transport for the local server.
-
 package httptransport
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
+
+	"floe/server/internal/operation"
 )
 
-// Sessions owns admin-UI session and login-attempt state.
-//
-// This is transport state: it never decides a connection, pairing or authority
-// outcome, and no business owner shares this mutex.
 type Sessions struct {
 	mu            sync.Mutex
 	adminHash     string
-	internalToken string
 	active        map[string]sessionRecord
 	loginAttempts int
 	loginWindow   time.Time
 }
 
 type sessionRecord struct {
+	CSRF    string
 	Expires time.Time
-	Scope   clientScope
 }
 
-func NewSessions(adminHash, internalToken string) *Sessions {
-	return &Sessions{
-		adminHash:     adminHash,
-		internalToken: internalToken,
-		active:        map[string]sessionRecord{},
-	}
+func NewSessions(adminHash string) *Sessions {
+	return &Sessions{adminHash: adminHash, active: map[string]sessionRecord{}}
 }
 
-// Lookup returns the session for a token.
 func (sessions *Sessions) Lookup(token string) (sessionRecord, bool) {
 	sessions.mu.Lock()
 	defer sessions.mu.Unlock()
-	record, ok := sessions.active[token]
-	return record, ok
+	record, exists := sessions.active[digest(token)]
+	return record, exists && record.Expires.After(time.Now())
 }
 
-// Put records a session.
-func (sessions *Sessions) Put(token string, record sessionRecord) {
-	sessions.mu.Lock()
-	defer sessions.mu.Unlock()
-	sessions.active[token] = record
-}
-
-// Delete ends a session.
 func (sessions *Sessions) Delete(token string) {
 	sessions.mu.Lock()
 	defer sessions.mu.Unlock()
-	delete(sessions.active, token)
+	delete(sessions.active, digest(token))
 }
 
-// RecordLoginAttempt counts a failed login inside the current window and
-// reports the running count.
-func (sessions *Sessions) RecordLoginAttempt(now time.Time, window time.Duration) int {
+func (sessions *Sessions) Login(credential string) (string, operation.Result) {
 	sessions.mu.Lock()
 	defer sessions.mu.Unlock()
-	if now.Sub(sessions.loginWindow) > window {
-		sessions.loginWindow = now
-		sessions.loginAttempts = 0
+	now := time.Now()
+	if now.Sub(sessions.loginWindow) > time.Minute {
+		sessions.loginWindow, sessions.loginAttempts = now, 0
 	}
 	sessions.loginAttempts++
-	return sessions.loginAttempts
+	if sessions.loginAttempts > 10 {
+		return "", operation.Reject(operation.Limited, "try_later")
+	}
+	if digest(credential) != sessions.adminHash {
+		return "", operation.Reject(operation.Unauthenticated, "unauthorized")
+	}
+	for key, value := range sessions.active {
+		if !value.Expires.After(now) {
+			delete(sessions.active, key)
+		}
+	}
+	if len(sessions.active) >= 8 {
+		return "", operation.Reject(operation.Limited, "too_many_sessions")
+	}
+	token := rand.Text() + rand.Text()
+	sessions.active[digest(token)] = sessionRecord{CSRF: rand.Text() + rand.Text(), Expires: now.Add(12 * time.Hour)}
+	return token, operation.Accept(map[string]bool{"ok": true})
 }
 
-// ResetLoginAttempts clears the failure count after a successful login.
-func (sessions *Sessions) ResetLoginAttempts() {
-	sessions.mu.Lock()
-	defer sessions.mu.Unlock()
-	sessions.loginAttempts = 0
+func digest(value string) string {
+	hash := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(hash[:])
 }

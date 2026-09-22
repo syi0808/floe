@@ -1,27 +1,29 @@
-package authorization
+package application
 
 import (
 	"errors"
+
+	"floe/server/internal/authorization"
 )
 
 type consoleTrustStore struct{ console *Console }
 
-func (store consoleTrustStore) LoadIssuers() ([]IssuerRecord, error) {
+func (store consoleTrustStore) LoadIssuers() ([]authorization.IssuerRecord, error) {
 	store.console.mu.Lock()
 	defer store.console.mu.Unlock()
-	if store.console.trustUnavailable.Load() {
+	if store.console.admissions.TrustUnavailable() {
 		return nil, errors.New("trust unavailable")
 	}
 	if len(store.console.state.RevokedIssuerKeys) > maxRetainedIssuerIdentities || len(store.console.state.TrustedIssuers) > maxRetainedIssuerIdentities || len(store.console.state.RevokedIssuerKeys)+len(store.console.state.TrustedIssuers) > maxRetainedIssuerIdentities {
 		return nil, errors.New("invalid trusted issuer state")
 	}
-	records := make([]IssuerRecord, 0, len(store.console.state.TrustedIssuers))
+	records := make([]authorization.IssuerRecord, 0, len(store.console.state.TrustedIssuers))
 	for mapKey, trusted := range store.console.state.TrustedIssuers {
 		client, paired := store.console.state.Clients[trusted.ClientID]
 		if mapKey != trusted.KeyID || trusted.KeyID == "" || len(trusted.PublicKey) == 0 || store.console.state.RevokedIssuerKeys[trusted.KeyID] || !paired || client.ClientID != trusted.ClientID || client.PersonID != trusted.PersonID || client.DeviceID != trusted.DeviceID {
 			return nil, errors.New("invalid trusted issuer state")
 		}
-		records = append(records, IssuerRecord{KeyID: trusted.KeyID, EnrollmentID: trusted.EnrollmentID, Principal: Principal{ClientID: trusted.ClientID, PersonID: trusted.PersonID, DeviceID: trusted.DeviceID, Authenticated: true}, PublicKey: append([]byte(nil), trusted.PublicKey...)})
+		records = append(records, authorization.IssuerRecord{KeyID: trusted.KeyID, EnrollmentID: trusted.EnrollmentID, Principal: authorization.Principal{ClientID: trusted.ClientID, PersonID: trusted.PersonID, DeviceID: trusted.DeviceID, Authenticated: true}, PublicKey: append([]byte(nil), trusted.PublicKey...)})
 	}
 	return records, nil
 }
@@ -29,16 +31,16 @@ func (store consoleTrustStore) LoadIssuers() ([]IssuerRecord, error) {
 func (store consoleTrustStore) IsIssuerKeyRevoked(keyID string) (bool, error) {
 	store.console.mu.Lock()
 	defer store.console.mu.Unlock()
-	if store.console.trustUnavailable.Load() {
+	if store.console.admissions.TrustUnavailable() {
 		return false, errors.New("trust unavailable")
 	}
 	return store.console.state.RevokedIssuerKeys[keyID], nil
 }
 
-func (store consoleTrustStore) CommitIssuerActivation(record IssuerRecord) error {
+func (store consoleTrustStore) CommitIssuerActivation(record authorization.IssuerRecord) error {
 	store.console.mu.Lock()
 	defer store.console.mu.Unlock()
-	if store.console.trustUnavailable.Load() {
+	if store.console.admissions.TrustUnavailable() {
 		return errors.New("trust unavailable")
 	}
 	if store.console.state.RevokedIssuerKeys[record.KeyID] {
@@ -71,10 +73,10 @@ func (store consoleTrustStore) CommitIssuerActivation(record IssuerRecord) error
 	return nil
 }
 
-func (store consoleTrustStore) CommitIssuerRevocation(record IssuerRecord) error {
+func (store consoleTrustStore) CommitIssuerRevocation(record authorization.IssuerRecord) error {
 	store.console.mu.Lock()
 	defer store.console.mu.Unlock()
-	if store.console.trustUnavailable.Load() {
+	if store.console.admissions.TrustUnavailable() {
 		return errors.New("trust unavailable")
 	}
 	if _, exists := store.console.state.TrustedIssuers[record.KeyID]; !exists {

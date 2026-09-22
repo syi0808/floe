@@ -96,7 +96,7 @@ func List(ctx context.Context, scope Scope, records map[string]Record, sources S
 func ownedSnapshots(snapshots []any, scope Scope, ownership OwnershipReader) ([]any, error) {
 	owned := make([]any, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		value, connectorID, deviceID, ok := snapshotMetadata(snapshot)
+		value, connectorID, deviceID, ok := SnapshotMetadata(snapshot)
 		if !ok {
 			return nil, ErrScopeUnavailable
 		}
@@ -130,8 +130,8 @@ func (source LegacySnapshotSource) ConnectionSnapshot(context.Context) (any, err
 	return source.Runtime.ConnectionSnapshot()
 }
 
-// snapshotMetadata reads the connector and device a reported snapshot claims.
-func snapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
+// SnapshotMetadata reads the connector and device a reported snapshot claims.
+func SnapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, "", "", false
@@ -159,6 +159,6 @@ func snapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
 
 // SnapshotConnectorID reads which connector a reported snapshot belongs to.
 func SnapshotConnectorID(snapshot any) (string, bool) {
-	_, connectorID, _, ok := snapshotMetadata(snapshot)
+	_, connectorID, _, ok := SnapshotMetadata(snapshot)
 	return connectorID, ok
 }

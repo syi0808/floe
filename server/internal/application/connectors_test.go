@@ -1,4 +1,4 @@
-package connections
+package application
 
 import (
 	"context"
@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"floe/server/internal/connections"
 	"floe/server/internal/credentials"
+	httptransport "floe/server/internal/transport/http"
 )
 
 type clientOAuthRuntime struct {
@@ -246,7 +248,7 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 		request.Header.Set("Content-Type", "application/json")
 		close(reconnectStarted)
 		response := httptest.NewRecorder()
-		fixture.console.serveClientConnectors(response, request, clientScope{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID})
+		httptransport.ServeConnectors(response, request, fixture.console.connectorOperations(connections.Scope{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID}))
 		reconnected <- response
 	}()
 	<-reconnectStarted
@@ -279,7 +281,7 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 	_, clientRetained := fixture.console.state.Clients[clientID]
 	_, connectionRetained := fixture.console.state.Connections[connectionID]
 	cleanup := fixture.console.state.Cleanups[fixturePersonID]
-	fixture.console.lastPair = time.Time{}
+	fixture.pairingClock = fixture.pairingClock.Add(11 * time.Second)
 	fixture.console.mu.Unlock()
 	if clientRetained || connectionRetained || len(cleanup.Connections) != 1 {
 		test.Fatalf("failed disconnect resurrected revoked state: client=%v connection=%v cleanup=%#v", clientRetained, connectionRetained, cleanup)
@@ -424,7 +426,7 @@ func TestConnectorLifecycleHandlersRevalidateAuthenticatedClient(test *testing.T
 		test.Run(current.name, func(test *testing.T) {
 			fixture := setup(test)
 			clientID, _ := fixture.pair()
-			scope := clientScope{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
+			scope := connections.Scope{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
 			fixture.console.mu.Lock()
 			delete(fixture.console.state.Clients, clientID)
 			fixture.console.mu.Unlock()
@@ -433,7 +435,7 @@ func TestConnectorLifecycleHandlersRevalidateAuthenticatedClient(test *testing.T
 				request.Header.Set("Content-Type", "application/json")
 			}
 			response := httptest.NewRecorder()
-			fixture.console.serveClientConnectors(response, request, scope)
+			httptransport.ServeConnectors(response, request, fixture.console.connectorOperations(scope))
 			if response.Code != http.StatusUnauthorized {
 				test.Fatalf("revoked authenticated scope reached %s lifecycle: %d %s", current.name, response.Code, response.Body.String())
 			}
@@ -554,7 +556,7 @@ func TestPairedConnectorCatalogIncludesDisconnectedAndUnavailableProviders(test 
 	_, token := fixture.pair()
 	value := fixture.value(fixture.call(http.MethodGet, "/v1/connectors", nil, token))
 	connectors := value["connectors"].([]any)
-	if len(connectors) != len(clientConnectorDefinitions) {
+	if len(connectors) != len(connections.Definitions) {
 		test.Fatalf("catalog length: %d", len(connectors))
 	}
 	byID := map[string]map[string]any{}
@@ -624,7 +626,7 @@ func TestOAuthConnectRequiresCredentialBinding(test *testing.T) {
 		test.Fatalf("OAuth started without credential binding: %#v", runtime.actions)
 	}
 	fixture.console.mu.Lock()
-	attempts := len(fixture.console.connectorAttempts)
+	attempts := len(fixture.console.connections.Attempts())
 	fixture.console.mu.Unlock()
 	if attempts != 0 {
 		test.Fatal("credential binding failure retained an attempt")
@@ -656,7 +658,7 @@ func TestOAuthAttemptSaveFailureDoesNotStartLogin(test *testing.T) {
 	}
 	fixture.console.mu.Lock()
 	defer fixture.console.mu.Unlock()
-	if len(fixture.console.state.Attempts) != 0 || len(fixture.console.connectorAttempts) != 0 {
+	if len(fixture.console.state.Attempts) != 0 || len(fixture.console.connections.Attempts()) != 0 {
 		test.Fatal("attempt save failure retained transient state")
 	}
 }
@@ -716,7 +718,7 @@ func TestConnectorMutationsRejectCrossPersonCredentials(test *testing.T) {
 	fixture.console.mu.Lock()
 	fixture.console.state.Clients["other"] = pairedClient{TokenHash: digest(otherToken), PersonID: otherPersonID, DeviceID: "other-device"}
 	connectionID := "github.issues.foreign"
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "github.issues", PersonID: fixturePersonID}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "github.issues", PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
 
 	foreign := fixture.call(http.MethodDelete, "/v1/connectors/github.issues", map[string]any{"schema_version": 1, "connection_id": connectionID, "connection_revision": 1}, otherToken)
@@ -820,7 +822,7 @@ func TestOAuthRuntimeRebindsPersistedConnectionOnServerRestart(test *testing.T) 
 		test.Fatal(err)
 	}
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	fixture.vault.values[credential] = `{"access_token":"persisted"}`
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
@@ -931,7 +933,7 @@ func TestOAuthCatalogRequiresCredentialReadinessAndReconnectRepairsStaleRecord(t
 	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	fixture.vault.values[credential] = `{"stale":"credential"}`
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
 	}
@@ -961,7 +963,7 @@ func TestOAuthReconnectRetriesStaleCredentialCleanup(test *testing.T) {
 	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	fixture.vault.values[credential] = `{"stale":"credential"}`
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	fixture.console.mu.Unlock()
 	fixture.vault.failDeletes = 1
 
@@ -1384,7 +1386,7 @@ func TestClientDeleteSaveFailurePreservesOAuthAttemptAtomically(test *testing.T)
 			fixture.console.mu.Lock()
 			_, clientPreserved := fixture.console.state.Clients[clientID]
 			_, durablePreserved := fixture.console.state.Attempts[attemptID]
-			_, transientPreserved := fixture.console.connectorAttempts[attemptID]
+			transientPreserved := fixture.console.connections.GetAttempt(attemptID) != nil
 			fixture.console.mu.Unlock()
 			if !clientPreserved || !durablePreserved || !transientPreserved {
 				test.Fatalf("failed save partially revoked client: client=%v durable=%v transient=%v", clientPreserved, durablePreserved, transientPreserved)

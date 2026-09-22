@@ -44,7 +44,7 @@ func TestConnectionListingOwnershipAndFailures(t *testing.T) {
 	if !OwnedByConnection(records, "c1", scope) || OwnedByConnection(records, "c2", scope) {
 		t.Fatal("connection ownership")
 	}
-	bound := map[string]Record{"c1": {ConnectionID: "c1", ConnectorID: "gmail", PersonID: "p1", Device: &deviceBinding{DeviceID: "other"}}}
+	bound := map[string]Record{"c1": {ConnectionID: "c1", ConnectorID: "gmail", PersonID: "p1", Device: &DeviceBinding{DeviceID: "other"}}}
 	if OwnedByConnection(bound, "c1", scope) {
 		t.Fatal("device-bound connection leaked to another device")
 	}

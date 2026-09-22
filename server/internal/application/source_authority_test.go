@@ -1,9 +1,10 @@
-package authorization
+package application
 
 import (
 	"testing"
 
 	"floe/server/internal/authorization"
+	"floe/server/internal/connections"
 )
 
 func TestCurrentSourceFencesEpochOwnerIdentityAndDevice(t *testing.T) {
@@ -11,7 +12,7 @@ func TestCurrentSourceFencesEpochOwnerIdentityAndDevice(t *testing.T) {
 	clientID, _ := fixture.pair()
 	connectionID := fixtureConnectionID("gmail")
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 2, ProviderIdentity: "provider-subject", Device: &deviceBinding{DeviceID: fixtureDeviceID}}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 2, ProviderIdentity: "provider-subject", Device: &connections.DeviceBinding{DeviceID: fixtureDeviceID}}
 	executionOwner := fixture.console.state.ExecutionOwnerID
 	fixture.console.mu.Unlock()
 	principal := authorization.Principal{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID, Authenticated: true}

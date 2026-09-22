@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 )
 
 const producerIdentitySchema = 1
@@ -24,49 +23,14 @@ type producerIdentityRecord struct {
 	PublicKey     string `json:"public_key"`
 }
 
-type producerIdentity struct {
+type ProducerIdentity struct {
 	keyID      string
 	privateKey ed25519.PrivateKey
 	publicKey  ed25519.PublicKey
 }
 
-func loadProducerIdentity(path string, allowCreate bool) (*producerIdentity, error) {
-	file, err := os.Open(path)
-	if err == nil {
-		defer file.Close()
-		data, readError := io.ReadAll(io.LimitReader(file, 4097))
-		if readError != nil {
-			return nil, readError
-		}
-		return decodeProducerIdentity(data)
-	}
-	if os.IsNotExist(err) {
-		if !allowCreate {
-			return nil, errors.New("producer identity missing")
-		}
-		publicKey, privateKey, generateError := ed25519.GenerateKey(cryptorand.Reader)
-		if generateError != nil {
-			return nil, generateError
-		}
-		keyID, idError := newConnectionID()
-		if idError != nil {
-			return nil, idError
-		}
-		record := producerIdentityRecord{SchemaVersion: producerIdentitySchema, KeyID: keyID, PrivateKey: base64.RawURLEncoding.EncodeToString(privateKey), PublicKey: base64.RawURLEncoding.EncodeToString(publicKey)}
-		encoded, marshalError := json.Marshal(record)
-		if marshalError != nil {
-			return nil, marshalError
-		}
-		if writeError := writePrivate(path, encoded); writeError != nil {
-			return nil, writeError
-		}
-		return &producerIdentity{keyID: keyID, privateKey: privateKey, publicKey: publicKey}, nil
-	}
-	return nil, err
-}
-
-func decodeProducerIdentity(data []byte) (*producerIdentity, error) {
-	if len(data) == 0 || len(data) > 4096 || !strictAuthorityJSON(data) {
+func DecodeProducerIdentity(data []byte) (*ProducerIdentity, error) {
+	if len(data) == 0 || len(data) > 4096 || rejectDuplicateJSON(data) != nil {
 		return nil, errors.New("invalid producer identity")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -75,7 +39,7 @@ func decodeProducerIdentity(data []byte) (*producerIdentity, error) {
 	if err := decoder.Decode(&record); err != nil || decoder.Decode(new(any)) != io.EOF {
 		return nil, errors.New("invalid producer identity")
 	}
-	if record.SchemaVersion != producerIdentitySchema || !validConnectionID(record.KeyID) {
+	if record.SchemaVersion != producerIdentitySchema || validateUUID(record.KeyID) != nil {
 		return nil, errors.New("invalid producer identity")
 	}
 	privateKey, err := base64.RawURLEncoding.DecodeString(record.PrivateKey)
@@ -92,37 +56,36 @@ func decodeProducerIdentity(data []byte) (*producerIdentity, error) {
 	if len(publicKey) != ed25519.PublicKeySize || publicError != nil || len(recordedPublicKey) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(recordedPublicKey) != record.PublicKey || !ed25519.PublicKey(recordedPublicKey).Equal(publicKey) {
 		return nil, errors.New("invalid producer key")
 	}
-	return &producerIdentity{keyID: record.KeyID, privateKey: recomputedKey, publicKey: append(ed25519.PublicKey(nil), publicKey...)}, nil
+	return &ProducerIdentity{keyID: record.KeyID, privateKey: recomputedKey, publicKey: append(ed25519.PublicKey(nil), publicKey...)}, nil
 }
 
-func (identity *producerIdentity) fingerprint() string {
+func (identity *ProducerIdentity) Fingerprint() string {
 	digest := sha256.Sum256(identity.publicKey)
 	return hex.EncodeToString(digest[:])
 }
 
-func (identity *producerIdentity) signChallenge(challenge []byte) []byte {
+func (identity *ProducerIdentity) SignChallenge(challenge []byte) []byte {
 	message := make([]byte, 0, len(producerSignatureDomain)+len(challenge))
 	message = append(message, producerSignatureDomain...)
 	message = append(message, challenge...)
 	return ed25519.Sign(identity.privateKey, message)
 }
 
-func (console *Console) producerMetadata() (map[string]any, error) {
-	if console.producerUnavailable.Load() || console.producer == nil {
-		return nil, errors.New("producer identity unavailable")
+func (identity *ProducerIdentity) KeyID() string { return identity.keyID }
+func (identity *ProducerIdentity) PublicKey() ed25519.PublicKey {
+	return append(ed25519.PublicKey(nil), identity.publicKey...)
+}
+
+func GenerateProducerIdentity(keyID string) (*ProducerIdentity, []byte, error) {
+	publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
+	if err != nil {
+		return nil, nil, err
 	}
-	console.mu.Lock()
-	instanceID := console.state.InstanceID
-	executionOwner := console.state.ExecutionOwnerID
-	console.mu.Unlock()
-	audience := "floe.server:" + instanceID
-	return map[string]any{
-		"schema_version":  1,
-		"instance_id":     instanceID,
-		"execution_owner": executionOwner,
-		"audience":        audience,
-		"key_id":          console.producer.keyID,
-		"public_key":      base64.RawURLEncoding.EncodeToString(console.producer.publicKey),
-		"fingerprint":     console.producer.fingerprint(),
-	}, nil
+	record := producerIdentityRecord{SchemaVersion: producerIdentitySchema, KeyID: keyID, PrivateKey: base64.RawURLEncoding.EncodeToString(privateKey), PublicKey: base64.RawURLEncoding.EncodeToString(publicKey)}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return nil, nil, err
+	}
+	identity, err := DecodeProducerIdentity(encoded)
+	return identity, encoded, err
 }

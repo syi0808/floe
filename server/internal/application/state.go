@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"floe/server/internal/authorization"
+	"floe/server/internal/connections"
 	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 )
@@ -50,7 +52,7 @@ type diskState struct {
 	Targets            map[string]inference.Target        `json:"targets"`
 	Routes             map[string]inference.Route         `json:"routes"`
 	Providers          map[string]providerProfile         `json:"providers,omitempty"`
-	Connections        map[string]connectionRecord        `json:"connections,omitempty"`
+	Connections        map[string]connections.Record      `json:"connections,omitempty"`
 	Clients            map[string]pairedClient            `json:"clients"`
 	Cleanups           map[string]personCleanup           `json:"person_cleanups"`
 	Attempts           map[string]connectionAttemptRecord `json:"connection_attempts"`
@@ -113,14 +115,9 @@ type trustedIssuerRecord struct {
 }
 
 type providerProfile struct {
-	BaseURL   string                  `json:"base_url"`
-	APIKeyEnv string                  `json:"api_key_env,omitempty"`
-	Classes   map[string]classProfile `json:"classes"`
-}
-
-type classProfile struct {
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	BaseURL   string                            `json:"base_url"`
+	APIKeyEnv string                            `json:"api_key_env,omitempty"`
+	Classes   map[string]inference.ProfileClass `json:"classes"`
 }
 
 func randomToken() string {
@@ -170,7 +167,7 @@ func writePrivate(path string, value []byte) error {
 }
 
 func readState(directory string) (diskState, string, error) {
-	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}, TrustSchemaVersion: trustSchemaVersion, TrustedIssuers: map[string]trustedIssuerRecord{}, RevokedIssuerKeys: map[string]bool{}, TrustQuarantine: map[string]json.RawMessage{}}
+	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connections.Record{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}, TrustSchemaVersion: trustSchemaVersion, TrustedIssuers: map[string]trustedIssuerRecord{}, RevokedIssuerKeys: map[string]bool{}, TrustQuarantine: map[string]json.RawMessage{}}
 	var err error
 	if state.InstanceID, err = newConnectionID(); err != nil {
 		return state, "", err
@@ -212,7 +209,7 @@ func readState(directory string) (diskState, string, error) {
 			return nil
 		}
 		validateTrustJSON := func(raw json.RawMessage) bool {
-			return len(raw) <= 1<<20 && strictAuthorityJSON(raw)
+			return len(raw) <= 1<<20 && authorization.StrictJSON(raw)
 		}
 		issuerCount := 0
 		revokedCount := 0
@@ -286,7 +283,7 @@ func readState(directory string) (diskState, string, error) {
 			state.Providers = map[string]providerProfile{}
 		}
 		if state.Connections == nil {
-			state.Connections = map[string]connectionRecord{}
+			state.Connections = map[string]connections.Record{}
 		}
 		if state.TrustedIssuers == nil {
 			state.TrustedIssuers = map[string]trustedIssuerRecord{}
@@ -321,12 +318,12 @@ func readState(directory string) (diskState, string, error) {
 		credentialIdentities := map[string]bool{}
 		connectorIdentities := map[string]bool{}
 		for key, cleanup := range state.Cleanups {
-			if key != cleanup.PersonID || !validPersonID(cleanup.PersonID) || personID != "" && personID != cleanup.PersonID || len(cleanup.Connections) == 0 || len(cleanup.Connections) > len(clientConnectorDefinitions) {
+			if key != cleanup.PersonID || !validPersonID(cleanup.PersonID) || personID != "" && personID != cleanup.PersonID || len(cleanup.Connections) == 0 || len(cleanup.Connections) > len(connections.Definitions) {
 				return state, "", errors.New("invalid server state")
 			}
 			personID = cleanup.PersonID
 			for _, step := range cleanup.Connections {
-				definition, exists := clientConnectorDefinitionFor(step.ConnectorID)
+				definition, exists := connections.DefinitionFor(step.ConnectorID)
 				ownerKey := cleanup.PersonID + "\x00" + step.ConnectorID
 				if !exists || !validConnectionID(step.ConnectionID) || connectionIdentities[step.ConnectionID] || credentialIdentities[step.Credential] || connectorIdentities[ownerKey] || definition.AuthKind == "secret" && !step.RuntimeComplete || step.Credential == "" && !step.VaultComplete {
 					return state, "", errors.New("invalid server state")
@@ -360,8 +357,8 @@ func readState(directory string) (diskState, string, error) {
 				credentialIdentities[connection.Credential] = true
 			}
 			connectorIdentities[ownerKey] = true
-			if definition, exists := clientConnectorDefinitionFor(connection.ConnectorID); exists {
-				if _, err := validatedConnectorScope(definition, connection.Scope); err != nil {
+			if definition, exists := connections.DefinitionFor(connection.ConnectorID); exists {
+				if _, err := connections.ValidatedConnectorScope(definition, connection.Scope); err != nil {
 					return state, "", errors.New("invalid server state")
 				}
 				credentialNamespace := definition.CredentialName
@@ -378,7 +375,7 @@ func readState(directory string) (diskState, string, error) {
 			}
 		}
 		for key, attempt := range state.Attempts {
-			definition, exists := clientConnectorDefinitionFor(attempt.ConnectorID)
+			definition, exists := connections.DefinitionFor(attempt.ConnectorID)
 			client, clientOwned := state.Clients[attempt.ClientID]
 			clientOwned = clientOwned && client.PersonID == attempt.PersonID && client.DeviceID == attempt.DeviceID
 			credentialNamespace := ""
@@ -387,13 +384,13 @@ func readState(directory string) (diskState, string, error) {
 			}
 			expectedCredential, _ := credentials.ConnectionName(credentialNamespace, attempt.ConnectionID, attempt.PersonID)
 			ownerKey := attempt.PersonID + "\x00" + attempt.ConnectorID
-			if key != attempt.AttemptID || len(attempt.AttemptID) < 32 || len(attempt.AttemptID) > 128 || !exists || !isOAuthAuthKind(definition.AuthKind) || !clientOwned || !validConnectionID(attempt.ConnectionID) || connectionIdentities[attempt.ConnectionID] || credentialIdentities[attempt.Credential] || connectorIdentities[ownerKey] || attempt.Credential != expectedCredential || attempt.CleanupKind != "oauth_logout" || attempt.RuntimeComplete || attempt.VaultComplete || attempt.CreatedAtUnixMs <= 0 {
+			if key != attempt.AttemptID || len(attempt.AttemptID) < 32 || len(attempt.AttemptID) > 128 || !exists || !connections.IsOAuthAuthKind(definition.AuthKind) || !clientOwned || !validConnectionID(attempt.ConnectionID) || connectionIdentities[attempt.ConnectionID] || credentialIdentities[attempt.Credential] || connectorIdentities[ownerKey] || attempt.Credential != expectedCredential || attempt.CleanupKind != "oauth_logout" || attempt.RuntimeComplete || attempt.VaultComplete || attempt.CreatedAtUnixMs <= 0 {
 				return state, "", errors.New("invalid server state")
 			}
 			connectionIdentities[attempt.ConnectionID] = true
 			credentialIdentities[attempt.Credential] = true
 			connectorIdentities[ownerKey] = true
-			if _, err := validatedConnectorScope(definition, attempt.Scope); err != nil {
+			if _, err := connections.ValidatedConnectorScope(definition, attempt.Scope); err != nil {
 				return state, "", errors.New("invalid server state")
 			}
 		}
@@ -425,7 +422,7 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}, TrustSchemaVersion: state.TrustSchemaVersion, TrustedIssuers: map[string]trustedIssuerRecord{}, RevokedIssuerKeys: map[string]bool{}, TrustQuarantine: map[string]json.RawMessage{}, InstanceID: state.InstanceID, ExecutionOwnerID: state.ExecutionOwnerID, TrustCorrupt: state.TrustCorrupt}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connections.Record{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}, TrustSchemaVersion: state.TrustSchemaVersion, TrustedIssuers: map[string]trustedIssuerRecord{}, RevokedIssuerKeys: map[string]bool{}, TrustQuarantine: map[string]json.RawMessage{}, InstanceID: state.InstanceID, ExecutionOwnerID: state.ExecutionOwnerID, TrustCorrupt: state.TrustCorrupt}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
 	}
@@ -433,7 +430,7 @@ func cloneState(state diskState) diskState {
 		copy.Routes[key] = value
 	}
 	for key, value := range state.Providers {
-		classes := map[string]classProfile{}
+		classes := map[string]inference.ProfileClass{}
 		for class, configured := range value.Classes {
 			classes[class] = configured
 		}
@@ -458,7 +455,7 @@ func cloneState(state diskState) diskState {
 			binding := *value.Device
 			value.Device = &binding
 		}
-		value.Scope = cloneConnectorScope(value.Scope)
+		value.Scope = connections.CloneConnectorScope(value.Scope)
 		copy.Connections[key] = value
 	}
 	for key, value := range state.Cleanups {
@@ -466,7 +463,7 @@ func cloneState(state diskState) diskState {
 		copy.Cleanups[key] = value
 	}
 	for key, value := range state.Attempts {
-		value.Scope = cloneConnectorScope(value.Scope)
+		value.Scope = connections.CloneConnectorScope(value.Scope)
 		copy.Attempts[key] = value
 	}
 	return copy

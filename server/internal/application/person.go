@@ -1,10 +1,12 @@
-package connections
+package application
 
 import (
 	"context"
 	"errors"
 	"sort"
 	"time"
+
+	"floe/server/internal/connections"
 )
 
 var errConnectorLifecycleInProgress = errors.New("connector lifecycle in progress")
@@ -34,7 +36,7 @@ func (console *Console) removeClientAttemptsLocked(state *diskState, clientID st
 		delete(state.Attempts, attemptID)
 		transientAttempts = append(transientAttempts, attemptID)
 	}
-	for attemptID, attempt := range console.connectorAttempts {
+	for attemptID, attempt := range console.connections.Attempts() {
 		if attempt.ClientID == clientID {
 			transientAttempts = append(transientAttempts, attemptID)
 		}
@@ -73,7 +75,7 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		if seenConnections[connectionID] || credential != "" && seenCredentials[credential] {
 			return
 		}
-		definition, exists := clientConnectorDefinitionFor(connectorID)
+		definition, exists := connections.DefinitionFor(connectorID)
 		if !exists {
 			return
 		}
@@ -92,13 +94,13 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		}
 		appendStep(record.ConnectionID, record.ConnectorID, record.Credential)
 		delete(state.Connections, connectionID)
-		for attemptID, attempt := range console.connectorAttempts {
+		for attemptID, attempt := range console.connections.Attempts() {
 			if attempt.ConnectionID == connectionID {
 				transientAttempts = append(transientAttempts, attemptID)
 			}
 		}
 	}
-	for attemptID, attempt := range console.connectorAttempts {
+	for attemptID, attempt := range console.connections.Attempts() {
 		if attempt.PersonID != personID {
 			continue
 		}
@@ -112,7 +114,7 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		appendStep(attempt.ConnectionID, attempt.ConnectorID, attempt.Credential)
 		delete(state.Attempts, attemptID)
 	}
-	for _, record := range console.connectorReservations {
+	for _, record := range console.connections.Reservations() {
 		if record.PersonID == personID {
 			appendStep(record.ConnectionID, record.ConnectorID, record.Credential)
 		}
@@ -173,16 +175,16 @@ func (console *Console) retryPersonCleanupLocked(personID string) error {
 	var cleanupErrors []error
 	for index := range cleanup.Connections {
 		step := cleanup.Connections[index]
-		if _, reserved := console.connectorReservations[step.ConnectionID]; reserved {
+		if _, reserved := console.connections.Reservation(step.ConnectionID); reserved {
 			cleanupErrors = append(cleanupErrors, errConnectorLifecycleInProgress)
 			continue
 		}
 		if !step.RuntimeComplete {
-			definition, exists := clientConnectorDefinitionFor(step.ConnectorID)
-			if !exists || definition.OAuthRuntime == nil || definition.OAuthRuntime(console) == nil {
+			definition, exists := connections.DefinitionFor(step.ConnectorID)
+			if !exists || !connections.IsOAuthAuthKind(definition.AuthKind) || console.connectorOAuthRuntime(definition.ID) == nil {
 				cleanupErrors = append(cleanupErrors, errors.New("cleanup runtime unavailable"))
 			} else {
-				runtime := definition.OAuthRuntime(console)
+				runtime := console.connectorOAuthRuntime(definition.ID)
 				err := runtime.BindCredential(step.Credential)
 				if err == nil {
 					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -223,7 +225,7 @@ func (console *Console) retryPersonCleanupLocked(personID string) error {
 	return nil
 }
 
-func (console *Console) completeReservedCleanupLocked(record connectionRecord, runtimeComplete, vaultComplete bool) error {
+func (console *Console) completeReservedCleanupLocked(record connections.Record, runtimeComplete, vaultComplete bool) error {
 	cleanup, exists := console.state.Cleanups[record.PersonID]
 	if !exists {
 		return nil

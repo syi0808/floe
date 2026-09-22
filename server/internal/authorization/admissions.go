@@ -16,7 +16,7 @@ type Admissions struct {
 	calendar   map[string]calendarAdmissionState
 	remoteView map[string]remoteViewAdmissionState
 
-	producer            *producerIdentity
+	producer            *ProducerIdentity
 	trustUnavailable    atomic.Bool
 	producerUnavailable atomic.Bool
 }
@@ -76,9 +76,9 @@ func (admissions *Admissions) ProducerUnavailable() bool {
 }
 
 // Producer returns the identity this server presents to clients.
-func (admissions *Admissions) Producer() *producerIdentity { return admissions.producer }
+func (admissions *Admissions) Producer() *ProducerIdentity { return admissions.producer }
 
 // SetProducer records the identity this server presents.
-func (admissions *Admissions) SetProducer(identity *producerIdentity) {
+func (admissions *Admissions) SetProducer(identity *ProducerIdentity) {
 	admissions.producer = identity
 }

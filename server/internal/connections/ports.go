@@ -67,16 +67,16 @@ type DriveAuthRuntime interface {
 }
 
 // A device bound to a Person-owned connection.
-type deviceBinding struct {
+type DeviceBinding struct {
 	DeviceID string `json:"device_id"`
 }
 
-type connectionRecord struct {
+type Record struct {
 	ConnectionID       string         `json:"connection_id"`
 	Revision           uint64         `json:"revision"`
 	ConnectorID        string         `json:"connector_id"`
 	PersonID           string         `json:"person_id"`
-	Device             *deviceBinding `json:"device_binding,omitempty"`
+	Device             *DeviceBinding `json:"device_binding,omitempty"`
 	Scope              map[string]any `json:"scope"`
 	Credential         string         `json:"credential,omitempty"`
 	Incarnation        string         `json:"incarnation"`

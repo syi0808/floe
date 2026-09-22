@@ -1,9 +1,10 @@
-package connections
+package application
 
 import (
 	"context"
 	"errors"
 
+	"floe/server/internal/connections"
 	githubconnector "floe/server/internal/connectors/github"
 	calendarconnector "floe/server/internal/connectors/googlecalendar"
 	driveconnector "floe/server/internal/connectors/googledrive"
@@ -11,12 +12,6 @@ import (
 	microsoftcalendarconnector "floe/server/internal/connectors/microsoftcalendar"
 	microsoftteamsconnector "floe/server/internal/connectors/microsoftteams"
 	slackconnector "floe/server/internal/connectors/slack"
-)
-
-const (
-	githubTokenKey = "FLOE_CONNECTOR_GITHUB_TOKEN"
-	slackTokenKey  = "FLOE_CONNECTOR_SLACK_TOKEN"
-	homeTokenKey   = "FLOE_CONNECTOR_HOME_ASSISTANT_TOKEN"
 )
 
 type vaultTokenSource struct {
@@ -33,9 +28,9 @@ func (source vaultTokenSource) Token(context.Context) (string, error) {
 }
 
 func (console *Console) rebuildConnectorRuntimes() error {
-	console.work = map[string]WorkContextRuntime{}
-	console.logistics = map[string]LogisticsRuntime{}
-	console.calendars = map[string]CalendarRuntime{}
+	console.work = map[string]connections.WorkContextRuntime{}
+	console.logistics = map[string]connections.LogisticsRuntime{}
+	console.calendars = map[string]connections.CalendarRuntime{}
 	for _, connection := range console.state.Connections {
 		if err := console.rebuildConnectorRuntime(connection); err != nil {
 			return err
@@ -44,7 +39,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 	return nil
 }
 
-func (console *Console) rebuildConnectorRuntime(connection connectionRecord) error {
+func (console *Console) rebuildConnectorRuntime(connection connections.Record) error {
 	scope := connection.Scope
 	switch connection.ConnectorID {
 	case "github.issues":
@@ -126,7 +121,7 @@ func (console *Console) rebuildConnectorRuntime(connection connectionRecord) err
 		}
 		return err
 	case "home_assistant.states":
-		entities, ok := connectorScopeStrings(scope["entities"])
+		entities, ok := connections.ConnectorScopeStrings(scope["entities"])
 		if !ok {
 			return errors.New("invalid connector scope")
 		}
@@ -141,23 +136,4 @@ func (console *Console) rebuildConnectorRuntime(connection connectionRecord) err
 		return err
 	}
 	return nil
-}
-
-func connectorScopeStrings(value any) ([]string, bool) {
-	switch values := value.(type) {
-	case []string:
-		return append([]string(nil), values...), true
-	case []any:
-		items := make([]string, len(values))
-		for index, value := range values {
-			item, ok := value.(string)
-			if !ok {
-				return nil, false
-			}
-			items[index] = item
-		}
-		return items, true
-	default:
-		return nil, false
-	}
 }

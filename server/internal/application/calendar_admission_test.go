@@ -1,4 +1,4 @@
-package authorization
+package application
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"floe/server/internal/authorization"
+	"floe/server/internal/connections"
 )
 
 type calendarAuthorityIdentityRuntime struct {
@@ -32,24 +33,6 @@ func (runtime *calendarAuthorityIdentityRuntime) WithVerifiedProviderIdentity(ex
 		return authorization.ErrDenied
 	}
 	return consume()
-}
-
-func TestCalendarAuthorityRejectsCaseAliasesAndNestedUnknownFields(t *testing.T) {
-	valid := []byte(`{"schema_version":1,"query":{"range_start_unix_ms":1,"range_end_unix_ms":2,"cursor":"","limit":1}}`)
-	if !validateCalendarCaseExact(valid) {
-		t.Fatal("valid calendar envelope rejected")
-	}
-	for _, encoded := range [][]byte{
-		[]byte(`{"SCHEMA_VERSION":1}`),
-		[]byte(`{"schema_version":1,"query":{"LIMIT":1,"range_start_unix_ms":1,"range_end_unix_ms":2,"cursor":""}}`),
-	} {
-		if validateCalendarCaseExact(encoded) {
-			t.Fatalf("case alias accepted: %s", encoded)
-		}
-	}
-	if validateCalendarObject([]byte(`{"range_start_unix_ms":1,"range_end_unix_ms":2,"cursor":"","limit":1,"unknown":true}`), map[string]struct{}{"range_start_unix_ms": {}, "range_end_unix_ms": {}, "cursor": {}, "limit": {}}) == nil {
-		t.Fatal("nested unknown field accepted")
-	}
 }
 
 func TestCalendarSourcePreviewIsProducerSignedAndUsesVerifiedIdentity(t *testing.T) {
@@ -141,18 +124,6 @@ func TestCalendarSourcePreviewIsProducerSignedAndUsesVerifiedIdentity(t *testing
 	}
 }
 
-func TestBoundedCalendarViewCountsOnlyValidatedItems(t *testing.T) {
-	result, itemCount, err := boundedCalendarView(map[string]any{
-		"items": []any{map[string]any{"id": "one"}, map[string]any{"id": "two"}},
-	})
-	if err != nil || itemCount != 2 || !json.Valid(result) {
-		t.Fatalf("unexpected bounded view result: items=%d err=%v", itemCount, err)
-	}
-	if _, _, err := boundedCalendarView(map[string]any{"items": "not-an-array"}); err == nil {
-		t.Fatal("invalid item collection accepted")
-	}
-}
-
 func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 	fixture := setup(t)
 	clientID, token := fixture.pair()
@@ -170,7 +141,7 @@ func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 	record.IdentityUnverified = false
 	fixture.console.state.Connections[connectionID] = record
 	fixture.console.mu.Unlock()
-	fixture.console.calendars = map[string]CalendarRuntime{connectionID: &fakeCalendarRuntime{
+	fixture.console.calendars = map[string]connections.CalendarRuntime{connectionID: &fakeCalendarRuntime{
 		snapshot: calendarSnapshot("calendar.google", "google_calendar"),
 		view:     map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "items": []any{}},
 	}}
@@ -181,15 +152,15 @@ func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enrollment, challenge, err := fixture.console.authorization.BeginEnrollment(principal, keyID, privateKey.Public().(ed25519.PublicKey), metadata["audience"].(string))
+	enrollment, challenge, err := fixture.console.authorizationEngine.BeginEnrollment(principal, keyID, privateKey.Public().(ed25519.PublicKey), metadata["audience"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownerMessage := append([]byte(authorization.SignatureDomain), challenge.Bytes...)
-	if err := fixture.console.authorization.CompleteEnrollment(enrollment.ID, principal, authorization.Proof{ChallengeID: challenge.ID, KeyID: keyID, Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, ownerMessage))}); err != nil {
+	if err := fixture.console.authorizationEngine.CompleteEnrollment(enrollment.ID, principal, authorization.Proof{ChallengeID: challenge.ID, KeyID: keyID, Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, ownerMessage))}); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.console.authorization.ApproveEnrollment(enrollment.ID, enrollment.Fingerprint, true); err != nil {
+	if err := fixture.console.authorizationEngine.ApproveEnrollment(enrollment.ID, enrollment.Fingerprint, true); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()

@@ -1,4 +1,4 @@
-package authorization
+package application
 
 import (
 	"crypto/ed25519"
@@ -73,16 +73,23 @@ func TestProducerIdentityRejectsSeedCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var record producerIdentityRecord
+	var record map[string]json.RawMessage
 	if err := json.Unmarshal(data, &record); err != nil {
 		t.Fatal(err)
 	}
-	privateKey, err := base64.RawURLEncoding.DecodeString(record.PrivateKey)
+	var encodedKey string
+	if err := json.Unmarshal(record["private_key"], &encodedKey); err != nil {
+		t.Fatal(err)
+	}
+	privateKey, err := base64.RawURLEncoding.DecodeString(encodedKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	privateKey[0] ^= 1
-	record.PrivateKey = base64.RawURLEncoding.EncodeToString(privateKey)
+	record["private_key"], err = json.Marshal(base64.RawURLEncoding.EncodeToString(privateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
 	corrupt, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)

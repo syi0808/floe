@@ -1,4 +1,4 @@
-package authorization
+package application
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"floe/server/internal/authorization"
+	"floe/server/internal/connections"
 	"floe/server/internal/credentials"
 )
 
@@ -118,7 +119,7 @@ func TestAuthorityEnrollmentHTTPFlowAndMethodGuards(t *testing.T) {
 	if deleted.Code != http.StatusOK {
 		t.Fatalf("client delete: %d %s", deleted.Code, deleted.Body.String())
 	}
-	if len(fixture.console.authorization.ActiveIssuers()) != 0 {
+	if len(fixture.console.authorizationEngine.ActiveIssuers()) != 0 {
 		t.Fatal("client deletion left issuer active in memory")
 	}
 }
@@ -188,7 +189,7 @@ func TestAuthorityTrustWriteFailureTombstoneAndCorruptionIsolation(t *testing.T)
 	if err != nil {
 		t.Fatalf("reopen tombstone: %v", err)
 	}
-	if reopened.authorization == nil {
+	if reopened.authorizationEngine == nil {
 		t.Fatal("valid tombstone disabled unrelated authority state")
 	}
 	corrupt := cloneState(fixture.console.state)
@@ -206,7 +207,7 @@ func TestAuthorityTrustWriteFailureTombstoneAndCorruptionIsolation(t *testing.T)
 	if err != nil {
 		t.Fatalf("corrupt trust killed chat: %v", err)
 	}
-	if reopened.authorization != nil {
+	if reopened.authorizationEngine != nil {
 		t.Fatal("corrupt trust enabled protected authority")
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8431/v1/inference-purposes", nil)
@@ -224,7 +225,7 @@ func TestConnectionScopeNoopPreservesEpoch(t *testing.T) {
 	_, token := fixture.pair()
 	connectionID := fixtureConnectionID("github.issues")
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "github.issues", PersonID: fixturePersonID, Scope: map[string]any{"owner": "floe", "repository": "server"}, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 1}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "github.issues", PersonID: fixturePersonID, Scope: map[string]any{"owner": "floe", "repository": "server"}, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 1}
 	before := fixture.console.state.Connections[connectionID]
 	fixture.console.mu.Unlock()
 	unchanged := fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "connection_id": connectionID, "connection_revision": before.Revision, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token)
@@ -268,15 +269,15 @@ func TestTrustCollectionsMissingDuplicateAndOverCapStayQuarantined(t *testing.T)
 		t.Fatal(err)
 	}
 	reopened, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
-	if err != nil || reopened.authorization != nil {
-		t.Fatalf("missing trust collections were trusted: console=%v auth=%v", err, reopened.authorization)
+	if err != nil || reopened.authorizationEngine != nil {
+		t.Fatalf("missing trust collections were trusted: console=%v auth=%v", err, reopened.authorizationEngine)
 	}
 	if err := reopened.save(cloneState(reopened.state)); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err = New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
-	if err != nil || reopened.authorization != nil {
-		t.Fatalf("missing trust quarantine was lost after save: console=%v auth=%v", err, reopened.authorization)
+	if err != nil || reopened.authorizationEngine != nil {
+		t.Fatalf("missing trust quarantine was lost after save: console=%v auth=%v", err, reopened.authorizationEngine)
 	}
 	data, _ = os.ReadFile(statePath)
 	_ = json.Unmarshal(data, &fields)
@@ -290,8 +291,8 @@ func TestTrustCollectionsMissingDuplicateAndOverCapStayQuarantined(t *testing.T)
 		t.Fatal(err)
 	}
 	reopened, err = New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
-	if err != nil || reopened.authorization != nil {
-		t.Fatalf("duplicate trust keys were trusted: console=%v auth=%v", err, reopened.authorization)
+	if err != nil || reopened.authorizationEngine != nil {
+		t.Fatalf("duplicate trust keys were trusted: console=%v auth=%v", err, reopened.authorizationEngine)
 	}
 	issuers := make(map[string]json.RawMessage, maxRetainedIssuerIdentities+1)
 	for index := 0; index <= maxRetainedIssuerIdentities; index++ {
@@ -306,8 +307,8 @@ func TestTrustCollectionsMissingDuplicateAndOverCapStayQuarantined(t *testing.T)
 		t.Fatal(err)
 	}
 	reopened, err = New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
-	if err != nil || reopened.authorization != nil {
-		t.Fatalf("over-cap trust killed chat or was trusted: console=%v auth=%v", err, reopened.authorization)
+	if err != nil || reopened.authorizationEngine != nil {
+		t.Fatalf("over-cap trust killed chat or was trusted: console=%v auth=%v", err, reopened.authorizationEngine)
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8431/v1/inference-purposes", nil)
 	request.Host = fixture.console.address
@@ -352,7 +353,7 @@ func TestClientDeleteFencesBlockedIssuerActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.console.authorization = engine
+	fixture.console.authorizationEngine = engine
 	privateKey := ed25519.NewKeyFromSeed([]byte("01234567890123456789012345678901"))
 	principal := authorization.Principal{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID, Authenticated: true}
 	enrollment, challenge, err := engine.BeginEnrollment(principal, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", privateKey.Public().(ed25519.PublicKey), "local-owner")
@@ -407,7 +408,7 @@ func TestClientDeleteFencesBlockedIssuerActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened.authorization == nil {
+	if reopened.authorizationEngine == nil {
 		t.Fatal("blocked activation/deletion left restart trust unavailable")
 	}
 }
@@ -419,7 +420,7 @@ func TestIndeterminateStateSaveLatchesCachedSourceAuthority(t *testing.T) {
 	fixture.console.mu.Lock()
 	executionOwner := fixture.console.state.ExecutionOwnerID
 	credentialName, _ := credentials.ConnectionName("FLOE_GMAIL_OAUTH", connectionID, fixturePersonID)
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credentialName, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 1, ProviderIdentity: "provider-subject"}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credentialName, Incarnation: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Epoch: 1, ProviderIdentity: "provider-subject"}
 	fixture.console.mu.Unlock()
 	privateKey := ed25519.NewKeyFromSeed([]byte("01234567890123456789012345678901"))
 	principal := authorization.Principal{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID, Authenticated: true}
@@ -454,7 +455,7 @@ func TestIndeterminateStateSaveLatchesCachedSourceAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reopened.authorization == nil {
+	if reopened.authorizationEngine == nil {
 		t.Fatal("reopen trust state was not self-consistent after client delete")
 	}
 }

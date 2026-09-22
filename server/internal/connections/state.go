@@ -25,12 +25,6 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Attempt is one in-flight connector authorization attempt.
-type Attempt = connectorAttempt
-
-// Record is a reserved Person-owned connection.
-type Record = connectionRecord
-
 // Lifecycle returns the lock serializing changes for one connector.
 //
 // The lock is per connector, so two connectors never block each other and two
@@ -47,18 +41,46 @@ func (registry *Registry) Lifecycle(connectorID string) *sync.Mutex {
 }
 
 // Attempt returns the in-flight attempt for a key.
-func (registry *Registry) Attempt(key string) (*Attempt, bool) {
+func (registry *Registry) GetAttempt(key string) *Attempt {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	attempt, ok := registry.attempts[key]
-	return attempt, ok
+	return cloneAttempt(registry.attempts[key])
+}
+
+func cloneAttempt(attempt *Attempt) *Attempt {
+	if attempt == nil {
+		return nil
+	}
+	snapshot := *attempt
+	snapshot.Scope = CloneConnectorScope(attempt.Scope)
+	return &snapshot
+}
+
+func (registry *Registry) Attempts() map[string]*Attempt {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	result := make(map[string]*Attempt, len(registry.attempts))
+	for key, attempt := range registry.attempts {
+		result[key] = cloneAttempt(attempt)
+	}
+	return result
+}
+
+func (registry *Registry) Reservations() map[string]Record {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	result := make(map[string]Record, len(registry.reservations))
+	for key, record := range registry.reservations {
+		result[key] = record
+	}
+	return result
 }
 
 // PutAttempt records or replaces an in-flight attempt.
 func (registry *Registry) PutAttempt(key string, attempt *Attempt) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	registry.attempts[key] = attempt
+	registry.attempts[key] = cloneAttempt(attempt)
 }
 
 // DeleteAttempt ends an attempt so a late observation cannot settle it.

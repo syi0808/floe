@@ -19,8 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"floe/server/internal/connections"
 	"floe/server/internal/connectors/common"
 	"floe/server/internal/credentials"
+	"floe/server/internal/inference"
 )
 
 const fixturePersonID = "00000000-0000-4000-8000-000000000001"
@@ -247,11 +249,12 @@ func (vault *memoryVault) Delete(key string) error {
 }
 
 type fixture struct {
-	console *Console
-	vault   *memoryVault
-	cookie  *http.Cookie
-	csrf    string
-	test    *testing.T
+	pairingClock time.Time
+	console      *Console
+	vault        *memoryVault
+	cookie       *http.Cookie
+	csrf         string
+	test         *testing.T
 }
 
 func setup(test *testing.T) *fixture {
@@ -261,13 +264,13 @@ func setup(test *testing.T) *fixture {
 	if err != nil {
 		test.Fatal(err)
 	}
-	management.allowLegacyPairing = true
 	github := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: vault, instant: true}}
 	slack := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: vault, instant: true}}
 	if management.SetGitHubAuth(github) != nil || management.SetSlackAuth(slack) != nil {
 		test.Fatal("could not configure fixture OAuth runtimes")
 	}
-	fixture := &fixture{console: management, vault: vault, test: test}
+	fixture := &fixture{console: management, vault: vault, test: test, pairingClock: time.Now()}
+	management.pairing = management.newPairing(true, func() time.Time { return fixture.pairingClock })
 	secret, _ := os.ReadFile(filepath.Join(management.directory, "admin-token"))
 	response := fixture.call("POST", "/manage/api/login", map[string]string{"token": string(secret)}, "")
 	if response.Code != 200 {
@@ -286,12 +289,12 @@ func TestBlockedCredentialStatusDoesNotBlockInferenceAuthentication(test *testin
 		test.Fatal(err)
 	}
 	management.mu.Lock()
-	management.state.Providers["codex_oauth"] = providerProfile{BaseURL: codexEndpoint, Classes: map[string]classProfile{"balanced": {Model: "fixture"}}}
+	management.state.Providers["codex_oauth"] = providerProfile{BaseURL: codexEndpoint, Classes: map[string]inference.ProfileClass{"balanced": {Model: "fixture"}}}
 	management.state.Clients["fixture"] = pairedClient{TokenHash: digest("app-token"), PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
 	management.mu.Unlock()
 	stateDone := make(chan struct{})
 	go func() {
-		management.writeState(httptest.NewRecorder(), session{csrf: "csrf"})
+		management.managementState()
 		close(stateDone)
 	}()
 	select {
@@ -323,8 +326,8 @@ func TestBlockedCredentialStatusDoesNotBlockInferenceAuthentication(test *testin
 func TestOAuthBindingFailureIsReturnedAndRuntimeIsCleared(test *testing.T) {
 	fixture := setup(test)
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections["gmail-connection"] = connectionRecord{ConnectionID: "gmail-connection", ConnectorID: "gmail", PersonID: fixturePersonID, Credential: "gmail:fixture"}
-	fixture.console.state.Connections["microsoft-connection"] = connectionRecord{ConnectionID: "microsoft-connection", ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Credential: "microsoft:fixture"}
+	fixture.console.state.Connections["gmail-connection"] = connections.Record{ConnectionID: "gmail-connection", ConnectorID: "gmail", PersonID: fixturePersonID, Credential: "gmail:fixture"}
+	fixture.console.state.Connections["microsoft-connection"] = connections.Record{ConnectionID: "microsoft-connection", ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Credential: "microsoft:fixture"}
 	fixture.console.mu.Unlock()
 
 	bindError := errors.New("credential binding failed")
@@ -431,7 +434,7 @@ func (fixture *fixture) ownConnector(connectorID string) {
 	fixture.test.Helper()
 	connectionID := fixtureConnectionID(connectorID)
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: connectorID, PersonID: fixturePersonID}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: connectorID, PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
 }
 
@@ -579,7 +582,7 @@ func TestPersistedStateRejectsClientAndCleanupForDifferentPersons(test *testing.
 	}
 	cleanupPersonID := "00000000-0000-4000-8000-000000000002"
 	connectionID := "00000000-0000-4000-8000-000000000020"
-	credential, _ := credentials.ConnectionName(githubTokenKey, connectionID, cleanupPersonID)
+	credential, _ := credentials.ConnectionName(connections.GithubTokenKey, connectionID, cleanupPersonID)
 	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connection_attempts":{},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, digest("token"), fixturePersonID, fixtureDeviceID, cleanupPersonID, cleanupPersonID, connectionID, credential)
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
@@ -597,8 +600,8 @@ func TestPersistedStateRejectsCleanupForMultiplePersons(test *testing.T) {
 	otherPersonID := "00000000-0000-4000-8000-000000000002"
 	firstConnectionID := "00000000-0000-4000-8000-000000000021"
 	secondConnectionID := "00000000-0000-4000-8000-000000000022"
-	firstCredential, _ := credentials.ConnectionName(githubTokenKey, firstConnectionID, fixturePersonID)
-	secondCredential, _ := credentials.ConnectionName(githubTokenKey, secondConnectionID, otherPersonID)
+	firstCredential, _ := credentials.ConnectionName(connections.GithubTokenKey, firstConnectionID, fixturePersonID)
+	secondCredential, _ := credentials.ConnectionName(connections.GithubTokenKey, secondConnectionID, otherPersonID)
 	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{},"connection_attempts":{},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]},%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, fixturePersonID, fixturePersonID, firstConnectionID, firstCredential, otherPersonID, otherPersonID, secondConnectionID, secondCredential)
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
@@ -662,7 +665,7 @@ func TestUnscopedBearerCannotReadViews(test *testing.T) {
 	token := "unscoped-token"
 	fixture.console.mu.Lock()
 	fixture.console.state.Clients["unscoped"] = pairedClient{TokenHash: digest(token)}
-	fixture.console.logistics = map[string]LogisticsRuntime{"home_assistant.states.fixture": &fakeContextRuntime{}}
+	fixture.console.logistics = map[string]connections.LogisticsRuntime{"home_assistant.states.fixture": &fakeContextRuntime{}}
 	fixture.console.mu.Unlock()
 
 	response := fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token)
@@ -677,12 +680,12 @@ func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
 	fixture.console.mu.Lock()
 	next := cloneState(fixture.console.state)
 	connectionID := "00000000-0000-4000-8000-000000000012"
-	next.Connections[connectionID] = connectionRecord{
+	next.Connections[connectionID] = connections.Record{
 		ConnectionID: connectionID,
 		Revision:     1,
 		ConnectorID:  "calendar.apple",
 		PersonID:     fixturePersonID,
-		Device:       &deviceBinding{DeviceID: fixtureDeviceID},
+		Device:       &connections.DeviceBinding{DeviceID: fixtureDeviceID},
 	}
 	err := fixture.console.save(next)
 	fixture.console.mu.Unlock()
@@ -806,7 +809,7 @@ func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 	_, token := fixture.pair()
 	fixture.console.mu.Lock()
 	connectionID := fixtureConnectionID("calendar.apple")
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &deviceBinding{DeviceID: fixtureDeviceID}}
+	fixture.console.state.Connections[connectionID] = connections.Record{ConnectionID: connectionID, Revision: 1, ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &connections.DeviceBinding{DeviceID: fixtureDeviceID}}
 	fixture.console.mu.Unlock()
 	snapshot := map[string]any{
 		"descriptor": map[string]any{
@@ -816,7 +819,7 @@ func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 		"connection": map[string]any{"connector_id": "calendar.apple", "state": "ready"},
 		"views":      []any{},
 	}
-	fixture.console.calendars = map[string]CalendarRuntime{connectionID: &fakeCalendarRuntime{snapshot: snapshot}}
+	fixture.console.calendars = map[string]connections.CalendarRuntime{connectionID: &fakeCalendarRuntime{snapshot: snapshot}}
 	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "connection_scope_unavailable") {
 		test.Fatalf("foreign device connection accepted: %d %s", response.Code, response.Body.String())
@@ -877,7 +880,7 @@ func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 	fixture.ownConnector("calendar.microsoft")
 	googleConnectionID := fixtureConnectionID("calendar.google")
 	microsoftConnectionID := fixtureConnectionID("calendar.microsoft")
-	fixture.console.calendars = map[string]CalendarRuntime{
+	fixture.console.calendars = map[string]connections.CalendarRuntime{
 		googleConnectionID:    &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), readErr: errors.New("google unavailable")},
 		microsoftConnectionID: &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.microsoft", "microsoft_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
 	}
@@ -1079,7 +1082,7 @@ func TestExpiredRejectedAndDuplicatePairing(test *testing.T) {
 	if strings.Contains(state.Body.String(), started["proof"].(string)) {
 		test.Fatal("poll proof leaked to management response")
 	}
-	fixture.console.pair.Expires = time.Now().Add(-time.Second)
+	fixture.pairingClock = fixture.pairingClock.Add(10 * time.Minute)
 	if fixture.call("POST", "/manage/api/pair/approve", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": "wrong"}, "").Code != 409 {
 		test.Fatal("expired request approved")
 	}
