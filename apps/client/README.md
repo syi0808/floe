@@ -78,7 +78,7 @@ test requires explicit operator approval and an already-configured, unexpired
 Codex OAuth credential. With `FLOE_VALIDATION_CODEX_MODEL` set to the approved
 existing model, run that exact test with `-- --exact --ignored --nocapture`.
 It configures only a disposable loopback server, uses fictional input through
-canonical Inference/Access, verifies exact `chatgpt.com` consent and usage, and
+canonical Inference/Access, verifies exact `OpenAI (Codex OAuth)` recipient consent and usage, and
 revokes only its disposable paired client. It is not a Flutter Conversation test
 and does not set up, refresh deliberately, or rotate an external account.
 Current end-to-end validation results and remaining blockers are recorded only in

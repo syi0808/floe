@@ -57,7 +57,7 @@ pub async fn assert_remote_profile(saved: &SavedServerConnection) {
     assert_eq!(profile.purpose.as_str(), CANONICAL_MODEL_PURPOSE);
     assert_eq!(
         profile.data_recipient,
-        DataRecipient::External("chatgpt.com".into())
+        DataRecipient::External("OpenAI (Codex OAuth)".into())
     );
 }
 

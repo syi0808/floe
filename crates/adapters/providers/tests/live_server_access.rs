@@ -323,7 +323,7 @@ async fn exercise_live_server(model: Option<String>) {
         assert_eq!(denied.usage.attempts, 0);
         let mut consented = saved.clone();
         consented.allow_external = true;
-        consented.external_recipients = vec!["chatgpt.com".into()];
+        consented.external_recipients = vec!["OpenAI (Codex OAuth)".into()];
         Some((live_model::attempt(&consented).await, consented))
     } else {
         None
