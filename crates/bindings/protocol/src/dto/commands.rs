@@ -6,7 +6,7 @@ use super::{APP_WIRE_VERSION, AppWireErrorDto};
 const MAX_TURN_TEXT_BYTES: usize = 8 * 1024;
 const MAX_TURN_PAYLOAD_BYTES: usize = 64 * 1024;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppCommandRequestDto {
     pub schema_version: u32,
@@ -30,9 +30,62 @@ impl AppCommandRequestDto {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppCommandDto {
+    #[serde(rename = "context.apply")]
+    ContextApply { command: super::ContextCommandDto },
+    #[serde(rename = "actions.calendar")]
+    ActionsCalendar {
+        operation: super::CalendarActionOperationDto,
+    },
+    #[serde(rename = "day.mutate")]
+    DayMutate {
+        day: super::DayQueryDto,
+        mutation: super::DayMutationDto,
+    },
+    #[serde(rename = "knowledge.memory.decide")]
+    KnowledgeMemoryDecide {
+        candidate_id: Uuid,
+        decision: super::AgentMemoryReviewDecisionKindDto,
+    },
+    #[serde(rename = "access.calendar.configure")]
+    AccessCalendarConfigure {
+        change: super::CalendarGrantConfigurationDto,
+    },
+    #[serde(rename = "access.personal.configure")]
+    AccessPersonalConfigure {
+        connector: String,
+        change: super::PersonalAccessChangeDto,
+    },
+    #[serde(rename = "access.contacts.configure")]
+    AccessContactsConfigure {
+        connector: String,
+        change: super::ContactsAccessChangeDto,
+    },
+    #[serde(rename = "experts.registry.configure")]
+    ExpertsRegistryConfigure {
+        change: super::RegistryConfigurationDto,
+    },
+    #[serde(rename = "experts.calendar.install")]
+    ExpertsCalendarInstall {
+        setup: super::CalendarExpertInstallDto,
+    },
+    #[serde(rename = "conversation.session.start")]
+    ConversationSessionStart {},
+    #[serde(rename = "conversation.session.resume")]
+    ConversationSessionResume {},
+    #[serde(rename = "conversation.session.recover")]
+    ConversationSessionRecover {
+        session_id: Uuid,
+        expected_revision: u64,
+    },
+    #[serde(rename = "vault.create")]
+    VaultCreate {},
+    #[serde(rename = "vault.unlock")]
+    VaultUnlock {},
+    #[serde(rename = "vault.lock")]
+    VaultLock {},
     #[serde(rename = "conversation.start_turn")]
     ConversationStartTurn {
         session_id: Uuid,
@@ -54,6 +107,51 @@ pub enum AppCommandDto {
 impl AppCommandDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::ContextApply { .. } => Ok(()),
+            Self::ActionsCalendar { operation } => super::actions::validate_command(operation),
+            Self::DayMutate { mutation, .. } => mutation.validate(),
+            Self::KnowledgeMemoryDecide { candidate_id, .. } => {
+                if candidate_id.is_nil() {
+                    Err("command.candidate_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::AccessCalendarConfigure { change } => change.validate(),
+            Self::AccessPersonalConfigure { connector, .. }
+            | Self::AccessContactsConfigure { connector, .. } => {
+                if super::local_access::identifier(connector) {
+                    Ok(())
+                } else {
+                    Err("command.connector")
+                }
+            }
+            Self::ExpertsRegistryConfigure { change } => {
+                let target_id = match &change.target {
+                    super::RegistryConfigurationTargetDto::Installation { id, .. }
+                    | super::RegistryConfigurationTargetDto::Assignment { id, .. }
+                    | super::RegistryConfigurationTargetDto::CalendarView { id, .. } => id,
+                };
+                if change.instance_id.is_nil()
+                    || target_id.is_nil()
+                    || change.expected_revision == 0
+                    || change.expected_revision > i64::MAX as u64
+                {
+                    Err("command.change")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::ExpertsCalendarInstall { setup } => setup.validate(),
+            Self::ConversationSessionStart {} | Self::ConversationSessionResume {} => Ok(()),
+            Self::ConversationSessionRecover { session_id, .. } => {
+                if session_id.is_nil() {
+                    Err("command.session_id")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::VaultCreate {} | Self::VaultUnlock {} | Self::VaultLock {} => Ok(()),
             Self::ConversationStartTurn {
                 session_id,
                 text,
@@ -197,9 +295,41 @@ pub enum AppCancelRunOutcomeDto {
     Accepted,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppCommandResultDto {
+    ContextApplied {
+        command_id: Uuid,
+        context: super::LocalContextResultDto,
+    },
+    ActionOperation {
+        #[serde(flatten)]
+        result: super::ActionOperationResultDto,
+    },
+    DayMutation {
+        command_id: Uuid,
+        mutation: super::MutationResultDto,
+    },
+    KnowledgeOperation {
+        #[serde(flatten)]
+        result: super::KnowledgeOperationResultDto,
+    },
+    LocalAccessOperation {
+        #[serde(flatten)]
+        result: super::LocalAccessResultDto,
+    },
+    ExpertOperation {
+        #[serde(flatten)]
+        result: super::ExpertOperationResultDto,
+    },
+    ConversationSessionOperation {
+        #[serde(flatten)]
+        result: super::ConversationSessionResultDto,
+    },
+    VaultOperation {
+        #[serde(flatten)]
+        result: super::VaultLifecycleResultDto,
+    },
     CommandReceipt {
         #[serde(flatten)]
         receipt: AppCommandReceiptDto,

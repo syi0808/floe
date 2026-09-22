@@ -1,25 +1,47 @@
 mod access;
+mod actions;
 pub use access::{
     RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
     RemoteAuthorityEnrollmentStatusDto, RemoteCalendarGrantOverviewDto,
     RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
     RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto,
 };
+pub use actions::ActionOperationResultDto;
 pub use connections::RemotePairingChallengeDto;
 mod connections;
 pub use connections::{
-    PairingOutcomeDto, PairingReportDto, PairingTargetDto, RemotePairingOperationDto,
-    RemotePairingRequestDto, RemotePairingResultDto,
+    ConnectionsResultDto, PairingOutcomeDto, PairingReportDto, PairingTargetDto,
+    RemotePairingOperationDto, RemotePairingRequestDto, RemotePairingResultDto,
 };
 mod agent;
 mod calendar;
 mod commands;
+mod conversation;
+pub use conversation::ConversationSessionResultDto;
 mod day;
+mod day_mutation;
+pub use day_mutation::DayMutationDto;
 mod envelope;
 mod errors;
 mod events;
+mod experts;
+pub use experts::{CalendarExpertInstallDto, ExpertOperationResultDto};
+mod context;
 mod local_context;
+pub use context::{
+    AttentionCompletionDto, CalendarCompletionDto, ContextCommandDto, ContextQueryDto,
+    PersonalCompletionDto,
+};
+mod knowledge;
+pub use knowledge::KnowledgeOperationResultDto;
+mod local_access;
+pub use local_access::{
+    CalendarGrantChangeDto, CalendarGrantConfigurationDto, CalendarSubjectIntentDto,
+    LocalAccessResultDto,
+};
 mod queries;
+mod vault;
+pub use vault::VaultLifecycleResultDto;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const APP_WIRE_VERSION: u32 = 2;

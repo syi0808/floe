@@ -4,6 +4,8 @@
 //! Business judgment belongs to the owning module; this crate only assembles.
 
 mod action_facade;
+#[cfg(unix)]
+mod action_services;
 mod agent_fixture;
 pub mod agent_run;
 mod api;
@@ -11,18 +13,36 @@ mod bootstrap;
 mod calendar_facade;
 #[cfg(unix)]
 mod composition;
+#[cfg(unix)]
+mod connection_services;
+#[cfg(unix)]
+mod context_services;
 mod core;
+#[cfg(unix)]
+mod day_services;
 mod diagnostics;
 mod error;
 mod events;
+#[cfg(unix)]
+mod expert_services;
 mod host;
+#[cfg(unix)]
+mod knowledge_services;
+#[cfg(unix)]
+mod local_access_services;
 mod local_context;
+#[cfg(unix)]
+mod local_operations;
 mod prompts;
 mod remote_services;
 mod services;
+#[cfg(unix)]
+mod session_services;
 mod turn_request;
 #[cfg(unix)]
 mod vault_host;
+#[cfg(unix)]
+mod vault_services;
 mod worker;
 
 pub use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
@@ -58,6 +78,8 @@ pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
 pub use action_facade::CalendarActionCommand;
+#[cfg(unix)]
+pub use action_services::{ActionCommands, ActionInspection, ActionOperationResult, ActionQueries};
 pub use agent_fixture::{
     AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,
     run_persisted_agent_sample,
@@ -66,8 +88,25 @@ pub use agent_run::{AgentFixtureRunCommand, AgentFixtureRunRequest, AgentFixture
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
+#[cfg(unix)]
+pub use connection_services::{ConnectionsQueries, ConnectionsResult};
+#[cfg(unix)]
+pub use context_services::{
+    AttentionCompletion, CalendarCompletion, ContextCommand, ContextQuery, LocalContextCommands,
+    LocalContextQueries, PersonalCompletion,
+};
 pub use core::{Classification, FloeCore};
+#[cfg(unix)]
+pub use day_services::{
+    DayCommands, DayMutation, DayMutationRequest, DayMutationResult, DayQueries, DayRead,
+};
 pub use error::{CoreError, ErrorCode};
+#[cfg(unix)]
+pub use expert_services::{
+    CalendarExpertInstall, CalendarExpertOverview, ExpertCommand, ExpertCommands, ExpertInspection,
+    ExpertOperationResult, ExpertQueries, RegistryConfiguration, RegistryConfigurationTarget,
+    RegistryOverview,
+};
 /// The acquisition values one local-context command carries.
 pub use floe_context::valid_native_subject_fingerprint;
 pub use floe_provider_adapters::sources::native_acquisition::{
@@ -78,6 +117,15 @@ pub use floe_provider_adapters::sources::native_acquisition::{
     PersonalAcquisitionResult, PersonalDomain, attention_failure, personal_failure,
 };
 pub use host::{AppHost, HostRequest};
+#[cfg(unix)]
+pub use knowledge_services::{
+    KnowledgeCommands, KnowledgeInspection, KnowledgeOperationResult, KnowledgeQueries,
+};
+#[cfg(unix)]
+pub use local_access_services::{
+    CalendarGrantChange, CalendarGrantConfiguration, CalendarSubjectIntent, LocalAccessCommand,
+    LocalAccessCommands, LocalAccessInspection, LocalAccessQueries, LocalAccessResult,
+};
 pub use local_context::{
     CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,
 };
@@ -92,9 +140,18 @@ pub use services::{
     EventRead, ProfileSelection, ReadConversation, ReadConversationEvents, RunEventRecord,
     ServiceError, StartTurn, TurnMode,
 };
+#[cfg(unix)]
+pub use session_services::{
+    ConversationSessionCommand, ConversationSessionCommands, ConversationSessionQueries,
+    ConversationSessionResult,
+};
 pub use turn_request::ConversationTurnRequest;
 #[cfg(unix)]
 pub use vault_host::{VaultBridge, VaultRequestFailure};
+#[cfg(unix)]
+pub use vault_services::{
+    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult,
+};
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
     CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation, FixtureOperation,

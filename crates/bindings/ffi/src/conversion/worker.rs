@@ -525,25 +525,29 @@ fn personal_access(request: &PersonalAccessConfigurationDto) -> PersonalAccessCo
     PersonalAccessConfiguration {
         connector: request.connector.clone(),
         device_id: request.device_id.clone(),
-        change: match &request.change {
-            PersonalAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
-            PersonalAccessChangeDto::Review {
-                expected_native_subject_fingerprint,
-                consumers,
-                feasibility_query: query,
-                expected_grant_id,
-                expected_grant_authority,
-            } => PersonalAccessChange::Review {
-                expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-                consumers: consumers.clone(),
-                feasibility_query: query.as_ref().map(feasibility_query),
-                expected_grant_id: *expected_grant_id,
-                expected_grant_authority: *expected_grant_authority,
-            },
-            PersonalAccessChangeDto::SetEnabled { enabled } => {
-                PersonalAccessChange::SetEnabled { enabled: *enabled }
-            }
+        change: personal_access_change(&request.change),
+    }
+}
+
+pub(crate) fn personal_access_change(change: &PersonalAccessChangeDto) -> PersonalAccessChange {
+    match change {
+        PersonalAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
+        PersonalAccessChangeDto::Review {
+            expected_native_subject_fingerprint,
+            consumers,
+            feasibility_query: query,
+            expected_grant_id,
+            expected_grant_authority,
+        } => PersonalAccessChange::Review {
+            expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
+            consumers: consumers.clone(),
+            feasibility_query: query.as_ref().map(feasibility_query),
+            expected_grant_id: *expected_grant_id,
+            expected_grant_authority: *expected_grant_authority,
         },
+        PersonalAccessChangeDto::SetEnabled { enabled } => {
+            PersonalAccessChange::SetEnabled { enabled: *enabled }
+        }
     }
 }
 
@@ -551,29 +555,31 @@ fn contacts_access(request: &ContactsAccessConfigurationDto) -> ContactsAccessCo
     ContactsAccessConfiguration {
         connector: request.connector.clone(),
         device_id: request.device_id.clone(),
-        change: match &request.change {
-            ContactsAccessChangeDto::Inspect { selected_handles } => {
-                ContactsAccessChange::Inspect {
-                    selected_handles: selected_handles.clone(),
-                }
-            }
-            ContactsAccessChangeDto::Review {
-                selected_handles,
-                expected_native_subject_fingerprint,
-                consumers,
-                expected_grant_id,
-                expected_grant_authority,
-            } => ContactsAccessChange::Review {
-                selected_handles: selected_handles.clone(),
-                expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-                consumers: consumers.clone(),
-                expected_grant_id: *expected_grant_id,
-                expected_grant_authority: *expected_grant_authority,
-            },
-            ContactsAccessChangeDto::SetEnabled { enabled } => {
-                ContactsAccessChange::SetEnabled { enabled: *enabled }
-            }
+        change: contacts_access_change(&request.change),
+    }
+}
+
+pub(crate) fn contacts_access_change(change: &ContactsAccessChangeDto) -> ContactsAccessChange {
+    match change {
+        ContactsAccessChangeDto::Inspect { selected_handles } => ContactsAccessChange::Inspect {
+            selected_handles: selected_handles.clone(),
         },
+        ContactsAccessChangeDto::Review {
+            selected_handles,
+            expected_native_subject_fingerprint,
+            consumers,
+            expected_grant_id,
+            expected_grant_authority,
+        } => ContactsAccessChange::Review {
+            selected_handles: selected_handles.clone(),
+            expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
+            consumers: consumers.clone(),
+            expected_grant_id: *expected_grant_id,
+            expected_grant_authority: *expected_grant_authority,
+        },
+        ContactsAccessChangeDto::SetEnabled { enabled } => {
+            ContactsAccessChange::SetEnabled { enabled: *enabled }
+        }
     }
 }
 
@@ -632,7 +638,7 @@ pub(crate) fn enrollment_status_dto(
     }
 }
 
-fn vault_state_dto(state: VaultState) -> AgentVaultStateDto {
+pub(crate) fn vault_state_dto(state: VaultState) -> AgentVaultStateDto {
     match state {
         VaultState::Missing => AgentVaultStateDto::Missing,
         VaultState::Locked => AgentVaultStateDto::Locked,
@@ -641,7 +647,7 @@ fn vault_state_dto(state: VaultState) -> AgentVaultStateDto {
     }
 }
 
-fn subject_preview_dto(preview: CalendarSubjectPreview) -> CalendarSubjectPreviewDto {
+pub(crate) fn subject_preview_dto(preview: CalendarSubjectPreview) -> CalendarSubjectPreviewDto {
     CalendarSubjectPreviewDto {
         provider: super::day::calendar_provider_to_dto(preview.provider),
         device_id: preview.device_id,
@@ -654,7 +660,7 @@ fn subject_preview_dto(preview: CalendarSubjectPreview) -> CalendarSubjectPrevie
     }
 }
 
-fn proposal_dto(proposal: CalendarProposalInspection) -> AgentProposalInspectionDto {
+pub(crate) fn proposal_dto(proposal: CalendarProposalInspection) -> AgentProposalInspectionDto {
     AgentProposalInspectionDto {
         schema_version: PROTOCOL_VERSION,
         person_id: proposal.person_id.to_string(),
@@ -664,7 +670,7 @@ fn proposal_dto(proposal: CalendarProposalInspection) -> AgentProposalInspection
     }
 }
 
-fn memory_review_dto(
+pub(crate) fn memory_review_dto(
     review: MemoryReviewResult,
 ) -> Result<AgentMemoryReviewOverviewDto, AgentFailure> {
     Ok(AgentMemoryReviewOverviewDto {
@@ -680,7 +686,7 @@ fn memory_review_dto(
     })
 }
 
-fn memory_dto(
+pub(crate) fn memory_dto(
     snapshot: floe_app::MemoryOverviewSnapshot,
 ) -> Result<AgentMemoryOverviewDto, AgentFailure> {
     Ok(AgentMemoryOverviewDto {
@@ -776,7 +782,9 @@ pub fn worker_result(result: WorkerResult) -> Result<AgentVaultResultDto, AgentF
     })
 }
 
-fn personal_access_dto(overview: floe_app::PersonalAccessOverview) -> PersonalAccessOverviewDto {
+pub(crate) fn personal_access_dto(
+    overview: floe_app::PersonalAccessOverview,
+) -> PersonalAccessOverviewDto {
     PersonalAccessOverviewDto {
         schema_version: 1,
         person_id: overview.person_id.to_string(),
@@ -878,7 +886,7 @@ fn proposal(
     })
 }
 
-fn calendar_action_operation(
+pub(crate) fn calendar_action_operation(
     operation: CalendarActionOperationDto,
 ) -> WireResult<CalendarActionOperation> {
     Ok(match operation {

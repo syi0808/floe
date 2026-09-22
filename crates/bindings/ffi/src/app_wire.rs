@@ -25,12 +25,264 @@ fn command_with_host<Services>(
     request: AppCommandRequestDto,
 ) -> AppWireResult<AppCommandResultDto>
 where
-    Services: floe_app::HostServices + floe_app::ConversationCommands,
+    Services: floe_app::HostServices
+        + floe_app::ConversationCommands
+        + floe_app::VaultLifecycleCommands
+        + floe_app::ConversationSessionCommands
+        + floe_app::ExpertCommands
+        + floe_app::LocalAccessCommands
+        + floe_app::KnowledgeCommands
+        + floe_app::DayCommands
+        + floe_app::ActionCommands
+        + floe_app::LocalContextCommands,
 {
     request.validate().map_err(request_validation)?;
     let host_request = host.request(request.request_id).map_err(host_failure)?;
     let runtime_epoch = host_request.caller().runtime_epoch();
     match request.command {
+        AppCommandDto::ContextApply { command } => {
+            let command = crate::context_wire::command(command).map_err(structural_error)?;
+            let result = host_request
+                .services()
+                .apply_local_context(host_request.caller(), command)
+                .map_err(|failure| structural_error(floe_protocol::wire::agent_failure(failure)))?;
+            Ok(AppCommandResultDto::ContextApplied {
+                command_id: request.command_id,
+                context: crate::conversion::native::local_context_result(
+                    floe_app::PersonId(host_request.caller().person_id()),
+                    result,
+                ),
+            })
+        }
+        AppCommandDto::ActionsCalendar { operation } => {
+            let command = crate::conversion::worker::calendar_action_operation(operation)
+                .map_err(structural_error)?;
+            let result = host_request
+                .services()
+                .action_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::ActionOperation {
+                result: action_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::DayMutate { day, mutation } => {
+            let result = host_request
+                .services()
+                .mutate_day(
+                    host_request.caller(),
+                    floe_app::DayMutationRequest {
+                        command_id: request.command_id,
+                        day: crate::day_wire::read(day).map_err(structural_error)?,
+                        mutation: crate::day_wire::mutation(mutation).map_err(structural_error)?,
+                    },
+                )
+                .map_err(day_error)?;
+            if result.command_id != request.command_id {
+                return Err(service_error(floe_app::ServiceError::Internal));
+            }
+            Ok(AppCommandResultDto::DayMutation {
+                command_id: result.command_id,
+                mutation: floe_protocol::MutationResultDto {
+                    snapshot: crate::conversion::day_snapshot_to_dto(result.snapshot).map_err(
+                        |failure| structural_error(floe_protocol::wire::conversion_error(failure)),
+                    )?,
+                    changed_item: result
+                        .changed_item
+                        .map(crate::conversion::timeline_item_to_dto),
+                    capture: result.capture.map(crate::conversion::capture_to_dto),
+                },
+            })
+        }
+        AppCommandDto::KnowledgeMemoryDecide {
+            candidate_id,
+            decision,
+        } => {
+            let decision = floe_app::MemoryReviewDecision {
+                candidate_id,
+                kind: match decision {
+                    floe_protocol::AgentMemoryReviewDecisionKindDto::Approve => {
+                        floe_app::KnowledgeDecisionKind::Approve
+                    }
+                    floe_protocol::AgentMemoryReviewDecisionKindDto::Reject => {
+                        floe_app::KnowledgeDecisionKind::Reject
+                    }
+                },
+            };
+            let result = host_request
+                .services()
+                .decide_memory(host_request.caller(), request.command_id, decision)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::KnowledgeOperation {
+                result: knowledge_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::AccessCalendarConfigure { change } => {
+            let change = floe_app::CalendarGrantConfiguration {
+                instance_id: change.instance_id,
+                expected_revision: change.expected_revision,
+                setup_id: change.setup_id,
+                change: match change.change {
+                    floe_protocol::CalendarGrantChangeDto::SetEnabled { enabled } => {
+                        floe_app::CalendarGrantChange::SetEnabled { enabled }
+                    }
+                    floe_protocol::CalendarGrantChangeDto::Remove {} => {
+                        floe_app::CalendarGrantChange::Remove
+                    }
+                    floe_protocol::CalendarGrantChangeDto::SetScope {
+                        provider,
+                        calendar_ids,
+                        connection_scope,
+                        connection_revision,
+                        source_authority,
+                        reviewed_native_subject_fingerprint,
+                    } => floe_app::CalendarGrantChange::SetScope {
+                        provider: crate::conversion::calendar_provider_from_dto(provider),
+                        calendar_ids,
+                        connection_scope: crate::conversion::calendar_scope_from_dto(
+                            connection_scope,
+                        ),
+                        connection_revision,
+                        source_authority,
+                        reviewed_native_subject_fingerprint,
+                    },
+                },
+            };
+            let result = host_request
+                .services()
+                .local_access_command(
+                    host_request.caller(),
+                    request.command_id,
+                    floe_app::LocalAccessCommand::Calendar(change),
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::AccessPersonalConfigure { connector, change } => {
+            let command = floe_app::LocalAccessCommand::Personal {
+                connector,
+                change: crate::conversion::worker::personal_access_change(&change),
+            };
+            let result = host_request
+                .services()
+                .local_access_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::AccessContactsConfigure { connector, change } => {
+            let command = floe_app::LocalAccessCommand::Contacts {
+                connector,
+                change: crate::conversion::worker::contacts_access_change(&change),
+            };
+            let result = host_request
+                .services()
+                .local_access_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::ExpertsRegistryConfigure { change } => {
+            let command =
+                floe_app::ExpertCommand::ConfigureRegistry(floe_app::RegistryConfiguration {
+                    instance_id: change.instance_id,
+                    expected_revision: change.expected_revision,
+                    target: match change.target {
+                        floe_protocol::RegistryConfigurationTargetDto::Installation {
+                            id,
+                            enabled,
+                        } => floe_app::RegistryConfigurationTarget::Installation { id, enabled },
+                        floe_protocol::RegistryConfigurationTargetDto::Assignment {
+                            id,
+                            enabled,
+                        } => floe_app::RegistryConfigurationTarget::Assignment { id, enabled },
+                        floe_protocol::RegistryConfigurationTargetDto::CalendarView {
+                            id,
+                            enabled,
+                        } => floe_app::RegistryConfigurationTarget::CalendarView { id, enabled },
+                    },
+                });
+            let result = host_request
+                .services()
+                .expert_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::ExpertOperation {
+                result: expert_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::ExpertsCalendarInstall { setup } => {
+            let command =
+                floe_app::ExpertCommand::InstallCalendar(floe_app::CalendarExpertInstall {
+                    instance_id: setup.instance_id,
+                    expected_revision: setup.expected_revision,
+                    setup_id: setup.setup_id,
+                    provider: crate::conversion::calendar_provider_from_dto(setup.provider),
+                    calendar_ids: setup.calendar_ids,
+                    connection_scope: crate::conversion::calendar_scope_from_dto(
+                        setup.connection_scope,
+                    ),
+                    connection_revision: setup.connection_revision,
+                    source_authority: setup.source_authority,
+                    reviewed_native_subject_fingerprint: setup.reviewed_native_subject_fingerprint,
+                });
+            let result = host_request
+                .services()
+                .expert_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::ExpertOperation {
+                result: expert_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::ConversationSessionStart {}
+        | AppCommandDto::ConversationSessionResume {}
+        | AppCommandDto::ConversationSessionRecover { .. } => {
+            let command = match request.command {
+                AppCommandDto::ConversationSessionStart {} => {
+                    floe_app::ConversationSessionCommand::Start
+                }
+                AppCommandDto::ConversationSessionResume {} => {
+                    floe_app::ConversationSessionCommand::Resume
+                }
+                AppCommandDto::ConversationSessionRecover {
+                    session_id,
+                    expected_revision,
+                } => floe_app::ConversationSessionCommand::Recover {
+                    session_id,
+                    expected_revision,
+                },
+                _ => unreachable!(),
+            };
+            let result = host_request
+                .services()
+                .session_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::ConversationSessionOperation {
+                result: session_result(result, request.command_id)?,
+            })
+        }
+        AppCommandDto::VaultCreate {}
+        | AppCommandDto::VaultUnlock {}
+        | AppCommandDto::VaultLock {} => {
+            let command = match request.command {
+                AppCommandDto::VaultCreate {} => floe_app::VaultLifecycleCommand::Create,
+                AppCommandDto::VaultUnlock {} => floe_app::VaultLifecycleCommand::Unlock,
+                AppCommandDto::VaultLock {} => floe_app::VaultLifecycleCommand::Lock,
+                _ => unreachable!(),
+            };
+            let result = host_request
+                .services()
+                .vault_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            if result.operation_id != request.command_id {
+                return Err(service_error(floe_app::ServiceError::Internal));
+            }
+            Ok(AppCommandResultDto::VaultOperation {
+                result: vault_result(result),
+            })
+        }
         AppCommandDto::ConversationStartTurn {
             session_id,
             expected_revision,
@@ -110,7 +362,19 @@ pub(crate) fn query(
     query_with_host(&handle.app(), request)
 }
 
-fn query_with_host<Services: floe_app::HostServices + floe_app::ConversationQueries>(
+fn query_with_host<
+    Services: floe_app::HostServices
+        + floe_app::ConversationQueries
+        + floe_app::VaultLifecycleQueries
+        + floe_app::ConversationSessionQueries
+        + floe_app::ExpertQueries
+        + floe_app::LocalAccessQueries
+        + floe_app::KnowledgeQueries
+        + floe_app::ConnectionsQueries
+        + floe_app::DayQueries
+        + floe_app::ActionQueries
+        + floe_app::LocalContextQueries,
+>(
     host: &floe_app::AppHost<Services>,
     request: AppQueryRequestDto,
 ) -> AppWireResult<AppQueryResultDto> {
@@ -120,6 +384,241 @@ fn query_with_host<Services: floe_app::HostServices + floe_app::ConversationQuer
     let runtime_epoch = caller.runtime_epoch();
     let services = host_request.services();
     match request.query {
+        AppQueryDto::ContextRead { query } => {
+            let query = crate::context_wire::query(query).map_err(structural_error)?;
+            let result = services
+                .query_local_context(caller, query)
+                .map_err(|failure| structural_error(floe_protocol::wire::agent_failure(failure)))?;
+            Ok(AppQueryResultDto::ContextRead {
+                context: crate::conversion::native::local_context_result(
+                    floe_app::PersonId(caller.person_id()),
+                    result,
+                ),
+            })
+        }
+        AppQueryDto::ActionsCapabilities {}
+        | AppQueryDto::ActionsAuthority {}
+        | AppQueryDto::ActionsList {}
+        | AppQueryDto::ActionsGet { .. }
+        | AppQueryDto::ActionsProposalInspect { .. } => {
+            let inspection = match request.query {
+                AppQueryDto::ActionsCapabilities {} => floe_app::ActionInspection::Capabilities,
+                AppQueryDto::ActionsAuthority {} => floe_app::ActionInspection::Authority,
+                AppQueryDto::ActionsList {} => floe_app::ActionInspection::List,
+                AppQueryDto::ActionsGet { action_id } => {
+                    floe_app::ActionInspection::Get { action_id }
+                }
+                AppQueryDto::ActionsProposalInspect {
+                    session_id,
+                    invocation_id,
+                } => floe_app::ActionInspection::Proposal {
+                    session_id,
+                    invocation_id,
+                },
+                _ => unreachable!(),
+            };
+            let result = services
+                .inspect_actions(caller, request.request_id, inspection)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ActionOperation {
+                result: action_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::ActionsReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_action_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ActionOperation {
+                result: action_result(result, operation_id)?,
+            })
+        }
+        AppQueryDto::DaySnapshot { day } => {
+            let result = services
+                .read_day(
+                    caller,
+                    crate::day_wire::read(day).map_err(structural_error)?,
+                )
+                .map_err(day_error)?;
+            Ok(AppQueryResultDto::DaySnapshot {
+                snapshot: crate::conversion::day_snapshot_to_dto(result).map_err(|failure| {
+                    structural_error(floe_protocol::wire::conversion_error(failure))
+                })?,
+            })
+        }
+        AppQueryDto::KnowledgeMemoryOverview {} | AppQueryDto::KnowledgeMemoryReview {} => {
+            let inspection = if matches!(request.query, AppQueryDto::KnowledgeMemoryOverview {}) {
+                floe_app::KnowledgeInspection::Memory
+            } else {
+                floe_app::KnowledgeInspection::Review
+            };
+            let result = services
+                .inspect_knowledge(caller, request.request_id, inspection)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::KnowledgeOperation {
+                result: knowledge_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::KnowledgeReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_knowledge_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::KnowledgeOperation {
+                result: knowledge_result(result, operation_id)?,
+            })
+        }
+        AppQueryDto::ConnectionsOverview {} => {
+            let result = services
+                .inspect_connections(caller, request.request_id)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConnectionsOperation {
+                result: connections_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::ConnectionsReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_connections_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConnectionsOperation {
+                result: connections_result(result, operation_id)?,
+            })
+        }
+        AppQueryDto::AccessCalendarPreview { request: subject } => {
+            let inspection =
+                floe_app::LocalAccessInspection::CalendarSubject(floe_app::CalendarSubjectIntent {
+                    provider: crate::conversion::calendar_provider_from_dto(subject.provider),
+                    connection_id: subject.connection_id,
+                    calendar_ids: subject.calendar_ids,
+                    connection_scope: crate::conversion::calendar_scope_from_dto(
+                        subject.connection_scope,
+                    ),
+                    connection_revision: subject.connection_revision,
+                    source_authority: subject.source_authority,
+                });
+            let result = services
+                .inspect_local_access(caller, request.request_id, inspection)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::AccessPersonalInspect { connector } => {
+            let result = services
+                .inspect_local_access(
+                    caller,
+                    request.request_id,
+                    floe_app::LocalAccessInspection::Personal { connector },
+                )
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::AccessContactsInspect {
+            connector,
+            selected_handles,
+        } => {
+            let result = services
+                .inspect_local_access(
+                    caller,
+                    request.request_id,
+                    floe_app::LocalAccessInspection::Contacts {
+                        connector,
+                        selected_handles,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::AccessLocalReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_local_access_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::LocalAccessOperation {
+                result: local_access_result(result, operation_id)?,
+            })
+        }
+        AppQueryDto::ExpertsRegistryInspect {} | AppQueryDto::ExpertsCalendarInspect {} => {
+            let inspection = if matches!(request.query, AppQueryDto::ExpertsRegistryInspect {}) {
+                floe_app::ExpertInspection::Registry
+            } else {
+                floe_app::ExpertInspection::Calendar
+            };
+            let result = services
+                .inspect_experts(caller, request.request_id, inspection)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ExpertOperation {
+                result: expert_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::ExpertsReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_expert_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ExpertOperation {
+                result: expert_result(result, operation_id)?,
+            })
+        }
+        AppQueryDto::ConversationSessionGet { session_id } => {
+            let result = services
+                .get_session(caller, request.request_id, session_id)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConversationSessionOperation {
+                result: session_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::ConversationSessionReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_session_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ConversationSessionOperation {
+                result: session_result(result, operation_id)?,
+            })
+        }
+        AppQueryDto::VaultStatus {} => {
+            let result = services
+                .vault_status(caller, request.request_id)
+                .map_err(service_error)?;
+            if result.operation_id != request.request_id {
+                return Err(service_error(floe_app::ServiceError::Internal));
+            }
+            Ok(AppQueryResultDto::VaultOperation {
+                result: vault_result(result),
+            })
+        }
+        AppQueryDto::VaultReadResult {
+            operation_id,
+            release,
+        } => {
+            let result = services
+                .read_vault_result(caller, operation_id, release)
+                .map_err(service_error)?;
+            if result.operation_id != operation_id {
+                return Err(service_error(floe_app::ServiceError::Internal));
+            }
+            Ok(AppQueryResultDto::VaultOperation {
+                result: vault_result(result),
+            })
+        }
         AppQueryDto::ConversationGetCommand { command_id } => {
             let receipt = services
                 .read_conversation(caller, floe_app::ReadConversation::Command { command_id })
@@ -221,6 +720,231 @@ fn events_with_host<Services: floe_app::HostServices + floe_app::ConversationEve
             runtime_epoch,
             snapshot_cursor,
         },
+    })
+}
+
+fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultLifecycleResultDto {
+    floe_protocol::VaultLifecycleResultDto {
+        operation_id: result.operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &result.operation_id.to_string(),
+            )
+        }),
+    }
+}
+
+fn structural_error(error: floe_protocol::ErrorDto) -> AppWireErrorDto {
+    let mut metadata = error.metadata;
+    let domain_code = serde_json::to_value(error.code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned));
+    if let Some(code) = domain_code {
+        metadata.insert("owner_code".into(), code);
+    }
+    AppWireErrorDto {
+        code: match error.code {
+            floe_protocol::ErrorCodeDto::NotFound => AppWireErrorCodeDto::NotFound,
+            floe_protocol::ErrorCodeDto::Conflict => AppWireErrorCodeDto::Conflict,
+            floe_protocol::ErrorCodeDto::Storage => AppWireErrorCodeDto::Unavailable,
+            floe_protocol::ErrorCodeDto::Internal => AppWireErrorCodeDto::Internal,
+            _ => AppWireErrorCodeDto::Validation,
+        },
+        message: error.message,
+        field: error.field,
+        metadata,
+    }
+}
+
+fn day_error(error: floe_app::CoreError) -> AppWireErrorDto {
+    structural_error(crate::bridge::core_error(error))
+}
+
+fn session_result(
+    result: floe_app::ConversationSessionResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::ConversationSessionResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::ConversationSessionResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        session: result
+            .session
+            .as_ref()
+            .map(floe_protocol::wire::protocol_payload)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &operation_id.to_string(),
+            )
+        }),
+    })
+}
+
+fn expert_result(
+    result: floe_app::ExpertOperationResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::ExpertOperationResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::ExpertOperationResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        registry: result
+            .registry
+            .as_ref()
+            .map(floe_protocol::wire::protocol_payload)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        calendar_experts: result
+            .calendar_experts
+            .as_ref()
+            .map(floe_protocol::wire::protocol_payload)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &operation_id.to_string(),
+            )
+        }),
+    })
+}
+
+fn local_access_result(
+    result: floe_app::LocalAccessResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::LocalAccessResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::LocalAccessResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        calendar_experts: result
+            .calendar_experts
+            .as_ref()
+            .map(floe_protocol::wire::protocol_payload)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        calendar_subject_preview: result
+            .calendar_subject_preview
+            .map(crate::conversion::worker::subject_preview_dto),
+        personal_access: result
+            .personal_access
+            .map(crate::conversion::worker::personal_access_dto),
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &operation_id.to_string(),
+            )
+        }),
+    })
+}
+
+fn knowledge_result(
+    result: floe_app::KnowledgeOperationResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::KnowledgeOperationResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::KnowledgeOperationResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        memory: result
+            .memory
+            .map(crate::conversion::worker::memory_dto)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        memory_review: result
+            .memory_review
+            .map(crate::conversion::worker::memory_review_dto)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &operation_id.to_string(),
+            )
+        }),
+    })
+}
+
+fn connections_result(
+    result: floe_app::ConnectionsResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::ConnectionsResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::ConnectionsResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        connections: result
+            .connections
+            .as_ref()
+            .map(|connections| {
+                connections
+                    .iter()
+                    .map(floe_protocol::wire::protocol_payload)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &operation_id.to_string(),
+            )
+        }),
+    })
+}
+
+fn action_result(
+    result: floe_app::ActionOperationResult,
+    operation_id: uuid::Uuid,
+) -> AppWireResult<floe_protocol::ActionOperationResultDto> {
+    if result.operation_id != operation_id {
+        return Err(service_error(floe_app::ServiceError::Internal));
+    }
+    Ok(floe_protocol::ActionOperationResultDto {
+        operation_id,
+        done: result.done,
+        state: result.state.map(crate::conversion::worker::vault_state_dto),
+        calendar_actions: result
+            .calendar_actions
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        proposal: result.proposal.map(crate::conversion::worker::proposal_dto),
+        failure: result.failure.as_ref().map(|failure| {
+            crate::conversion::worker::failure_envelope(
+                failure,
+                &result.stage,
+                &operation_id.to_string(),
+            )
+        }),
     })
 }
 
@@ -495,6 +1219,322 @@ mod tests {
         receipt: Arc<Mutex<Option<RunReceipt>>>,
         event_read: Arc<Mutex<Option<EventRead>>>,
         failure: Arc<Mutex<Option<floe_app::ServiceError>>>,
+        vault_calls: Arc<Mutex<Vec<(Uuid, String, Uuid)>>>,
+        vault_result: Arc<Mutex<Option<floe_app::VaultLifecycleResult>>>,
+    }
+
+    impl Services {
+        fn vault_result_for(
+            &self,
+            caller: &floe_app::CallerContext,
+            operation_id: Uuid,
+        ) -> floe_app::VaultLifecycleResult {
+            self.vault_calls.lock().unwrap().push((
+                caller.person_id(),
+                caller.device_id().into(),
+                operation_id,
+            ));
+            self.vault_result
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(floe_app::VaultLifecycleResult {
+                    operation_id,
+                    stage: "status".into(),
+                    done: true,
+                    state: Some(floe_app::VaultState::Missing),
+                    failure: None,
+                })
+        }
+    }
+
+    impl floe_app::VaultLifecycleCommands for Services {
+        fn vault_command(
+            &self,
+            caller: &floe_app::CallerContext,
+            operation_id: Uuid,
+            _command: floe_app::VaultLifecycleCommand,
+        ) -> Result<floe_app::VaultLifecycleResult, floe_app::ServiceError> {
+            Ok(self.vault_result_for(caller, operation_id))
+        }
+    }
+
+    impl floe_app::ConversationSessionCommands for Services {
+        fn session_command(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _command: floe_app::ConversationSessionCommand,
+        ) -> Result<floe_app::ConversationSessionResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::ExpertCommands for Services {
+        fn expert_command(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _command: floe_app::ExpertCommand,
+        ) -> Result<floe_app::ExpertOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::LocalAccessCommands for Services {
+        fn local_access_command(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _command: floe_app::LocalAccessCommand,
+        ) -> Result<floe_app::LocalAccessResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::KnowledgeCommands for Services {
+        fn decide_memory(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _decision: floe_app::MemoryReviewDecision,
+        ) -> Result<floe_app::KnowledgeOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::DayCommands for Services {
+        fn mutate_day(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _request: floe_app::DayMutationRequest,
+        ) -> Result<floe_app::DayMutationResult, floe_app::CoreError> {
+            Err(floe_app::CoreError::new(
+                floe_app::ErrorCode::Storage,
+                "test service unavailable",
+            ))
+        }
+    }
+
+    impl floe_app::ActionCommands for Services {
+        fn action_command(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _command: floe_app::CalendarActionOperation,
+        ) -> Result<floe_app::ActionOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::LocalContextCommands for Services {
+        fn apply_local_context(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _command: floe_app::ContextCommand,
+        ) -> Result<floe_app::LocalContextOutcome, AgentFailure> {
+            Err(AgentFailure::CapabilityUnavailable)
+        }
+    }
+    impl floe_app::LocalContextQueries for Services {
+        fn query_local_context(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _query: floe_app::ContextQuery,
+        ) -> Result<floe_app::LocalContextOutcome, AgentFailure> {
+            Err(AgentFailure::CapabilityUnavailable)
+        }
+    }
+    impl floe_app::ActionQueries for Services {
+        fn inspect_actions(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _inspection: floe_app::ActionInspection,
+        ) -> Result<floe_app::ActionOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+        fn read_action_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::ActionOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+    impl floe_app::DayQueries for Services {
+        fn read_day(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _request: floe_app::DayRead,
+        ) -> Result<floe_app::DaySnapshot, floe_app::CoreError> {
+            Err(floe_app::CoreError::new(
+                floe_app::ErrorCode::Storage,
+                "test service unavailable",
+            ))
+        }
+    }
+    impl floe_app::KnowledgeQueries for Services {
+        fn inspect_knowledge(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _inspection: floe_app::KnowledgeInspection,
+        ) -> Result<floe_app::KnowledgeOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+        fn read_knowledge_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::KnowledgeOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+    impl floe_app::ConnectionsQueries for Services {
+        fn inspect_connections(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+        ) -> Result<floe_app::ConnectionsResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+        fn read_connections_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::ConnectionsResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::LocalAccessQueries for Services {
+        fn inspect_local_access(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _inspection: floe_app::LocalAccessInspection,
+        ) -> Result<floe_app::LocalAccessResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+        fn read_local_access_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::LocalAccessResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::ExpertQueries for Services {
+        fn inspect_experts(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _inspection: floe_app::ExpertInspection,
+        ) -> Result<floe_app::ExpertOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+        fn read_expert_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::ExpertOperationResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::ConversationSessionQueries for Services {
+        fn get_session(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _session_id: Uuid,
+        ) -> Result<floe_app::ConversationSessionResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+        fn read_session_result(
+            &self,
+            _caller: &floe_app::CallerContext,
+            _operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::ConversationSessionResult, floe_app::ServiceError> {
+            Err(floe_app::ServiceError::Unavailable)
+        }
+    }
+
+    impl floe_app::VaultLifecycleQueries for Services {
+        fn vault_status(
+            &self,
+            caller: &floe_app::CallerContext,
+            operation_id: Uuid,
+        ) -> Result<floe_app::VaultLifecycleResult, floe_app::ServiceError> {
+            Ok(self.vault_result_for(caller, operation_id))
+        }
+
+        fn read_vault_result(
+            &self,
+            caller: &floe_app::CallerContext,
+            operation_id: Uuid,
+            _release: bool,
+        ) -> Result<floe_app::VaultLifecycleResult, floe_app::ServiceError> {
+            Ok(self.vault_result_for(caller, operation_id))
+        }
+    }
+
+    #[test]
+    fn vault_services_admit_identity_and_reject_wrong_operation_results() {
+        let person_id = Uuid::new_v4();
+        let operation_id = Uuid::new_v4();
+        let services = Services::default();
+        let host = floe_app::AppHost::bootstrap_claim(
+            services.clone(),
+            floe_app::LocalIdentityClaim {
+                person_id,
+                device_id: "verified-device".into(),
+            },
+        )
+        .unwrap();
+        let command = || AppCommandRequestDto {
+            schema_version: 2,
+            request_id: Uuid::new_v4(),
+            command_id: operation_id,
+            command: AppCommandDto::VaultCreate {},
+        };
+        assert!(
+            matches!(command_with_host(&host, command()).unwrap(), AppCommandResultDto::VaultOperation { result } if result.operation_id == operation_id)
+        );
+        assert_eq!(
+            services.vault_calls.lock().unwrap().as_slice(),
+            &[(person_id, "verified-device".into(), operation_id)]
+        );
+        *services.vault_result.lock().unwrap() = Some(floe_app::VaultLifecycleResult {
+            operation_id: Uuid::new_v4(),
+            stage: "create".into(),
+            done: true,
+            state: Some(floe_app::VaultState::Ready),
+            failure: None,
+        });
+        assert!(command_with_host(&host, command()).is_err());
+        assert!(
+            query_with_host(
+                &host,
+                AppQueryRequestDto {
+                    schema_version: 2,
+                    request_id: Uuid::new_v4(),
+                    query: AppQueryDto::VaultReadResult {
+                        operation_id,
+                        release: true
+                    },
+                }
+            )
+            .is_err()
+        );
     }
 
     impl floe_app::ConversationQueries for Services {

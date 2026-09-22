@@ -30,7 +30,7 @@ pub const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
 pub const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
 
 /// What the Person is asking to change about one source.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PersonalAccessChange {
     /// Show what is granted now, and what subject the device answers for.
     Inspect,
@@ -54,7 +54,7 @@ pub struct PersonalAccessConfiguration {
 }
 
 /// What the Person is asking to change about their contacts.
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ContactsAccessChange {
     Inspect {
         selected_handles: Vec<String>,

@@ -41,6 +41,7 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 
 use crate::local_context::LocalContextHost;
+use crate::local_operations::{LocalOperationAdmission, LocalOperationIntent, LocalOperationOwner};
 use crate::{FloeCore, diagnostics};
 
 mod calendar_access;
@@ -48,6 +49,7 @@ mod conversation_turn;
 mod expert_setup;
 mod learner_worker;
 mod personal_grants;
+mod product_actions;
 mod remote_authority;
 mod remote_views;
 
@@ -124,6 +126,18 @@ impl VaultBridge {
     ) -> Result<WorkerResult, AgentFailure> {
         self.worker()?
             .remote_request(caller, operation_id, action, pairing, release)
+    }
+
+    pub(crate) fn local_request(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: Uuid,
+        intent: Option<LocalOperationIntent>,
+        owner: LocalOperationOwner,
+        release: bool,
+    ) -> Result<WorkerResult, AgentFailure> {
+        self.worker()?
+            .local_request(caller, operation_id, intent, owner, release)
     }
 
     pub(crate) fn conversation_query(
@@ -321,6 +335,7 @@ struct Job {
     id: Uuid,
     action: Box<WorkerAction>,
     command_identity: Option<CommandIdentity>,
+    local_admission: Option<LocalOperationAdmission>,
     cancellation: Cancellation,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
@@ -883,6 +898,43 @@ impl Worker {
         )
     }
 
+    fn local_request(
+        &self,
+        caller: &crate::CallerContext,
+        operation_id: Uuid,
+        intent: Option<LocalOperationIntent>,
+        owner: LocalOperationOwner,
+        release: bool,
+    ) -> Result<WorkerResult, AgentFailure> {
+        if operation_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if let Some(intent) = intent {
+            if intent.owner() != owner {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let action = Box::new(intent.action(caller));
+            self.submit_admitted_job(
+                PersonId(caller.person_id()),
+                operation_id,
+                action,
+                Some(LocalOperationAdmission {
+                    caller: caller.clone(),
+                    intent,
+                }),
+            )?;
+        }
+        self.poll_admitted_job(
+            PersonId(caller.person_id()),
+            operation_id,
+            0,
+            false,
+            release,
+            None,
+            Some((caller, owner)),
+        )
+    }
+
     /// Read how far one job got, after any stop or release the caller asked for.
     fn poll_job(
         &self,
@@ -893,10 +945,30 @@ impl Worker {
         release: bool,
         remote: Option<(&crate::CallerContext, bool)>,
     ) -> Result<WorkerResult, AgentFailure> {
+        self.poll_admitted_job(person, id, after_sequence, stop, release, remote, None)
+    }
+
+    fn poll_admitted_job(
+        &self,
+        person: PersonId,
+        id: Uuid,
+        after_sequence: usize,
+        stop: bool,
+        release: bool,
+        remote: Option<(&crate::CallerContext, bool)>,
+        local: Option<(&crate::CallerContext, LocalOperationOwner)>,
+    ) -> Result<WorkerResult, AgentFailure> {
         let jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         let job = jobs.get(&id).cloned().ok_or(AgentFailure::NotFound)?;
         if job.person != person {
             return Err(AgentFailure::NotFound);
+        }
+        match (&job.local_admission, local) {
+            (Some(admission), Some((caller, owner)))
+                if admission.caller == *caller && admission.intent.owner() == owner && !stop => {}
+            (None, None) => {}
+            (Some(_), None) => return Err(AgentFailure::PolicyDenied),
+            _ => return Err(AgentFailure::NotFound),
         }
         match remote {
             Some((caller, pairing))
@@ -1006,6 +1078,22 @@ impl Worker {
         id: Uuid,
         action: Box<WorkerAction>,
     ) -> Result<Arc<Job>, AgentFailure> {
+        self.submit_admitted_job(person, id, action, None)
+    }
+
+    fn submit_admitted_job(
+        &self,
+        person: PersonId,
+        id: Uuid,
+        action: Box<WorkerAction>,
+        local_admission: Option<LocalOperationAdmission>,
+    ) -> Result<Arc<Job>, AgentFailure> {
+        if local_admission
+            .as_ref()
+            .is_some_and(|admission| admission.caller.person_id() != person.0)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         if action
             .remote_caller()
             .is_some_and(|caller| caller.person_id() != person.0)
@@ -1016,6 +1104,9 @@ impl Worker {
         if let Some(job) = jobs.get(&id) {
             if job.person != person {
                 return Err(AgentFailure::NotFound);
+            }
+            if job.local_admission != local_admission {
+                return Err(AgentFailure::Conflict);
             }
             // One request id means one command; a second one under the same id
             // is a different request, whatever it asks for.
@@ -1086,6 +1177,7 @@ impl Worker {
             id,
             action,
             command_identity,
+            local_admission,
             cancellation: Cancellation::default(),
             run_cancellations: Arc::clone(&self.run_cancellations),
             admission: Mutex::new(None),
@@ -1680,10 +1772,9 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             })
         }
         WorkerAction::CalendarAction { operation } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let result = execute_agent_calendar_action(
+            let result = product_actions::execute(
                 core,
-                vault,
+                current.as_ref().map(|(_, vault)| vault.vault.as_ref()),
                 job.person,
                 operation,
                 &job.cancellation,
@@ -1691,7 +1782,11 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             .await?;
             Ok(VaultExecutionResult {
                 calendar_actions: Some(result),
-                ..VaultExecutionResult::ready()
+                ..VaultExecutionResult::new(if current.is_some() {
+                    VaultState::Ready
+                } else {
+                    stored_vault_state(root, job.person)
+                })
             })
         }
         WorkerAction::ConversationSession { operation } => {
@@ -2616,6 +2711,7 @@ mod tests {
     mod expert_actions;
     pub(in crate::vault_host) mod expert_evidence;
     mod learner_worker;
+    mod local_product;
     mod memory_review;
     mod proposals;
     mod remote_product;

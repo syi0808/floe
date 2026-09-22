@@ -176,7 +176,7 @@ fn continuation_mode(
 }
 
 #[cfg(unix)]
-fn service_failure(failure: floe_kernel::AgentFailure) -> crate::ServiceError {
+pub(crate) fn service_failure(failure: floe_kernel::AgentFailure) -> crate::ServiceError {
     use crate::ServiceError;
     use floe_kernel::AgentFailure;
 

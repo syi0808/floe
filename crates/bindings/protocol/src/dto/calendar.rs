@@ -35,6 +35,7 @@ pub enum CalendarFailureDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarRangeDto {
     pub start_date: NaiveDate,
     pub end_date_exclusive: NaiveDate,
@@ -43,6 +44,7 @@ pub struct CalendarRangeDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarSelectionDto {
     pub calendar_id: String,
     pub calendar_name: String,

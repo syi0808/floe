@@ -7,7 +7,9 @@
 mod abi;
 mod app_wire;
 mod bridge;
+mod context_wire;
 pub mod conversion;
+mod day_wire;
 mod diagnostics;
 mod remote_wire;
 

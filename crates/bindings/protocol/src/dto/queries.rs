@@ -26,6 +26,62 @@ impl AppQueryRequestDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppQueryDto {
+    #[serde(rename = "context.read")]
+    ContextRead { query: super::ContextQueryDto },
+    #[serde(rename = "actions.capabilities")]
+    ActionsCapabilities {},
+    #[serde(rename = "actions.authority")]
+    ActionsAuthority {},
+    #[serde(rename = "actions.list")]
+    ActionsList {},
+    #[serde(rename = "actions.get")]
+    ActionsGet { action_id: Uuid },
+    #[serde(rename = "actions.proposal.inspect")]
+    ActionsProposalInspect {
+        session_id: Uuid,
+        invocation_id: Uuid,
+    },
+    #[serde(rename = "actions.read_result")]
+    ActionsReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "day.snapshot")]
+    DaySnapshot { day: super::DayQueryDto },
+    #[serde(rename = "knowledge.memory.overview")]
+    KnowledgeMemoryOverview {},
+    #[serde(rename = "knowledge.memory.review")]
+    KnowledgeMemoryReview {},
+    #[serde(rename = "knowledge.read_result")]
+    KnowledgeReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "connections.overview")]
+    ConnectionsOverview {},
+    #[serde(rename = "connections.read_result")]
+    ConnectionsReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "access.calendar.preview")]
+    AccessCalendarPreview {
+        request: super::CalendarSubjectIntentDto,
+    },
+    #[serde(rename = "access.personal.inspect")]
+    AccessPersonalInspect { connector: String },
+    #[serde(rename = "access.contacts.inspect")]
+    AccessContactsInspect {
+        connector: String,
+        selected_handles: Vec<String>,
+    },
+    #[serde(rename = "access.local.read_result")]
+    AccessLocalReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "experts.registry.inspect")]
+    ExpertsRegistryInspect {},
+    #[serde(rename = "experts.calendar.inspect")]
+    ExpertsCalendarInspect {},
+    #[serde(rename = "experts.read_result")]
+    ExpertsReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "conversation.session.get")]
+    ConversationSessionGet { session_id: Uuid },
+    #[serde(rename = "conversation.session.read_result")]
+    ConversationSessionReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "vault.status")]
+    VaultStatus {},
+    #[serde(rename = "vault.read_result")]
+    VaultReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "conversation.get_command")]
     ConversationGetCommand { command_id: Uuid },
     #[serde(rename = "conversation.get_run")]
@@ -37,6 +93,60 @@ pub enum AppQueryDto {
 impl AppQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
         let (field, id) = match self {
+            Self::ContextRead { .. } => return Ok(()),
+            Self::ActionsCapabilities {} | Self::ActionsAuthority {} | Self::ActionsList {} => {
+                return Ok(());
+            }
+            Self::ActionsGet { action_id } => ("query.action_id", action_id),
+            Self::ActionsReadResult { operation_id, .. } => ("query.operation_id", operation_id),
+            Self::ActionsProposalInspect {
+                session_id,
+                invocation_id,
+            } => {
+                if session_id.is_nil() {
+                    return Err("query.session_id");
+                }
+                ("query.invocation_id", invocation_id)
+            }
+            Self::DaySnapshot { .. } => return Ok(()),
+            Self::KnowledgeMemoryOverview {}
+            | Self::KnowledgeMemoryReview {}
+            | Self::ConnectionsOverview {} => return Ok(()),
+            Self::KnowledgeReadResult { operation_id, .. }
+            | Self::ConnectionsReadResult { operation_id, .. } => {
+                ("query.operation_id", operation_id)
+            }
+            Self::AccessCalendarPreview { request } => return request.validate(),
+            Self::AccessPersonalInspect { connector } => {
+                return if super::local_access::identifier(connector) {
+                    Ok(())
+                } else {
+                    Err("query.connector")
+                };
+            }
+            Self::AccessContactsInspect {
+                connector,
+                selected_handles,
+            } => {
+                return if super::local_access::identifier(connector)
+                    && super::local_access::identifiers(selected_handles, 64)
+                {
+                    Ok(())
+                } else {
+                    Err("query.selection")
+                };
+            }
+            Self::AccessLocalReadResult { operation_id, .. } => {
+                ("query.operation_id", operation_id)
+            }
+            Self::ExpertsRegistryInspect {} | Self::ExpertsCalendarInspect {} => return Ok(()),
+            Self::ExpertsReadResult { operation_id, .. } => ("query.operation_id", operation_id),
+            Self::ConversationSessionGet { session_id } => ("query.session_id", session_id),
+            Self::ConversationSessionReadResult { operation_id, .. } => {
+                ("query.operation_id", operation_id)
+            }
+            Self::VaultStatus {} => return Ok(()),
+            Self::VaultReadResult { operation_id, .. } => ("query.operation_id", operation_id),
             Self::ConversationGetCommand { command_id } => ("query.command_id", command_id),
             Self::ConversationGetRun { run_id } => ("query.run_id", run_id),
             Self::ConversationGetMessage { message_id } => ("query.message_id", message_id),
@@ -45,9 +155,43 @@ impl AppQueryDto {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppQueryResultDto {
+    ContextRead {
+        context: super::LocalContextResultDto,
+    },
+    ActionOperation {
+        #[serde(flatten)]
+        result: super::ActionOperationResultDto,
+    },
+    DaySnapshot {
+        snapshot: super::DaySnapshotDto,
+    },
+    KnowledgeOperation {
+        #[serde(flatten)]
+        result: super::KnowledgeOperationResultDto,
+    },
+    ConnectionsOperation {
+        #[serde(flatten)]
+        result: super::ConnectionsResultDto,
+    },
+    LocalAccessOperation {
+        #[serde(flatten)]
+        result: super::LocalAccessResultDto,
+    },
+    ExpertOperation {
+        #[serde(flatten)]
+        result: super::ExpertOperationResultDto,
+    },
+    ConversationSessionOperation {
+        #[serde(flatten)]
+        result: super::ConversationSessionResultDto,
+    },
+    VaultOperation {
+        #[serde(flatten)]
+        result: super::VaultLifecycleResultDto,
+    },
     CommandReceipt {
         #[serde(flatten)]
         receipt: AppCommandReceiptDto,

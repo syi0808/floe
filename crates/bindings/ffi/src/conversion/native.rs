@@ -39,7 +39,7 @@ const ALLOWED_VIEW_IDS: [&str; 5] = [
     "calendar.timeline",
 ];
 
-fn now_unix_ms() -> WireResult<i64> {
+pub(crate) fn now_unix_ms() -> WireResult<i64> {
     i64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -49,7 +49,7 @@ fn now_unix_ms() -> WireResult<i64> {
     .map_err(|_| invalid("now", "system clock is out of range"))
 }
 
-fn validate_handle(value: &str, field: &'static str) -> WireResult<()> {
+pub(crate) fn validate_handle(value: &str, field: &'static str) -> WireResult<()> {
     if !value.trim().is_empty() && value.len() <= 128 {
         Ok(())
     } else {
@@ -57,14 +57,14 @@ fn validate_handle(value: &str, field: &'static str) -> WireResult<()> {
     }
 }
 
-fn validate_host_epoch(value: &str) -> WireResult<()> {
+pub(crate) fn validate_host_epoch(value: &str) -> WireResult<()> {
     if value.trim().is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
         return Err(invalid("operation.host_epoch", "invalid host epoch"));
     }
     Ok(())
 }
 
-fn validate_view_id(view_id: &str) -> WireResult<()> {
+pub(crate) fn validate_view_id(view_id: &str) -> WireResult<()> {
     if ALLOWED_VIEW_IDS.contains(&view_id) {
         Ok(())
     } else {
@@ -75,7 +75,7 @@ fn validate_view_id(view_id: &str) -> WireResult<()> {
     }
 }
 
-fn validate_fingerprint(value: &str, field: &'static str) -> WireResult<()> {
+pub(crate) fn validate_fingerprint(value: &str, field: &'static str) -> WireResult<()> {
     if valid_native_subject_fingerprint(value) {
         Ok(())
     } else {
@@ -83,7 +83,7 @@ fn validate_fingerprint(value: &str, field: &'static str) -> WireResult<()> {
     }
 }
 
-fn parse_request_id(value: &str, field: &'static str) -> WireResult<Uuid> {
+pub(crate) fn parse_request_id(value: &str, field: &'static str) -> WireResult<Uuid> {
     validate_handle(value, field)?;
     Uuid::parse_str(value).map_err(|_| invalid(field, "must be a UUID"))
 }
@@ -103,7 +103,7 @@ pub fn calendar_provider_dto(value: CalendarProvider) -> CalendarProviderDto {
     super::day::calendar_provider_to_dto(value)
 }
 
-fn calendar_source_failure(value: CalendarFailureDto) -> CalendarSourceFailure {
+pub(crate) fn calendar_source_failure(value: CalendarFailureDto) -> CalendarSourceFailure {
     match value {
         CalendarFailureDto::PermissionDenied => CalendarSourceFailure::PermissionDenied,
         CalendarFailureDto::CalendarUnavailable => CalendarSourceFailure::CalendarUnavailable,
@@ -169,7 +169,7 @@ fn native_schedule_dto(value: NativeEventSchedule) -> EventScheduleDto {
     }
 }
 
-fn native_batch(value: CalendarBatchDto) -> NativeCalendarBatch {
+pub(crate) fn native_batch(value: CalendarBatchDto) -> NativeCalendarBatch {
     NativeCalendarBatch {
         calendar_id: value.calendar_id,
         records: value
@@ -207,7 +207,7 @@ fn native_batch_dto(value: NativeCalendarBatch) -> CalendarBatchDto {
     }
 }
 
-fn acquisition_mode(value: LocalContextAcquisitionModeDto) -> CalendarAcquisitionMode {
+pub(crate) fn acquisition_mode(value: LocalContextAcquisitionModeDto) -> CalendarAcquisitionMode {
     match value {
         LocalContextAcquisitionModeDto::InspectSubject => CalendarAcquisitionMode::InspectSubject,
         LocalContextAcquisitionModeDto::ReadEvents => CalendarAcquisitionMode::ReadEvents,
@@ -221,7 +221,9 @@ fn acquisition_mode_dto(value: CalendarAcquisitionMode) -> LocalContextAcquisiti
     }
 }
 
-fn attention_mode(value: LocalContextAttentionAcquisitionModeDto) -> AttentionAcquisitionMode {
+pub(crate) fn attention_mode(
+    value: LocalContextAttentionAcquisitionModeDto,
+) -> AttentionAcquisitionMode {
     match value {
         LocalContextAttentionAcquisitionModeDto::InspectSubject => {
             AttentionAcquisitionMode::InspectSubject
@@ -243,7 +245,7 @@ fn attention_mode_dto(value: AttentionAcquisitionMode) -> LocalContextAttentionA
     }
 }
 
-fn personal_domain(value: LocalContextPersonalDomainDto) -> PersonalDomain {
+pub(crate) fn personal_domain(value: LocalContextPersonalDomainDto) -> PersonalDomain {
     match value {
         LocalContextPersonalDomainDto::People => PersonalDomain::People,
         LocalContextPersonalDomainDto::Wellbeing => PersonalDomain::Wellbeing,

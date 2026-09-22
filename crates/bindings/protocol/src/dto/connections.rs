@@ -1,4 +1,13 @@
 use serde::{Deserialize, Serialize};
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionsResultDto {
+    pub operation_id: uuid::Uuid,
+    pub done: bool,
+    pub state: Option<super::AgentVaultStateDto>,
+    pub connections: Option<Vec<super::ConnectorSnapshotDto>>,
+    pub failure: Option<super::AgentVaultFailureDto>,
+}
 use uuid::Uuid;
 
 use super::{

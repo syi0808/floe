@@ -6,6 +6,7 @@ use super::calendar::{
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DayQueryDto {
     pub date: String,
     pub timezone_offset_seconds: i32,
@@ -56,7 +57,7 @@ pub struct EventDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EventScheduleDto {
     Timed {
         starts_at: String,
@@ -144,7 +145,7 @@ pub enum CaptureProcessingDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DomainRefDto {
     Event { id: String },
     Task { id: String },
@@ -160,6 +161,7 @@ pub struct CommandRequestDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarRecordDto {
     pub can_modify: bool,
     pub calendar_id: String,
@@ -170,6 +172,7 @@ pub struct CalendarRecordDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarBatchDto {
     pub calendar_id: String,
     pub records: Vec<CalendarRecordDto>,
@@ -270,7 +273,7 @@ pub enum CommandDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClassificationDto {
     Event {
         title: String,
