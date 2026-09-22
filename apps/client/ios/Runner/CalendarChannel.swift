@@ -5,6 +5,10 @@ import UIKit
 
 @MainActor
 final class CalendarChannel {
+  private struct AcquisitionFailure: Error {
+    let code: String
+  }
+
   private static let channelName = "floe/calendar"
   private static let provider = "event_kit"
 
@@ -95,8 +99,8 @@ final class CalendarChannel {
     case "readAcquisition":
       do {
         result(try readAcquisition(arguments))
-      } catch let error as FlutterError {
-        result(error)
+      } catch let error as AcquisitionFailure {
+        result(failure(error.code))
       } catch {
         result(failure("provider_unavailable"))
       }
@@ -128,25 +132,25 @@ final class CalendarChannel {
           calendarIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }),
           start >= 0, end > start, end - start <= 32 * 86_400_000,
           deadline > Self.unixMilliseconds(), deadline - Self.unixMilliseconds() <= 30_000
-    else { throw failure("invalid_input") }
-    guard bindDeviceID(arguments) == deviceID else { throw failure("stale_context") }
+    else { throw AcquisitionFailure(code: "invalid_input") }
+    guard bindDeviceID(arguments) == deviceID else { throw AcquisitionFailure(code: "stale_context") }
 
     let evidenceBefore = subjectEvidence(calendarIDs: calendarIDs)
     guard evidenceBefore.availableCalendarIDs.count <= 128 else {
-      throw failure("provider_unavailable")
+      throw AcquisitionFailure(code: "provider_unavailable")
     }
     guard calendarIDs.allSatisfy(evidenceBefore.availableCalendarIDs.contains) else {
-      throw failure("calendar_unavailable")
+      throw AcquisitionFailure(code: "calendar_unavailable")
     }
     if mode == "read_events" {
       guard canRead,
             let expected = arguments["expected_native_subject_fingerprint"] as? String,
             expected == evidenceBefore.fingerprint
-      else { throw failure("permission_denied") }
+      else { throw AcquisitionFailure(code: "permission_denied") }
     } else if arguments["expected_native_subject_fingerprint"] != nil {
-      throw failure("invalid_input")
+      throw AcquisitionFailure(code: "invalid_input")
     }
-    guard deadline > Self.unixMilliseconds() else { throw failure("deadline_exceeded") }
+    guard deadline > Self.unixMilliseconds() else { throw AcquisitionFailure(code: "deadline_exceeded") }
 
     var batches: [[String: Any]] = []
     if mode == "read_events" {
@@ -154,13 +158,13 @@ final class CalendarChannel {
       let endDate = Date(timeIntervalSince1970: TimeInterval(end) / 1000)
       var total = 0
       for calendarID in calendarIDs {
-        guard deadline > Self.unixMilliseconds() else { throw failure("deadline_exceeded") }
+        guard deadline > Self.unixMilliseconds() else { throw AcquisitionFailure(code: "deadline_exceeded") }
         guard let calendar = store.calendar(withIdentifier: calendarID) else {
-          throw failure("calendar_unavailable")
+          throw AcquisitionFailure(code: "calendar_unavailable")
         }
         let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: [calendar])
         let events = store.events(matching: predicate)
-        guard events.count <= 128 - total else { throw failure("provider_unavailable") }
+        guard events.count <= 128 - total else { throw AcquisitionFailure(code: "provider_unavailable") }
         var records: [[String: Any]] = []
         for event in events {
           total += 1
@@ -170,7 +174,7 @@ final class CalendarChannel {
             "records": records,
             "failure": NSNull(),
           ]], options: [.sortedKeys])
-          guard encoded.count <= 65_536 else { throw failure("provider_unavailable") }
+          guard encoded.count <= 65_536 else { throw AcquisitionFailure(code: "provider_unavailable") }
         }
         batches.append([
           "calendar_id": calendarID,
@@ -182,7 +186,7 @@ final class CalendarChannel {
     let evidenceAfter = subjectEvidence(calendarIDs: calendarIDs)
     guard evidenceAfter.fingerprint == evidenceBefore.fingerprint,
           deadline > Self.unixMilliseconds()
-    else { throw failure("stale_context") }
+    else { throw AcquisitionFailure(code: "stale_context") }
     let response: [String: Any] = [
       "request_id": requestID,
       "host_epoch": hostEpoch,
@@ -203,7 +207,7 @@ final class CalendarChannel {
     ]
     guard JSONSerialization.isValidJSONObject(response),
           (try JSONSerialization.data(withJSONObject: response)).count <= 65_536
-    else { throw failure("provider_unavailable") }
+    else { throw AcquisitionFailure(code: "provider_unavailable") }
     return response
   }
 
@@ -237,7 +241,7 @@ final class CalendarChannel {
           externalID.utf8.count <= 512,
           externalRevision.utf8.count <= 512,
           title.utf8.count <= 4_096
-    else { throw failure("provider_unavailable") }
+    else { throw AcquisitionFailure(code: "provider_unavailable") }
     return [
       "calendar_id": event.calendar.calendarIdentifier,
       "external_id": externalID,
