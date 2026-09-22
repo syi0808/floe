@@ -6,6 +6,12 @@ the actual built EventKit adapter, then replaces a successful create response wi
 `iCloud · Floe Validation`. It does not approve anything or retry a create.
 Rust and Flutter must recover the original execution marker by lookup.
 
+Use whole-second proposal start/end times. EventKit discards subsecond event
+times; the production adapter rejects nonrepresentable write precision before
+permission/preflight/create rather than writing an event that cannot match its
+durable intent. Lookup still requires the exact marker/payload; no widened
+matching tolerance or blind retry is permitted.
+
 Do not ship this shim. Normal builds include the guarded Calendar executor; obtain operator
 authorization for the dedicated calendar, disposable event and cleanup first.
 Never change TCC grants, existing calendars, or unrelated events to make a test pass.

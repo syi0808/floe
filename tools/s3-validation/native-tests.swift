@@ -11,6 +11,27 @@ let raw: [String: Any] = [
   "schedule": ["starts_at": "2026-03-08T07:00:00Z", "ends_at": "2026-03-08T08:00:00Z", "timezone": "America/New_York"]
 ]
 let proposal = try Proposal(raw)
+try proposal.requireWritablePrecision()
+for field in ["starts_at", "ends_at"] {
+  var fractional = raw
+  var schedule = raw["schedule"] as! [String: Any]
+  schedule[field] = field == "starts_at" ? "2026-03-08T07:00:00.500Z" : "2026-03-08T08:00:00.500Z"
+  fractional["schedule"] = schedule
+  let fractionalProposal = try Proposal(fractional)
+  do {
+    try fractionalProposal.requireWritablePrecision()
+    fatalError("EventKit subsecond write accepted")
+  } catch {}
+  for operation in ["preflight", "create"] {
+    let request: [String: Any] = ["operation": operation, "action": fractional,
+      "deadline": ISO8601DateFormatter().string(from: Date().addingTimeInterval(10))]
+    let input = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+    let output = input.withCString { floeEventKitAction($0) }!
+    let result = try JSONSerialization.jsonObject(with: Data(String(cString: output).utf8)) as! [String: Any]
+    floeEventKitFree(output)
+    check(result["error"] as? String == "provider_unavailable", "subsecond write reached Calendar")
+  }
+}
 check(proposal.end.timeIntervalSince(proposal.start) == 3600, "UTC interval changed across DST")
 check(proposal.marker.absoluteString.contains(proposal.execution), "missing execution marker")
 var fixedOffset = raw
@@ -101,4 +122,4 @@ do {
   }, contains: { _ in true }, generation: { "stable" }, subjectFingerprint: { String(repeating: "a", count: 64) })
   fatalError("permission withdrawal during inventory lookup was ignored")
 } catch { check(laterPermissions == 2, "permission was not rechecked") }
-print("25 native validation assertions passed; no OS permission or event access invoked")
+print("32 native validation assertions passed; no OS permission or event access invoked")

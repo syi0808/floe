@@ -274,6 +274,7 @@ fn native_executor_uses_rust_ledger_and_lookup_only_after_response_loss() {
 #[test]
 #[ignore = "requires explicit authorization, copied debug app and real EventKit response-loss shim"]
 fn authorized_eventkit_response_loss_recovers_exact_disposable_event() {
+    use chrono::Timelike;
     assert_eq!(
         std::env::var("FLOE_EVENTKIT_VALIDATION_AUTHORIZATION").as_deref(),
         Ok("iCloud · Floe Validation/Floe S3 — disposable/create-recover-cleanup")
@@ -306,7 +307,7 @@ fn authorized_eventkit_response_loss_recovers_exact_disposable_event() {
             crate::CalendarScope::Selected,
         ))
         .unwrap();
-    let now = chrono::Utc::now();
+    let now = chrono::Utc::now().with_nanosecond(0).unwrap();
     let result = host
         .action(CalendarActionOperation::Propose(Box::new(
             crate::CalendarActionProposal {

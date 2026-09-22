@@ -110,6 +110,13 @@ struct Proposal {
       !event.hasAttendees && (original != nil || !event.hasAlarms)
   }
 
+  func requireWritablePrecision() throws {
+    guard start.timeIntervalSince1970.rounded(.towardZero) == start.timeIntervalSince1970,
+          end.timeIntervalSince1970.rounded(.towardZero) == end.timeIntervalSince1970 else {
+      throw NativeFailure("provider_unavailable")
+    }
+  }
+
   func existing(_ store: EKEventStore) throws -> EKEvent? {
     guard let original = original else { return nil }
     guard let externalID = externalID, externalID.hasSuffix("|"),
@@ -379,6 +386,9 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   let proposal = try Proposal(raw)
   let deadline = try timestamp(request["deadline"])
   guard Date() < deadline else { throw NativeFailure("timeout") }
+  if operation == "preflight" || operation == "create" {
+    try proposal.requireWritablePrecision()
+  }
   try requirePermission()
   let store = EKEventStore()
   guard let target = store.calendar(withIdentifier: proposal.calendarID) else { throw NativeFailure("provider_unavailable") }
