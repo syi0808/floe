@@ -127,6 +127,17 @@ fn admitted_sessions_and_management_reads_share_canonical_owners_not_fixture_ses
 }
 
 #[test]
+fn terminal_session_reads_can_overlap_the_finishing_turn_job() {
+    let caller = remote_caller(PersonId::new(), "verified-device");
+    let get = LocalOperationIntent::ConversationSession(ConversationSessionOperation::Get {
+        session_id: Uuid::new_v4(),
+    });
+    let start = LocalOperationIntent::ConversationSession(ConversationSessionOperation::Start);
+    assert!(get.action(&caller).is_concurrent_host());
+    assert!(!start.action(&caller).is_concurrent_host());
+}
+
+#[test]
 fn local_expert_and_access_intents_inject_only_the_admitted_device() {
     let caller = remote_caller(PersonId::new(), "verified-device");
     let setup = crate::CalendarExpertInstall {

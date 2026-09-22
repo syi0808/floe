@@ -252,6 +252,9 @@ impl WorkerAction {
                 | Self::ContactsAccess { .. }
                 | Self::CalendarSubjectPreview { .. }
                 | Self::ConversationTurn { .. }
+                | Self::ConversationSession {
+                    operation: ConversationSessionOperation::Get { .. },
+                }
                 | Self::InspectProposal { .. }
                 | Self::MemoryReview { .. }
                 | Self::Memory

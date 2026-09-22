@@ -25,7 +25,7 @@ void main() {
     await Directory('$bundle/Contents/MacOS').create(recursive: true);
     await Directory(frameworks).create();
     await File(Platform.resolvedExecutable).copy(executable);
-    await File('../../tools/validation/local-model-smoke-Info.plist')
+    await File('../../tools/validation/product-conversation-Info.plist')
         .copy('$bundle/Contents/Info.plist');
 
     Future<void> checked(String command, List<String> arguments) async {
