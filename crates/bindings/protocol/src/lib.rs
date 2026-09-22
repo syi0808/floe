@@ -5,8 +5,6 @@ pub mod wire;
 pub use dto::{
     APP_WIRE_VERSION, ActionAuthorityModeDto, ActionOperationResultDto, AgentEventDto,
     AgentFailureCategory, AgentFailureDomain, AgentFailureDto, AgentFailureSafeAction,
-    AgentFixtureOperationDto, AgentFixturePromptDto, AgentFixtureRequestDto, AgentFixtureResultDto,
-    AgentFixtureRunDto, AgentFixtureRunOperationDto, AgentFixtureRunRequestDto,
     AgentMemoryOriginDto, AgentMemoryOverviewDto, AgentMemoryReviewDecisionKindDto,
     AgentMemoryReviewOverviewDto, AgentMemorySummaryDto, AgentProposalActionDto,
     AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy, AgentSessionDto,

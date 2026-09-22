@@ -3,8 +3,6 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
-import '../../support/agent_fixture_gateway.dart';
-
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -87,7 +85,7 @@ void main() {
       );
       expect(find.byTooltip('Reload conversation'), findsOneWidget);
       gateway.failLoad = false;
-      await gateway.startAgentFixture('test');
+      await gateway.startConversation('test');
       gateway.saved!['active_turn'] = 'interrupted';
       await tester.tap(find.byTooltip('Reload conversation'));
       await tester.pumpAndSettle();
@@ -159,7 +157,7 @@ void main() {
       final controller = AgentController(gateway: gateway, personId: 'test');
       addTearDown(controller.dispose);
       await controller.load();
-      final run = controller.sendText(AgentFixturePrompt.today.sampleText);
+      final run = controller.sendText('Show today’s briefing.');
       await tester.pump(const Duration(milliseconds: 100));
       await run;
       await tester.pumpWidget(
@@ -179,7 +177,7 @@ void main() {
     final controller = AgentController(gateway: gateway, personId: 'test');
     addTearDown(controller.dispose);
     await controller.load();
-    final run = controller.sendText(AgentFixturePrompt.today.sampleText);
+    final run = controller.sendText('Show today’s briefing.');
     await tester.pump(const Duration(milliseconds: 100));
     await run;
 

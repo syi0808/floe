@@ -8,7 +8,7 @@ import 'dart:convert';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/experts/domain/agent_expert_result.dart';
 
-import '../../support/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';

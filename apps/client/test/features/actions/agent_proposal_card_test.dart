@@ -1,7 +1,7 @@
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
-import '../../support/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';

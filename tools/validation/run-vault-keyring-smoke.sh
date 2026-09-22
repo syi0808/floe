@@ -8,7 +8,7 @@ case "${1:-}" in
   *) printf '%s\n' 'Use --probe, --exercise, or --cleanup <retained temporary root> <Person UUID>.' >&2; exit 2 ;;
 esac
 
-CARGO_INCREMENTAL=0 cargo build -p floe-core --example vault_keyring_smoke
+CARGO_INCREMENTAL=0 cargo build -p floe-app --example vault_keyring_smoke
 bundle="$PWD/target/validation/FloeVaultSmoke.app"
 mkdir -p "$bundle/Contents/MacOS"
 cp target/debug/examples/vault_keyring_smoke "$bundle/Contents/MacOS/FloeVaultSmoke"

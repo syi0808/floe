@@ -10,8 +10,6 @@ extern "C" {
 typedef struct FloeHandle FloeHandle;
 
 FloeHandle *floe_core_open(const char *database_path, char **error_json_out);
-char *floe_core_agent_fixture(FloeHandle *handle, const char *request_json);
-char *floe_core_agent_fixture_run(FloeHandle *handle, const char *request_json);
 char *floe_core_command_v2(FloeHandle *handle, const char *request_json);
 char *floe_core_query_v2(FloeHandle *handle, const char *request_json);
 char *floe_core_events_v2(FloeHandle *handle, const char *request_json);

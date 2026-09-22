@@ -58,10 +58,6 @@ impl<Services: HostServices> AppHost<Services> {
         })
     }
 
-    pub fn legacy_services(&self) -> &Services {
-        &self.services
-    }
-
     pub fn shutdown(&self) -> Result<(), HostError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| HostError::Shutdown)?;
         match lifecycle.state {

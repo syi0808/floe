@@ -8,11 +8,9 @@ use std::{
 
 use tokio::{sync::Notify, time::Instant};
 
+use super::schedule_host::TestScheduleHost;
 use super::*;
-use crate::agent_fixture::FixtureCapabilities;
-use crate::{AgentFixturePrompt, AgentFixtureTurn, recover_agent_sample};
 use floe_agent_contract::SessionProtection;
-use floe_conversation::AgentEventKind;
 use floe_conversation::AgentMessage;
 use floe_conversation::AgentOutcome;
 use floe_conversation::AgentSessionScope;
@@ -41,14 +39,12 @@ mod calendar_setup;
 #[tokio::test]
 async fn expert_atomic_commit_cannot_rebind_an_existing_conversation() {
     let fixture = Fixture::new().await;
-    let mut session = fixture.vault.create_sample_session().await.unwrap();
-    let seeded = FixtureCapabilities::new_with_instance(
-        fixture.person,
-        fixture.vault.registry_instance_id(),
-    )
-    .unwrap()
-    .snapshot()
-    .unwrap();
+    let mut session = fixture.vault.create_session().await.unwrap();
+    let seeded =
+        TestScheduleHost::new_with_instance(fixture.person, fixture.vault.registry_instance_id())
+            .unwrap()
+            .snapshot()
+            .unwrap();
     fixture
         .vault
         .initialize_expert_registry(&seeded)
@@ -56,7 +52,7 @@ async fn expert_atomic_commit_cannot_rebind_an_existing_conversation() {
         .unwrap();
     session.scope = Some(AgentSessionScope::Calendar {
         setup_id: Uuid::new_v4(),
-        provider: floe_agent_contract::CalendarProvider::Fixture,
+        provider: floe_agent_contract::CalendarProvider::EventKit,
     });
     session.revision = 1;
     assert_eq!(
@@ -415,7 +411,7 @@ impl Fixture {
 
     async fn prepare(&self) -> RegistrySnapshot {
         let capabilities =
-            FixtureCapabilities::new_with_instance(self.person, self.vault.registry_instance_id())
+            TestScheduleHost::new_with_instance(self.person, self.vault.registry_instance_id())
                 .unwrap();
         let snapshot = capabilities.snapshot().unwrap();
         self.vault
@@ -426,7 +422,8 @@ impl Fixture {
     }
 
     async fn stage(&self, call_id: Uuid) -> (AgentSession, AgentSession, RegistrySnapshot) {
-        let mut previous = self.vault.create_sample_session().await.unwrap();
+        let mut previous = self.vault.create_session().await.unwrap();
+        previous.data_classes.push(floe_agent_contract::DataClass::Synthetic);
         let turn_id = Uuid::new_v4();
         previous.active_turn = Some(turn_id);
         previous.messages.push(AgentMessage::User {
@@ -436,7 +433,7 @@ impl Fixture {
         previous.revision = 1;
         self.vault.compare_and_swap(&previous, 0).await.unwrap();
         let snapshot = self.vault.expert_registry().await.unwrap().unwrap();
-        let capabilities = FixtureCapabilities::from_snapshot(self.person, snapshot).unwrap();
+        let capabilities = TestScheduleHost::from_snapshot(self.person, snapshot).unwrap();
         let context_id = Uuid::new_v4();
         let task = capabilities
             .handle_message(A2ASendMessageRequest {
@@ -570,21 +567,27 @@ impl Fixture {
     }
 
     async fn sample(&self) -> AgentSession {
-        let session = self.vault.create_sample_session().await.unwrap();
-        crate::run_persisted_agent_sample(
-            &self.vault,
-            AgentFixtureTurn {
-                person_id: self.person,
-                session_id: session.id,
-                expected_revision: 0,
-                prompt: AgentFixturePrompt::Today,
-            },
-            Cancellation::default(),
-            Duration::ZERO,
-            |_| {},
-        )
-        .await
-        .unwrap()
+        let previous = self.vault.expert_registry().await.unwrap();
+        let baseline = match previous {
+            Some(previous) => {
+                let next =
+                    TestScheduleHost::ensure_snapshot(self.person, previous.clone()).unwrap();
+                if next.revision != previous.revision {
+                    self.vault
+                        .save_expert_registry(previous.revision, &next)
+                        .await
+                        .unwrap();
+                }
+                next
+            }
+            None => self.prepare().await,
+        };
+        let (previous, next, staged) = self.stage(Uuid::new_v4()).await;
+        self.vault
+            .commit_expert_session(&next, previous.revision, baseline.revision, &staged)
+            .await
+            .unwrap();
+        next
     }
 }
 
@@ -638,11 +641,9 @@ async fn registry_and_private_state_survive_sessions_reopen_wal_and_checkpoint_e
 #[tokio::test]
 async fn key_failure_rolls_back_component_initialization_before_retry() {
     let mut fixture = Fixture::new().await;
-    let capabilities = FixtureCapabilities::new_with_instance(
-        fixture.person,
-        fixture.vault.registry_instance_id(),
-    )
-    .unwrap();
+    let capabilities =
+        TestScheduleHost::new_with_instance(fixture.person, fixture.vault.registry_instance_id())
+            .unwrap();
     let seed = capabilities.snapshot().unwrap();
     fixture.keys.0.fail_on_read.store(2, Ordering::Release);
     assert_eq!(
@@ -772,67 +773,46 @@ async fn saved_revocation_and_configuration_cas_do_not_reset_private_state_or_na
         EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
             .await
             .unwrap();
-    let unavailable = fixture.sample().await;
-    assert_eq!(unavailable.messages.len(), 1);
-    assert_eq!(
-        unavailable.last_outcome,
-        Some(AgentOutcome::Halted {
-            reason: AgentFailure::InvalidModelOutput,
-        })
-    );
+    let host = TestScheduleHost::from_snapshot(fixture.person, next.clone()).unwrap();
+    assert!(host.agent_cards(fixture.person).is_empty());
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(next));
     assert_eq!(fixture.receipts().await, 1);
 }
 
 #[tokio::test]
-async fn persisted_authority_change_during_model_work_never_publishes_expert_success() {
+async fn persisted_authority_change_rejects_staged_expert_success() {
     let fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;
-    let session = fixture.vault.create_sample_session().await.unwrap();
-    let started = Notify::new();
-    let run = crate::run_persisted_agent_sample(
-        &fixture.vault,
-        AgentFixtureTurn {
-            person_id: fixture.person,
-            session_id: session.id,
-            expected_revision: 0,
-            prompt: AgentFixturePrompt::Today,
-        },
-        Cancellation::default(),
-        Duration::from_millis(100),
-        |event| {
-            if matches!(event.event, AgentEventKind::ModelStarted { .. }) {
-                started.notify_one();
-            }
-        },
-    );
-    let revoke = async {
-        tokio::time::timeout(Duration::from_secs(1), started.notified())
-            .await
-            .unwrap();
-        let mut registry =
-            AgentRegistry::restore(baseline.clone(), fixture.vault.registry_instance_id()).unwrap();
-        registry
-            .set_installation_enabled(registry.revision(), baseline.installations[0].id, false)
-            .unwrap();
-        fixture
-            .vault
-            .save_expert_registry(baseline.revision, &registry.snapshot())
-            .await
-            .unwrap();
-    };
-    let (result, ()) = tokio::join!(run, revoke);
-    assert_eq!(result, Err(AgentFailure::Conflict));
-    let actual = fixture
+    let (previous, next, staged) = fixture.stage(Uuid::new_v4()).await;
+    let mut registry =
+        AgentRegistry::restore(baseline.clone(), fixture.vault.registry_instance_id()).unwrap();
+    registry
+        .set_installation_enabled(registry.revision(), baseline.installations[0].id, false)
+        .unwrap();
+    fixture
         .vault
-        .load(fixture.person, session.id)
+        .save_expert_registry(baseline.revision, &registry.snapshot())
         .await
         .unwrap();
-    assert_eq!(actual.messages.len(), 1);
-    assert!(actual.active_turn.is_some());
-    let registry = fixture.vault.expert_registry().await.unwrap().unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .commit_expert_session(&next, previous.revision, baseline.revision, &staged)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .load(fixture.person, previous.id)
+            .await
+            .unwrap(),
+        previous
+    );
+    assert!(previous.active_turn.is_some());
+    let current = fixture.vault.expert_registry().await.unwrap().unwrap();
     assert!(
-        registry
+        current
             .assignments
             .iter()
             .all(|assignment| assignment.private_state.revision == 0)
@@ -1116,7 +1096,7 @@ async fn older_invocation_replay_is_rejected_by_the_durable_receipt_ledger() {
 }
 
 #[tokio::test]
-async fn abandoned_draft_is_discarded_and_committed_expert_recovery_never_replays() {
+async fn abandoned_draft_is_discarded_and_committed_expert_state_survives_reopen() {
     let mut fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;
     let (previous, _uncommitted, staged) = fixture.stage(Uuid::new_v4()).await;
@@ -1144,14 +1124,9 @@ async fn abandoned_draft_is_discarded_and_committed_expert_recovery_never_replay
         EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
             .await
             .unwrap();
-    let recovered = recover_agent_sample(&fixture.vault, fixture.person, next.id, next.revision)
-        .await
-        .unwrap();
     assert_eq!(
-        recovered.last_outcome,
-        Some(AgentOutcome::Halted {
-            reason: AgentFailure::Interrupted
-        })
+        fixture.vault.load(fixture.person, next.id).await.unwrap(),
+        next
     );
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(staged));
     assert_eq!(fixture.receipts().await, 1);

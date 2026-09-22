@@ -6,8 +6,6 @@
 mod action_facade;
 #[cfg(unix)]
 mod action_services;
-mod agent_fixture;
-pub mod agent_run;
 mod api;
 mod bootstrap;
 mod calendar_facade;
@@ -80,11 +78,6 @@ pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnap
 pub use action_facade::CalendarActionCommand;
 #[cfg(unix)]
 pub use action_services::{ActionCommands, ActionInspection, ActionOperationResult, ActionQueries};
-pub use agent_fixture::{
-    AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,
-    run_persisted_agent_sample,
-};
-pub use agent_run::{AgentFixtureRunCommand, AgentFixtureRunRequest, AgentFixtureRunSnapshot};
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
@@ -154,7 +147,7 @@ pub use vault_services::{
 };
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
-    CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation, FixtureOperation,
+    CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation,
     MemoryReviewDecision, MemoryReviewResult, RemoteCalendarGrantPreview, RemoteGrantOverview,
     RemotePairingChallenge, VaultState, WorkerAction, WorkerOperation, WorkerResult,
 };

@@ -20,10 +20,6 @@ impl FloeHandle {
         Self { app }
     }
 
-    pub fn services(&self) -> &AppComposition {
-        self.app.legacy_services()
-    }
-
     pub fn app(&self) -> &AppHost<AppComposition> {
         &self.app
     }

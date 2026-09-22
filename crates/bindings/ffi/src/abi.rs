@@ -47,23 +47,6 @@ where
     }
 }
 
-fn invoke_json<Request, Response>(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-    operation: impl FnOnce(&FloeHandle, Request) -> WireResult<Response>,
-) -> *mut c_char
-where
-    Request: DeserializeOwned,
-    Response: Serialize,
-{
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        operation(handle, request)
-    })
-}
-
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn floe_core_open(
@@ -130,24 +113,6 @@ pub unsafe extern "C" fn floe_core_events_v2(
     request_json: *const c_char,
 ) -> *mut c_char {
     invoke_json_v2(handle_ptr, request_json, app_wire::events)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_agent_fixture(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, agent_fixture)
-}
-
-#[unsafe(no_mangle)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn floe_core_agent_fixture_run(
-    handle_ptr: *mut FloeHandle,
-    request_json: *const c_char,
-) -> *mut c_char {
-    invoke_json(handle_ptr, request_json, agent_fixture_run)
 }
 
 #[unsafe(no_mangle)]

@@ -311,27 +311,8 @@ async fn setup_and_sample_coexist_in_both_orders_without_regranting_disabled_sam
             .await
             .unwrap();
         assert_eq!(replay.setup, installed.setup);
-        let session = fixture.vault.create_sample_session().await.unwrap();
-        let attempted = crate::run_persisted_agent_sample(
-            &fixture.vault,
-            AgentFixtureTurn {
-                person_id: fixture.person,
-                session_id: session.id,
-                expected_revision: session.revision,
-                prompt: AgentFixturePrompt::Today,
-            },
-            Cancellation::default(),
-            Duration::ZERO,
-            |_| {},
-        )
-        .await
-        .unwrap();
-        assert!(
-            !attempted
-                .messages
-                .iter()
-                .any(|message| matches!(message, AgentMessage::Capability { result: Ok(_), .. }))
-        );
+        let host = TestScheduleHost::from_snapshot(fixture.person, disabled.clone()).unwrap();
+        assert!(host.agent_cards(fixture.person).is_empty());
         assert_eq!(
             fixture.vault.expert_registry().await.unwrap(),
             Some(disabled)

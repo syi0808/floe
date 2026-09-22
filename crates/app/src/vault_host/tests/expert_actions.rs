@@ -15,8 +15,8 @@ use tokio::time::Instant;
 use floe_experts_builtin::schedule::{ExpertHost, ExpertViews};
 use floe_vault::*;
 
-use super::*;
 use super::expert_evidence::delegation_message;
+use super::*;
 
 /// An Expert invocation records its capability calls before dispatch; these
 /// regressions run one that makes none.
@@ -163,7 +163,7 @@ impl Fixture {
         let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
             .await
             .unwrap();
-        let seed = crate::agent_fixture::FixtureCapabilities::new_with_instance(
+        let seed = super::schedule_host::TestScheduleHost::new_with_instance(
             person,
             vault.registry_instance_id(),
         )
@@ -206,7 +206,7 @@ impl Fixture {
             }],
         });
         let mut session = if class == DataClass::Synthetic {
-            vault.create_sample_session().await.unwrap()
+            vault.create_session().await.unwrap()
         } else {
             vault.create_session().await.unwrap()
         };
@@ -895,7 +895,8 @@ async fn unavailable_key_cannot_publish_and_post_publish_key_loss_reconciles_one
 async fn copied_session_output_without_its_bound_receipt_cannot_mint_an_intent() {
     let fixture = Fixture::new().await;
     for forged_invocation in [false, true] {
-        let mut copied = fixture.vault.create_sample_session().await.unwrap();
+        let mut copied = fixture.vault.create_session().await.unwrap();
+        copied.data_classes.push(DataClass::Synthetic);
         let mut evidence = fixture.evidence.clone();
         if forged_invocation {
             evidence.invocation_id = Uuid::new_v4();

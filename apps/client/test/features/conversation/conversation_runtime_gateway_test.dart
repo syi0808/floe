@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 
-import '../../support/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
 import 'package:floe_client/app/runtime/floe_client.dart';

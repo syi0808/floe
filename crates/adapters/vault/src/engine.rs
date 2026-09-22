@@ -37,7 +37,6 @@ impl TursoStore {
             "calendar_mirrors",
             "calendar_actions",
             "action_authorities",
-            "agent_fixture_sessions",
         ] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
@@ -50,71 +49,6 @@ impl TursoStore {
                 )
                 .await
                 .map_err(storage_error)?;
-        }
-        Ok(())
-    }
-
-    pub async fn agent_fixture_session(
-        &self,
-        person_id: PersonId,
-        session_id: uuid::Uuid,
-    ) -> Result<floe_conversation::AgentSession, StoreError> {
-        let session: floe_conversation::AgentSession = self
-            .get("agent_fixture_sessions", session_id.to_string())
-            .await?
-            .ok_or_else(|| {
-                StoreError::new(StoreErrorCode::NotFound, "agent fixture session not found")
-            })?;
-        if session.person_id != person_id {
-            return Err(StoreError::new(
-                StoreErrorCode::NotFound,
-                "agent fixture session not found",
-            ));
-        }
-        Ok(session)
-    }
-
-    pub async fn latest_agent_fixture_session(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<floe_conversation::AgentSession>, StoreError> {
-        let connection = self.connection().await?;
-        let mut rows = connection.query(
-            "SELECT payload FROM agent_fixture_sessions WHERE person_id = ? ORDER BY rowid DESC LIMIT 1",
-            [person_id.to_string()],
-        ).await.map_err(storage_error)?;
-        match rows.next().await.map_err(storage_error)? {
-            Some(row) => {
-                let payload: String = row.get(0).map_err(storage_error)?;
-                Ok(Some(from_str(&payload).map_err(storage_error)?))
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub async fn save_agent_fixture_session(
-        &self,
-        session: &floe_conversation::AgentSession,
-        previous: Option<&floe_conversation::AgentSession>,
-    ) -> Result<(), StoreError> {
-        let connection = self.connection().await?;
-        let payload = to_string(session).map_err(storage_error)?;
-        let changed = if let Some(previous) = previous {
-            connection.execute(
-                "UPDATE agent_fixture_sessions SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
-                (payload, session.id.to_string(), session.person_id.to_string(), to_string(previous).map_err(storage_error)?),
-            ).await.map_err(storage_error)?
-        } else {
-            connection.execute(
-                "INSERT OR IGNORE INTO agent_fixture_sessions(id, person_id, payload) VALUES (?, ?, ?)",
-                (session.id.to_string(), session.person_id.to_string(), payload),
-            ).await.map_err(storage_error)?
-        };
-        if changed != 1 {
-            return Err(StoreError::new(
-                StoreErrorCode::Conflict,
-                "agent fixture session changed; reload",
-            ));
         }
         Ok(())
     }

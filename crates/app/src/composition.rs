@@ -5,12 +5,11 @@ use std::sync::Arc;
 
 use tokio::runtime::{Builder, Runtime};
 
-use crate::{AppHost, FloeCore, HostError, HostServices, agent_run, local_context, vault_host};
+use crate::{AppHost, FloeCore, HostError, HostServices, local_context, vault_host};
 
 pub struct AppComposition {
     pub(crate) runtime: Runtime,
     pub(crate) core: Arc<FloeCore>,
-    pub(crate) agent_runs: agent_run::AgentRuns,
     pub(crate) local_context: Arc<local_context::LocalContextHost>,
     #[cfg(unix)]
     pub(crate) agent_vault: vault_host::VaultBridge,
@@ -20,7 +19,6 @@ impl HostServices for AppComposition {
     fn shutdown(&self) -> Result<(), crate::HostError> {
         #[cfg(unix)]
         self.agent_vault.shutdown();
-        self.agent_runs.close(&self.runtime);
         Ok(())
     }
 }
@@ -229,7 +227,6 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
     let services = AppComposition {
         runtime,
         core: core.clone(),
-        agent_runs: Default::default(),
         local_context: local_context.clone(),
         #[cfg(unix)]
         agent_vault: vault_host::VaultBridge::new(path, core, local_context),
@@ -242,20 +239,6 @@ pub enum AppOpenError {
     Host(HostError),
     Runtime(String),
     Store(String),
-}
-
-impl AppComposition {
-    pub fn runtime(&self) -> &Runtime {
-        &self.runtime
-    }
-
-    pub fn core(&self) -> &crate::FloeCore {
-        &self.core
-    }
-
-    pub fn agent_runs(&self) -> &agent_run::AgentRuns {
-        &self.agent_runs
-    }
 }
 
 #[cfg(unix)]

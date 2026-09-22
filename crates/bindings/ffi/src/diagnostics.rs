@@ -1,26 +1,10 @@
 use std::{any::Any, sync::Once};
 
-use floe_app::{PanicRecord, TraceContext, panic_record};
+use floe_app::{PanicRecord, panic_record};
 use floe_protocol::{ErrorCodeDto, ErrorDto};
 use tracing_subscriber::EnvFilter;
-use uuid::Uuid;
 
 static INITIALIZE: Once = Once::new();
-
-pub(crate) fn trace_context(request_id: Uuid) -> TraceContext {
-    TraceContext::new(request_id)
-}
-
-pub(crate) fn instrument<F>(
-    future: F,
-    context: TraceContext,
-    operation: &'static str,
-) -> impl std::future::Future<Output = F::Output>
-where
-    F: std::future::Future,
-{
-    floe_app::instrument(future, context, operation)
-}
 
 pub(crate) fn initialize() {
     INITIALIZE.call_once(|| {
@@ -62,6 +46,7 @@ pub(crate) fn panic_error(payload: Box<dyn Any + Send>) -> ErrorDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn panic_error_is_correlated_without_exposing_payload() {

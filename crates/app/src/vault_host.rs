@@ -16,19 +16,17 @@ use std::{
 
 #[cfg(target_os = "android")]
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
-use floe_agent_contract::AgentFailure;
-use floe_conversation::{AgentEvent, AgentSession, SessionStore};
-// What the regressions below read off a finished turn.
-use crate::{AgentFixtureTurn, recover_agent_sample, run_persisted_agent_sample};
 use crate::{
     CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
-    ConversationSessionOperation, ConversationTurnRequest, FixtureOperation, RemoteGrantOverview,
-    VaultState, WorkerAction, WorkerOperation, WorkerResult,
+    ConversationSessionOperation, ConversationTurnRequest, RemoteGrantOverview, VaultState,
+    WorkerAction, WorkerOperation, WorkerResult,
 };
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
+use floe_agent_contract::AgentFailure;
 use floe_context_contract::CalendarProvider;
 #[cfg(test)]
 use floe_conversation::AgentOutcome;
+use floe_conversation::{AgentEvent, AgentSession};
 use floe_execution::Cancellation;
 use floe_experts::{BuiltinSourceBinding, BuiltinSourceEvidence};
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
@@ -1576,57 +1574,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             *current = None;
             Ok(VaultExecutionResult::new(VaultState::Locked))
         }
-        WorkerAction::Session { operation } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let session = match operation {
-                FixtureOperation::Start => vault.create_sample_session().await?,
-                FixtureOperation::Resume => vault.resume_sample_session().await?,
-                FixtureOperation::Get { session_id } => {
-                    sample_session(&***vault, job.person, *session_id).await?
-                }
-                FixtureOperation::Recover {
-                    session_id,
-                    expected_revision,
-                } => {
-                    sample_session(&***vault, job.person, *session_id).await?;
-                    recover_agent_sample(&***vault, job.person, *session_id, *expected_revision)
-                        .await?
-                }
-                FixtureOperation::Turn {
-                    session_id,
-                    expected_revision,
-                    prompt,
-                } => {
-                    run_persisted_agent_sample(
-                        vault,
-                        AgentFixtureTurn {
-                            person_id: job.person,
-                            session_id: *session_id,
-                            expected_revision: *expected_revision,
-                            prompt: *prompt,
-                        },
-                        job.cancellation.clone(),
-                        Duration::from_millis(500),
-                        |event| {
-                            if let Ok(mut progress) = job.progress.lock() {
-                                if progress.events.len() < 64 {
-                                    progress.events.push(event);
-                                } else {
-                                    job.cancellation.cancel();
-                                }
-                            } else {
-                                job.cancellation.cancel();
-                            }
-                        },
-                    )
-                    .await?
-                }
-            };
-            Ok(VaultExecutionResult {
-                session: Some(session),
-                ..VaultExecutionResult::ready()
-            })
-        }
         WorkerAction::Registry { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let registry = match change {
@@ -2671,22 +2618,9 @@ fn builtin_source_handle(person_id: PersonId, source: BuiltinContextSource) -> U
 
 /// Whether the client must stop applying results for the current session.
 
-async fn sample_session(
-    store: &impl SessionStore,
-    person: PersonId,
-    id: Uuid,
-) -> Result<AgentSession, AgentFailure> {
-    let session = store.load(person, id).await?;
-    if session.scope.is_some()
-        || session.data_classes != [floe_agent_contract::DataClass::Synthetic]
-    {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    Ok(session)
-}
-
 #[cfg(test)]
 mod tests {
+    use floe_conversation::SessionStore;
     #[cfg(target_os = "macos")]
     mod native_actions;
     use super::*;
@@ -2694,7 +2628,6 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     // These regressions drive the worker the way the binding does, so the
     // fixtures they stand up are stated on the binding's wire.
-    use crate::AgentFixturePrompt;
     use floe_vault::VaultKey;
     use ring::signature::{self, Ed25519KeyPair, KeyPair};
     use serde_json::json;
@@ -2716,6 +2649,7 @@ mod tests {
     mod memory_review;
     mod proposals;
     mod remote_product;
+    mod schedule_host;
     mod vault_registry;
 
     use super::conversation_turn::expert_dispatch::BuiltinExpertEndpoint;
@@ -3397,20 +3331,6 @@ mod tests {
                 .revision,
             installed_revision,
         );
-        let sample = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Resume,
-            },
-        )
-        .session
-        .unwrap();
-        assert_ne!(sample.id, created.id);
-        assert_eq!(
-            sample.data_classes,
-            [floe_agent_contract::DataClass::Synthetic]
-        );
     }
 
     #[test]
@@ -3429,24 +3349,11 @@ mod tests {
         let empty = perform(&worker, person, WorkerAction::Registry { change: None });
         assert_eq!(empty.state, Some(VaultState::Ready));
         assert!(empty.registry.is_none());
-        let session = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Start,
-            },
-        )
-        .session
-        .unwrap();
         perform(
             &worker,
             person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Turn {
-                    session_id: session.id,
-                    expected_revision: 0,
-                    prompt: AgentFixturePrompt::Today,
-                },
+            WorkerAction::ConversationSession {
+                operation: ConversationSessionOperation::Start,
             },
         );
         let before = perform(&worker, person, WorkerAction::Registry { change: None })
@@ -3525,168 +3432,11 @@ mod tests {
                 .as_ref(),
             Some(after)
         );
-        let session = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Start,
-            },
-        )
-        .session
-        .unwrap();
-        let denied = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Turn {
-                    session_id: session.id,
-                    expected_revision: 0,
-                    prompt: AgentFixturePrompt::Today,
-                },
-            },
-        )
-        .session
-        .unwrap();
-        assert_eq!(denied.messages.len(), 1);
-        assert_eq!(
-            denied.last_outcome,
-            Some(floe_conversation::AgentOutcome::Halted {
-                reason: AgentFailure::InvalidModelOutput,
-            })
-        );
         let current = perform(&worker, person, WorkerAction::Registry { change: None })
             .registry
             .unwrap();
         assert_eq!(current, *after);
         perform(&worker, person, WorkerAction::Lock {});
-    }
-
-    #[test]
-    fn sample_transport_cannot_read_or_recover_personal_sessions() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("vaults");
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let keys = Keys::default();
-        let person = PersonId::new();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let session = runtime.block_on(async {
-            let vault = EncryptedAgentVault::create(&root, person, keys.clone())
-                .await
-                .unwrap();
-            let mut session = vault.create_session().await.unwrap();
-            session.active_turn = Some(Uuid::new_v4());
-            session.revision = 1;
-            vault.compare_and_swap(&session, 0).await.unwrap();
-            session
-        });
-        let worker = Worker::new(root, keys).unwrap();
-        assert_eq!(
-            perform(&worker, person, WorkerAction::Unlock {}).state,
-            Some(VaultState::Ready)
-        );
-        for operation in [
-            FixtureOperation::Get {
-                session_id: session.id,
-            },
-            FixtureOperation::Recover {
-                session_id: session.id,
-                expected_revision: session.revision,
-            },
-        ] {
-            let result = perform(&worker, person, WorkerAction::Session { operation });
-            assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
-            assert_eq!(result.state, Some(VaultState::Ready));
-            assert!(result.session.is_none());
-            assert!(result.events.is_empty());
-        }
-        let sample = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Resume,
-            },
-        )
-        .session
-        .unwrap();
-        assert_ne!(sample.id, session.id);
-        assert_eq!(
-            sample.data_classes,
-            [floe_agent_contract::DataClass::Synthetic]
-        );
-    }
-
-    #[test]
-    fn worker_keeps_expert_assignment_and_state_across_host_restart_and_new_chat() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("vaults");
-        let keys = Keys::default();
-        let person = PersonId::new();
-        let worker = Worker::new(root.clone(), keys.clone()).unwrap();
-        assert_eq!(
-            perform(&worker, person, WorkerAction::Create {}).state,
-            Some(VaultState::Ready)
-        );
-        fn run(worker: &Worker, person: PersonId) -> floe_experts::ExpertResult {
-            let session = perform(
-                worker,
-                person,
-                WorkerAction::Session {
-                    operation: FixtureOperation::Start,
-                },
-            )
-            .session
-            .unwrap();
-            let completed = perform(
-                worker,
-                person,
-                WorkerAction::Session {
-                    operation: FixtureOperation::Turn {
-                        session_id: session.id,
-                        expected_revision: 0,
-                        prompt: AgentFixturePrompt::Today,
-                    },
-                },
-            )
-            .session
-            .unwrap();
-            assert_eq!(
-                completed.last_outcome,
-                Some(floe_conversation::AgentOutcome::Completed)
-            );
-            let floe_conversation::AgentMessage::Delegation { task, .. } = &completed.messages[1]
-            else {
-                panic!("expected Expert result");
-            };
-            serde_json::from_str(
-                task.data_part(floe_experts::EXPERT_RESULT_MEDIA_TYPE)
-                    .unwrap(),
-            )
-            .unwrap()
-        }
-        let first = run(&worker, person);
-        assert_eq!(first.state_revision, 1);
-        assert_eq!(
-            perform(&worker, person, WorkerAction::Lock {}).state,
-            Some(VaultState::Locked)
-        );
-        drop(worker);
-        let worker = Worker::new(root, keys).unwrap();
-        assert_eq!(
-            perform(&worker, person, WorkerAction::Unlock {}).state,
-            Some(VaultState::Ready)
-        );
-        let second = run(&worker, person);
-        assert_eq!(second.state_revision, 2);
-        assert_eq!(second.assignment_id, first.assignment_id);
-        assert_eq!(second.instance_id, first.instance_id);
-        assert_eq!(second.view_handle, first.view_handle);
-        assert_eq!(
-            perform(&worker, person, WorkerAction::Lock {}).state,
-            Some(VaultState::Locked)
-        );
     }
 
     #[test]
@@ -3708,15 +3458,15 @@ mod tests {
         let session = perform(
             &worker,
             person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Resume,
+            WorkerAction::ConversationSession {
+                operation: ConversationSessionOperation::Resume,
             },
         )
         .session
         .unwrap();
         assert_eq!(
             session.data_classes,
-            [floe_agent_contract::DataClass::Synthetic]
+            [floe_agent_contract::DataClass::Personal]
         );
         assert_eq!(
             perform(&worker, PersonId::new(), WorkerAction::Lock {}).failure,
@@ -3734,8 +3484,8 @@ mod tests {
             perform(
                 &worker,
                 person,
-                WorkerAction::Session {
-                    operation: FixtureOperation::Resume
+                WorkerAction::ConversationSession {
+                    operation: ConversationSessionOperation::Resume
                 }
             )
             .session
@@ -3751,8 +3501,8 @@ mod tests {
             perform(
                 &worker,
                 person,
-                WorkerAction::Session {
-                    operation: FixtureOperation::Resume
+                WorkerAction::ConversationSession {
+                    operation: ConversationSessionOperation::Resume
                 }
             )
             .failure,
@@ -3764,101 +3514,6 @@ mod tests {
             Some(VaultState::Ready)
         );
         assert_eq!(keys.0.values.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn worker_streams_cancels_replays_and_blocks_recovery_of_a_live_run() {
-        let directory = tempfile::tempdir().unwrap();
-        let person = PersonId::new();
-        let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
-        perform(&worker, person, WorkerAction::Create {});
-        let session = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Start,
-            },
-        )
-        .session
-        .unwrap();
-        let id = Uuid::new_v4();
-        let operation = || WorkerOperation::Submit {
-            action: Box::new(WorkerAction::Session {
-                operation: FixtureOperation::Turn {
-                    session_id: session.id,
-                    expected_revision: session.revision,
-                    prompt: AgentFixturePrompt::Today,
-                },
-            }),
-        };
-        worker.request(person, id, operation()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let result = worker.request(person, id, operation()).unwrap();
-            if result.events.iter().any(|event| {
-                matches!(
-                    event.event,
-                    floe_conversation::AgentEventKind::ModelStarted { .. }
-                )
-            }) {
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        assert!(matches!(
-            worker.request(
-                person,
-                Uuid::new_v4(),
-                WorkerOperation::Submit {
-                    action: Box::new(WorkerAction::Session {
-                        operation: FixtureOperation::Recover {
-                            session_id: session.id,
-                            expected_revision: 1
-                        }
-                    })
-                }
-            ),
-            Err(AgentFailure::Conflict)
-        ));
-        assert!(matches!(
-            worker.request(PersonId::new(), id, WorkerOperation::Stop),
-            Err(AgentFailure::NotFound)
-        ));
-        worker.request(person, id, WorkerOperation::Stop).unwrap();
-        let result = wait(&worker, person, id);
-        assert_eq!(
-            result.session.as_ref().unwrap().last_outcome,
-            Some(floe_conversation::AgentOutcome::Halted {
-                reason: AgentFailure::Cancelled
-            })
-        );
-        let awaited = wait(&worker, person, id);
-        assert_eq!(
-            (awaited.request_id, awaited.next_sequence, awaited.done),
-            (result.request_id, result.next_sequence, result.done)
-        );
-        assert!(matches!(
-            worker.request(
-                person,
-                id,
-                WorkerOperation::Poll {
-                    after_sequence: result.next_sequence + 1
-                }
-            ),
-            Err(AgentFailure::InvalidInput)
-        ));
-        worker
-            .request(person, id, WorkerOperation::Release)
-            .unwrap();
-        let resumed = perform(
-            &worker,
-            person,
-            WorkerAction::Session {
-                operation: FixtureOperation::Resume,
-            },
-        );
-        assert_eq!(resumed.session, result.session);
     }
 
     #[test]

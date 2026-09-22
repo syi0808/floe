@@ -186,7 +186,8 @@ async fn inspection_rejects_cross_person_copied_and_uncommitted_receipts() {
         Err(AgentFailure::NotFound)
     );
     for forged in [false, true] {
-        let mut copied = fixture.vault.create_sample_session().await.unwrap();
+        let mut copied = fixture.vault.create_session().await.unwrap();
+        copied.data_classes.push(DataClass::Synthetic);
         let mut evidence = fixture.evidence.clone();
         if forged {
             evidence.invocation_id = Uuid::new_v4();

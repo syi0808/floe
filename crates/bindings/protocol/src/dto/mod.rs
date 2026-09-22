@@ -48,9 +48,7 @@ pub const APP_WIRE_VERSION: u32 = 2;
 
 pub use agent::{
     ActionAuthorityModeDto, AgentEventDto, AgentFailureCategory, AgentFailureDomain,
-    AgentFailureDto, AgentFailureSafeAction, AgentFixtureOperationDto, AgentFixturePromptDto,
-    AgentFixtureRequestDto, AgentFixtureResultDto, AgentFixtureRunDto, AgentFixtureRunOperationDto,
-    AgentFixtureRunRequestDto, AgentMemoryOriginDto, AgentMemoryOverviewDto,
+    AgentFailureDto, AgentFailureSafeAction, AgentMemoryOriginDto, AgentMemoryOverviewDto,
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
     AgentSessionDto, AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,

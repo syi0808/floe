@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import '../support/agent_fixture_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
@@ -56,7 +56,7 @@ class TestVaultGateway extends TestAgentGateway implements AgentVaultGateway {
   }
 
   @override
-  Future<AgentFixtureResult> resumeAgentFixture(String personId) async {
+  Future<AgentSession> resumeConversation(String personId) async {
     await resumeGate?.future;
     _check();
     if (state != AgentVaultState.ready) {
@@ -66,6 +66,6 @@ class TestVaultGateway extends TestAgentGateway implements AgentVaultGateway {
         sealSession: true,
       );
     }
-    return super.resumeAgentFixture(personId);
+    return super.resumeConversation(personId);
   }
 }

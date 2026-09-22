@@ -154,7 +154,8 @@ async fn seed(
     registry
         .record_result(registry_revision, &evidence)
         .unwrap();
-    let mut session = vault.create_sample_session().await.unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    session.data_classes.push(DataClass::Synthetic);
     let turn_id = Uuid::new_v4();
     session.active_turn = Some(turn_id);
     session.revision = 1;
@@ -359,18 +360,13 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         perform(&worker, PersonId::new(), inspect()).failure,
         Some(AgentFailure::NotFound)
     );
-    let saved = perform(
-        &worker,
-        person,
-        WorkerAction::Session {
-            operation: FixtureOperation::Get {
-                session_id: session.id,
-            },
-        },
-    )
-    .session
-    .unwrap();
+    perform(&worker, person, WorkerAction::Lock);
+    let saved = runtime.block_on(async {
+        let vault = EncryptedAgentVault::open(&directory.path().join("vaults"), person, keys.clone()).await.unwrap();
+        vault.load(person, session.id).await.unwrap()
+    });
     assert_eq!(saved, session);
+    perform(&worker, person, WorkerAction::Unlock);
     assert_eq!(
         runtime
             .block_on(core.actions().calendar_actions(person))

@@ -615,36 +615,7 @@ async fn memory_review_rejects_untrusted_sources_and_non_user_decisions() {
     let vault = EncryptedAgentVault::create(root.path(), person, keys)
         .await
         .unwrap();
-    let mut sample = vault.create_sample_session().await.unwrap();
     let turn_id = Uuid::new_v4();
-    sample.messages = vec![AgentMessage::User {
-        turn_id,
-        text: "fixture preference".into(),
-    }];
-    sample.revision = 1;
-    sample.last_outcome = Some(AgentOutcome::Completed);
-    vault.compare_and_swap(&sample, 0).await.unwrap();
-    let request = StageMemoryCandidate {
-        session_id: sample.id,
-        expected_session_revision: sample.revision,
-        turn_ids: vec![turn_id],
-        observation_kind: LearningObservationKind::UserCorrection,
-        digest: "fixture evidence".into(),
-        value: memory_value("fixture-derived memory must not persist"),
-        target_id: None,
-        base_revision: None,
-        extractor_version: "memory.fixture.v1".into(),
-        prompt_version: "correction.v1".into(),
-        actor: KnowledgeActor::Learner {
-            run_id: Uuid::new_v4(),
-        },
-        created_at: Utc.with_ymd_and_hms(2026, 9, 10, 12, 3, 0).unwrap(),
-    };
-    assert_eq!(
-        vault.stage_memory_candidate(request).await,
-        Err(AgentFailure::PolicyDenied)
-    );
-
     let mut personal = vault.create_session().await.unwrap();
     personal.messages = vec![AgentMessage::User {
         turn_id,

@@ -2043,7 +2043,7 @@ impl Fixture {
         let session = if class == DataClass::Personal {
             vault.create_session().await.unwrap()
         } else {
-            vault.create_sample_session().await.unwrap()
+            vault.create_session().await.unwrap()
         };
         Self {
             vault,

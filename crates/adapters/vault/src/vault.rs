@@ -390,31 +390,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.create_session().await
     }
 
-    pub async fn create_sample_session(&self) -> Result<AgentSession, AgentFailure> {
+    #[cfg(test)]
+    pub(crate) async fn create_sample_session(&self) -> Result<AgentSession, AgentFailure> {
         let mut session = AgentSession::new(self.person_id);
         session.data_classes = vec![DataClass::Synthetic];
         self.insert_session(session).await
-    }
-
-    pub async fn resume_sample_session(&self) -> Result<AgentSession, AgentFailure> {
-        let connection = self.connection()?;
-        let mut rows = connection
-            .query(
-                "SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'synthetic' ORDER BY rowid DESC LIMIT 1",
-                (),
-            )
-            .await
-            .map_err(storage)?;
-        if let Some(row) = rows.next().await.map_err(storage)? {
-            let id =
-                Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
-            let session = self.load(self.person_id, id).await?;
-            if session.scope.is_some() || session.data_classes != [DataClass::Synthetic] {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            return Ok(session);
-        }
-        self.create_sample_session().await
     }
 
     pub fn check_access(&self) -> Result<(), AgentFailure> {
@@ -795,3 +775,6 @@ impl<Keys: VaultKeyProvider> floe_conversation::GovernedSessionRepository
         })
     }
 }
+
+#[cfg(test)]
+mod synthetic_tests;

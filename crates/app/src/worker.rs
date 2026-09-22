@@ -23,25 +23,6 @@ pub enum VaultState {
     Unavailable,
 }
 
-/// What a scripted fixture run is asked to do.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FixtureOperation {
-    Start,
-    Resume,
-    Get {
-        session_id: Uuid,
-    },
-    Turn {
-        session_id: Uuid,
-        expected_revision: u64,
-        prompt: crate::AgentFixturePrompt,
-    },
-    Recover {
-        session_id: Uuid,
-        expected_revision: u64,
-    },
-}
-
 /// What a Session command is asked to do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationSessionOperation {
@@ -172,9 +153,6 @@ pub enum WorkerAction {
     Create,
     Unlock,
     Lock,
-    Session {
-        operation: FixtureOperation,
-    },
     Registry {
         change: Option<floe_experts::RegistryConfiguration>,
     },
@@ -240,7 +218,6 @@ impl WorkerAction {
             Self::Create => "create",
             Self::Unlock => "unlock",
             Self::Lock => "lock",
-            Self::Session { .. } => "session",
             Self::Registry { .. } => "registry",
             Self::CalendarExperts { .. } => "calendar_experts",
             Self::CalendarAccess { .. } => "calendar_access",
