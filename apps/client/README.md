@@ -52,6 +52,15 @@ host suite plus current provider-adapter and Inference tests.
 FoundationModels transport; supported hosts can also run `--exercise` and
 `--exercise-learner`. The smoke example belongs to `floe-app`.
 
+`flutter test integration/product_conversation_test.dart` runs the real product
+gateways and debug FFI in a private, signed copy of Flutter's test host containing
+the same-source Foundation dylib. It requires macOS with Foundation Available
+and no saved-server credential conflicting with its random validation identity.
+It never changes the shared saved-server slot; that conflict is a fail-closed
+environment blocker, not permission to clear credentials. The integration checks
+Auto/explicit `foundation-device` turns and durable reopen, then deletes only the
+exact validation-owned Vault key before removing its private profile.
+
 `flutter test integration/local_server_pairing_test.dart` (from `apps/client`)
 requires a buildable Go server and the debug FFI dylib. It uses a fresh temporary
 profile, final Rust pairing envelopes and memory-only credential persistence,
