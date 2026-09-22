@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -721,5 +722,7 @@ func newConnectionID() (string, error) {
 	return hexadecimal[:8] + "-" + hexadecimal[8:12] + "-" + hexadecimal[12:16] + "-" + hexadecimal[16:20] + "-" + hexadecimal[20:], nil
 }
 
-func validConnectionID(value string) bool { return validateUUID(value) == nil && value[14] == '4' }
+var connectionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+
+func validConnectionID(value string) bool { return connectionIDPattern.MatchString(value) }
 func StrictJSON(data []byte) bool         { return rejectDuplicateJSON(data) == nil }

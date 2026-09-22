@@ -206,7 +206,11 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if request.Method != http.MethodPost {
-		failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
+		if request.URL.Path == "/manage/api/pair/approve" || request.URL.Path == "/manage/api/pair/reject" {
+			failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
+		} else {
+			failure(writer, http.StatusNotFound, "not_found")
+		}
 		return
 	}
 	switch request.URL.Path {

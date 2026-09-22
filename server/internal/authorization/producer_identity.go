@@ -39,7 +39,7 @@ func DecodeProducerIdentity(data []byte) (*ProducerIdentity, error) {
 	if err := decoder.Decode(&record); err != nil || decoder.Decode(new(any)) != io.EOF {
 		return nil, errors.New("invalid producer identity")
 	}
-	if record.SchemaVersion != producerIdentitySchema || validateUUID(record.KeyID) != nil {
+	if record.SchemaVersion != producerIdentitySchema || !validConnectionID(record.KeyID) {
 		return nil, errors.New("invalid producer identity")
 	}
 	privateKey, err := base64.RawURLEncoding.DecodeString(record.PrivateKey)
