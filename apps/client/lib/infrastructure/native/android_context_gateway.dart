@@ -141,7 +141,7 @@ final class AndroidContextGateway
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>('readContacts', {
         'limit': limit,
-        if (selectedHandles != null) 'selected_handles': selectedHandles,
+        'selected_handles': ?selectedHandles,
       }),
     );
     validateAndroidPeopleView(view);

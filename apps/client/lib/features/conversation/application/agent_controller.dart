@@ -51,7 +51,7 @@ final class AgentController extends ChangeNotifier {
           !_disposed &&
           _locking == null &&
           vaultState == AgentVaultState.ready,
-      onFatalFailure: _fail,
+      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     memoryController = AgentMemoryController(
       memoryGateway: gateway is AgentMemoryGateway
@@ -68,7 +68,7 @@ final class AgentController extends ChangeNotifier {
           !_disposed &&
           _locking == null &&
           vaultState == AgentVaultState.ready,
-      onFatalFailure: _fail,
+      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     calendarExpertController = AgentCalendarExpertController(
       gateway: gateway is AgentCalendarExpertGateway
@@ -87,7 +87,7 @@ final class AgentController extends ChangeNotifier {
           !_disposed &&
           _locking == null &&
           vaultState == AgentVaultState.ready,
-      onFatalFailure: _fail,
+      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     connectionController = AgentConnectionController(
       gateway: gateway is AgentConnectionsGateway
@@ -102,7 +102,7 @@ final class AgentController extends ChangeNotifier {
           !_sealed &&
           !_disposed &&
           _locking == null,
-      onFatalFailure: _fail,
+      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     _conversationRuntime?.readModel.addListener(_notify);
   }
@@ -226,8 +226,9 @@ final class AgentController extends ChangeNotifier {
           ? error.failure
           : 'storage_unavailable';
       _proposalFailures[message.callId] = reason;
-      if (reason == 'vault_unavailable' || reason == 'interrupted') {
-        _fail(reason);
+      if (error is AgentVaultException &&
+          (error.reloadRequired == true || error.sealSession == true)) {
+        _failFromError(error, reason);
       }
     } finally {
       _end();
@@ -414,7 +415,11 @@ final class AgentController extends ChangeNotifier {
         };
         if (_sealed) return;
         if (vaultState != AgentVaultState.ready) {
-          throw const AgentVaultException('vault_unavailable');
+          throw const AgentVaultException(
+            'vault_unavailable',
+            reloadRequired: true,
+            sealSession: true,
+          );
         }
       }
       final conversation = gateway;
@@ -549,11 +554,11 @@ final class AgentController extends ChangeNotifier {
       if (!_disposed && !_sealed && session?.id == original.id) {
         _acceptSession(completion.session);
         _lastConversationRunId = completion.run.runId;
+        needsReload = false;
         final issue = completion.run.report?.issues.firstOrNull;
         if (issue != null) {
           _acceptConversationIssue(issue);
         }
-        needsReload = false;
       }
     } on Object catch (error, stackTrace) {
       if (!_disposed && !_sealed) {
@@ -632,7 +637,11 @@ final class AgentController extends ChangeNotifier {
       if (_sealed) return;
       vaultState = state;
       if (state != AgentVaultState.ready) {
-        throw const AgentVaultException('vault_unavailable');
+        throw const AgentVaultException(
+          'vault_unavailable',
+          reloadRequired: true,
+          sealSession: true,
+        );
       }
       final saved = await gateway.resumeConversation(personId);
       _acceptSession(saved);
@@ -673,7 +682,7 @@ final class AgentController extends ChangeNotifier {
       _clearFailure();
       needsReload = false;
     } on Object {
-      _fail('vault_unavailable');
+      _fail('vault_unavailable', reloadRequired: true, sealSession: true);
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -714,22 +723,20 @@ final class AgentController extends ChangeNotifier {
       affectedRefs: source?.affectedRefs,
       incidentId: source?.incidentId,
       retryPolicy: source?.retryPolicy,
-      reloadRequired: source?.reloadRequired,
+      reloadRequired: source?.reloadRequired ?? source == null,
       sealSession: source?.sealSession,
     );
   }
 
   void _acceptConversationIssue(AppWireIssue issue) {
-    _clearProposals();
-    failure = issue.metadata['reason_code'] ?? issue.code;
-    recoveryAction = issue.metadata['recovery_action'];
-    failureDomain = issue.metadata['domain'];
-    failureCategory = issue.metadata['category'];
-    failureSafeActions = const [];
-    failureAffectedRefs = const [];
-    failureIncidentId = null;
-    failureRetryPolicy = null;
-    needsReload = issue.metadata['reload_required'] == 'true';
+    _fail(
+      issue.metadata['reason_code'] ?? issue.code,
+      recoveryAction: issue.metadata['recovery_action'],
+      domain: issue.metadata['domain'],
+      category: issue.metadata['category'],
+      reloadRequired: issue.metadata['reload_required'] == 'true',
+      sealSession: issue.metadata['seal_session'] == 'true',
+    );
   }
 
   void _fail(
@@ -753,10 +760,9 @@ final class AgentController extends ChangeNotifier {
     failureAffectedRefs = List.unmodifiable(affectedRefs ?? const []);
     failureIncidentId = incidentId;
     failureRetryPolicy = retryPolicy;
-    // Reload and seal are decided by the owner; this controller only applies
-    // what the failure envelope reported.
     needsReload = reloadRequired ?? false;
     if (usesVault && (sealSession ?? false)) {
+      _sealed = true;
       registryController.clear();
       calendarExpertController.clear();
       memoryController.clear();

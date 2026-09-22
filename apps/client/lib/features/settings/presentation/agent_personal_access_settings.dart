@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 
@@ -134,9 +135,7 @@ final class _PersonalAttentionAccessCardState
             const SizedBox(height: FloeSpace.xs),
             const Text('Allow attention data for:'),
             for (final consumer in const ['assistant', 'attention.expert'])
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
+              FloeCheckboxTile(
                 value: selectedConsumers.contains(consumer),
                 onChanged: busy
                     ? null
@@ -634,9 +633,7 @@ final class _PersonalContactsAccessCardState
             Text('No readable contacts found.', style: FloeType.bodySmall)
           else
             for (final identity in identities)
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
+              FloeCheckboxTile(
                 value: selected.contains(identity['handle']),
                 onChanged: busy
                     ? null

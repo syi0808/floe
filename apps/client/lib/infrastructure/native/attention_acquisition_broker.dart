@@ -11,12 +11,10 @@ typedef AttentionAcquisitionReader = Future<Map<String, dynamic>> Function(
 
 final class AttentionAcquisitionBroker {
   AttentionAcquisitionBroker({
-    required LocalContextTransport transport,
-    required String personId,
+    required this._transport,
+    required this._personId,
     String? hostEpoch,
-  }) : _transport = transport,
-       _personId = personId,
-       _hostEpoch = hostEpoch ?? _newEpoch();
+  }) : _hostEpoch = hostEpoch ?? _newEpoch();
 
   final LocalContextTransport _transport;
   final String _personId;
@@ -97,8 +95,9 @@ final class AttentionAcquisitionBroker {
   }
 
   void _ensureOpen() {
-    if (_disposed)
+    if (_disposed) {
       throw StateError('Attention acquisition broker is disposed.');
+    }
   }
 
   static void _validateResult(
@@ -215,12 +214,10 @@ final class AttentionAcquisitionBroker {
 
 final class AttentionAcquisitionService {
   AttentionAcquisitionService({
-    required AttentionAcquisitionBroker broker,
-    required AttentionAcquisitionReader reader,
-    Duration pollInterval = const Duration(milliseconds: 100),
-  }) : _broker = broker,
-       _reader = reader,
-       _pollInterval = pollInterval;
+    required this._broker,
+    required this._reader,
+    this._pollInterval = const Duration(milliseconds: 100),
+  });
 
   final AttentionAcquisitionBroker _broker;
   final AttentionAcquisitionReader _reader;
@@ -232,8 +229,9 @@ final class AttentionAcquisitionService {
   DateTime _retryNotBefore = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<void> start() async {
-    if (_disposed)
+    if (_disposed) {
       throw StateError('Attention acquisition service is disposed.');
+    }
     if (_timer != null) return;
     await _broker.start();
     _timer = Timer.periodic(_pollInterval, (_) => unawaited(_pollOnce()));

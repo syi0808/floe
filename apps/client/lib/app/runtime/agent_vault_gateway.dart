@@ -178,7 +178,7 @@ final class NativeAgentVaultGateway
   ) async {
     final result = await _perform(personId, {
       'kind': 'memory_review',
-      'decision': decision,
+      'decision': ?decision,
     });
     final review = AgentMemoryReviewOverview.fromJson(
       Map<String, Object?>.from(result['memory_review'] as Map),

@@ -80,7 +80,13 @@ class TestProposalGateway extends TestVaultGateway
   }) async {
     requests.add((personId, sessionId, invocationId));
     await inspectionGate?.future;
-    if (inspectionFailure case final reason?) throw AgentVaultException(reason);
+    if (inspectionFailure case final reason?) {
+      throw AgentVaultException(
+        reason,
+        reloadRequired: reason == 'vault_unavailable',
+        sealSession: reason == 'vault_unavailable',
+      );
+    }
     return AgentProposalInspection.fromJson(response);
   }
 }

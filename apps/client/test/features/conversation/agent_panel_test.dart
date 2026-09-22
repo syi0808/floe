@@ -112,6 +112,8 @@ void main() {
         reasonCode: 'session_integrity',
         safeActions: ['start_new_session', 'export_diagnostics'],
         incidentId: 'incident-1',
+        reloadRequired: true,
+        sealSession: false,
       );
     final controller = AgentController(gateway: gateway, personId: 'test');
     addTearDown(controller.dispose);

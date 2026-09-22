@@ -16,7 +16,13 @@ class TestVaultGateway extends TestAgentGateway implements AgentVaultGateway {
   Completer<void>? resumeGate;
 
   void _check() {
-    if (unavailable) throw const AgentVaultException('vault_unavailable');
+    if (unavailable) {
+      throw const AgentVaultException(
+        'vault_unavailable',
+        reloadRequired: true,
+        sealSession: true,
+      );
+    }
   }
 
   @override
@@ -54,7 +60,11 @@ class TestVaultGateway extends TestAgentGateway implements AgentVaultGateway {
     await resumeGate?.future;
     _check();
     if (state != AgentVaultState.ready) {
-      throw const AgentVaultException('vault_unavailable');
+      throw const AgentVaultException(
+        'vault_unavailable',
+        reloadRequired: true,
+        sealSession: true,
+      );
     }
     return super.resumeAgentFixture(personId);
   }

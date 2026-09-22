@@ -50,7 +50,13 @@ final class TestRegistryGateway extends TestVaultGateway
   Future<AgentRegistryView?> readRegistry(String personId) async {
     reads++;
     await registryGate?.future;
-    if (registryError case final String error) throw AgentVaultException(error);
+    if (registryError case final String error) {
+      throw AgentVaultException(
+        error,
+        reloadRequired: error == 'vault_unavailable' || error == 'interrupted',
+        sealSession: error == 'vault_unavailable' || error == 'interrupted',
+      );
+    }
     return snapshot == null ? null : AgentRegistryView.fromJson(snapshot!);
   }
 
@@ -63,7 +69,13 @@ final class TestRegistryGateway extends TestVaultGateway
   }) async {
     changes++;
     await registryGate?.future;
-    if (registryError case final String error) throw AgentVaultException(error);
+    if (registryError case final String error) {
+      throw AgentVaultException(
+        error,
+        reloadRequired: error == 'vault_unavailable' || error == 'interrupted',
+        sealSession: error == 'vault_unavailable' || error == 'interrupted',
+      );
+    }
     if (current.revision != snapshot!['revision']) {
       throw const AgentVaultException('conflict');
     }

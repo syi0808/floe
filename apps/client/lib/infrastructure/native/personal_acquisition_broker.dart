@@ -11,12 +11,10 @@ typedef PersonalAcquisitionReader = Future<Map<String, dynamic>> Function(
 
 final class PersonalAcquisitionBroker {
   PersonalAcquisitionBroker({
-    required LocalContextTransport transport,
-    required String personId,
+    required this._transport,
+    required this._personId,
     String? hostEpoch,
-  }) : _transport = transport,
-       _personId = personId,
-       _hostEpoch = hostEpoch ?? _newEpoch();
+  }) : _hostEpoch = hostEpoch ?? _newEpoch();
 
   final LocalContextTransport _transport;
   final String _personId;
@@ -257,12 +255,10 @@ final class PersonalAcquisitionBroker {
 
 final class PersonalAcquisitionService {
   PersonalAcquisitionService({
-    required PersonalAcquisitionBroker broker,
-    required PersonalAcquisitionReader reader,
-    Duration pollInterval = const Duration(seconds: 30),
-  }) : _broker = broker,
-       _reader = reader,
-       _pollInterval = pollInterval;
+    required this._broker,
+    required this._reader,
+    this._pollInterval = const Duration(seconds: 30),
+  });
 
   final PersonalAcquisitionBroker _broker;
   final PersonalAcquisitionReader _reader;
@@ -271,8 +267,9 @@ final class PersonalAcquisitionService {
   bool _disposed = false;
 
   Future<void> start() async {
-    if (_disposed)
+    if (_disposed) {
       throw StateError('Personal acquisition service is disposed.');
+    }
     await _broker.start();
     _timer ??= Timer.periodic(_pollInterval, (_) => unawaited(_pollOnce()));
     await _pollOnce();

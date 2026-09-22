@@ -115,7 +115,7 @@ final class AppleContextGateway
       await _channel.invokeMapMethod<Object?, Object?>('readContacts', {
         'device_id': _deviceId,
         'limit': limit,
-        if (selectedHandles != null) 'selected_handles': selectedHandles,
+        'selected_handles': ?selectedHandles,
       }),
     );
     validateApplePeopleView(view);
@@ -233,7 +233,11 @@ final class AppleContextGateway
         appleNativeArguments(_deviceId, const {}),
       ),
     );
-    const fields = {'schema_version', 'subject_fingerprint', 'permission_class'};
+    const fields = {
+      'schema_version',
+      'subject_fingerprint',
+      'permission_class',
+    };
     if (value.keys.toSet().difference(fields).isNotEmpty ||
         !value.keys.toSet().containsAll(fields) ||
         value['schema_version'] != 1 ||

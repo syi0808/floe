@@ -241,6 +241,12 @@ class TestAgentGateway
         _done && (omitSessionOnFailure || includeSessionWithFailure)
         ? responseRecoveryAction
         : null,
+    'failure_reload_required':
+        _done &&
+        responseFailure != null &&
+        omitSessionOnFailure &&
+        !includeSessionWithFailure,
+    'failure_seal_session': false,
   });
 }
 

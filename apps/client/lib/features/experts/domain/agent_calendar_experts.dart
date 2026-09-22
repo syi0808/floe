@@ -195,9 +195,8 @@ final class AgentCalendarAccessRequest {
         'connection_scope': connectionScope!,
         'connection_revision': connectionRevision!,
         'source_authority': sourceAuthority!.toJson(),
-        if (reviewedNativeSubjectFingerprint != null)
-          'reviewed_native_subject_fingerprint':
-              reviewedNativeSubjectFingerprint!,
+        'reviewed_native_subject_fingerprint':
+            ?reviewedNativeSubjectFingerprint,
       },
       AgentCalendarAccessOperation.remove => {'kind': 'remove'},
     },
@@ -257,8 +256,7 @@ final class AgentCalendarSetup {
     'connection_scope': connectionScope,
     'connection_revision': connectionRevision,
     'source_authority': sourceAuthority.toJson(),
-    if (reviewedNativeSubjectFingerprint != null)
-      'reviewed_native_subject_fingerprint': reviewedNativeSubjectFingerprint!,
+    'reviewed_native_subject_fingerprint': ?reviewedNativeSubjectFingerprint,
   };
 }
 

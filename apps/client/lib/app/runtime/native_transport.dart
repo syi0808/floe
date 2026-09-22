@@ -534,14 +534,16 @@ final class NativeTransport implements AppWireTransport, LocalContextTransport {
       },
     });
     final raw = result['personal_acquisitions'];
-    if (raw is! List)
+    if (raw is! List) {
       throw const FormatException('Invalid personal acquisition poll.');
+    }
     return raw
         .map((value) {
-          if (value is! Map)
+          if (value is! Map) {
             throw const FormatException(
               'Invalid personal acquisition request.',
             );
+          }
           return Map<String, dynamic>.from(value);
         })
         .toList(growable: false);

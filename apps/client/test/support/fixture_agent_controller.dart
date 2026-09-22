@@ -110,7 +110,11 @@ final class FixtureAgentController extends ChangeNotifier {
         };
         if (_sealed) return;
         if (vaultState != AgentVaultState.ready) {
-          throw const AgentVaultException('vault_unavailable');
+          throw const AgentVaultException(
+            'vault_unavailable',
+            reloadRequired: true,
+            sealSession: true,
+          );
         }
       }
 
@@ -321,7 +325,11 @@ final class FixtureAgentController extends ChangeNotifier {
       if (_sealed) return;
       vaultState = state;
       if (state != AgentVaultState.ready) {
-        throw const AgentVaultException('vault_unavailable');
+        throw const AgentVaultException(
+          'vault_unavailable',
+          reloadRequired: true,
+          sealSession: true,
+        );
       }
       _acceptSession((await gateway.resumeAgentFixture(personId)).session);
       needsReload = false;
@@ -397,7 +405,7 @@ final class FixtureAgentController extends ChangeNotifier {
       affectedRefs: source?.affectedRefs,
       incidentId: source?.incidentId,
       retryPolicy: source?.retryPolicy,
-      reloadRequired: source?.reloadRequired,
+      reloadRequired: source?.reloadRequired ?? source == null,
       sealSession: source?.sealSession,
     );
   }

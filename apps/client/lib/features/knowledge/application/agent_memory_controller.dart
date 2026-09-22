@@ -17,7 +17,7 @@ final class AgentMemoryController extends ChangeNotifier {
   final AgentMemoryReviewGateway? reviewGateway;
   final String personId;
   final bool Function() canOperate;
-  final void Function(String failure) onFatalFailure;
+  final void Function(AgentVaultException failure) onFatalFailure;
 
   List<AgentMemoryCandidate>? candidates;
   String? reviewFailure;
@@ -46,7 +46,7 @@ final class AgentMemoryController extends ChangeNotifier {
       if (!canOperate()) return;
       overview = null;
       failure = _failure(error);
-      _reportFatal(failure!);
+      _reportFatal(error);
     } finally {
       busy = false;
       notifyListeners();
@@ -92,7 +92,7 @@ final class AgentMemoryController extends ChangeNotifier {
     } on Object catch (error) {
       if (!canOperate()) return;
       reviewFailure = _failure(error);
-      _reportFatal(reviewFailure!);
+      _reportFatal(error);
     } finally {
       busy = false;
       notifyListeners();
@@ -102,9 +102,10 @@ final class AgentMemoryController extends ChangeNotifier {
   String _failure(Object error) =>
       error is AgentVaultException ? error.failure : 'storage_unavailable';
 
-  void _reportFatal(String reason) {
-    if (reason == 'vault_unavailable' || reason == 'interrupted') {
-      onFatalFailure(reason);
+  void _reportFatal(Object error) {
+    if (error is AgentVaultException &&
+        (error.reloadRequired == true || error.sealSession == true)) {
+      onFatalFailure(error);
     }
   }
 }

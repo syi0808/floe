@@ -295,7 +295,8 @@ final class CalendarExpertTransport {
 
 class TestCalendarExpertGateway extends TestVaultGateway
     implements AgentRegistryGateway, AgentCalendarExpertGateway {
-  TestCalendarExpertGateway() : super(personId: registryPerson, personal: true) {
+  TestCalendarExpertGateway()
+    : super(personId: registryPerson, personal: true) {
     state = AgentVaultState.ready;
     native = NativeAgentVaultGateway(transport.call, deviceId: 'test-device');
   }
@@ -308,7 +309,13 @@ class TestCalendarExpertGateway extends TestVaultGateway
 
   Future<void> _wait() async {
     await gate?.future;
-    if (error case final failure?) throw AgentVaultException(failure);
+    if (error case final failure?) {
+      throw AgentVaultException(
+        failure,
+        reloadRequired: failure == 'vault_unavailable',
+        sealSession: failure == 'vault_unavailable',
+      );
+    }
   }
 
   @override

@@ -163,6 +163,66 @@ void main() {
     gateway.runtime.readModel.dispose();
   });
 
+  for (final sealSession in [false, true]) {
+    test('owner report preserves reload and seal=$sealSession', () async {
+      final gateway = _ConversationGateway(
+        failFirst: true,
+        failureReason: 'interrupted',
+        reloadRequired: true,
+        sealSession: sealSession,
+      );
+      final controller = AgentController(gateway: gateway, personId: 'person');
+      addTearDown(() {
+        controller.dispose();
+        gateway.runtime.readModel.dispose();
+      });
+      await controller.load();
+
+      await controller.sendText('Observe owner failure');
+
+      expect(controller.failure, 'interrupted');
+      expect(controller.needsReload, isTrue);
+      expect(controller.canSend, isFalse);
+      expect(controller.session == null, sealSession);
+      expect(controller.messages.isEmpty, sealSession);
+      expect(
+        controller.vaultState,
+        sealSession ? AgentVaultState.unavailable : AgentVaultState.ready,
+      );
+      expect(gateway.runtime.cancellations, 0);
+      expect(gateway.turns, hasLength(1));
+
+      await controller.load();
+      expect(controller.needsReload, isFalse);
+      expect(controller.session, isNotNull);
+      expect(gateway.turns, hasLength(1));
+    });
+  }
+
+  test(
+    'local observation timeout requires reload without sealing or cancellation',
+    () async {
+      final gateway = _ConversationGateway()
+        ..runtime.observationError = TimeoutException('observation timeout');
+      final controller = AgentController(gateway: gateway, personId: 'person');
+      addTearDown(() {
+        controller.dispose();
+        gateway.runtime.readModel.dispose();
+      });
+      await controller.load();
+
+      await controller.sendText('Keep backend work independent');
+
+      expect(controller.needsReload, isTrue);
+      expect(controller.canSend, isFalse);
+      expect(controller.session, isNotNull);
+      expect(controller.vaultState, AgentVaultState.ready);
+      expect(gateway.runtime.cancellations, 0);
+      await controller.retry();
+      expect(gateway.turns, hasLength(1));
+    },
+  );
+
   testWidgets('oversized emoji input stays in the composer', (tester) async {
     final gateway = _ConversationGateway();
     final controller = AgentController(gateway: gateway, personId: 'person');
@@ -202,12 +262,16 @@ final class _ConversationGateway extends TestVaultGateway
   _ConversationGateway({
     this.failFirst = false,
     this.failureReason = 'server_model_unavailable',
+    this.reloadRequired = false,
+    this.sealSession = false,
   }) {
     state = AgentVaultState.ready;
   }
 
   final bool failFirst;
   final String failureReason;
+  final bool reloadRequired;
+  final bool sealSession;
   late final _ImmediateConversationRuntime runtime =
       _ImmediateConversationRuntime(this);
   final turns = <AgentConversationTurnRequest>[];
@@ -261,6 +325,8 @@ final class _ImmediateConversationRuntime
   _ImmediateConversationRuntime(this.owner);
 
   final _ConversationGateway owner;
+  Object? observationError;
+  int cancellations = 0;
   @override
   final AppReadModel readModel = AppReadModel();
 
@@ -280,6 +346,7 @@ final class _ImmediateConversationRuntime
   }) async {
     owner.active = request;
     owner.turns.add(request);
+    if (observationError case final error?) throw error;
     final shouldFail = owner.failFirst && owner.turns.length == 1;
     final runId = owner.turns.length == 1
         ? '00000000-0000-4000-8000-000000000403'
@@ -302,6 +369,8 @@ final class _ImmediateConversationRuntime
                   'model unavailable',
                   metadata: {
                     'reason_code': owner.failureReason,
+                    'reload_required': owner.reloadRequired.toString(),
+                    'seal_session': owner.sealSession.toString(),
                     if (owner.failureReason == 'server_model_unavailable')
                       'recovery_action': 'retry_read',
                   },
@@ -324,7 +393,9 @@ final class _ImmediateConversationRuntime
   @override
   Future<void> cancelConversationTurn(
     AgentConversationTurnRequest request,
-  ) async {}
+  ) async {
+    cancellations++;
+  }
 }
 
 final class _RuntimeConversationGateway extends TestVaultGateway

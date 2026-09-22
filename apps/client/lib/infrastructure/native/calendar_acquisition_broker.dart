@@ -11,12 +11,10 @@ typedef CalendarAcquisitionReader = Future<Map<String, dynamic>> Function(
 
 final class CalendarAcquisitionBroker {
   CalendarAcquisitionBroker({
-    required LocalContextTransport transport,
-    required String personId,
+    required this._transport,
+    required this._personId,
     String? hostEpoch,
-  }) : _transport = transport,
-       _personId = personId,
-       _hostEpoch = hostEpoch ?? _newEpoch();
+  }) : _hostEpoch = hostEpoch ?? _newEpoch();
 
   final LocalContextTransport _transport;
   final String _personId;
@@ -232,12 +230,10 @@ final class CalendarAcquisitionBroker {
 
 final class CalendarAcquisitionService {
   CalendarAcquisitionService({
-    required CalendarAcquisitionBroker broker,
-    required CalendarAcquisitionReader reader,
-    Duration pollInterval = const Duration(milliseconds: 100),
-  }) : _broker = broker,
-       _reader = reader,
-       _pollInterval = pollInterval;
+    required this._broker,
+    required this._reader,
+    this._pollInterval = const Duration(milliseconds: 100),
+  });
 
   final CalendarAcquisitionBroker _broker;
   final CalendarAcquisitionReader _reader;

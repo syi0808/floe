@@ -21,7 +21,7 @@ final class AgentCalendarExpertController extends ChangeNotifier {
   final AgentRegistryController registryController;
   final String personId;
   final bool Function() canOperate;
-  final void Function(String failure) onFatalFailure;
+  final void Function(AgentVaultException failure) onFatalFailure;
 
   AgentCalendarExperts? experts;
   String? failure;
@@ -399,8 +399,9 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       failure = error is AgentVaultException
           ? error.failure
           : 'storage_unavailable';
-      if (failure == 'vault_unavailable' || failure == 'interrupted') {
-        onFatalFailure(failure!);
+      if (error is AgentVaultException &&
+          (error.reloadRequired == true || error.sealSession == true)) {
+        onFatalFailure(error);
       }
     } finally {
       busy = false;
