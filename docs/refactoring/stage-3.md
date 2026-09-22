@@ -1,6 +1,6 @@
 # Stage 3 — Product Boundary and Final Composition
 
-**Status: active**
+**Status: closed · archived — refactoring program ended by macOS-first scope decision**
 
 **Stage 3 entry baseline (historical):** `39263a1339d0519b78a20680c0eea73506ff6d6f` (`2-F`)
 
@@ -10,11 +10,13 @@ Stage 1 ownership is complete. Stage 2 canonical internal runtime is complete an
 
 This document is the Stage 3 progress source of truth. The linked step documents own the concrete scope for each checkpoint.
 
-## Current checkpoint
+## Closure
 
-**Current: 3-F — End-to-End Product Validation.**
+There is no active Stage 3 checkpoint.
 
-3-E is **complete · frozen**. Its [Agent report](stage-3/3-e.md#agent-report) records E0 → E7 caller cutover, owner-prefixed local AppWire services, caller-zero outer ABI/fixture/legacy Conversation deletion, and all final gates on implementation snapshot `c83a6fbcfa6d77f080fe22514808e8befb24f314`. Closure after that snapshot is documentation only. 3-F is **active**; its [Agent report](stage-3/3-f.md#agent-report) owns the validation evidence and remaining blockers. Stage 3 is not yet eligible to freeze.
+3-E is **complete · frozen**. 3-F is **closed · archived by scope decision**, not declared fully green: its final macOS/Rust/Flutter/Architecture/Foundation/Vault/EventKit/Go/remote-model evidence is recorded in [3-F](stage-3/3-f.md), while the final-candidate iOS simulator package/ABI validation remains **deferred until active iOS development**. The refactoring program ends here so current work can focus on macOS stabilization without keeping historical migration context in the default documentation path.
+
+The final refactoring implementation candidate is `f7fa06dbd9b27c9e6bf8f02e1a67e120cbc620e8`; the final pre-archive validation report is `d03615306d5d75689f5a0d6a53883f92598e39a6`. This archive record intentionally does not relabel the skipped iOS simulator gate as passed.
 
 3-D remains **complete · frozen**: its [Residual closure Agent report](stage-3/3-d.md#residual-closure-agent-report) records coherent Go owner extraction, real Flutter pairing, protected Rust Access success and revocation failure through a test-owned current saved-connection store, and all final gates on source snapshot `864a39fbd5e5205b4afc5de993c9c4db822716a6`. 3-C remains **complete · frozen**; see [its Agent report and exact Flutter handoff](stage-3/3-c.md#agent-report). No 3-D implementation is part of 3-C closure. 3-B remains **complete · frozen**; see [its Agent report](stage-3/3-b.md#agent-report).
 
@@ -27,7 +29,7 @@ This document is the Stage 3 progress source of truth. The linked step documents
 - [x] **3-C — Protocol and FFI contract cutover** — [execution plan](stage-3/3-c.md) (complete · frozen)
 - [x] **3-D — Flutter, native and server caller cutover** — [execution plan](stage-3/3-d.md) (complete · frozen; residual closure complete)
 - [x] **3-E — Outer compatibility deletion** — [execution plan](stage-3/3-e.md) (complete · frozen)
-- [ ] **3-F — End-to-end product validation** — [execution plan](stage-3/3-f.md)
+- [x] **3-F — End-to-end product validation** — [execution plan](stage-3/3-f.md) (closed · archived by scope decision; final-candidate iOS simulator validation deferred)
 
 ## Fixed Stage 3 ownership rule
 
@@ -122,14 +124,16 @@ Canonical Foundation transport is implemented. 3-D verified the macOS release bu
 
 3-E  delete caller-zero compatibility (complete · frozen)
 
-3-F  final Apple-first product validation (active; freeze blocked)
+3-F  final Apple-first product validation (closed · archived by scope decision; iOS simulator validation deferred)
 ~~~
 
 Do not skip directly to 3-E because a symbol is named `legacy`, `compat`, `RemoteRoute` or `v2`. Caller ownership and the final product contract determine deletion.
 
 ## Stage 3 exit gate
 
-Stage 3 is complete only when all are true:
+The checklist below is retained as the original historical exit gate. The refactoring program was closed by scope decision before the final-candidate iOS simulator package gate was rerun; that item remains deferred rather than passed.
+
+The original gate required:
 
 - General Conversation and delegated Expert execution run through canonical owners;
 - Schedule/Calendar no longer owns a parallel model runtime;
