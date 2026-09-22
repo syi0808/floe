@@ -272,8 +272,6 @@ pub struct WorkerResult {
     pub stage: String,
     #[cfg(test)]
     pub events: Vec<floe_conversation::AgentEvent>,
-    #[cfg(test)]
-    pub next_sequence: usize,
     pub done: bool,
     pub state: Option<VaultState>,
     pub session: Option<floe_conversation::AgentSession>,

@@ -21,7 +21,7 @@ use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use crate::{
     CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
     ConversationSessionOperation, ConversationTurnRequest, RemoteGrantOverview, VaultState,
-    WorkerAction, WorkerOperation, WorkerResult,
+    WorkerAction, WorkerResult,
 };
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use floe_agent_contract::AgentFailure;
@@ -987,8 +987,6 @@ impl Worker {
             stage: job.action.name().into(),
             #[cfg(test)]
             events: progress.events[after_sequence..].to_vec(),
-            #[cfg(test)]
-            next_sequence: progress.events.len(),
             done: progress.done,
             state: progress.state,
             session: progress.session.clone(),
