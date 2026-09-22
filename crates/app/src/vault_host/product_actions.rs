@@ -58,6 +58,9 @@ pub(super) async fn execute<Keys: VaultKeyProvider>(
         _ => None,
     };
     if let Some(action_id) = action_id {
+        if vault.is_none() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
         if let Some(vault) = vault {
             match vault.agent_calendar_action(action_id).await {
                 Ok(_) => {

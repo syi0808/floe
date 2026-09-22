@@ -40,6 +40,7 @@ import 'package:floe_client/features/settings/presentation/settings_screen.dart'
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
@@ -69,6 +70,7 @@ class PersonalDayScreen extends StatefulWidget {
     required this.gateway,
     required this.query,
     this.agentGateway,
+    this.ownerGateways = const LocalOwnerGateways(),
     this.pairingGateway,
     this.remoteAccessGateway,
     this.serverClient,
@@ -79,6 +81,7 @@ class PersonalDayScreen extends StatefulWidget {
   final DayGateway gateway;
   final DayQuery query;
   final AgentConversationGateway? agentGateway;
+  final LocalOwnerGateways ownerGateways;
   final RemotePairingGateway? pairingGateway;
   final RemoteAccessGateway? remoteAccessGateway;
   final LocalServerClient? serverClient;
@@ -133,6 +136,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     if (agentGateway != null) {
       agentController = AgentController(
         gateway: agentGateway,
+        owners: widget.ownerGateways,
         personId: widget.query.personId,
       )..addListener(_reloadActionAuthorityAfterVaultUnlock);
     }
@@ -287,9 +291,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         macOSContext: widget.macOSContext,
         daySnapshot: controller.snapshot,
         agentController: agentController,
-        agentVaultGateway: widget.agentGateway is NativeAgentVaultGateway
-            ? widget.agentGateway as NativeAgentVaultGateway
-            : null,
+        personalAccessGateway: widget.ownerGateways.personalAccess,
         calendarSources: _agentCalendarSources,
         calendarSourceChanges: controller,
         initialDeviceCalendarDetail: openDeviceCalendarDetail,
@@ -299,9 +301,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return SettingsScreen(
         pairingGateway: widget.pairingGateway,
         client: widget.serverClient,
-        agentVaultGateway: widget.agentGateway is NativeAgentVaultGateway
-            ? widget.agentGateway as NativeAgentVaultGateway
-            : null,
+        personalAccessGateway: widget.ownerGateways.personalAccess,
         actionController: actionController,
         agentController: agentController,
         androidContext: widget.androidContext,

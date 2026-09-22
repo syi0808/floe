@@ -140,7 +140,7 @@ void main() {
       MaterialApp(
         theme: FloeTheme.light,
         home: Scaffold(
-          body: SettingsScreen(client: null, agentVaultGateway: null),
+          body: SettingsScreen(client: null, personalAccessGateway: null),
         ),
       ),
     );

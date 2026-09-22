@@ -16,6 +16,7 @@ import 'package:floe_client/features/experts/domain/agent_expert_result.dart';
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/experts/application/agent_calendar_expert_controller.dart';
@@ -37,13 +38,57 @@ final class AgentController extends ChangeNotifier {
     required AgentConversationGateway gateway,
     required String personId,
     Duration loadTimeout = const Duration(seconds: 10),
-  }) => AgentController._(gateway, personId, loadTimeout);
+    LocalOwnerGateways owners = const LocalOwnerGateways(),
+  }) => AgentController._(
+    gateway,
+    personId,
+    loadTimeout,
+    LocalOwnerGateways(
+      vault:
+          owners.vault ??
+          (gateway is AgentVaultGateway ? gateway as AgentVaultGateway : null),
+      registry:
+          owners.registry ??
+          (gateway is AgentRegistryGateway
+              ? gateway as AgentRegistryGateway
+              : null),
+      calendarExperts:
+          owners.calendarExperts ??
+          (gateway is AgentCalendarExpertGateway
+              ? gateway as AgentCalendarExpertGateway
+              : null),
+      memory:
+          owners.memory ??
+          (gateway is AgentMemoryGateway
+              ? gateway as AgentMemoryGateway
+              : null),
+      memoryReview:
+          owners.memoryReview ??
+          (gateway is AgentMemoryReviewGateway
+              ? gateway as AgentMemoryReviewGateway
+              : null),
+      connections:
+          owners.connections ??
+          (gateway is AgentConnectionsGateway
+              ? gateway as AgentConnectionsGateway
+              : null),
+      proposals:
+          owners.proposals ??
+          (gateway is AgentProposalGateway
+              ? gateway as AgentProposalGateway
+              : null),
+      personalAccess: owners.personalAccess,
+    ),
+  );
 
-  AgentController._(this.gateway, this.personId, this.loadTimeout) {
+  AgentController._(
+    this.gateway,
+    this.personId,
+    this.loadTimeout,
+    this.owners,
+  ) {
     registryController = AgentRegistryController(
-      gateway: gateway is AgentRegistryGateway
-          ? gateway as AgentRegistryGateway
-          : null,
+      gateway: owners.registry,
       personId: personId,
       canOperate: () =>
           !_busy &&
@@ -54,12 +99,8 @@ final class AgentController extends ChangeNotifier {
       onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     memoryController = AgentMemoryController(
-      memoryGateway: gateway is AgentMemoryGateway
-          ? gateway as AgentMemoryGateway
-          : null,
-      reviewGateway: gateway is AgentMemoryReviewGateway
-          ? gateway as AgentMemoryReviewGateway
-          : null,
+      memoryGateway: owners.memory,
+      reviewGateway: owners.memoryReview,
       personId: personId,
       canOperate: () =>
           !_busy &&
@@ -71,12 +112,8 @@ final class AgentController extends ChangeNotifier {
       onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     calendarExpertController = AgentCalendarExpertController(
-      gateway: gateway is AgentCalendarExpertGateway
-          ? gateway as AgentCalendarExpertGateway
-          : null,
-      registryGateway: gateway is AgentRegistryGateway
-          ? gateway as AgentRegistryGateway
-          : null,
+      gateway: owners.calendarExperts,
+      registryGateway: owners.registry,
       registryController: registryController,
       personId: personId,
       canOperate: () =>
@@ -90,9 +127,7 @@ final class AgentController extends ChangeNotifier {
       onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
     connectionController = AgentConnectionController(
-      gateway: gateway is AgentConnectionsGateway
-          ? gateway as AgentConnectionsGateway
-          : null,
+      gateway: owners.connections,
       personId: personId,
       canOperate: () =>
           !_busy &&
@@ -108,6 +143,7 @@ final class AgentController extends ChangeNotifier {
   }
 
   final AgentConversationGateway gateway;
+  final LocalOwnerGateways owners;
   final String personId;
   final Duration loadTimeout;
   AgentSession? session;
@@ -180,7 +216,7 @@ final class AgentController extends ChangeNotifier {
 
   bool canInspectProposal(AgentCapabilityMessage message) =>
       usesVault &&
-      gateway is AgentProposalGateway &&
+      owners.proposals != null &&
       !busy &&
       !_sealed &&
       !_disposed &&
@@ -208,7 +244,7 @@ final class AgentController extends ChangeNotifier {
     _proposalFailures.remove(message.callId);
     _notify();
     try {
-      final result = await (gateway as AgentProposalGateway).inspectProposal(
+      final result = await owners.proposals!.inspectProposal(
         personId: personId,
         sessionId: original.id,
         invocationId: message.callId,
@@ -342,7 +378,7 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
-  bool get usesVault => gateway is AgentVaultGateway;
+  bool get usesVault => owners.vault != null;
   bool get isGeneralConversation =>
       session?.scope == null && session?.dataClasses.singleOrNull == 'personal';
   bool get isConnectedConversation => isGeneralConversation;
@@ -403,7 +439,7 @@ final class AgentController extends ChangeNotifier {
     progress = AgentProgress.loading;
     _notify();
     try {
-      if (gateway case final AgentVaultGateway vault) {
+      if (owners.vault case final vault?) {
         final state = await vault.vaultStatus(personId).timeout(loadTimeout);
         if (_sealed) return;
         vaultState = switch (state) {
@@ -618,13 +654,10 @@ final class AgentController extends ChangeNotifier {
   }
 
   Future<void> unlock({bool create = false}) async {
-    if (busy ||
-        _disposed ||
-        _locking != null ||
-        gateway is! AgentVaultGateway) {
+    if (busy || _disposed || _locking != null || owners.vault == null) {
       return;
     }
-    final vault = gateway as AgentVaultGateway;
+    final vault = owners.vault!;
     _sealed = false;
     _begin();
     progress = AgentProgress.loading;
@@ -657,7 +690,7 @@ final class AgentController extends ChangeNotifier {
   }
 
   Future<void> closeView() {
-    if (gateway is! AgentVaultGateway) return stop();
+    if (owners.vault == null) return stop();
     return _locking ??= _lock().whenComplete(() => _locking = null);
   }
 
@@ -677,7 +710,7 @@ final class AgentController extends ChangeNotifier {
     await _operationDone?.future;
     _begin();
     try {
-      await (gateway as AgentVaultGateway).lockVault(personId);
+      await owners.vault!.lockVault(personId);
       vaultState = AgentVaultState.locked;
       _clearFailure();
       needsReload = false;

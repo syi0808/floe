@@ -1,3 +1,8 @@
+import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+
+import '../../support/app_wire_transport.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -44,10 +49,7 @@ void main() {
 
   test('native gateway sends only instance revision and explicit enablement target', () async {
     final transport = RegistryTransport();
-    final gateway = NativeAgentVaultGateway(
-      transport.call,
-      deviceId: 'test-device',
-    );
+    final gateway = NativeRegistryGateway(transport);
     final before = (await gateway.readRegistry(registryPerson))!;
     final after = await gateway.configureRegistry(
       before,
@@ -73,10 +75,7 @@ void main() {
     'lost mutation reply is drained and reread without replaying configuration',
     () async {
       final transport = RegistryTransport();
-      final gateway = NativeAgentVaultGateway(
-        transport.call,
-        deviceId: 'test-device',
-      );
+      final gateway = NativeRegistryGateway(transport);
       final before = (await gateway.readRegistry(registryPerson))!;
       transport.loseMutationReply = true;
       await expectLater(
@@ -100,10 +99,7 @@ void main() {
     () async {
       final transport = RegistryTransport()
         ..snapshot['person_id'] = registryInstance;
-      final gateway = NativeAgentVaultGateway(
-        transport.call,
-        deviceId: 'test-device',
-      );
+      final gateway = NativeRegistryGateway(transport);
       await expectLater(
         gateway.readRegistry(registryPerson),
         throwsFormatException,
@@ -218,19 +214,27 @@ void main() {
   });
 }
 
-class RegistryTransport {
+class RegistryTransport extends TestAppWireTransport {
   final snapshot = registryFixture();
   Map<String, dynamic>? pending;
   Map? lastChange;
   bool loseMutationReply = false;
   int changes = 0;
 
+  @override
   Future<Map<String, dynamic>> call(Map<String, Object?> request) async {
-    final operation = request['operation'] as Map;
-    if (operation['kind'] == 'submit') {
-      if (pending != null) throw const AgentVaultException('conflict');
-      final action = operation['action'] as Map;
-      expect(action['kind'], 'registry');
+    final operation = (request['command'] ?? request['query']) as Map;
+    final operationId = ownerOperationId(request);
+    if (!(operation['kind'] as String).endsWith('.read_result')) {
+      if (pending != null) {
+        if (pending!['operation_id'] == operationId) return pending!;
+        throw const AgentVaultException('conflict');
+      }
+      final action = operation;
+      expect(
+        action['kind'],
+        anyOf('experts.registry.inspect', 'experts.registry.configure'),
+      );
       final change = action['change'] as Map?;
       if (change != null) {
         lastChange = change;
@@ -245,7 +249,8 @@ class RegistryTransport {
         snapshot['revision'] = (snapshot['revision'] as int) + 1;
       }
       pending = {
-        'request_id': request['request_id'],
+        'kind': 'expert_operation',
+        'operation_id': ownerOperationId(request),
         'done': true,
         'events': <Object?>[],
         'next_sequence': 0,
@@ -259,9 +264,11 @@ class RegistryTransport {
         throw StateError('lost registry reply');
       }
     }
-    if (pending == null) throw const AgentVaultException('not_found');
+    if (pending == null) {
+      throw const NativeTransportException('not_found', 'released');
+    }
     final result = Map<String, dynamic>.from(pending!);
-    if (operation['kind'] == 'release') pending = null;
+    if (operation['release'] == true) pending = null;
     return result;
   }
 }

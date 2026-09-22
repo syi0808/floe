@@ -18,6 +18,7 @@ import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/connections/presentation/agent_connection_settings.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
+import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
@@ -38,7 +39,7 @@ class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.client,
-    this.agentVaultGateway,
+    this.personalAccessGateway,
     this.pairingGateway,
     this.actionController,
     this.agentController,
@@ -49,7 +50,7 @@ class SettingsScreen extends StatefulWidget {
   });
 
   final LocalServerClient? client;
-  final NativeAgentVaultGateway? agentVaultGateway;
+  final AgentPersonalAccessGateway? personalAccessGateway;
   final RemotePairingGateway? pairingGateway;
   final CalendarActionController? actionController;
   final AgentController? agentController;
@@ -100,7 +101,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       androidContext: widget.androidContext,
       appleContext: widget.appleContext,
       daySnapshot: widget.daySnapshot,
-      personalAccessGateway: widget.agentVaultGateway,
+      personalAccessGateway: widget.personalAccessGateway,
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
@@ -110,7 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ),
     _SettingsPage.remoteServer => _RemoteServerSettings(
       client: widget.client,
-      agentVaultGateway: widget.agentVaultGateway,
+      personalAccessGateway: widget.personalAccessGateway,
       pairingGateway: widget.pairingGateway,
     ),
   };
@@ -220,12 +221,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 class _RemoteServerSettings extends StatelessWidget {
   const _RemoteServerSettings({
     required this.client,
-    required this.agentVaultGateway,
+    required this.personalAccessGateway,
     required this.pairingGateway,
   });
 
   final LocalServerClient? client;
-  final NativeAgentVaultGateway? agentVaultGateway;
+  final AgentPersonalAccessGateway? personalAccessGateway;
   final RemotePairingGateway? pairingGateway;
 
   @override

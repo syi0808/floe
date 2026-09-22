@@ -39,7 +39,6 @@ final class CalendarSubjectPreviewRequest {
 
   Map<String, Object?> toJson() => {
     'provider': provider,
-    'device_id': deviceId,
     'connection_id': connectionId,
     'calendar_ids': calendarIds,
     'connection_scope': connectionScope,
@@ -190,7 +189,6 @@ final class AgentCalendarAccessRequest {
       AgentCalendarAccessOperation.setScope => {
         'kind': 'set_scope',
         'provider': provider!,
-        'device_id': deviceId!,
         'calendar_ids': calendarIds!,
         'connection_scope': connectionScope!,
         'connection_revision': connectionRevision!,
@@ -251,7 +249,6 @@ final class AgentCalendarSetup {
     'expected_revision': expectedRevision,
     'setup_id': setupId,
     'provider': provider,
-    'device_id': deviceId,
     'calendar_ids': calendarIds,
     'connection_scope': connectionScope,
     'connection_revision': connectionRevision,

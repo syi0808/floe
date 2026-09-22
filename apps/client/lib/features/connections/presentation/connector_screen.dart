@@ -25,7 +25,7 @@ import 'package:floe_client/features/connections/presentation/server_connector_p
 import 'package:floe_client/features/experts/presentation/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 import 'package:floe_client/features/settings/presentation/agent_personal_access_settings.dart';
@@ -45,7 +45,7 @@ class ConnectorScreen extends StatefulWidget {
     this.agentController,
     this.calendarSources,
     this.calendarSourceChanges,
-    this.agentVaultGateway,
+    this.personalAccessGateway,
     this.remoteAccessGateway,
     this.connectorAuthorization,
     this.appleContext,
@@ -68,7 +68,7 @@ class ConnectorScreen extends StatefulWidget {
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
   final RemoteAccessGateway? remoteAccessGateway;
-  final NativeAgentVaultGateway? agentVaultGateway;
+  final AgentPersonalAccessGateway? personalAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
   final DaySnapshot? daySnapshot;
@@ -408,7 +408,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     connection: connection,
     personId: widget.query.personId,
     deviceId: connection.descriptor.execution.deviceId ?? widget.deviceId ?? '',
-    agentVaultGateway: widget.agentVaultGateway,
+    personalAccessGateway: widget.personalAccessGateway,
     appleContext: widget.appleContext,
     macOSContext: widget.macOSContext,
     daySnapshot: widget.daySnapshot,
@@ -760,7 +760,7 @@ final class _AppleConnectionDetail extends StatefulWidget {
     required this.connection,
     required this.personId,
     required this.deviceId,
-    required this.agentVaultGateway,
+    required this.personalAccessGateway,
     required this.appleContext,
     required this.macOSContext,
     required this.daySnapshot,
@@ -771,7 +771,7 @@ final class _AppleConnectionDetail extends StatefulWidget {
   final AgentConnection connection;
   final String personId;
   final String deviceId;
-  final NativeAgentVaultGateway? agentVaultGateway;
+  final AgentPersonalAccessGateway? personalAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
   final DaySnapshot? daySnapshot;
@@ -873,7 +873,7 @@ final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
 
   @override
   Widget build(BuildContext context) {
-    final gateway = widget.agentVaultGateway;
+    final gateway = widget.personalAccessGateway;
     final scoped = gateway == null
         ? null
         : _ScopedPersonalAccessGateway(

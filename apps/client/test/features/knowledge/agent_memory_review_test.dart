@@ -1,36 +1,42 @@
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+
+import '../../support/app_wire_transport.dart';
+
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('native gateway reads and decides pending memory candidates', () async {
     Map<String, Object?>? submittedAction;
     var pending = true;
-    final gateway = NativeAgentVaultGateway((request) async {
-      final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'submit') {
-        submittedAction = Map<String, Object?>.from(
-          operation['action']! as Map,
+    final gateway = NativeMemoryGateway(
+      CallbackAppWireTransport((request) async {
+        final operation = Map<String, Object?>.from(
+          (request['command'] ?? request['query']) as Map,
         );
-        if (submittedAction!['decision'] != null) pending = false;
-      }
-      return {
-        'request_id': request['request_id'],
-        'events': <Object?>[],
-        'next_sequence': 0,
-        'done': true,
-        'state': 'ready',
-        'memory_review': {
-          'schema_version': 1,
-          'person_id': 'person-1',
-          'candidates': pending ? [_candidate] : <Object?>[],
-        },
-        'failure': null,
-      };
-    }, deviceId: 'test-device');
+        if (!(operation['kind'] as String).endsWith('.read_result')) {
+          submittedAction = operation;
+          if (submittedAction!['decision'] != null) pending = false;
+        }
+        return {
+          'kind': 'knowledge_operation',
+          'operation_id': ownerOperationId(request),
+          'events': <Object?>[],
+          'next_sequence': 0,
+          'done': true,
+          'state': 'ready',
+          'memory_review': {
+            'schema_version': 1,
+            'person_id': 'person-1',
+            'candidates': pending ? [_candidate] : <Object?>[],
+          },
+          'failure': null,
+        };
+      }),
+    );
 
     final review = await gateway.readMemoryReview('person-1');
-    expect(submittedAction, {'kind': 'memory_review'});
+    expect(submittedAction, {'kind': 'knowledge.memory.review'});
     expect(review.candidates.single.statement, 'Prefers focused mornings');
     expect(review.candidates.single.sourceCount, 1);
 
@@ -40,8 +46,9 @@ void main() {
       decision: AgentMemoryDecision.approve,
     );
     expect(submittedAction, {
-      'kind': 'memory_review',
-      'decision': {'candidate_id': 'candidate-1', 'decision': 'approve'},
+      'kind': 'knowledge.memory.decide',
+      'candidate_id': 'candidate-1',
+      'decision': 'approve',
     });
     expect(decided.candidates, isEmpty);
   });

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/day/application/native_day_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
@@ -21,15 +23,28 @@ final class TestAppHost {
     required String deviceId,
     CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
     DateTime Function()? clock,
-  }) async => TestAppHost._(
-    await AppRuntime.open(
-      libraryPath: libraryPath,
-      databasePath: databasePath,
-      deviceId: deviceId,
-    ),
-    calendarAdapter,
-    clock,
-  );
+  }) async {
+    final root = File(databasePath).parent;
+    final identity = File('${root.path}/local_device_id');
+    if (await identity.exists()) {
+      if (await identity.readAsString() != deviceId) {
+        throw StateError('Test device identity changed');
+      }
+    } else {
+      await identity.writeAsString(deviceId);
+    }
+    final profile = Directory('${root.path}/people/$localPersonId');
+    await profile.create(recursive: true);
+    return TestAppHost._(
+      await AppRuntime.open(
+        libraryPath: libraryPath,
+        databasePath: '${profile.path}/floe.db',
+        deviceId: deviceId,
+      ),
+      calendarAdapter,
+      clock,
+    );
+  }
 
   Future<void> close() async {
     await day.drain();

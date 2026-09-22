@@ -1,3 +1,7 @@
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+
+import '../../support/app_wire_transport.dart';
+
 import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -19,7 +23,6 @@ void main() {
       'expected_revision',
       'setup_id',
       'provider',
-      'device_id',
       'calendar_ids',
       'connection_scope',
       'connection_revision',
@@ -101,8 +104,8 @@ void main() {
 
   test('read-only inspection supplies instance and revision zero before the first sample', () async {
     final transport = CalendarExpertTransport();
-    final gateway = NativeAgentVaultGateway(
-      transport.call,
+    final gateway = NativeCalendarExpertGateway(
+      transport,
       deviceId: 'test-device',
     );
     final empty = await gateway.readCalendarExperts(registryPerson);
@@ -152,8 +155,8 @@ void main() {
     'gateway rejects a reviewed device different from its current device',
     () async {
       final transport = CalendarExpertTransport();
-      final gateway = NativeAgentVaultGateway(
-        transport.call,
+      final gateway = NativeCalendarExpertGateway(
+        transport,
         deviceId: 'test-device',
       );
       final request = AgentCalendarSetup(
@@ -178,29 +181,26 @@ void main() {
 
   test('setup uses explicit stable identity and retries tolerate later revocation or state changes', () async {
     final transport = CalendarExpertTransport();
-    final gateway = NativeAgentVaultGateway(
-      transport.call,
+    final gateway = NativeCalendarExpertGateway(
+      transport,
       deviceId: 'test-device',
     );
     final request = calendarSetupRequest();
     final installed = await gateway.installCalendarExpert(request);
     expect(installed.views.single.enabled, false);
-    expect(transport.committedSetup, {
-      ...request.toJson(),
-      'device_id': 'test-device',
-    });
+    expect(transport.committedSetup, request.toJson());
     expect(
       transport.committedSetup!['source_authority'],
       calendarSourceAuthority.toJson(),
     );
-    expect(transport.committedSetup!['device_id'], 'test-device');
-    var registry = await gateway.configureRegistry(
+    expect(transport.committedSetup!.containsKey('device_id'), isFalse);
+    var registry = await NativeRegistryGateway(transport).configureRegistry(
       installed.registry,
       target: AgentRegistryTarget.calendarView,
       id: calendarViewId,
       enabled: true,
     );
-    registry = await gateway.configureRegistry(
+    registry = await NativeRegistryGateway(transport).configureRegistry(
       registry,
       target: AgentRegistryTarget.calendarView,
       id: calendarViewId,
@@ -216,8 +216,8 @@ void main() {
   test('uncertain submit poll and release are drained before exact setup reconciliation', () async {
     for (final loss in ['submit', 'poll', 'release_before', 'release_after']) {
       final transport = CalendarExpertTransport()..loss = loss;
-      final gateway = NativeAgentVaultGateway(
-        transport.call,
+      final gateway = NativeCalendarExpertGateway(
+        transport,
         deviceId: 'test-device',
       );
       final request = calendarSetupRequest();
@@ -228,7 +228,7 @@ void main() {
       final result = await gateway.installCalendarExpert(request);
       expect(result.receiptFor(request), isNotNull);
       expect(transport.installations, 1, reason: loss);
-      expect(transport.submissions, 2, reason: loss);
+      expect(transport.submissions, 1, reason: loss);
       expect(transport.pending, isNull);
     }
   });
@@ -237,8 +237,8 @@ void main() {
     'refresh reconciles accepted installation without submitting it again',
     () async {
       final transport = CalendarExpertTransport()..loss = 'submit';
-      final gateway = NativeAgentVaultGateway(
-        transport.call,
+      final gateway = NativeCalendarExpertGateway(
+        transport,
         deviceId: 'test-device',
       );
       final request = calendarSetupRequest();
@@ -257,48 +257,50 @@ void main() {
     () async {
       for (var mode = 0; mode < 7; mode++) {
         final transport = CalendarExpertTransport();
-        final gateway = NativeAgentVaultGateway((request) async {
-          final result = await transport.call(request);
-          final overview = result['calendar_experts'] as Map?;
-          if (overview != null && (overview['setups'] as List).isNotEmpty) {
-            switch (mode) {
-              case 0:
-                (overview['registry'] as Map)['person_id'] = registryInstance;
-              case 1:
-                (overview['registry'] as Map)['instance_id'] = registryPerson;
-              case 2:
-                ((overview['views'] as List).single as Map)['calendar_ids'] = [
-                  'changed',
-                ];
-              case 3:
-                (overview['setups'] as List).clear();
-              case 4:
-                result['state'] = 'locked';
-              case 5:
-                result['failure'] = {
-                  'schema_version': 1,
-                  'domain': 'vault',
-                  'category': 'transient',
-                  'reason_code': 'vault_unavailable',
-                  'kind': 'vault_unavailable',
-                  'stage': 'calendar_experts',
-                  'safe_actions': const <String>['reopen_vault'],
-                  'affected_refs': const <String>[],
-                  'incident_id': result['request_id'],
-                  'retry_policy': 'never',
-                  'retryable': false,
-                  'recovery_action': 'reopen_vault',
-                  'reload_required': false,
-                  'seal_session': false,
-                  'correlation_request_id': result['request_id'],
-                };
-              case 6:
-                ((overview['views'] as List).single as Map)['device_id'] =
-                    'other-device';
+        final gateway = NativeCalendarExpertGateway(
+          CallbackAppWireTransport((request) async {
+            final result = await transport.call(request);
+            final overview = result['calendar_experts'] as Map?;
+            if (overview != null && (overview['setups'] as List).isNotEmpty) {
+              switch (mode) {
+                case 0:
+                  (overview['registry'] as Map)['person_id'] = registryInstance;
+                case 1:
+                  (overview['registry'] as Map)['instance_id'] = registryPerson;
+                case 2:
+                  ((overview['views'] as List).single as Map)['calendar_ids'] =
+                      ['changed'];
+                case 3:
+                  (overview['setups'] as List).clear();
+                case 4:
+                  result['state'] = 'locked';
+                case 5:
+                  result['failure'] = {
+                    'schema_version': 1,
+                    'domain': 'vault',
+                    'category': 'transient',
+                    'reason_code': 'vault_unavailable',
+                    'kind': 'vault_unavailable',
+                    'stage': 'calendar_experts',
+                    'safe_actions': const <String>['reopen_vault'],
+                    'affected_refs': const <String>[],
+                    'incident_id': result['operation_id'],
+                    'retry_policy': 'never',
+                    'retryable': false,
+                    'recovery_action': 'reopen_vault',
+                    'reload_required': false,
+                    'seal_session': false,
+                    'correlation_request_id': result['operation_id'],
+                  };
+                case 6:
+                  ((overview['views'] as List).single as Map)['device_id'] =
+                      'other-device';
+              }
             }
-          }
-          return result;
-        }, deviceId: 'test-device');
+            return result;
+          }),
+          deviceId: 'test-device',
+        );
         await expectLater(
           gateway.installCalendarExpert(calendarSetupRequest()),
           mode == 5

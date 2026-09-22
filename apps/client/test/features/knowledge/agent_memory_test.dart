@@ -1,31 +1,37 @@
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+
+import '../../support/app_wire_transport.dart';
+
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('native gateway reads a bounded saved memory overview', () async {
     Map<String, Object?>? submittedAction;
-    final gateway = NativeAgentVaultGateway((request) async {
-      final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'submit') {
-        submittedAction = Map<String, Object?>.from(
-          operation['action']! as Map,
+    final gateway = NativeMemoryGateway(
+      CallbackAppWireTransport((request) async {
+        final operation = Map<String, Object?>.from(
+          (request['command'] ?? request['query']) as Map,
         );
-      }
-      return {
-        'request_id': request['request_id'],
-        'events': <Object?>[],
-        'next_sequence': 0,
-        'done': true,
-        'state': 'ready',
-        'memory': _overview,
-        'failure': null,
-      };
-    }, deviceId: 'test-device');
+        if (!(operation['kind'] as String).endsWith('.read_result')) {
+          submittedAction = operation;
+        }
+        return {
+          'kind': 'knowledge_operation',
+          'operation_id': ownerOperationId(request),
+          'events': <Object?>[],
+          'next_sequence': 0,
+          'done': true,
+          'state': 'ready',
+          'memory': _overview,
+          'failure': null,
+        };
+      }),
+    );
 
     final overview = await gateway.readMemory('person-1');
 
-    expect(submittedAction, {'kind': 'memory'});
+    expect(submittedAction, {'kind': 'knowledge.memory.overview'});
     expect(overview.savedCount, 1);
     expect(overview.pendingCount, 2);
     expect(overview.memories.single.statement, 'Prefers focused mornings');

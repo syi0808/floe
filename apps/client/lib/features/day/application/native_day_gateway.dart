@@ -4,7 +4,10 @@ import 'package:flutter/services.dart';
 
 import 'package:floe_client/app/local_identity.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
-import 'package:floe_client/app/runtime/native_transport.dart' show nativeProtocolVersion;
+import 'package:floe_client/app/runtime/native_transport.dart'
+    show NativeTransportException, nativeProtocolVersion;
+import 'package:floe_client/app/runtime/owner_operation.dart';
+import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/calendar_observation_publisher.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -42,20 +45,17 @@ final class NativeDayGateway
 
   @override
   Future<DaySnapshot> loadDay(DayQuery query) async {
-    final envelope = await _runtime.request('load_day', _loadRequest(query));
+    final envelope = await _load(query);
     return _decodeSnapshot(envelope);
   }
 
   @override
   Future<CaptureReceipt> submitCapture(String input, DayQuery query) async {
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'submit_capture',
-        'input': input,
-        'occurred_at': _timestamp(_clock()),
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'submit_capture',
+      'input': input,
+      'occurred_at': _timestamp(_clock()),
+    });
     return _decodeCapture(_asMap(data['capture']));
   }
 
@@ -65,16 +65,13 @@ final class NativeDayGateway
     ClassificationDraft classification,
     DayQuery query,
   ) async {
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'classify_capture',
-        'capture_id': capture.id,
-        'expected_revision': capture.revision,
-        'classification': _classification(classification),
-        'occurred_at': _timestamp(_clock()),
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'classify_capture',
+      'capture_id': capture.id,
+      'expected_revision': capture.revision,
+      'classification': _classification(classification),
+      'occurred_at': _timestamp(_clock()),
+    });
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
@@ -84,30 +81,24 @@ final class NativeDayGateway
     bool completed,
     DayQuery query,
   ) async {
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'set_task_completion',
-        'task_id': task.id,
-        'expected_revision': task.revision,
-        'completed': completed,
-        'occurred_at': _timestamp(_clock()),
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'set_task_completion',
+      'task_id': task.id,
+      'expected_revision': task.revision,
+      'completed': completed,
+      'occurred_at': _timestamp(_clock()),
+    });
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
   @override
   Future<DaySnapshot> deleteItem(DayItem item, DayQuery query) async {
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'delete_item',
-        'target': {'kind': item.kind.name, 'id': item.id},
-        'expected_revision': item.revision,
-        'occurred_at': _timestamp(_clock()),
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'delete_item',
+      'target': {'kind': item.kind.name, 'id': item.id},
+      'expected_revision': item.revision,
+      'occurred_at': _timestamp(_clock()),
+    });
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
@@ -152,21 +143,17 @@ final class NativeDayGateway
     final connectionId = _deviceId.startsWith('local-')
         ? _deviceId.substring('local-'.length)
         : _deviceId;
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'set_calendar_scope',
-        'connection_id': connectionId,
-        'connection_revision': (current.calendar?.revision ?? 0) + 1,
-        'device_id': _deviceId,
-        'scope': includeAll ? 'all' : 'selected',
-        'provider': calendars.first.provider,
-        'calendars': [
-          for (final calendar in calendars)
-            {'calendar_id': calendar.id, 'calendar_name': calendar.name},
-        ],
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'set_calendar_scope',
+      'connection_id': connectionId,
+      'connection_revision': (current.calendar?.revision ?? 0) + 1,
+      'scope': includeAll ? 'all' : 'selected',
+      'provider': calendars.first.provider,
+      'calendars': [
+        for (final calendar in calendars)
+          {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+      ],
+    });
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
@@ -181,26 +168,22 @@ final class NativeDayGateway
   }) async {
     if (connectionId.isEmpty ||
         connectionRevision <= 0 ||
-        deviceId.isEmpty ||
+        deviceId != _deviceId ||
         calendars.isEmpty ||
         calendars.any((calendar) => calendar.provider != provider)) {
       throw ArgumentError('Invalid Calendar connection binding');
     }
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'set_calendar_scope',
-        'connection_id': connectionId,
-        'connection_revision': connectionRevision,
-        'device_id': deviceId,
-        'scope': 'selected',
-        'provider': provider,
-        'calendars': [
-          for (final calendar in calendars)
-            {'calendar_id': calendar.id, 'calendar_name': calendar.name},
-        ],
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'set_calendar_scope',
+      'connection_id': connectionId,
+      'connection_revision': connectionRevision,
+      'scope': 'selected',
+      'provider': provider,
+      'calendars': [
+        for (final calendar in calendars)
+          {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+      ],
+    });
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
@@ -222,19 +205,16 @@ final class NativeDayGateway
           .map((calendar) => calendar.id)
           .toSet();
       if (connection.includeAll) {
-        final discovered = await _runtime.request(
-          'execute',
-          _commandRequest(query, {
-            'type': 'discover_calendars',
-            'expected_revision': connection.revision,
-            'calendars': [
-              for (final calendar in inventory.where(
-                (calendar) => calendar.provider == provider,
-              ))
-                {'calendar_id': calendar.id, 'calendar_name': calendar.name},
-            ],
-          }),
-        );
+        final discovered = await _mutate(query, {
+          'type': 'discover_calendars',
+          'expected_revision': connection.revision,
+          'calendars': [
+            for (final calendar in inventory.where(
+              (calendar) => calendar.provider == provider,
+            ))
+              {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+          ],
+        });
         connection = _decodeSnapshot(_asMap(discovered['snapshot'])).calendar!;
       }
       final active = connection;
@@ -264,27 +244,20 @@ final class NativeDayGateway
           }
         }),
       );
-      final data = await _runtime.request(
-        'execute',
-        _commandRequest(query, {
-          'type': 'import_calendar_sources',
-          'expected_revision': active.revision,
-          'occurred_at': _timestamp(_clock()),
-          'range': {
-            'start_date': _date(query.date),
-            'end_date_exclusive': _date(
-              DateTime.utc(
-                query.date.year,
-                query.date.month,
-                query.date.day + 1,
-              ),
-            ),
-            'timezone_offset_seconds': query.timezoneOffsetSeconds,
-            'end_timezone_offset_seconds': query.endTimezoneOffsetSeconds,
-          },
-          'batches': batches,
-        }),
-      );
+      final data = await _mutate(query, {
+        'type': 'import_calendar_sources',
+        'expected_revision': active.revision,
+        'occurred_at': _timestamp(_clock()),
+        'range': {
+          'start_date': _date(query.date),
+          'end_date_exclusive': _date(
+            DateTime.utc(query.date.year, query.date.month, query.date.day + 1),
+          ),
+          'timezone_offset_seconds': query.timezoneOffsetSeconds,
+          'end_timezone_offset_seconds': query.endTimezoneOffsetSeconds,
+        },
+        'batches': batches,
+      });
       final snapshot = _decodeSnapshot(_asMap(data['snapshot']));
       final syncedConnection = snapshot.calendar;
       if (syncedConnection != null) {
@@ -307,14 +280,11 @@ final class NativeDayGateway
       if (error is AppRuntimeException && error.code != 'validation') {
         rethrow;
       }
-      final data = await _runtime.request(
-        'execute',
-        _commandRequest(query, {
-          'type': 'calendar_failed',
-          'expected_revision': connection!.revision,
-          'failure': _calendarFailure(error),
-        }),
-      );
+      final data = await _mutate(query, {
+        'type': 'calendar_failed',
+        'expected_revision': connection!.revision,
+        'failure': _calendarFailure(error),
+      });
       return _decodeSnapshot(_asMap(data['snapshot']));
     }
   }
@@ -361,13 +331,10 @@ final class NativeDayGateway
     if (_calendarObservationPublisher.supports(current.calendar!.provider)) {
       await _calendarObservationPublisher.revoke(personId: query.personId);
     }
-    final data = await _runtime.request(
-      'execute',
-      _commandRequest(query, {
-        'type': 'disconnect_calendar',
-        'expected_revision': current.calendar!.revision,
-      }),
-    );
+    final data = await _mutate(query, {
+      'type': 'disconnect_calendar',
+      'expected_revision': current.calendar!.revision,
+    });
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
@@ -385,23 +352,52 @@ final class NativeDayGateway
     return completer.future;
   }
 
+  Future<Map<String, dynamic>> _load(DayQuery query) async {
+    try {
+      final result = await ownerQuery(
+        _runtime.wireTransport,
+        newAgentRequestId(),
+        {'kind': 'day.snapshot', 'day': _day(query)},
+      );
+      if (result['kind'] != 'day_snapshot') {
+        throw const FormatException('Invalid Day result');
+      }
+      return _asMap(result['snapshot']);
+    } on NativeTransportException catch (error) {
+      throw AppRuntimeException(
+        error.metadata['owner_code'] ?? error.code,
+        error.message,
+        field: error.field,
+        metadata: error.metadata,
+      );
+    }
+  }
 
-
-  Map<String, dynamic> _loadRequest(DayQuery query) => {
-    'schema_version': nativeProtocolVersion,
-    'person_id': query.personId,
-    'day': _day(query),
-  };
-
-  Map<String, dynamic> _commandRequest(
+  Future<Map<String, dynamic>> _mutate(
     DayQuery query,
-    Map<String, dynamic> command,
-  ) => {
-    'schema_version': nativeProtocolVersion,
-    'person_id': query.personId,
-    'day': _day(query),
-    'command': command,
-  };
+    Map<String, dynamic> mutation,
+  ) async {
+    final commandId = newAgentRequestId();
+    try {
+      final result = await ownerCommand(_runtime.wireTransport, commandId, {
+        'kind': 'day.mutate',
+        'day': _day(query),
+        'mutation': mutation,
+      });
+      if (result['kind'] != 'day_mutation' ||
+          result['command_id'] != commandId) {
+        throw const FormatException('Invalid Day mutation correlation');
+      }
+      return _asMap(result['mutation']);
+    } on NativeTransportException catch (error) {
+      throw AppRuntimeException(
+        error.metadata['owner_code'] ?? error.code,
+        error.message,
+        field: error.field,
+        metadata: error.metadata,
+      );
+    }
+  }
 
   Map<String, dynamic> _day(DayQuery query) {
     final now = _clock();

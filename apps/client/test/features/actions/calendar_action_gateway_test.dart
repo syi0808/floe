@@ -1,4 +1,5 @@
 import '../../support/app_host.dart';
+import '../../support/app_wire_transport.dart';
 
 import 'dart:io';
 
@@ -12,50 +13,69 @@ import '../day/calendar_gateway_test.dart' show FixtureCalendarAdapter, query;
 void main() {
   test('action policy mutation uses the authoritative vault job', () async {
     final calls = <String>[];
-    final gateway = NativeCalendarActionGateway((operation, request) async {
-      expect(operation, 'agent_vault');
-      final command = request['operation'] as Map;
-      calls.add(command['kind'] as String);
-      if (command['kind'] == 'submit') {
-        final action = command['action'] as Map;
-        expect(action['kind'], 'calendar_action');
-        expect(action['operation'], {
-          'kind': 'set_authority',
-          'calendar_create': 'deny',
-        });
-        return {'done': false};
-      }
-      return {
-        'done': true,
-        'calendar_actions': {
-          'actions': <Object>[],
-          'authority': {'calendar_create': 'deny'},
-        },
-      };
-    });
+    final gateway = NativeCalendarActionGateway(
+      CallbackAppWireTransport((request) async {
+        final intent = (request['command'] ?? request['query']) as Map;
+        calls.add(intent['kind'] as String);
+        expect(request.containsKey('person_id'), isFalse);
+        if (intent['kind'] == 'actions.calendar') {
+          expect(intent['operation'], {
+            'kind': 'set_authority',
+            'calendar_create': 'deny',
+          });
+          return {
+            'kind': 'action_operation',
+            'operation_id': ownerOperationId(request),
+            'done': false,
+            'failure': null,
+          };
+        }
+        expect(intent['kind'], 'actions.read_result');
+        return {
+          'kind': 'action_operation',
+          'operation_id': ownerOperationId(request),
+          'done': true,
+          'failure': null,
+          'calendar_actions': {
+            'actions': <Object>[],
+            'authority': {'calendar_create': 'deny'},
+          },
+        };
+      }),
+    );
     final authority = await gateway.setCalendarCreateAuthority(
       'person',
       ActionAuthorityMode.deny,
     );
     expect(authority.calendarCreate, ActionAuthorityMode.deny);
-    expect(calls, ['submit', 'poll', 'release']);
+    expect(calls, [
+      'actions.calendar',
+      'actions.read_result',
+      'actions.read_result',
+    ]);
   });
 
   test(
     'vault action failure is released and retains recovery metadata',
     () async {
       final calls = <String>[];
-      final gateway = NativeCalendarActionGateway((operation, request) async {
-        expect(operation, 'agent_vault');
-        calls.add((request['operation'] as Map)['kind'] as String);
-        return {
-          'done': true,
-          'failure': {
-            'kind': 'vault_unavailable',
-            'recovery_action': 'reopen_vault',
-          },
-        };
-      });
+      final gateway = NativeCalendarActionGateway(
+        CallbackAppWireTransport((request) async {
+          final intent = request['query'] as Map;
+          calls.add(intent['kind'] as String);
+          return {
+            'kind': 'action_operation',
+            'operation_id': ownerOperationId(request),
+            'done': true,
+            'failure': ownerFailure(
+              request,
+              'vault_unavailable',
+              'calendar_action',
+              recovery: 'reopen_vault',
+            ),
+          };
+        }),
+      );
       await expectLater(
         gateway.loadActionAuthority('person'),
         throwsA(
@@ -68,7 +88,7 @@ void main() {
               ),
         ),
       );
-      expect(calls, ['submit', 'release']);
+      expect(calls, ['actions.authority', 'actions.read_result']);
     },
   );
 

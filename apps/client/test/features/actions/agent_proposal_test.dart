@@ -1,3 +1,7 @@
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+
+import '../../support/app_wire_transport.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -68,36 +72,39 @@ void main() {
     var response = inspectionJson();
     var includeProposal = true;
     String? failure;
-    final gateway = NativeAgentVaultGateway((request) async {
-      operations.add(request['operation']! as Map<String, Object?>);
-      return {
-        'request_id': request['request_id'],
-        'done': true,
-        'events': [],
-        'next_sequence': 0,
-        'state': 'ready',
-        'failure': failure == null
-            ? null
-            : {
-                'schema_version': 1,
-                'domain': 'app',
-                'category': 'internal',
-                'reason_code': failure,
-                'kind': failure,
-                'stage': 'inspect_proposal',
-                'safe_actions': const <String>['export_diagnostics'],
-                'affected_refs': const <String>[],
-                'incident_id': request['request_id'],
-                'retry_policy': 'never',
-                'retryable': false,
-                'recovery_action': 'none',
-                'reload_required': false,
-                'seal_session': false,
-                'correlation_request_id': request['request_id'],
-              },
-        if (includeProposal) 'proposal': response,
-      };
-    }, deviceId: 'test-device');
+    final gateway = NativeProposalGateway(
+      CallbackAppWireTransport((request) async {
+        operations.add(Map<String, Object?>.from(request['query'] as Map));
+        return {
+          'kind': 'action_operation',
+          'operation_id': ownerOperationId(request),
+          'done': true,
+          'events': [],
+          'next_sequence': 0,
+          'state': 'ready',
+          'failure': failure == null
+              ? null
+              : {
+                  'schema_version': 1,
+                  'domain': 'app',
+                  'category': 'internal',
+                  'reason_code': failure,
+                  'kind': failure,
+                  'stage': 'inspect_proposal',
+                  'safe_actions': const <String>['export_diagnostics'],
+                  'affected_refs': const <String>[],
+                  'incident_id': ownerOperationId(request),
+                  'retry_policy': 'never',
+                  'retryable': false,
+                  'recovery_action': 'none',
+                  'reload_required': false,
+                  'seal_session': false,
+                  'correlation_request_id': ownerOperationId(request),
+                },
+          if (includeProposal) 'proposal': response,
+        };
+      }),
+    );
     Future<AgentProposalInspection> inspect() => gateway.inspectProposal(
       personId: proposalPerson,
       sessionId: proposalSession,
@@ -152,15 +159,16 @@ void main() {
     );
     expect(
       operations
-          .where((entry) => entry['kind'] == 'submit')
-          .every(
-            (entry) => (entry['action'] as Map)['kind'] == 'inspect_proposal',
-          ),
+          .where((entry) => entry['kind'] != 'actions.read_result')
+          .every((entry) => entry['kind'] == 'actions.proposal.inspect'),
       true,
     );
     expect(
       operations.every(
-        (entry) => ['submit', 'release'].contains(entry['kind']),
+        (entry) => [
+          'actions.proposal.inspect',
+          'actions.read_result',
+        ].contains(entry['kind']),
       ),
       true,
     );

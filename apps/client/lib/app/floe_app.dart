@@ -19,6 +19,7 @@ import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_toast.dart';
 import 'package:floe_client/app/local_identity.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 
 class FloeApp extends StatefulWidget {
   const FloeApp({
@@ -27,6 +28,7 @@ class FloeApp extends StatefulWidget {
     this.calendarActions,
     this.query,
     this.agentGateway,
+    this.ownerGateways = const LocalOwnerGateways(),
     this.pairingGateway,
     this.remoteAccessGateway,
     this.serverClient,
@@ -45,6 +47,7 @@ class FloeApp extends StatefulWidget {
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
+  final LocalOwnerGateways ownerGateways;
   final RemotePairingGateway? pairingGateway;
   final RemoteAccessGateway? remoteAccessGateway;
   final LocalServerClient? serverClient;
@@ -81,6 +84,7 @@ class _FloeAppState extends State<FloeApp> {
         gateway: widget.gateway,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
+        ownerGateways: widget.ownerGateways,
         pairingGateway: widget.pairingGateway,
         remoteAccessGateway: widget.remoteAccessGateway,
         serverClient: widget.serverClient,

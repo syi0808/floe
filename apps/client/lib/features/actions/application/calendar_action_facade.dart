@@ -10,7 +10,7 @@ import 'package:floe_client/features/actions/infrastructure/native_calendar_acti
 final class CalendarActionFacade
     implements CalendarActionExecutionGateway, CalendarDirectActionGateway {
   CalendarActionFacade(AppRuntime runtime)
-    : _gateway = NativeCalendarActionGateway(runtime.request);
+    : _gateway = NativeCalendarActionGateway(runtime.wireTransport);
 
   final NativeCalendarActionGateway _gateway;
 

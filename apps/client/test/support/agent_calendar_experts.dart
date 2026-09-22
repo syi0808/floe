@@ -1,3 +1,8 @@
+import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+
+import 'app_wire_transport.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -118,7 +123,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
   ],
 };
 
-final class CalendarExpertTransport {
+final class CalendarExpertTransport extends TestAppWireTransport {
   Map<String, dynamic> snapshot = calendarExpertsFixture(installed: false);
   Map<String, dynamic>? pending;
   Map<String, dynamic>? committedSetup;
@@ -129,17 +134,27 @@ final class CalendarExpertTransport {
   int submissions = 0;
   final List<String> operations = [];
 
+  @override
   Future<Map<String, dynamic>> call(Map<String, Object?> request) async {
-    final operation = request['operation'] as Map;
-    final kind = operation['kind'] as String;
+    final operation = (request['command'] ?? request['query']) as Map;
+    final operationId = ownerOperationId(request);
+    final kind = (operation['kind'] as String).endsWith('.read_result')
+        ? (operation['release'] == true ? 'release' : 'poll')
+        : 'submit';
     operations.add(kind);
     if (kind == 'submit') {
-      if (pending != null) throw const AgentVaultException('conflict');
-      final action = operation['action'] as Map;
-      if (action['kind'] == 'calendar_subject_preview') {
+      if (pending != null) {
+        if (pending!['operation_id'] == operationId) return pending!;
+        throw const AgentVaultException('conflict');
+      }
+      final action = operation;
+      if (action['kind'] == 'access.calendar.preview') {
         final previewRequest = action['request'] as Map;
         pending = {
-          'request_id': request['request_id'],
+          'operation_id': operationId,
+          'kind': (operation['kind'] as String).startsWith('access.')
+              ? 'local_access_operation'
+              : 'expert_operation',
           'events': <Object>[],
           'next_sequence': 0,
           'done': true,
@@ -147,6 +162,7 @@ final class CalendarExpertTransport {
           'calendar_subject_preview': {
             ...previewRequest,
             'connection_id': previewRequest['connection_id'],
+            'device_id': 'test-device',
             'native_subject_fingerprint': previewFingerprint,
           },
         };
@@ -184,7 +200,7 @@ final class CalendarExpertTransport {
               setup['reviewed_native_subject_fingerprint'];
         }
       }
-      if (action['kind'] == 'registry') {
+      if (action['kind'] == 'experts.registry.configure') {
         final change = action['change'] as Map;
         if (change['expected_revision'] !=
             (snapshot['registry'] as Map)['revision']) {
@@ -193,14 +209,14 @@ final class CalendarExpertTransport {
         final target = change['target'] as Map;
         if (target['kind'] != 'calendar_view' ||
             target['id'] != calendarViewId) {
-          throw const AgentVaultException('not_found');
+          throw const NativeTransportException('not_found', 'released');
         }
         ((snapshot['views'] as List).single as Map)['enabled'] =
             target['enabled'];
         (snapshot['registry'] as Map)['revision'] =
             (change['expected_revision'] as int) + 1;
       }
-      if (action['kind'] == 'calendar_access') {
+      if (action['kind'] == 'access.calendar.configure') {
         final request = action['change'] as Map;
         if (request['expected_revision'] !=
                 (snapshot['registry'] as Map)['revision'] ||
@@ -250,17 +266,26 @@ final class CalendarExpertTransport {
             (request['expected_revision'] as int) + 1;
       }
       pending = {
-        'request_id': request['request_id'],
+        'operation_id': operationId,
+        'kind': (operation['kind'] as String).startsWith('access.')
+            ? 'local_access_operation'
+            : 'expert_operation',
         'events': <Object>[],
         'next_sequence': 0,
         'done': true,
         'state': failure == null ? 'ready' : 'unavailable',
-        'failure': failure,
-        if (action['kind'] == 'calendar_experts')
+        'failure': failure == null
+            ? null
+            : ownerFailure(
+                Map<String, dynamic>.from(request),
+                failure!,
+                'calendar_experts',
+              ),
+        if ((action['kind'] as String).startsWith('experts.calendar.'))
           'calendar_experts': jsonDecode(jsonEncode(snapshot)),
-        if (action['kind'] == 'calendar_access')
+        if (action['kind'] == 'access.calendar.configure')
           'calendar_experts': jsonDecode(jsonEncode(snapshot)),
-        if (action['kind'] == 'registry')
+        if (action['kind'] == 'experts.registry.configure')
           'registry': jsonDecode(jsonEncode(snapshot['registry'])),
       };
       if (setup != null && loss == 'submit') {
@@ -268,9 +293,8 @@ final class CalendarExpertTransport {
         throw StateError('Lost accepted submit response');
       }
       if (setup != null && loss == 'poll') return {...pending!, 'done': false};
-    } else if (pending == null ||
-        pending!['request_id'] != request['request_id']) {
-      throw const AgentVaultException('not_found');
+    } else if (pending == null || pending!['operation_id'] != operationId) {
+      throw const NativeTransportException('not_found', 'released');
     }
     if (kind == 'poll' && loss == 'poll') {
       loss = null;
@@ -298,11 +322,12 @@ class TestCalendarExpertGateway extends TestVaultGateway
   TestCalendarExpertGateway()
     : super(personId: registryPerson, personal: true) {
     state = AgentVaultState.ready;
-    native = NativeAgentVaultGateway(transport.call, deviceId: 'test-device');
+    native = NativeCalendarExpertGateway(transport, deviceId: 'test-device');
   }
 
   final transport = CalendarExpertTransport();
-  late final NativeAgentVaultGateway native;
+  late final NativeCalendarExpertGateway native;
+  late final registryNative = NativeRegistryGateway(transport);
   Completer<void>? gate;
   String? error;
   final List<AgentCalendarSetup> requests = [];
@@ -360,7 +385,7 @@ class TestCalendarExpertGateway extends TestVaultGateway
     required bool enabled,
   }) async {
     await _wait();
-    return native.configureRegistry(
+    return registryNative.configureRegistry(
       current,
       target: target,
       id: id,

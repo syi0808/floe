@@ -4,7 +4,10 @@ import 'package:floe_client/features/connections/application/remote_access_gatew
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 
 import 'package:floe_client/app/local_identity.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways.dart';
+import 'package:floe_client/app/runtime/local_context_gateway.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
@@ -31,7 +34,7 @@ final class AppRuntimeException implements Exception {
 /// read model.
 ///
 /// These outlive any single screen, so no feature owns them. Features receive
-/// [request] and the gateways built from it.
+/// owner gateways built on the admitted AppWire.
 final class AppRuntime {
   AppRuntime._(this._transport, this.deviceId);
 
@@ -48,14 +51,37 @@ final class AppRuntime {
     expectedPersonId: defaultLocalPersonId,
     expectedDeviceId: deviceId,
   );
-  late final AgentVaultGateway vault = NativeAgentVaultGateway(
-    _vaultRequest,
-    deviceId: deviceId,
+  late final vault = NativeVaultLifecycleGateway(_transport);
+  late final conversation = NativeConversationSessionGateway(
+    _transport,
     runtimeClient: client,
     readModel: readModel,
   );
-
-  LocalContextTransport get localContextTransport => _transport;
+  late final registry = NativeRegistryGateway(_transport);
+  late final calendarExperts = NativeCalendarExpertGateway(
+    _transport,
+    deviceId: deviceId,
+  );
+  late final personalAccess = NativePersonalAccessGateway(
+    _transport,
+    deviceId: deviceId,
+  );
+  late final memory = NativeMemoryGateway(_transport);
+  late final connections = NativeConnectionsGateway(_transport);
+  late final proposals = NativeProposalGateway(_transport);
+  late final owners = LocalOwnerGateways(
+    vault: vault,
+    registry: registry,
+    calendarExperts: calendarExperts,
+    personalAccess: personalAccess,
+    memory: memory,
+    memoryReview: memory,
+    connections: connections,
+    proposals: proposals,
+  );
+  late final LocalContextTransport localContextTransport =
+      NativeLocalContextGateway(_transport, deviceId: deviceId);
+  AppWireTransport get wireTransport => _transport;
 
   Future<Map<String, dynamic>> remotePairingV2(Map<String, dynamic> request) =>
       _transport.remotePairingV2(request);
@@ -95,37 +121,6 @@ final class AppRuntime {
         error.code,
         error.message,
         field: error.field,
-        metadata: error.metadata,
-      );
-    }
-  }
-
-  Future<Map<String, dynamic>> request(
-    String operation,
-    Map<String, dynamic> request,
-  ) async {
-    try {
-      return await _transport.request(operation, request);
-    } on NativeTransportException catch (error) {
-      throw AppRuntimeException(
-        error.code,
-        error.message,
-        field: error.field,
-        metadata: error.metadata,
-      );
-    }
-  }
-
-  Future<Map<String, dynamic>> _vaultRequest(
-    Map<String, Object?> request,
-  ) async {
-    try {
-      return await this.request('agent_vault', request);
-    } on AppRuntimeException catch (error) {
-      throw AgentVaultException(
-        error.metadata['agent_failure'] ?? error.code,
-        requestId: error.metadata['request_id'],
-        stage: error.metadata['stage'],
         metadata: error.metadata,
       );
     }
