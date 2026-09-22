@@ -53,6 +53,13 @@ requires a buildable Go server and the debug FFI dylib. It uses a fresh temporar
 profile, final Rust pairing envelopes and memory-only credential persistence,
 then checks direct server authorization/revocation. It does not write the shared
 server Keychain slot or claim a live protected Access success through that slot.
+The separate `cargo test -p floe-provider-adapters --test live_server_access`
+test (repository root, macOS with Go) starts another disposable real server,
+strictly pairs it using test-owned vault keys, and loads the exact approved
+credential through `CurrentSavedConnectionStore::fixed`. It proves protected
+Rust Access inspection succeeds, then rejects both fresh and previously prepared
+transports after server revocation. This test also runs in the macOS Rust
+workspace suite; it never reads or writes the shared saved-connection Keychain slot.
 Current validation results and remaining blockers are recorded only in
 `docs/refactoring/stage-3/3-d.md`.
 

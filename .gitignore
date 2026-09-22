@@ -1,6 +1,7 @@
 /target/
 /server/config.local.json
 /server/.env
+/server/floe-server
 *.db
 *.db-shm
 *.db-wal

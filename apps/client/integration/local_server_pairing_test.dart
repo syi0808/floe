@@ -46,6 +46,8 @@ void main() {
     await socket.close();
     final address = 'http://127.0.0.1:$port';
     final binary = '${temporary.path}/floe-server';
+    final environmentFile = File('${temporary.path}/server.env');
+    await environmentFile.writeAsString('');
     final build = await Process.run('go', [
       'build',
       '-o',
@@ -60,6 +62,11 @@ void main() {
         'FLOE_SERVER_DATA': '${temporary.path}/node',
         'FLOE_SERVER_ADDRESS': '127.0.0.1:$port',
         'FLOE_INFERENCE_CONFIG': '',
+        'FLOE_ENV_FILE': environmentFile.path,
+        'FLOE_GITHUB_OAUTH_CLIENT_ID': '',
+        'FLOE_SLACK_OAUTH_CLIENT_ID': '',
+        'FLOE_GOOGLE_OAUTH_CLIENT_ID': '',
+        'FLOE_MICROSOFT_OAUTH_CLIENT_ID': '',
       },
     );
     final http = HttpClient()..findProxy = (_) => 'DIRECT';
@@ -136,7 +143,11 @@ void main() {
     );
     expect(pending.status, 'local_confirmed');
     expect(pending.token, isNull);
-    await manage('pair/approve', {'id': pair.pairingId});
+    await manage('pair/approve', {
+      'schema_version': 1,
+      'pairing_id': pair.pairingId,
+      'issuer_fingerprint': owner.fingerprint,
+    });
     final approved = await pairing.finalizeRemotePairing(
       target: target,
       pairingId: pair.pairingId,
@@ -152,7 +163,13 @@ void main() {
       deviceId: approved.deviceId,
     );
     await client.save(connection);
-    expect((await client.connection())?.clientId, pair.pairingId);
+    final saved = await client.connection();
+    expect(
+      saved != null &&
+          jsonEncode(saved.toJson()) == jsonEncode(connection.toJson()),
+      isTrue,
+      reason: 'The exact approved connection must be reread before release.',
+    );
     await pairing.releaseApprovedPairing(pair.pairingId);
     await client.checkConnection(connection);
     final purposes = await client.purposes(connection);
