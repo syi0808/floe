@@ -3,12 +3,11 @@ import 'dart:io';
 
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/connections/application/remote_pairing_gateway.dart';
 import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
-import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 
 import '../test/support/server_credentials.dart';
+import 'support/disposable_product_profile.dart';
 
 void main() {
   test('strict server pairing uses native owner envelopes and memory-only credential persistence', () async {
@@ -19,23 +18,14 @@ void main() {
       );
       return;
     }
-    final temporary = await Directory.systemTemp.createTemp('floe-pairing-');
-    final personId = newAgentRequestId();
-    const deviceId = 'strict-pairing-integration';
-    final profile = Directory('${temporary.path}/profile/people/$personId');
-    await profile.create(recursive: true);
-    await File('${temporary.path}/profile/local_device_id')
-        .writeAsString(deviceId);
-    final runtime = await AppRuntime.open(
-      libraryPath: library.path,
-      databasePath: '${profile.path}/floe.db',
-      deviceId: deviceId,
-    );
-    addTearDown(() async {
-      await runtime.close();
-      await temporary.delete(recursive: true);
-    });
+    final profile = await DisposableProductProfile.create();
+    addTearDown(profile.cleanup);
+    final temporary = profile.root;
+    final personId = profile.personId;
+    final deviceId = profile.deviceId;
+    final runtime = await profile.open(library.path);
     await runtime.vault.createVault(personId);
+    await profile.recordVault();
     final pairing = NativeRemotePairingGateway(
       runtime.remotePairingV2,
       expectedPersonId: personId,

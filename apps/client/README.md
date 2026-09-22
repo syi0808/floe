@@ -64,8 +64,8 @@ credential through `CurrentSavedConnectionStore::fixed`. It proves protected
 Rust Access inspection succeeds, then rejects both fresh and previously prepared
 transports after server revocation. This test also runs in the macOS Rust
 workspace suite; it never reads or writes the shared saved-connection Keychain slot.
-Current validation results and remaining blockers are recorded only in
-`docs/refactoring/stage-3/3-d.md`.
+Current end-to-end validation results and remaining blockers are recorded only in
+`docs/refactoring/stage-3/3-f.md`; 3-D and 3-E are frozen historical evidence.
 
 To start the local server and macOS client together from the repository root:
 

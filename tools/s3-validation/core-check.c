@@ -4,29 +4,42 @@
 #include <string.h>
 
 int main(int count, char **arguments) {
-    if (count != 4) return 64;
-    FILE *file = fopen(arguments[3], "rb");
-    if (!file) return 66;
-    if (fseek(file, 0, SEEK_END) != 0) return 74;
-    long length = ftell(file);
-    if (length < 0 || length > 1048576) return 65;
-    rewind(file);
-    char *request = calloc((size_t)length + 1, 1);
-    if (!request || fread(request, 1, (size_t)length, file) != (size_t)length) return 74;
-    fclose(file);
+    if (count != 2) return 64;
     char *error = NULL;
     FloeHandle *core = floe_core_open(arguments[1], &error);
     if (!core) {
         if (error) { puts(error); floe_string_free(error); }
-        free(request);
         return 1;
     }
-    char *response = strcmp(arguments[2], "action") == 0
-        ? floe_core_calendar_actions(core, request)
-        : strcmp(arguments[2], "load") == 0
-            ? floe_core_load_day(core, request) : floe_core_execute(core, request);
-    if (response) { puts(response); floe_string_free(response); }
+    char operation[32];
+    char *request = malloc(1048578);
+    int result = request ? 0 : 74;
+    while (request && fgets(operation, sizeof(operation), stdin)) {
+        operation[strcspn(operation, "\n")] = '\0';
+        if (!fgets(request, 1048578, stdin) || !strchr(request, '\n')) {
+            result = 65;
+            break;
+        }
+        char *response = NULL;
+        if (strcmp(operation, "command_v2") == 0) {
+            response = floe_core_command_v2(core, request);
+        } else if (strcmp(operation, "query_v2") == 0) {
+            response = floe_core_query_v2(core, request);
+        } else if (strcmp(operation, "events_v2") == 0) {
+            response = floe_core_events_v2(core, request);
+        } else {
+            result = 64;
+            break;
+        }
+        if (!response) {
+            result = 1;
+            break;
+        }
+        puts(response);
+        fflush(stdout);
+        floe_string_free(response);
+    }
     floe_core_free(core);
     free(request);
-    return response ? 0 : 1;
+    return result;
 }
