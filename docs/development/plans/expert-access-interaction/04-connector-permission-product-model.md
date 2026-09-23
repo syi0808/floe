@@ -181,7 +181,7 @@ Rules:
 
 If a direct Manager/assistant source-read path exists, add its real consumer identity only through the canonical product policy and a focused runtime test.
 
-## 5. Native Calendar connection## 5. Native Calendar connection
+## 5. Native Calendar connection
 
 ### 5.1 Connection detail composition
 
