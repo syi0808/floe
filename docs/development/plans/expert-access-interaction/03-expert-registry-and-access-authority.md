@@ -13,7 +13,7 @@ After this checkpoint:
 - CalendarExpertSetup, CalendarExpertOverview and CalendarAccessConfiguration no longer exist as product/runtime concepts;
 - stale local development Calendar-Expert persistence is reset/rejected rather than migrated into new authority.
 
-Checkpoint 02 must be complete first. Do not remove CalendarExpertSetup while Schedule execution still requires ScheduleEndpoint/select_active_setup.
+Checkpoint 02 must be complete first. Checkpoint 02 R4.5 already establishes the canonical first-party Calendar consumer policy required for Schedule cutover. Checkpoint 03 must reuse that policy while removing obsolete Registry/setup/mapping authority; it must not introduce a second consumer list.
 
 ## Baseline anchors
 
@@ -247,31 +247,26 @@ authorize_calendar_grant() may remain as a Calendar-shaped Access convenience if
 
 If the generic DataAccessGrant admission service can fully express the same checks, delete authorize_calendar_grant() and use the generic admission path.
 
-## 6. Consumer model
+## 6. Consumer-policy follow-through
 
-The product wants “Use with Floe”, but internal least privilege still matters.
+Checkpoint 02 R4.5 already establishes Calendar consumer identity: product composition derives the explicit first-party consumer set from built-in declarations and passes that set into Access grant creation. Grants contain real consumer ids; `calendar.expert` is not a group alias.
 
-Define an explicit first-party consumer policy for each source.
+Checkpoint 03 preserves that rule while ownership moves from CalendarExpertSetup/mappings to connection/source-owned Access state.
 
-For Calendar, expected first-party consumers include whichever current paths legitimately read it, such as:
+Requirements:
 
-- Manager/assistant source reads where supported;
-- Schedule;
-- Commitments optional Calendar enrichment;
-- Focus & Attention optional Calendar enrichment;
-- Wellbeing optional Calendar enrichment.
+- Access remains independent of the built-in Expert catalogue;
+- do not duplicate the Calendar consumer list in Vault, protocol, Flutter or connection UI;
+- new connection-owned Calendar grant creation reuses the same product-composition policy;
+- ContextDependency continues to record the actual admitted consumer;
+- extension/third-party consumers remain excluded unless separately granted;
+- adding a new built-in Calendar consumer is covered by declaration/policy tests, not an Access special case;
+- do not revive `calendar.expert` as compatibility authority after the old vertical is removed;
+- do not silently broaden legacy grants during schema cleanup.
 
-Do not grant third-party Experts through this first-party set.
+If direct Manager/assistant Calendar reading becomes a real current path, add that consumer through the same product policy with a focused runtime test. Do not pre-authorize hypothetical consumers.
 
-The exact representation can be:
-- a stable first-party consumer group understood by Access; or
-- an explicit set derived from built-in declarations.
-
-Choose one canonical mechanism. Do not copy the consumer list into Flutter.
-
-If using an explicit set, add a test that every built-in declaration requiring Calendar has a corresponding allowed first-party consumer and that adding a new third-party package does not silently enter the set.
-
-## 7. App/Worker API removal
+## 7. App/Worker API removal## 7. App/Worker API removal
 
 At crates/app/src/vault_host.rs baseline lines 1576 and 1645 remove WorkerAction paths that exist only for Calendar Expert management:
 
@@ -347,7 +342,7 @@ Add a regression asserting that an old/orphan Calendar Expert mapping is not aut
 
 ### Access
 
-- active Calendar grant authorizes each allowed first-party consumer;
+- active Calendar grant continues to authorize each canonical first-party consumer established in Checkpoint 02 R4.5;
 - paused/review-required grant returns NeedsUserAction;
 - foreign consumer denied;
 - third-party Expert denied without explicit grant;
@@ -430,6 +425,7 @@ Checkpoint 03 is complete when:
 - SourceGrants runtime gating is gone;
 - DataAccessGrant is the only Observe consumer authority;
 - Calendar grant identity contains no Schedule/Registry setup identity;
+- connection-owned grant creation reuses the single canonical first-party consumer policy and contains no `calendar.expert` compatibility authority;
 - CalendarExpertSetup/Overview/AccessConfiguration production APIs and wire commands are gone;
 - obsolete local Calendar Expert grant state is not migrated into authorization;
 - source absence is observed only at Context/Access read time;

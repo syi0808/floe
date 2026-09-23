@@ -2,6 +2,7 @@
 
 - **Status:** execution plan
 - **Baseline:** `main` at `0615b343bb752da85487a1a728927f0e3affdf5b`
+- **Current execution snapshot:** `main` at `98e9d8ce3b4b4ebfeacfe6589601adf7f1d64f42`. Checkpoint 01 is complete. Checkpoint 02 R1–R4 are landed; its first R5 cutover was reverted because legacy Calendar grants authorize `calendar.expert` while the common runtime correctly reads as the actual Expert identity such as `floe.builtin.schedule`.
 - **Scope:** built-in Expert runtime, Calendar source acquisition, Expert Registry, Access/DataAccessGrant authority, connector permission product model, conversation interaction escalation, Flutter chat/connection surfaces, protocol/persistence cleanup
 - **Compatibility posture:** pre-stable internal APIs and local development data may be replaced directly. Do not add compatibility paths or migrate disposable local state merely to preserve the current Calendar vertical.
 - **Primary product target:** Apple ecosystem. Android code may be adjusted only where shared contracts require compilation; do not expand Android parity work as part of this plan.
@@ -115,6 +116,8 @@ In particular:
 - Access does **not** reference Schedule installation IDs, assignment IDs or Registry view handles.
 - Connection selection is the maximum source scope, not a second consumer grant.
 - Observe permission never implies Act permission.
+- every successful source dependency records the **actual admitted consumer identity**. Compatibility aliases such as `calendar.expert` must not stand in for `floe.builtin.schedule` or another real consumer.
+- first-party source-consumer policy is assembled at product composition from canonical first-party declarations and passed to Access as grant scope; Access validates the scope but does not depend on the built-in Expert catalogue.
 - model processing/recipient consent remains independent from Observe permission internally even when product UI is simplified.
 
 ### 2.3 Source use at runtime
@@ -253,7 +256,7 @@ Line numbers below refer to the baseline commit and are planning anchors; symbol
 Read and execute these files in order.
 
 1. [01 — contracts and recoverable source interaction foundation](01-contracts-and-interaction-foundation.md)
-2. [02 — Calendar source extraction and Schedule Expert convergence](02-calendar-source-and-schedule-convergence.md)
+2. [02 — Schedule common-runtime convergence + Calendar consumer-policy prerequisite](02-calendar-source-and-schedule-convergence.md)
 3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md)
 4. [04 — connector permission product model](04-connector-permission-product-model.md)
 5. [05 — Conversation and Flutter interaction/resume](05-conversation-and-flutter-interaction.md)
@@ -261,7 +264,9 @@ Read and execute these files in order.
 
 Do not skip directly to Flutter. A chat permission button is unsafe until its target and decision path are owned by the canonical Access/Connections path.
 
-Do not delete the Schedule endpoint before checkpoint 2 has equivalent provider-neutral Calendar acquisition and request-scoped coverage tests.
+Checkpoint 02 owns one deliberately narrow Access/product-composition prerequisite: establish the canonical first-party Calendar consumer set so the common Schedule path can read under `floe.builtin.schedule`. This slice moved forward from the old Checkpoint 03 consumer-model section because R5 cannot succeed safely while grants authorize only `calendar.expert`.
+
+Do not expand that prerequisite into the rest of Checkpoint 03: CalendarExpertSetup, Registry source grants and `calendar_grant_mappings` remain until Checkpoint 03. Do not delete the Schedule endpoint until a fresh grant created under the canonical consumer policy proves the common Schedule success path.
 
 Do not make connection-time Observe implicit before checkpoint 3 has removed the competing Expert Registry permission authority.
 
@@ -275,6 +280,8 @@ Every checkpoint must preserve these properties.
 - no request supplies credentials, bearer tokens or arbitrary connection endpoints;
 - native subject/fingerprint changes fail closed and require a fresh review where policy requires it;
 - exact recipient / processing restriction remains enforced at the dispatch/release boundary;
+- every successful ContextDependency consumer equals the actual caller admitted for that read; no service alias may hide or broaden consumer identity;
+- first-party consumer policy never auto-includes extension/third-party package ids;
 - a user-interaction approval is not a source-read receipt and never bypasses fresh admission.
 
 ### Provenance
@@ -357,6 +364,7 @@ The whole plan is complete only when all of the following are true:
 - no CalendarExpertSetup/CalendarExpertOverview/CalendarAccessConfiguration product contract remains.
 - Expert Registry no longer acts as a source-access authority.
 - Access/DataAccessGrant is the only consumer Observe authority.
+- canonical first-party Calendar grants authorize real approved first-party consumer identities; the legacy `calendar.expert` compatibility consumer is not production authority.
 - Access persistence does not store Expert installation/assignment IDs as grant identity.
 - disabled/review-required sources do not make an enabled Expert disappear from the Manager catalog.
 - an expected source permission problem reaches the Expert/Manager as a typed recoverable outcome rather than terminating the root turn.

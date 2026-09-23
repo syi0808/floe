@@ -1,9 +1,10 @@
 # Checkpoint 02 — Schedule common-runtime cutover from current main
 
 - **Status:** active execution plan
-- **Current baseline:** main at 75e385ca00cb96e2b9f63757f4bd1659f428baf3
+- **Current baseline:** `main` at `98e9d8ce3b4b4ebfeacfe6589601adf7f1d64f42`
 - **Scope:** finish Checkpoint 02 only
-- **Do not enter:** Checkpoint 03 Registry/Access authority deletion, Checkpoint 04 product permission redesign, Checkpoint 05 durable Conversation interaction
+- **Current progress:** R1–R4 are landed. Commit `076cdf3a` attempted R5 and was reverted by `98e9d8ce` after the common Schedule path exposed a Calendar grant consumer-identity mismatch.
+- **Do not enter:** Checkpoint 03 Registry/grant-mapping authority deletion, Checkpoint 04 permission UX redesign, Checkpoint 05 durable Conversation interaction. The sole exception is R4.5 below: the first-party Calendar consumer-policy prerequisite moved forward from Checkpoint 03 because R5 cannot safely complete without it.
 - **Primary rule:** stop improving the already-extracted Calendar reader unless a Schedule common-path test proves a concrete missing semantic
 
 This file supersedes the previous broad Checkpoint 02 sequencing. The Calendar extraction half is already implemented. The remaining work is a runtime cutover.
@@ -42,7 +43,22 @@ ae2a827f0e  Admit native Calendar reads by current connection and grant
 be22dc59b0  Bind Expert Task settlement to selected package identity
 91b4b4258d  Preserve typed Calendar access outcomes for built-in Experts
 75e385ca00  Bind Calendar review outcomes to current source identity
+8b0f4533c3  Refactor Schedule request planning for common Calendar reads
+5633b81505  Run Schedule judgment through BuiltinExpertHost
+f8ab18c0d2  Settle stateful Schedule results on common Expert path
+076cdf3ad9  Cut Schedule over to the common Directory endpoint (reverted)
+98e9d8ce3b  Revert Schedule cutover pending Calendar grant identity
 ~~~
+
+### Current progress at this baseline
+
+- **R1 complete:** Schedule planning is request-only; setup/provider selection is removed from the new path.
+- **R2 complete:** `schedule::dispatch` reads through `BuiltinExpertHost::calendar_views` and preserves `SourceAccessRequirement` as a typed artifact.
+- **R3 complete:** common Schedule judgment lives in `schedule/expert.rs`; the old host remains only because the old production endpoint is still registered.
+- **R4 complete:** common stateful settlement and ContextDependency-based `/focus` proposal evidence are implemented.
+- **R5 blocked/reverted:** the common reader calls Access as `floe.builtin.schedule`, but legacy Calendar grant creation still scopes the grant to `calendar.expert`. Exact admission correctly rejects that substitution.
+
+Do not redo R1–R4 unless a regression test proves they are broken. The next implementation step is R4.5.
 
 Current production split:
 
@@ -460,7 +476,127 @@ Action write authority and approval semantics remain unchanged.
 
 ---
 
-# 8. R5 — Put Schedule into common setup and registration
+# 8. R4.5 — Establish canonical first-party Calendar consumer authority
+
+## Why this moved into Checkpoint 02
+
+The first R5 cutover proved a dependency that the original checkpoint ordering missed.
+
+The common host correctly reads Calendar for Schedule as:
+
+~~~text
+consumer = floe.builtin.schedule
+~~~
+
+while the legacy native and remote Calendar grant-creation paths currently create scopes containing only:
+
+~~~text
+consumer = calendar.expert
+~~~
+
+Admission is exact and therefore rejects the common Schedule consumer. This is correct fail-closed behavior. Do not weaken it with a compatibility rewrite.
+
+R4.5 is now a hard prerequisite of R5. The rest of Checkpoint 03 remains deferred.
+
+## Authority invariant
+
+A ContextDependency records the actual consumer that performed the read.
+
+Forbidden fixes:
+
+- translate `floe.builtin.schedule` to `calendar.expert` at read time;
+- treat `calendar.expert` as an implicit first-party group;
+- special-case Schedule in Calendar admission;
+- accept a grant merely because both consumer strings are first-party;
+- silently expand an already-active legacy grant.
+
+The canonical grant scope contains the explicit approved first-party consumer identities.
+
+## Canonical policy owner
+
+Access must remain unaware of the built-in Expert catalogue.
+
+Create one product-composition helper in App, or the narrow composition layer that already knows both built-in declarations and Access contracts, that derives the Calendar first-party consumer set from canonical declarations:
+
+~~~text
+BuiltinExpertKind::ALL
+  -> declaration.required_sources contains Calendar
+  -> GrantConsumer::builtin(kind.package_id())
+~~~
+
+With the current catalogue that yields:
+
+~~~text
+floe.builtin.schedule
+floe.builtin.commitments
+floe.builtin.focus-attention
+floe.builtin.wellbeing
+~~~
+
+Do not add `assistant` unless a current direct Manager Calendar-read path actually executes under that consumer and is covered by a focused runtime test.
+
+Do not include extension/third-party ids.
+
+Canonicalize, sort and deduplicate the consumer list; reject an empty Calendar policy.
+
+## Thread policy into grant creation
+
+Change grant creation/review APIs so product composition supplies the bounded consumer set. Do not create an admission-time alias.
+
+### Native / temporary CalendarExpertSetup path
+
+The temporary CalendarExpertSetup install/review path may still create the DataAccessGrant until Checkpoint 03.
+
+Change it so:
+
+- App supplies the canonical Calendar first-party consumer set;
+- Vault/adapter uses that set when constructing GrantScope;
+- no `calendar.expert` literal is injected by the adapter;
+- setup ids and mappings may remain temporarily, but they do not decide the consumer set.
+
+Do not make Vault depend on `floe-experts-builtin`.
+
+### Remote Calendar review path
+
+Change `remote_calendar_scope` / remote review activation so the caller supplies the canonical consumer set.
+
+The grant preview must not present `calendar.expert` as if it were the real security identity. If the current preview DTO has one `consumer: String`, replace it with either a bounded consumer-id list or a product-facing summary plus the exact reviewed consumer list.
+
+This is the only narrow Checkpoint 02 wire adjustment allowed by R4.5. Do not redesign the surrounding permission UX.
+
+## Existing grants: no silent expansion
+
+A grant previously reviewed only for `calendar.expert` does not prove consent for the new explicit first-party set.
+
+Therefore:
+
+- never mutate its scope in place solely because the application updated;
+- never infer the new set from an old Registry enabled bit;
+- an old grant remains non-admitting/review-required for the common Schedule path;
+- a fresh explicit review or a fresh disposable development profile creates the canonical scope.
+
+Because Floe is pre-stable, R5 success acceptance should use a fresh isolated profile. Checkpoint 03 later deletes the obsolete CalendarExpertSetup/mapping persistence entirely.
+
+## R4.5 tests
+
+Add table-driven tests proving:
+
+1. Calendar first-party consumers are derived from built-in declarations, not a duplicated string list;
+2. every built-in Expert that declares Calendar is present;
+3. a built-in Expert that does not declare Calendar is absent;
+4. extension/third-party consumers are absent by default;
+5. a fresh native Calendar grant admits `floe.builtin.schedule`;
+6. that native grant admits Commitments, Focus & Attention and Wellbeing under their exact ids;
+7. a foreign consumer is denied;
+8. a fresh remote Calendar grant carries the same canonical set and admits Schedule;
+9. a legacy `calendar.expert`-only grant does not silently admit Schedule;
+10. ContextDependency.consumer for a successful Schedule read is exactly `floe.builtin.schedule`.
+
+Do not start R5 until native and remote fresh-grant success tests pass.
+
+---
+
+# 9. R5 — Put Schedule into common setup and registration
 
 ## catalog.rs
 
@@ -511,9 +647,9 @@ Remove Schedule-specific packaging policy by calling the generic expert_packagin
 
 ---
 
-# 9. R6 — Cut production routing and immediately delete old endpoint
+# 10. R6 — Cut production routing and immediately delete old endpoint
 
-Before deletion, add one focused common-path E2E:
+R4.5 is a hard precondition. Before deletion, add one focused common-path E2E using a **fresh Calendar grant created with the canonical first-party consumer set**:
 
 ~~~text
 Manager
@@ -575,7 +711,7 @@ No direct ScheduleEndpoint fixture remains.
 
 ---
 
-# 10. R7 — Remove Schedule-specific history boundary
+# 11. R7 — Remove Schedule-specific history boundary
 
 Current Conversation imports CalendarHistoryBoundary from Schedule.
 
@@ -618,7 +754,7 @@ schedule/host.rs is deleted after domain logic moves to expert.rs.
 
 ---
 
-# 11. Behavior matrix
+# 12. Behavior matrix
 
 ## Successful native or remote Calendar read
 
@@ -664,7 +800,7 @@ Only a complete successful Calendar read may create Focus proposal. Proposal rem
 
 ---
 
-# 12. Stop conditions
+# 13. Stop conditions
 
 Stop and reassess before adding plumbing if the cutover appears to require:
 
@@ -681,7 +817,7 @@ Stop and reassess before adding plumbing if the cutover appears to require:
 
 ---
 
-# 13. Verification sequence
+# 14. Verification sequence
 
 After R1: Schedule plan tests.
 
@@ -716,7 +852,7 @@ Do not rerun native manual acceptance after every Schedule edit. Run relevant na
 
 ---
 
-# 14. Residual gate
+# 15. Residual gate
 
 Checkpoint 02 is incomplete while production matches remain for:
 
@@ -738,6 +874,8 @@ BuiltinExpertKind::BUILTIN_SETUP should be gone if it only represents the seven-
 
 Search select_active_setup and verify the old Schedule setup selector is absent.
 
+Search `calendar.expert`. At Checkpoint 02 completion it must not create or admit the canonical current Calendar grant and must not act as a consumer alias for common built-in reads. Historical/regression fixtures may mention it only to prove legacy scope is rejected; Checkpoint 03 removes the rest of the old vertical.
+
 The following may remain for Checkpoint 03, but none may be on Schedule execution:
 
 ~~~text
@@ -753,7 +891,7 @@ Report those matches explicitly rather than deleting them early.
 
 ---
 
-# 15. Architecture doc update
+# 16. Architecture doc update
 
 After cutover, update docs/architecture/runtime.md to state:
 
@@ -773,30 +911,24 @@ Do not turn this plan into a patch diary. Add only final completion evidence.
 
 ---
 
-# 16. Recommended commit sequence
+# 17. Recommended commit sequence
 
-Prefer these semantic commits:
+R1–R4 already exist on current main and must not be replayed.
 
-1. **Refactor Schedule request planning for common Calendar reads**
-   - R1.
+1. **Authorize Calendar reads for canonical first-party consumers**
+   - R4.5 only; native + remote fresh-grant tests.
 
-2. **Run Schedule judgment through BuiltinExpertHost**
-   - R2 + R3.
+2. **Cut Schedule over to the common Directory endpoint**
+   - R5 plus green success/review E2E under the canonical consumer policy.
 
-3. **Settle stateful Schedule results on the common Expert path**
-   - R4 including proposal evidence.
-
-4. **Cut Schedule over to the common Directory endpoint**
-   - R5 plus green common E2E.
-
-5. **Delete old Schedule endpoint and history boundary**
+3. **Delete old Schedule endpoint and history boundary**
    - R6 + R7 + residual cleanup + architecture doc.
 
-Do not return to a long sequence of Calendar-reader refinement commits without a failing cutover test.
+Do not return to Calendar-reader refinement without a failing common-path test.
 
 ---
 
-# 17. Completion checklist
+# 18. Completion checklist
 
 - [ ] Schedule planning no longer requires provider/setup selection.
 - [ ] schedule::dispatch uses the common BuiltinExpertHost signature.
@@ -806,6 +938,10 @@ Do not return to a long sequence of Calendar-reader refinement commits without a
 - [ ] exact SourceAccessRequirement survives in a typed artifact.
 - [ ] /focus proposal works through common path.
 - [ ] generic host/endpoint creates Schedule settlement.
+- [ ] canonical Calendar first-party consumer policy is derived from built-in declarations in product composition.
+- [ ] fresh native and remote grants admit `floe.builtin.schedule` under its exact consumer identity.
+- [ ] legacy `calendar.expert` scope is never treated as implicit approval for Schedule.
+- [ ] successful Schedule ContextDependency.consumer is `floe.builtin.schedule`.
 - [ ] builtin_setup_declarations includes Schedule.
 - [ ] registered_experts includes Schedule.
 - [ ] Schedule uses common BuiltinExpertEndpoint.
@@ -824,7 +960,7 @@ The checkpoint is complete only after the **Schedule runtime cutover**, not beca
 
 ---
 
-# 18. Required agent report
+# 19. Required agent report
 
 When done, report:
 

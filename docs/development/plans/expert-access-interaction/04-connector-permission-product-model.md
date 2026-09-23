@@ -163,33 +163,25 @@ Required safety rules:
 
 This deliberately changes the proposed ADR 0028 rule that connection selection and grant expansion are always separate product ceremonies.
 
-## 4. Default first-party consumer policy
+## 4. Reuse the canonical first-party consumer policy
 
-The default Observe grant created by a connection is for Floe’s first-party product consumers, not arbitrary packages.
+Checkpoint 02 R4.5 establishes the Calendar consumer policy required for runtime cutover: product composition derives actual built-in consumer identities from canonical declarations and passes them into Access grant creation. Checkpoint 04 does **not** redesign or duplicate that policy; it changes the product ceremony that creates, pauses and reviews the grant.
 
-Centralize this in Rust policy owned by Access/product composition.
+Rules:
 
-Do not send a consumer checkbox list from Flutter.
+- connection creation obtains the current canonical policy from product composition;
+- Flutter never sends or edits a consumer checkbox/string list;
+- Access validates supplied scope but does not depend on built-in Expert declarations;
+- Calendar reuses the policy established in Checkpoint 02;
+- analogous source policies such as Mail follow the same owner pattern when introduced;
+- third-party Expert/package ids are never included by default;
+- a consumer may still have stricter processing/sensitivity policy than the connection-level Observe toggle;
+- disabling Use with Floe blocks Observe for the canonical first-party set without changing Act authority;
+- `calendar.expert` must never reappear as product-facing or security compatibility authority.
 
-The policy should answer:
+If a direct Manager/assistant source-read path exists, add its real consumer identity only through the canonical product policy and a focused runtime test.
 
-~~~text
-for source X,
-which first-party product consumers may use the connection when “Use with Floe” is ON?
-~~~
-
-For Calendar, this may include Manager/assistant and the built-in Experts that declare Calendar.
-
-For Mail, it may include Manager/assistant, Commitments and Communication where applicable.
-
-Requirements:
-
-- third-party Expert/package IDs are never included by default;
-- adding a built-in Expert that requires a source must update/test this policy explicitly;
-- a consumer can still have stricter processing/sensitivity policy than the connection’s Observe toggle;
-- disabling Use with Floe blocks the whole first-party Observe policy for that connection.
-
-## 5. Native Calendar connection
+## 5. Native Calendar connection## 5. Native Calendar connection
 
 ### 5.1 Connection detail composition
 

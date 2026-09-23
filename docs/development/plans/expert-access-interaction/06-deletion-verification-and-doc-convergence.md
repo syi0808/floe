@@ -241,7 +241,9 @@ Required assertions:
 - no source availability check is used to decide card existence;
 - each declaration’s mandatory_source appears in required_sources;
 - source consumer policy has explicit first-party coverage for declared sources;
-- third-party package identity is not part of the default first-party permission set.
+- every successful source dependency records the actual admitted consumer identity;
+- third-party package identity is not part of the default first-party permission set;
+- no compatibility consumer such as `calendar.expert` substitutes for a real Expert package identity.
 
 Avoid manually duplicated “expected 8 ids” arrays in many tests. One authoritative declaration plus derived checks is preferred.
 
@@ -429,9 +431,10 @@ BuiltinSourceEvidence
 assignment_source_grant
 assignment_has_mandatory_source
 calendar_grant_mappings
+calendar.expert
 ~~~
 
-Expected: zero matches for the obsolete permission model.
+Expected: zero production-authority matches for the obsolete permission model. `calendar.expert` may appear only in historical decision text or a regression fixture proving legacy scope is rejected; it must not create, widen or admit a current grant.
 
 ### UI duplication
 
@@ -674,6 +677,7 @@ The implementation is done only when all boxes are true:
 - [ ] CalendarExpertSetup vertical deleted.
 - [ ] Calendar grant identity no longer references Registry setup/assignment/installation.
 - [ ] Access/DataAccessGrant is sole Observe authority.
+- [ ] canonical first-party grants contain actual approved consumer identities and no `calendar.expert` compatibility authority.
 - [ ] enabled Expert remains discoverable while source is off.
 - [ ] connector connection creates default first-party Observe authority.
 - [ ] Use with Floe is the connection-level Observe control.
