@@ -1,488 +1,855 @@
-# Checkpoint 02 — Calendar source extraction and Schedule Expert convergence
+# Checkpoint 02 — Schedule common-runtime cutover from current main
 
-## Goal
+- **Status:** active execution plan
+- **Current baseline:** main at 75e385ca00cb96e2b9f63757f4bd1659f428baf3
+- **Scope:** finish Checkpoint 02 only
+- **Do not enter:** Checkpoint 03 Registry/Access authority deletion, Checkpoint 04 product permission redesign, Checkpoint 05 durable Conversation interaction
+- **Primary rule:** stop improving the already-extracted Calendar reader unless a Schedule common-path test proves a concrete missing semantic
 
-Remove Schedule’s special App endpoint and make it run through the same built-in Expert setup, Directory registration, BuiltinExpertEndpoint, BuiltinExpertHost and Task path as the other seven built-in Experts.
+This file supersedes the previous broad Checkpoint 02 sequencing. The Calendar extraction half is already implemented. The remaining work is a runtime cutover.
 
-This checkpoint is intentionally large because Schedule’s special endpoint currently owns real Calendar functionality. The correct migration is **extract functionality to its semantic owners first, then delete the endpoint**. Do not replace ScheduleEndpoint with a forwarding wrapper.
+Checkpoint 02 is complete only when Schedule is the eighth ordinary built-in Expert and the old Schedule production endpoint no longer exists.
 
-By checkpoint exit:
+---
 
-- Schedule is registered in the common built-in dispatch table;
-- native and remote Calendar reads are available through a provider-neutral Context host path;
-- Schedule’s domain reasoning lives under crates/experts/builtin/src/schedule like every other Expert;
-- the App ScheduleEndpoint subtree is deleted;
-- the generic Task path can carry Schedule settlement/proposal output;
-- the old CalendarExpertSetup persistence may still exist temporarily, but Schedule execution must no longer depend on a Schedule-specific endpoint.
+## 0. Frozen foundation
 
-## Baseline anchors
+Treat the following as complete unless a focused Schedule common-path test demonstrates a concrete missing semantic:
 
-- crates/experts/builtin/src/catalog.rs:62 — BuiltinExpertKind::ALL
-- crates/experts/builtin/src/catalog.rs:73 — BuiltinExpertKind::BUILTIN_SETUP excludes Schedule
-- crates/experts/builtin/src/schedule/mod.rs:9 — exports old definition/history/host/plan
-- crates/experts/builtin/src/schedule/host.rs:38 — private ExpertHost
-- crates/experts/builtin/src/schedule/host.rs:68 — invoke_inner
-- crates/experts/builtin/src/schedule/host.rs:115 — run_schedule_reasoning
-- crates/experts/builtin/src/schedule/host.rs:384 — Answer requires active_view
-- crates/experts/builtin/src/schedule/host.rs:395 — Call path
-- crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:23 — special schedule module
-- crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:29 — registered_experts excludes Schedule
-- crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:84 — BuiltinExpertEndpoint
-- crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:407 — common calendar_views hook
-- crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs:56 — ScheduleEndpoint
-- crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs:79 — AgentEndpoint impl
-- crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs:91 — select_active_setup
-- crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs:48 — CalendarExpertEndpointResult
-- crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs:54 — schedule settlement owner
-- crates/app/src/vault_host.rs:195 — OpenVault::activate
-- crates/app/src/vault_host.rs:257 — sync_expert_directory
+1. request-scoped CalendarViewQuery;
+2. exact query and coverage validation;
+3. bounded pagination support;
+4. signed remote Calendar Context acquisition;
+5. native Calendar admission against current connection and DataAccessGrant;
+6. native EventKit acquisition through Context;
+7. common BuiltinExpertHost Calendar reads;
+8. SourceReadOutcome with Ready, Unavailable and NeedsUserAction;
+9. SourceAccessRequirement bound to current connection/resource/source authority when representable;
+10. generic Expert auxiliary artifact and settlement carriers;
+11. generic Vault Task settlement validation against the selected Expert/package.
 
-## 1. Move Calendar acquisition to Context-owned source reading
-
-### 1.1 What must leave ScheduleEndpoint
-
-Inventory the code in crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs and schedule/agent.rs and classify every symbol before moving anything.
-
-Expected categories:
-
-1. **source identity / connection resolution** -> Connections/provider adapters;
-2. **DataAccessGrant admission** -> Access;
-3. **native subject/fingerprint check** -> native/provider adapter + Access fence;
-4. **Calendar observation acquisition** -> provider adapter;
-5. **bounded timeline/View projection** -> Context;
-6. **dependency/provenance record** -> Context/Conversation recorder;
-7. **query range chosen from assignment** -> Schedule domain;
-8. **Schedule reasoning** -> Schedule Expert;
-9. **Task settlement / private-state CAS** -> generic Experts/Vault Task path;
-10. **action proposal payload** -> Schedule result/Actions bridge.
-
-Nothing in categories 1–6 may remain in a Schedule-specific App endpoint after the checkpoint.
-
-Inventory from the current implementation:
-
-| Current symbol(s) | Destination/ownership |
-|---|---|
-| `SelectedSetup`, `select_active_setup`, `validate_active_connection` | Connection selection and source identity; remove Registry setup authority in checkpoint 03 |
-| `BoundAccess`, `GrantBoundCalendarAccess` | Access admission/revalidation composed by Context, with no Expert setup key |
-| `Access`, `DeviceCalendarAccess`, `NativeCalendarReadAccess`, native batch/schedule conversion | Real native/provider adapter under Context Calendar acquisition |
-| `VaultRemoteCalendarBackend`, `RemoteCalendarAccess` | Remote provider transport and Access-signed admission |
-| `FixtureAccess` | Context Calendar reader test fixture only |
-| `ExpertTimelineViews`, `CalendarTimelineViews` | Context bounded projection, dependency and lease lifecycle |
-| `CalendarExpertEndpointRequest`, `run_calendar_expert_endpoint` | Split into generic host input, Schedule judgment and Experts Task lifecycle |
-| `CalendarExpertEndpointResult`, `CalendarExpertSettlement`, `CALENDAR_EXPERT_SETTLEMENT_OWNER` | Generic `BuiltinExpertOutput` / `ExpertSettlement` and Task settlement |
-| `NoCapabilityJournal`, `calendar_invocation`, `schedule_expert` | Remove with the old Registry-scoped execution path |
-
-### 1.2 Canonical Calendar reader
-
-Build one Context-owned Calendar reader used by any consumer, not only Schedule.
-
-It must compose the existing abstractions rather than introducing a second Calendar subsystem:
-
-- floe_context::CalendarSource
-- floe_context Calendar timeline/view projection
-- floe_access::CalendarReadAdmission / CalendarReadAccessRequest
-- native provider adapters such as NativeCalendarReadAccess / EventKit acquisition
-- remote ServerSourceClient / remote grant authorization
-- Calendar mirror fallback only where the existing Context contract explicitly supports it
-
-The reader input must be semantic and request-scoped:
+Relevant landed commits:
 
 ~~~text
-person
-device
-consumer
-purpose
-requested range
-resource/connection selection resolved from current source state
-deadline/cancellation
+95993ad82b  Make built-in Calendar reads request-scoped
+39a3e94b14  Select bounded Schedule calendar ranges from assignments
+675d60821b  Preserve paginated Calendar coverage in Context reads
+bc0c903d29  Validate Calendar pages against exact Context query
+e2f6760ce6  Add grant-bound remote Calendar Context reader
+25697999f6  Route common Expert Calendar reads through Context admission
+ae2a827f0e  Admit native Calendar reads by current connection and grant
+0ff0053933  Route native Calendar views through Context and common Expert host
+be22dc59b0  Bind Expert Task settlement to selected package identity
+91b4b4258d  Preserve typed Calendar access outcomes for built-in Experts
+75e385ca00  Bind Calendar review outcomes to current source identity
 ~~~
 
-The Expert must not provide:
-- connection credentials;
-- bearer token;
-- server base URL;
-- grant id chosen by the model;
-- source authority chosen by the model;
-- native fingerprint chosen by the model.
-
-The reader resolves authoritative current connection/grant state behind its owner boundaries.
-
-Implementation note: Context now has signed remote Calendar View acquisition and reauthorization plus native admission, bounded observation/projection and dependency reauthorization. The common App host injects both reads according to the current connection, including EventKit without a server connection, and records their dependencies under the requesting Expert consumer. The reader now returns typed ready, unavailable or review-required Calendar outcomes; its review requirement carries the current connection, selected resources and source authority when representable. An unresolved connection or unrepresentable resource cannot offer inline resolution. Optional Experts record missing Calendar context. Native grant selection no longer requires an App-supplied Schedule setup/view key, but the stored grant mapping still checks Registry state until checkpoint 03. The old Schedule endpoint and its separate App acquisition path remain to be deleted in this checkpoint; a generic Schedule result must retain its review requirement as an interaction artifact rather than reducing it to an optional issue.
-
-### 1.3 Native + remote parity at the semantic boundary
-
-Current common PersonalViewSource.calendar_views() only reads through ServerSourceClient and returns an empty list when no remote source client exists. That behavior is insufficient.
-
-Replace it with a host-injected Calendar reader that can serve:
-
-- EventKit on the current Apple device;
-- fixture/test Calendar;
-- supported remote Google/Microsoft Calendar;
-- Android only to the extent required for shared compilation, not new product parity.
-
-The BuiltinExpertHost method can remain calendar_views() if it is genuinely provider-neutral, but its implementation must no longer infer “no remote source client == no calendars”.
-
-A better concrete host field is conceptually:
+Current production split:
 
 ~~~text
-calendar_reader: Option<&dyn CalendarContextReaderApi>
+Schedule
+  -> ScheduleEndpoint
+  -> select_active_setup
+  -> CalendarExpertSetup / CalendarViewBinding
+  -> run_calendar_expert_endpoint
+  -> schedule::ExpertHost
+
+Other built-ins
+  -> BuiltinExpertEndpoint
+  -> registered_experts
+  -> BuiltinExpertHost
+  -> domain dispatch
 ~~~
 
-and DelegatedMessageExperts::calendar_views() forwards the request to that reader under the requesting Expert’s consumer identity.
+Do not add another Calendar abstraction while both paths remain alive.
 
-Do not inject provider-specific readers into the Expert crate.
+### Frozen-area changes are allowed only when
 
-### 1.4 Preserve exact range behavior
+1. a new common Schedule-path test exists;
+2. that test fails;
+3. the failure cannot be expressed by the current Context/Access contract;
+4. the fix is the smallest owner-correct change.
 
-Schedule’s current request-scoped range selection is a product invariant from ADR 0023.
+Do not proactively add new reader layers, permission reason variants, source metadata, or Checkpoint 03 authority work.
 
-The generic Calendar reader must accept a bounded requested interval. Do not regress to the current generic calendar_views() fixed “now ± 1 day” window.
+---
 
-Change BuiltinExpertHost Calendar acquisition contract to include a query/range object rather than a no-argument list call.
+# 1. Final topology
 
-For example:
+At checkpoint exit:
 
 ~~~text
-CalendarViewQuery
-  range_start_unix_ms
-  range_end_unix_ms
-  cursor?
-  max_items
-  max_bytes
+BuiltinExpertKind::ALL
+  -> common built-in setup
+  -> enabled Expert cards
+  -> Directory
+  -> one BuiltinExpertEndpoint
+  -> registered_experts
+       -> schedule::dispatch
+       -> commitments::dispatch
+       -> communication::dispatch
+       -> relationships::dispatch
+       -> focus_attention::dispatch
+       -> wellbeing::dispatch
+       -> work_context::dispatch
+       -> life_logistics::dispatch
 ~~~
 
-The host enforces absolute maximum duration/items/bytes. The Expert selects the requested interval from the assignment.
+Schedule reads Calendar only through:
 
-Tests must preserve:
-- today -> today coverage;
-- this week -> a fresh wider read;
-- explicit past/future range;
-- partial/paginated coverage remains distinct from empty;
-- stale coverage is not reused for a wider request.
+~~~text
+schedule::dispatch
+  -> BuiltinExpertHost::calendar_views
+  -> PersonalViewSource
+  -> CurrentCalendarContextReader
+  -> Context / Access
+  -> native or remote adapter
+~~~
 
-## 2. Rebuild Schedule as a normal built-in dispatch
+There is no production ScheduleEndpoint.
 
-### 2.1 File structure
+CalendarExpertSetup, SourceGrants and calendar_grant_mappings may remain for Checkpoint 03, but none may be required to execute Schedule.
 
-Converge crates/experts/builtin/src/schedule toward the same shape as the other Expert folders:
+---
+
+# 2. Current line anchors
+
+Current main 75e385ca:
+
+| File | Line | Symbol |
+|---|---:|---|
+| crates/experts/builtin/src/catalog.rs | 41 | builtin_setup_declarations |
+| crates/experts/builtin/src/catalog.rs | 62 | BuiltinExpertKind::ALL |
+| crates/experts/builtin/src/catalog.rs | 73 | BUILTIN_SETUP excludes Schedule |
+| crates/experts/builtin/src/host.rs | 116 | BuiltinExpertOutput |
+| crates/experts/builtin/src/host.rs | 152 | BuiltinExpertHost |
+| crates/experts/builtin/src/host.rs | 194 | calendar_views |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch.rs | 24 | special schedule module |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch.rs | 30 | registered_experts has seven |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch.rs | 425 | common Calendar host |
+| crates/app/src/vault_host/conversation_turn/expert_host.rs | 773 | CalendarContextReaderApi |
+| crates/app/src/vault_host/conversation_turn/expert_host.rs | 884 | CurrentCalendarContextReader |
+| crates/app/src/vault_host.rs | 195 | direct Schedule registration |
+| crates/app/src/vault_host.rs | 254 | sync_expert_directory |
+| crates/app/src/vault_host.rs | 2519 | builtin_setup_specs |
+| crates/app/src/vault_host.rs | 2568 | schedule_packaging |
+| crates/experts/builtin/src/schedule/plan.rs | 48 | old setup selection |
+| crates/experts/builtin/src/schedule/plan.rs | 110 | plan_run depends on provider/setup facts |
+| crates/experts/builtin/src/schedule/plan.rs | 149 | requested_range |
+| crates/experts/builtin/src/schedule/host.rs | 38 | old Schedule ExpertHost |
+| crates/experts/builtin/src/schedule/host.rs | 305 | iterative reasoning |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs | 54 | ScheduleEndpoint |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs | 272 | App select_active_setup |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs | 329 | BoundAccess |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs | 33 | CalendarExpertEndpointRequest |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs | 48 | CalendarExpertEndpointResult |
+| crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs | 58 | run_calendar_expert_endpoint |
+| crates/adapters/vault/src/repositories/task.rs | 64 | generic settlement validation |
+| crates/app/src/vault_host/conversation_turn.rs | 103 | CalendarHistoryBoundary |
+
+---
+
+# 3. Checkpoint boundaries
+
+## Leave for Checkpoint 03
+
+These may remain after this checkpoint:
+
+~~~text
+CalendarExpertSetup
+CalendarExpertOverview
+CalendarViewBinding
+calendar_grant_mappings
+SourceGrants
+BuiltinSourceBinding
+BuiltinSourceState
+Calendar access settings wire/UI
+~~~
+
+Do not remove them early.
+
+## Remove from Schedule execution now
+
+After cutover:
+
+- App does not select CalendarExpertSetup before Schedule runs.
+- App does not build BoundAccess for Schedule.
+- App does not call run_calendar_expert_endpoint.
+- Schedule appears in the same Directory sync as all other built-ins.
+- Schedule model execution uses common ExpertModelHost.
+- Schedule source reads use BuiltinExpertHost::calendar_views.
+
+Do not introduce a forwarding endpoint in either direction.
+
+---
+
+# 4. R1 — Separate request planning from source/setup planning
+
+The current schedule plan requires provider, calendar count and remote availability before the Calendar read. That forces the old setup selection.
+
+In crates/experts/builtin/src/schedule/plan.rs:
+
+Delete:
+
+~~~text
+ScheduleSetupCandidate
+ScheduleSetupSelection
+select_active_setup
+~~~
+
+Replace plan_run with request-only planning.
+
+Target shape:
+
+~~~text
+ScheduleRequestPlan
+  range
+  starts_at
+  ends_at
+  propose_focus
+~~~
+
+Target API:
+
+~~~text
+plan_request(
+  assignment,
+  local_now,
+  now
+) -> ScheduleRequestPlan
+~~~
+
+The planner may use only assignment/time/range semantics.
+
+It must not use:
+
+- CalendarProvider;
+- device id;
+- CalendarExpertSetup;
+- CalendarViewBinding;
+- calendar count;
+- remote source availability;
+- connection revision;
+- grant state.
+
+Keep requested_range.
+
+Remove acquire_remotely and provider-derived pre-read ScheduleReasoning.
+
+### Model placement
+
+Do not re-add provider identity to CalendarContextView to choose model placement.
+
+The common Expert path captures ContextDependency before model execution. Inference/Access owns ProcessingRestriction and exact recipient admission.
+
+Required invariant:
+
+~~~text
+LocalOnly dependency -> remote release denied
+ApprovedRecipient -> only exact approved recipient
+~~~
+
+Schedule does not branch on Google/Microsoft/EventKit to choose inference placement.
+
+### R1 tests
+
+- today;
+- this week;
+- explicit day;
+- explicit bounded range;
+- focus lead;
+- invalid/too-wide range;
+- no provider/setup input required.
+
+R1 is complete when old setup-selection types are gone from the Schedule domain package.
+
+---
+
+# 5. R2 — Create schedule::dispatch on BuiltinExpertHost
+
+Create:
+
+~~~text
+crates/experts/builtin/src/schedule/dispatch.rs
+~~~
+
+with:
+
+~~~text
+pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
+    host: &Host,
+    request: &BuiltinExpertRequest,
+) -> Result<BuiltinExpertOutput, AgentFailure>
+~~~
+
+Export it from schedule/mod.rs.
+
+### Dispatch sequence
+
+1. validate assignment;
+2. compute ScheduleRequestPlan;
+3. construct exact CalendarViewQuery;
+4. call host.calendar_views;
+5. branch on SourceReadOutcome;
+6. for Ready, obtain complete bounded evidence and run Schedule judgment;
+7. for blocked states, return a bounded blocked result;
+8. return BuiltinExpertOutput.
+
+Do not call source_granted as Schedule mandatory-source admission. The actual Calendar read is the runtime observation.
+
+### Ready
+
+For Ready:
+
+- require non-empty valid evidence before asserting schedule facts;
+- preserve requested range;
+- follow next_cursor using the same range;
+- bound total pages/items/bytes;
+- reject cursor cycles;
+- do not reimplement admission;
+- run judgment only after complete coverage.
+
+A small Schedule pagination helper is acceptable. A new Calendar reader abstraction is not.
+
+### Unavailable
+
+Return a valid Schedule unavailable/blocked result.
+
+Do not fabricate an empty Calendar.
+Do not emit NoFocusWindow as authoritative.
+Do not create an action proposal.
+
+### NeedsUserAction
+
+Preserve the exact SourceAccessRequirement.
+
+Do not throw AccessReviewRequired only to keep old behavior.
+Do not generate a UserInteractionRef before Checkpoint 05.
+
+Carry the requirement in one typed auxiliary artifact. Add a stable media type if needed:
+
+~~~text
+application/vnd.floe.source-access-requirement+json;version=1
+~~~
+
+This artifact is a requirement description, not permission and not a durable interaction.
+
+Task completion for the blocked result must allow Manager to perform the next iteration.
+
+---
+
+# 6. R3 — Move Schedule judgment out of schedule/host.rs
+
+Target package:
 
 ~~~text
 schedule/
   mod.rs
   dispatch.rs
   expert.rs
+  plan.rs
 ~~~
 
-Optional small domain helpers are allowed when they contain real Schedule semantics.
+Move into expert.rs only Schedule semantics:
 
-Delete by checkpoint end:
+- prompt;
+- iterative ExpertReasoner loop if still required;
+- capability request parsing;
+- conflict/free-window/focus analysis;
+- result helpers.
 
-- schedule/definition.rs
-- schedule/calendar_history.rs
-- the old infrastructure-heavy schedule/host.rs
+Delete the Schedule-local ExpertViews source abstraction.
 
-schedule/plan.rs may remain only if it is pure Schedule-domain parsing/planning and has no App/provider/Access/Registry dependencies. Prefer folding small logic into dispatch.rs or expert.rs if the separate file only preserves the old endpoint shape.
+Do not wrap BuiltinExpertHost into ExpertViews and preserve the old host. That leaves two infrastructure paths.
 
-### 2.2 dispatch()
+### Current failure behavior to remove
 
-Add Schedule to crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:registered_experts().
+The old reasoning loop propagates source failure directly and requires an active successful view before Answer.
 
-The dispatch implementation should follow the same pattern as Commitments/Focus/Wellbeing:
+New rule:
 
-1. inspect the source requirement through the generic host;
-2. resolve the requested Calendar interval from the assignment;
-3. read the Calendar source through the provider-neutral host port;
-4. record exact dependencies;
-5. run Schedule judgment;
-6. return BuiltinExpertOutput with Schedule result and optional proposal/interaction artifacts.
+- Ready complete evidence -> reason normally.
+- Unavailable -> deterministic blocked result or typed unavailable observation.
+- NeedsUserAction -> preserve requirement artifact and blocked result.
+- integrity/storage/cancel/deadline -> hard AgentFailure.
 
-Do not add a special branch in BuiltinExpertEndpoint for Schedule.
+A model cannot produce schedule facts without successful complete Calendar evidence.
 
-### 2.3 Iterative reasoning
+### Successful output compatibility
 
-Schedule currently has a multi-step tool-capable reasoning loop while other built-ins usually perform one bounded model call.
+For successful Schedule work, retain the current ExpertResult evidence shape in Checkpoint 02 so proposal inspection/private-state settlement remain compatible.
 
-It is acceptable for Schedule to keep a richer internal reasoning strategy **inside the Schedule Expert package**, provided:
+Blocked results may use a small separate result shape because they never carry action proposals.
 
-- it uses the shared ExpertModel/ExpertReasoner contract;
-- capability execution is supplied by BuiltinExpertHost;
-- failed source reads become ExpertCapabilityObservation from checkpoint 01;
-- App does not contain Schedule-specific orchestration;
-- Task/usage/deadline/cancellation are the common path.
+Do not fake ExpertResult source/view fields for a blocked read.
 
-If the existing iterative loop is still needed for range selection/search/free-window operations, move only that domain loop into schedule/expert.rs. Its tool execution callback must call generic Calendar Context acquisition.
+---
 
-A Schedule-specific internal algorithm is valid. A Schedule-specific App endpoint is not.
+# 7. R4 — Add one generic stateful built-in settlement hook
 
-### 2.4 Answer without a successful Calendar view
+Checkpoint 01 already lets BuiltinExpertOutput carry settlement. The common host now needs to produce it.
 
-Remove the old invariant at schedule/host.rs around the baseline Answer branch that requires active_view to exist before Schedule can answer.
+Add one generic host operation or equivalent service with semantics:
 
-The new behavior is:
+~~~text
+settle_stateful_result(
+  request,
+  draft
+) -> BuiltinExpertOutput
+~~~
 
-- mandatory source Ready -> normal Schedule result;
-- mandatory source NeedsUserAction -> Schedule returns a Manager-ready bounded result explaining that schedule evidence was not available and includes the interaction artifact;
-- mandatory source Unavailable -> Schedule returns a degraded/no-conclusion result when the domain schema supports it, or a typed non-hard blocked result;
-- hard integrity/storage/cancellation failure -> Err(AgentFailure).
+Do not add settle_schedule_result.
 
-Do not fabricate an empty Calendar view to make the result schema pass.
+A draft contains domain/evidence result fields only:
 
-The Schedule result schema should explicitly represent “no conclusion because source was unavailable/user action required” if its existing no-conclusion fields are insufficient.
+- source_handle;
+- data_class;
+- expires_at;
+- insights;
+- action proposals;
+- summary;
+- model call count;
+- view call count.
 
-## 3. Put Schedule into the common built-in setup
+It does not contain credentials, caller-chosen grant id, Registry snapshot, CalendarExpertSetup id, token or provider transport state.
 
-### 3.1 Remove ALL vs BUILTIN_SETUP divergence
+### App-side implementation
 
-At crates/experts/builtin/src/catalog.rs:62–80:
+The common App host:
 
-- make the installation declaration list contain all eight built-in Experts;
-- delete BUILTIN_SETUP if it exists only to mean “all except Schedule”;
-- use one canonical iteration list for built-in setup and Directory sync.
+1. loads current Registry;
+2. resolves selected built-in assignment from request.agent_id;
+3. validates package/assignment identity;
+4. uses the existing assignment view handle only as current ExpertResult identity;
+5. constructs ExpertResult;
+6. stages private-state completion;
+7. obtains exact captured Context dependencies;
+8. creates ExpertSettlement with owner equal to selected Expert package id;
+9. returns BuiltinExpertOutput with result + generic EndpointSettlement.
 
-If another semantic subset is genuinely needed later, name it for that semantic reason. Do not retain BUILTIN_SETUP as a compatibility alias.
+The existing granted view handle is temporary result identity only. It must not authorize the Calendar read. Checkpoint 03 removes the duplicated source authority.
 
-builtin_setup_declarations() at baseline line 41 must emit Schedule.
+### /focus proposal evidence
 
-### 3.2 Common packaging
+The common Context path uses Context-owned Calendar observation identity. The old proposal inspection still depends on Registry CalendarViewBinding.
 
-At crates/app/src/vault_host.rs:2521 and :2570:
+For governed Calendar proposals, move validation to recorded ContextDependency:
 
-- builtin_setup_specs() must package Schedule through expert_setup_spec() / expert_packaging();
-- delete schedule_packaging();
-- delete any separate schedule_definition path;
-- the Directory definition for Schedule must be generated from the same AgentCard / contract_definition path as every other built-in.
+- Person;
+- source/connection identity;
+- resources;
+- observation id;
+- current authority/freshness;
+- Task/action origin.
 
-### 3.3 Vault open / Directory
+Recognize the current Context Calendar observation handle and bind it to dependency.observation_id.
 
-At OpenVault::activate baseline lines 195–255:
+Do not require registry.calendar_view(result.view_handle) for a governed common Calendar read.
 
-delete:
-- creation of ScheduleEndpoint;
-- direct schedule_definition();
-- unconditional directory.register() for Schedule;
-- Schedule-specific settlement owner passed only because of that endpoint.
+Action write authority and approval semantics remain unchanged.
 
-OpenVault should construct:
-- one BuiltinExpertEndpoint;
-- one Directory;
-- one TaskCoordinator / VaultTaskRepository that can settle generic Expert tasks;
-- then sync enabled Expert cards through the same sync_expert_directory() path.
+### R4 tests
 
-At sync_expert_directory baseline lines 257–282:
-- iterate all built-in kinds;
-- unregister/register all through one rule;
-- do not special-case Schedule;
-- card inclusion must eventually stop depending on source grant availability in checkpoint 03. During checkpoint 02, if the old Registry source gating still exists, tests may use a prepared Calendar source so Schedule can register; this temporary dependency must be removed next.
+- correct selected Expert settlement;
+- foreign owner rejected;
+- stale Registry revision rejected;
+- result exactness;
+- successful /focus proposal inspectable;
+- proposal evidence validated by ContextDependency;
+- blocked result cannot publish an action.
 
-## 4. Generic Schedule settlement and proposal flow
+---
 
-### 4.1 Remove CalendarExpertSettlement naming
+# 8. R5 — Put Schedule into common setup and registration
 
-The common settlement contract already exists as ExpertSettlement.
+## catalog.rs
 
-Move Schedule private-state/task settlement generation into generic Expert output/Task settlement introduced in checkpoint 01.
+- builtin_setup_declarations derives from BuiltinExpertKind::ALL;
+- remove BUILTIN_SETUP if it only means all except Schedule;
+- Schedule installs through ExpertSetupSpec like every other built-in.
 
-Replace names such as:
+Do not create another seven/eight alias.
 
-- CalendarExpertSettlement
-- CalendarExpertEndpointResult
-- CALENDAR_EXPERT_SETTLEMENT_OWNER
+## expert_dispatch.rs
 
-with generic Expert settlement semantics.
+At registered_experts:
 
-### 4.2 VaultTaskRepository
+- change seven registrations to eight;
+- add BuiltinExpertKind::Schedule -> schedule::dispatch;
+- do not add any Schedule branch elsewhere in BuiltinExpertEndpoint.
 
-Implementation note: the repository no longer receives a Schedule-wide settlement owner. The current Schedule path emits its package id as owner, and Vault checks owner, Task agent/principal/id, invocation and Registry assignment/package identity during the atomic settlement. Schedule's old App endpoint remains until the generic dispatch replaces it.
+Add a table-driven test proving registered ids equal BuiltinExpertKind::ALL.
 
-At crates/adapters/vault/src/repositories/task.rs baseline lines 13, 72 and 101:
+## vault_host.rs
 
-the repository currently receives one settlement_owner string and dispatches to settle_calendar_expert_task_checked().
+At sync_expert_directory:
 
-Refactor so settlement validation is based on the Task’s selected Expert/assignment and the generic ExpertSettlement owner recorded by Experts, not a repository-wide hard-coded Schedule owner.
+- use one canonical built-in set;
+- Schedule is synchronized like every other card.
 
-Required checks:
+At builtin_setup_specs:
 
-- Task id matches completion;
-- principal matches;
-- invocation/assignment identity matches;
-- expected Registry revision/authority matches;
-- result digest/result value matches the settlement;
-- duplicate settlement is idempotent only under the exact same identity;
-- stale/foreign settlement conflicts;
-- no other Expert may settle Schedule state and vice versa.
+- package Schedule through expert_setup_spec / expert_packaging.
 
-Rename Vault method settle_calendar_expert_task_checked() to a generic settle_expert_task_checked() only when its body contains no Calendar-specific assumptions.
+### Existing CalendarExpertSetup
 
-### 4.3 Action proposals
-
-Schedule action proposals are domain output, not reason to keep a private endpoint.
-
-Carry proposal references as typed artifacts through the generic BuiltinExpertOutput -> A2ATask -> ExpertReport -> Task path.
-
-Existing AgentProposalCard behavior may continue to inspect the proposal through the current Actions owner until checkpoint 05. Do not move action authority into the new interaction contract.
-
-Observe permission interaction and Act approval remain separate.
-
-## 5. Remove Schedule-specific Conversation history knowledge
-
-The root Conversation currently passes schedule::CalendarHistoryBoundary from crates/app/src/vault_host/conversation_turn.rs baseline line 101.
-
-Delete that dependency.
-
-### 5.1 Immediate replacement
-
-Use recorded DependencyCoverage / ContextDependency identity as the primary history-authority mechanism.
-
-The repository already has project_model_conversation_history() using recorded coverage. The temporary SourceHistoryBoundary exists because some session messages cannot prove provenance.
+It may still exist for settings/persistence until Checkpoint 03.
 
 During this checkpoint:
 
-- ensure all successful generic Schedule source reads record their dependencies on the capability/task/message identity that Conversation later projects;
-- ensure Schedule Manager answers inherit the Task/source coverage through the existing coverage fold;
-- add tests that revoking the Calendar grant removes old Schedule-derived history even without checking the agent id string.
+- common built-in assignment is the runtime Schedule assignment;
+- old Calendar setup assignment is not used by Directory/runtime;
+- do not synchronize the two assignments;
+- identical package records may be reused;
+- fixture-only packaging conflicts should be fixed in fixture tests, not with production compatibility.
 
-### 5.2 SourceHistoryBoundary
+### schedule_packaging
 
-If the generic source-history fallback is still required for old message forms during the same checkpoint, replace CalendarHistoryBoundary with an owner-neutral rule based on “message has source-dependent recorded coverage”.
+Old settings may still need package metadata.
 
-Do not create a BuiltinExpertHistoryBoundary that maps every Expert id to source names. That only generalizes the wrong abstraction.
+Remove Schedule-specific packaging policy by calling the generic expert_packaging path for BuiltinExpertKind::Schedule.
 
-The target for checkpoint 06 is to delete SourceHistoryBoundary entirely if all canonical messages have recorded coverage sufficient for projection.
+---
 
-## 6. Deletion gate
+# 9. R6 — Cut production routing and immediately delete old endpoint
 
-Before marking checkpoint 02 complete, delete these production files if no unrelated pure-domain code remains:
+Before deletion, add one focused common-path E2E:
+
+~~~text
+Manager
+ -> common Schedule card
+ -> BuiltinExpertEndpoint
+ -> schedule::dispatch
+ -> BuiltinExpertHost::calendar_views
+ -> Context / Access
+ -> Schedule Task
+ -> Manager answer
+~~~
+
+Also prove NeedsUserAction produces a completed blocked Schedule Task and lets the root Manager Run continue.
+
+Once those pass, delete in the same cutover:
 
 ~~~text
 crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs
 crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs
 crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent/tests.rs
-crates/experts/builtin/src/schedule/definition.rs
-crates/experts/builtin/src/schedule/calendar_history.rs
 ~~~
 
-The old schedule/host.rs must also be deleted or reduced to a pure domain implementation renamed/moved to expert.rs. It must not retain source/provider/App orchestration.
-
-Remove production symbols:
+Remove:
 
 ~~~text
-ScheduleEndpoint
+pub(in crate::vault_host) mod schedule
+ScheduleEndpoint::new
 schedule_definition
-SCHEDULE_DEFINITION_REVISION
-CALENDAR_EXPERT_SETTLEMENT_OWNER
+direct Directory registration for Schedule
 CalendarExpertEndpointRequest
 CalendarExpertEndpointResult
 run_calendar_expert_endpoint
-select_active_setup
-schedule_packaging
-CalendarHistoryBoundary
+BoundAccess
+old endpoint-only access wrappers
+old endpoint-only capability journal
+old endpoint-only calendar_invocation
+old endpoint-only schedule_expert helper
+CALENDAR_EXPERT_SETTLEMENT_OWNER
+SCHEDULE_DEFINITION_REVISION
 ~~~
 
-Tests named calendar_experts.rs may temporarily remain if they now exercise generic Schedule + Calendar integration. Prefer renaming/splitting them before final checkpoint so test names describe the new architecture.
+Delete schedule/definition.rs.
 
-## 7. Tests
+No forwarding wrapper.
 
-### Built-in registration
+### Port old tests by responsibility
 
-Add a table-driven test over BuiltinExpertKind::ALL proving every declaration:
+| Old responsibility | New owner |
+|---|---|
+| range/query | schedule plan/dispatch |
+| native admission | Context native Calendar |
+| remote admission | Context/Access remote |
+| Schedule reasoning | schedule expert |
+| settlement | generic Experts/Vault |
+| delegation | common BuiltinExpertEndpoint E2E |
+| proposal | Actions + common Schedule E2E |
 
-- appears exactly once in built-in setup declarations;
-- packages through the same ExpertSetupSpec path;
-- can be registered through registered_experts();
-- has no dedicated App endpoint requirement.
+No direct ScheduleEndpoint fixture remains.
 
-### Schedule generic-path E2E
+---
 
-Drive a Manager turn:
+# 10. R7 — Remove Schedule-specific history boundary
+
+Current Conversation imports CalendarHistoryBoundary from Schedule.
+
+Remove that dependency.
+
+If SourceHistoryBoundary is still required by the current admission API, use a Conversation-owned conservative fallback:
+
+- successful source Tool result may be source-derived;
+- completed delegated Expert result/artifact may be source-derived;
+- compaction is unknown/source-derived;
+- user-authored messages remain user-owned.
+
+Do not map Expert ids to sources.
+Do not create BuiltinExpertHistoryBoundary.
+
+Over-pruning is acceptable; exposing source-derived history after authority loss is not.
+
+Checkpoint 06 may remove SourceHistoryBoundary entirely once stored coverage is sufficient.
+
+Delete:
 
 ~~~text
-user -> Manager -> Schedule delegation -> generic BuiltinExpertEndpoint
-     -> generic Calendar reader -> Context/Access -> fixture/native mock
-     -> Schedule result -> Task -> Manager final answer
+crates/experts/builtin/src/schedule/calendar_history.rs
+CalendarHistoryBoundary export
 ~~~
 
-Assert:
-- Task is Completed;
-- Manager Run is Completed;
-- result coverage contains Calendar dependency;
-- no ScheduleEndpoint symbol/path is used.
+Conversation tests must no longer depend on calendar. or floe.builtin.schedule string prefixes for provenance.
 
-### Source failure
+Final Schedule package:
 
-For Calendar source NeedsUserAction:
-- Schedule Task returns the non-hard blocked/degraded output defined in checkpoint 01;
-- Manager receives the Task result and performs another model iteration;
-- Manager final answer states the limitation;
-- root Run is not failed solely because Calendar permission is absent.
+~~~text
+schedule/
+  mod.rs
+  dispatch.rs
+  expert.rs
+  plan.rs
+~~~
 
-For hard Vault/integrity failure:
-- failure remains hard;
-- do not convert it into a permission interaction.
+schedule/host.rs is deleted after domain logic moves to expert.rs.
 
-### Range and coverage
+---
 
-Port the strongest tests from schedule/agent/tests.rs:
-- request range validation;
-- stale view rejected;
-- authorization rechecked after acquisition;
-- subject/fingerprint change between checks rejected;
-- failed read does not pin stale authority;
-- pagination/coverage bounds;
-- dependency exactness.
+# 11. Behavior matrix
 
-The tests should now target Context Calendar acquisition and Schedule dispatch separately rather than one giant ScheduleEndpoint fixture.
+## Successful native or remote Calendar read
 
-## 8. Residual searches
+~~~text
+Schedule dispatch
+ -> CalendarViewQuery
+ -> Ready
+ -> complete coverage
+ -> Schedule judgment
+ -> stateful ExpertResult
+ -> generic settlement
+ -> Task Completed
+ -> Manager synthesis
+~~~
 
-Run concept searches, not only exact file deletion:
+No provider branch exists in Schedule.
+
+## NeedsUserAction
+
+~~~text
+Calendar reader
+ -> NeedsUserAction(SourceAccessRequirement)
+ -> blocked Schedule result
+ -> source-access-requirement artifact
+ -> Task Completed
+ -> Manager next iteration
+ -> root Run can complete honestly
+~~~
+
+No fake evidence, no proposal, no random UserInteractionRef.
+
+## Unavailable
+
+Return a blocked/unavailable Schedule result. Do not interpret it as empty Calendar evidence.
+
+## Hard failure
+
+Integrity, foreign identity, Vault/storage error, cancellation, deadline and invalid model output remain hard AgentFailure.
+
+## /focus
+
+Only a complete successful Calendar read may create Focus proposal. Proposal remains bound to Task/invocation, common Schedule assignment, exact ContextDependency and existing Action authority.
+
+---
+
+# 12. Stop conditions
+
+Stop and reassess before adding plumbing if the cutover appears to require:
+
+1. forwarding ScheduleEndpoint;
+2. a second Calendar reader;
+3. copied DataAccessGrant state inside Schedule;
+4. provider identity added to CalendarContextView only for routing;
+5. both Schedule production endpoints registered;
+6. Checkpoint 03 work just to make Checkpoint 02 compile;
+7. optional legacy Schedule setup fields in BuiltinExpertRequest;
+8. fake Calendar evidence for NeedsUserAction;
+9. generated non-durable UserInteractionRef;
+10. Action authority inside Experts.
+
+---
+
+# 13. Verification sequence
+
+After R1: Schedule plan tests.
+
+After R2/R3: floe-experts-builtin and focused common Expert dispatch tests.
+
+Required cases:
+
+- complete Ready;
+- paginated Ready;
+- cursor cycle;
+- Unavailable;
+- NeedsUserAction requirement artifact;
+- hard failure;
+- no answer before complete evidence;
+- no proposal on blocked result.
+
+After R4: focused Experts/Vault/Actions settlement and proposal tests.
+
+After R5/R6:
+
+~~~sh
+cargo check --workspace --lib
+cargo test --workspace --no-fail-fast
+python3 tools/architecture/check_boundaries.py
+cargo build -p floe-ffi
+git diff --check
+~~~
+
+Flutter permission UX is not part of Checkpoint 02. Run Flutter only if the cutover changes client-visible result/wire shape.
+
+Do not rerun native manual acceptance after every Schedule edit. Run relevant native/macOS validation once at final cutover only if native/provider code changed after the frozen baseline.
+
+---
+
+# 14. Residual gate
+
+Checkpoint 02 is incomplete while production matches remain for:
 
 ~~~text
 ScheduleEndpoint
-schedule_definition
-schedule_packaging
+CalendarExpertEndpointRequest
+CalendarExpertEndpointResult
+run_calendar_expert_endpoint
 CALENDAR_EXPERT_SETTLEMENT_OWNER
-CalendarExpertEndpoint
-select_active_setup
+schedule_definition
+SCHEDULE_DEFINITION_REVISION
 CalendarHistoryBoundary
-BuiltinExpertKind::BUILTIN_SETUP
+ScheduleSetupCandidate
+ScheduleSetupSelection
 pub(in crate::vault_host) mod schedule
-floe.builtin.schedule/v1
 ~~~
 
-Allowed remaining “schedule” matches are domain names, prompt/result identifiers, Action proposal semantics and generic test fixtures. Infrastructure ownership must not be Schedule-specific.
+BuiltinExpertKind::BUILTIN_SETUP should be gone if it only represents the seven-Expert subset.
 
-Also inspect dependency manifests. Conversation/business modules must not gain a dependency on floe-experts-builtin merely to replace CalendarHistoryBoundary.
+Search select_active_setup and verify the old Schedule setup selector is absent.
 
-## 9. Verification
+The following may remain for Checkpoint 03, but none may be on Schedule execution:
 
-Targeted:
-- floe-experts-builtin tests;
-- floe-experts tests;
-- Context Calendar source/view tests;
-- Vault Task settlement tests;
-- App Schedule/Calendar conversation tests;
-- runtime delegation tests.
+~~~text
+CalendarExpertSetup
+CalendarViewBinding
+calendar_grant_mappings
+SourceGrants
+BuiltinSourceBinding
+BuiltinSourceState
+~~~
 
-Broad gate:
-- cargo check --workspace --lib
-- cargo test --workspace --no-fail-fast
-- python3 tools/architecture/check_boundaries.py
-- git diff --check
+Report those matches explicitly rather than deleting them early.
 
-Because this checkpoint removes App/FFI-visible Schedule infrastructure indirectly, build floe-ffi even if the explicit Calendar Expert wire is removed in checkpoint 03.
+---
 
-## 10. Checkpoint exit criteria
+# 15. Architecture doc update
 
-Checkpoint 02 is complete only when:
+After cutover, update docs/architecture/runtime.md to state:
 
-- Schedule is the eighth ordinary built-in Expert in common setup and dispatch;
-- no Schedule-specific App AgentEndpoint remains;
-- Calendar source acquisition is provider-neutral and can read the Apple native source through Context/Access;
-- Schedule request-scoped ranges are preserved;
-- expected Calendar access absence does not automatically hard-fail the root conversation;
-- generic Expert settlement can settle Schedule state/proposals;
-- Conversation no longer imports Schedule’s CalendarHistoryBoundary;
-- old Schedule infrastructure symbols are absent by residual search;
-- all targeted and broad Rust/architecture checks pass.
+- one BuiltinExpertEndpoint serves all built-ins;
+- Schedule uses common Context Calendar reader;
+- generic Task settlement validates selected Expert identity;
+- no separate Schedule endpoint exists;
+- remaining CalendarExpertSetup persistence is a Checkpoint 03 settings/authority concern, not Schedule runtime.
 
-Checkpoint 03 may now remove the CalendarExpertSetup/Registry permission authority because Schedule execution no longer needs that special vertical.
+Remove the current production description:
+
+~~~text
+ScheduleEndpoint -> run_calendar_expert_endpoint
+~~~
+
+Do not turn this plan into a patch diary. Add only final completion evidence.
+
+---
+
+# 16. Recommended commit sequence
+
+Prefer these semantic commits:
+
+1. **Refactor Schedule request planning for common Calendar reads**
+   - R1.
+
+2. **Run Schedule judgment through BuiltinExpertHost**
+   - R2 + R3.
+
+3. **Settle stateful Schedule results on the common Expert path**
+   - R4 including proposal evidence.
+
+4. **Cut Schedule over to the common Directory endpoint**
+   - R5 plus green common E2E.
+
+5. **Delete old Schedule endpoint and history boundary**
+   - R6 + R7 + residual cleanup + architecture doc.
+
+Do not return to a long sequence of Calendar-reader refinement commits without a failing cutover test.
+
+---
+
+# 17. Completion checklist
+
+- [ ] Schedule planning no longer requires provider/setup selection.
+- [ ] schedule::dispatch uses the common BuiltinExpertHost signature.
+- [ ] Schedule Calendar reads only through BuiltinExpertHost::calendar_views.
+- [ ] Schedule domain reasoning owns no source/provider host.
+- [ ] NeedsUserAction produces a valid blocked Schedule Task result.
+- [ ] exact SourceAccessRequirement survives in a typed artifact.
+- [ ] /focus proposal works through common path.
+- [ ] generic host/endpoint creates Schedule settlement.
+- [ ] builtin_setup_declarations includes Schedule.
+- [ ] registered_experts includes Schedule.
+- [ ] Schedule uses common BuiltinExpertEndpoint.
+- [ ] OpenVault no longer directly registers Schedule.
+- [ ] ScheduleEndpoint files deleted.
+- [ ] run_calendar_expert_endpoint deleted.
+- [ ] schedule_definition deleted.
+- [ ] CalendarHistoryBoundary deleted.
+- [ ] Conversation no longer imports Schedule for history classification.
+- [ ] Checkpoint 03-only state is not on Schedule execution.
+- [ ] successful common Schedule E2E passes.
+- [ ] NeedsUserAction common Schedule E2E passes and Manager root Run can complete.
+- [ ] Rust workspace, architecture and FFI gates pass.
+
+The checkpoint is complete only after the **Schedule runtime cutover**, not because the generic Calendar reader is feature-complete.
+
+---
+
+# 18. Required agent report
+
+When done, report:
+
+1. **Schedule cutover**
+   - new common path;
+   - old endpoint deletion.
+
+2. **Changed files/symbols**
+   - grouped by R1–R7.
+
+3. **Stateful settlement and proposal**
+   - generic settlement hook;
+   - ContextDependency-based proposal evidence.
+
+4. **Remaining Checkpoint 03 surface**
+   - CalendarExpertSetup / SourceGrants / grant mapping matches intentionally left;
+   - proof they are not on Schedule execution.
+
+5. **Residual search**
+   - exact searches and justified remaining matches.
+
+6. **Verification**
+   - exact commands/results.
+
+7. **Blocker**
+   - if any criterion remains, stop and report it instead of broadening Calendar infrastructure.
+
+Do not report Checkpoint 02 complete while ScheduleEndpoint or direct Schedule Directory registration exists.
