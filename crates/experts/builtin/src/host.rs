@@ -12,7 +12,7 @@ use floe_agent_contract::PersonId;
 use floe_agent_contract::{AgentContext, Artifact, EndpointSettlement, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, ExpertModel};
 use floe_context_contract::{
-    AttentionView, AuthorizedRead, CalendarContextView, NativeContextView, PeopleView,
+    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView, PeopleView,
     WellbeingView, WorkContextView,
 };
 use floe_context_contract::{ContextDependency, MemoryContextSnapshot, SourceGrant};
@@ -48,6 +48,15 @@ pub struct BuiltinExpertRequest {
 }
 
 impl BuiltinExpertRequest {
+    pub fn nearby_calendar_query(&self) -> Result<CalendarViewQuery, AgentFailure> {
+        CalendarViewQuery::try_new(
+            self.current_time_unix_ms.saturating_sub(86_400_000),
+            self.current_time_unix_ms.saturating_add(86_400_000),
+            None,
+            floe_context_contract::MAX_CALENDAR_CONTEXT_ITEMS,
+        )
+    }
+
     pub fn mail_invocation(
         &self,
         context: AgentContext,
@@ -184,6 +193,7 @@ pub trait BuiltinExpertHost: Sync {
     fn calendar_views<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
+        query: CalendarViewQuery,
     ) -> Acquiring<'a, Vec<CalendarContextView>>;
 
     fn work_context_views<'a>(

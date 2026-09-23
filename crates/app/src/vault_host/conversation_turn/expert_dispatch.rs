@@ -407,10 +407,11 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
     fn calendar_views<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
+        query: floe_context_contract::CalendarViewQuery,
     ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::CalendarContextView>> {
         Box::pin(async move {
             self.personal_views(request, ASSISTANT_CONSUMER)
-                .calendar_views(request.deadline, &request.cancellation)
+                .calendar_views(&query, request.deadline, &request.cancellation)
                 .await
         })
     }

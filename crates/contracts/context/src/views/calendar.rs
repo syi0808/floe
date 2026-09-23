@@ -16,6 +16,81 @@ const MAX_CALENDAR_CONTEXT_RANGE_MS: i64 = 32 * 86_400_000;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct CalendarViewQuery {
+    range_start_unix_ms: i64,
+    range_end_unix_ms: i64,
+    cursor: Option<String>,
+    limit: usize,
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    #[test]
+    fn query_preserves_request_scoped_range_and_bounds() {
+        let today = CalendarViewQuery::try_new(1_000, 86_401_000, None, 128).unwrap();
+        let week = CalendarViewQuery::try_new(1_000, 604_801_000, None, 128).unwrap();
+        assert_ne!(today.range_end_unix_ms(), week.range_end_unix_ms());
+        assert!(CalendarViewQuery::try_new(1_000, 1_000, None, 128).is_err());
+        assert!(CalendarViewQuery::try_new(1_000, 33 * 86_400_000, None, 128).is_err());
+        assert!(CalendarViewQuery::try_new(1_000, 2_000, None, 129).is_err());
+        assert!(CalendarViewQuery::try_new(1_000, 2_000, Some("".into()), 1).is_err());
+    }
+}
+
+impl CalendarViewQuery {
+    pub fn try_new(
+        range_start_unix_ms: i64,
+        range_end_unix_ms: i64,
+        cursor: Option<String>,
+        limit: usize,
+    ) -> Result<Self, AgentFailure> {
+        let query = Self {
+            range_start_unix_ms,
+            range_end_unix_ms,
+            cursor,
+            limit,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.range_start_unix_ms < 0
+            || self.range_end_unix_ms <= self.range_start_unix_ms
+            || self.range_end_unix_ms - self.range_start_unix_ms > MAX_CALENDAR_CONTEXT_RANGE_MS
+            || !(1..=MAX_CALENDAR_CONTEXT_ITEMS).contains(&self.limit)
+            || self.cursor.as_ref().is_some_and(|cursor| {
+                cursor.trim().is_empty()
+                    || cursor.len() > 2048
+                    || cursor.chars().any(char::is_control)
+            })
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+
+    pub fn range_start_unix_ms(&self) -> i64 {
+        self.range_start_unix_ms
+    }
+
+    pub fn range_end_unix_ms(&self) -> i64 {
+        self.range_end_unix_ms
+    }
+
+    pub fn cursor(&self) -> Option<&str> {
+        self.cursor.as_deref()
+    }
+
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarContextItem {
     pub evidence_handle: String,
     pub untrusted_title: String,

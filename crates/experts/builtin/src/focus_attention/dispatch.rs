@@ -22,7 +22,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     let (attention, dependency) = host.attention_view(request).await?;
     host.record_dependency(request.invocation_id, request.invocation_id, dependency)?;
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        host.calendar_views(request).await?
+        host.calendar_views(request, request.nearby_calendar_query()?).await?
     } else {
         vec![]
     };

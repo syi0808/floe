@@ -74,7 +74,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let model = host.model();
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        host.calendar_views(request).await?
+        host.calendar_views(request, request.nearby_calendar_query()?).await?
     } else {
         vec![]
     };

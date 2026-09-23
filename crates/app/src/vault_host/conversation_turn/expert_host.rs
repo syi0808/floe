@@ -525,16 +525,14 @@ impl PersonalViewSource<'_> {
 
     pub(super) async fn calendar_views(
         &self,
+        query: &floe_context_contract::CalendarViewQuery,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<CalendarContextView>, AgentFailure> {
+        query.validate()?;
         if self.source_client.is_none() {
             return Ok(vec![]);
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map_err(|_| AgentFailure::StaleContext)?;
-        let now = i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
         let source_client = self
             .source_client
             .ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -551,17 +549,24 @@ impl PersonalViewSource<'_> {
                         connector_id: &connection.connector_id,
                         connection_id: &connection.connection_id,
                         connection_revision: connection.connection_revision,
-                        range_start_unix_ms: now.saturating_sub(86_400_000),
-                        range_end_unix_ms: now.saturating_add(86_400_000),
-                        cursor: "",
-                        limit: floe_context::MAX_CALENDAR_CONTEXT_ITEMS,
+                        range_start_unix_ms: query.range_start_unix_ms(),
+                        range_end_unix_ms: query.range_end_unix_ms(),
+                        cursor: query.cursor().unwrap_or(""),
+                        limit: query.limit(),
                     },
                     deadline,
                     cancellation,
                 )
                 .await
             {
-                Ok(view) => views.push(view),
+                Ok(view) => {
+                    if view.range_start_unix_ms != query.range_start_unix_ms()
+                        || view.range_end_unix_ms != query.range_end_unix_ms()
+                    {
+                        return Err(AgentFailure::StaleContext);
+                    }
+                    views.push(view);
+                }
                 Err(AgentFailure::CapabilityUnavailable) => {}
                 Err(error) => return Err(error),
             }

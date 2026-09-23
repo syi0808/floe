@@ -17,7 +17,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     crate::require_mandatory_source(host, request)?;
     let wellbeing = host.wellbeing_view(request).await?;
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        host.calendar_views(request).await?
+        host.calendar_views(request, request.nearby_calendar_query()?).await?
     } else {
         vec![]
     };
