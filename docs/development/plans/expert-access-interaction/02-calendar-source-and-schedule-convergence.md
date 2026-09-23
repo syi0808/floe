@@ -58,6 +58,20 @@ Expected categories:
 
 Nothing in categories 1–6 may remain in a Schedule-specific App endpoint after the checkpoint.
 
+Inventory from the current implementation:
+
+| Current symbol(s) | Destination/ownership |
+|---|---|
+| `SelectedSetup`, `select_active_setup`, `validate_active_connection` | Connection selection and source identity; remove Registry setup authority in checkpoint 03 |
+| `BoundAccess`, `GrantBoundCalendarAccess` | Access admission/revalidation composed by Context, with no Expert setup key |
+| `Access`, `DeviceCalendarAccess`, `NativeCalendarReadAccess`, native batch/schedule conversion | Real native/provider adapter under Context Calendar acquisition |
+| `VaultRemoteCalendarBackend`, `RemoteCalendarAccess` | Remote provider transport and Access-signed admission |
+| `FixtureAccess` | Context Calendar reader test fixture only |
+| `ExpertTimelineViews`, `CalendarTimelineViews` | Context bounded projection, dependency and lease lifecycle |
+| `CalendarExpertEndpointRequest`, `run_calendar_expert_endpoint` | Split into generic host input, Schedule judgment and Experts Task lifecycle |
+| `CalendarExpertEndpointResult`, `CalendarExpertSettlement`, `CALENDAR_EXPERT_SETTLEMENT_OWNER` | Generic `BuiltinExpertOutput` / `ExpertSettlement` and Task settlement |
+| `NoCapabilityJournal`, `calendar_invocation`, `schedule_expert` | Remove with the old Registry-scoped execution path |
+
 ### 1.2 Canonical Calendar reader
 
 Build one Context-owned Calendar reader used by any consumer, not only Schedule.
