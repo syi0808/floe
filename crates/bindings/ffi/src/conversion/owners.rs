@@ -206,6 +206,7 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
     let source_stage = matches!(
         stage,
         "calendar_subject_preview"
+            | "calendar_access"
             | "calendar_action"
             | "personal_access"
             | "contacts_access"
@@ -473,6 +474,7 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
             if matches!(
                 stage,
                 "calendar_subject_preview"
+                    | "calendar_access"
                     | "calendar_action"
                     | "personal_access"
                     | "contacts_access"
@@ -545,6 +547,66 @@ pub(crate) fn contacts_access_change(change: &ContactsAccessChangeDto) -> Contac
         ContactsAccessChangeDto::SetEnabled { enabled } => {
             ContactsAccessChange::SetEnabled { enabled: *enabled }
         }
+    }
+}
+
+pub(crate) fn calendar_access_change(
+    change: &CalendarAccessChangeDto,
+) -> floe_app::CalendarAccessChange {
+    match change {
+        CalendarAccessChangeDto::Review {
+            connection_id,
+            calendar_ids,
+            expected_source_authority,
+            expected_native_subject_fingerprint,
+            expected_grant_id,
+            expected_grant_authority,
+        } => floe_app::CalendarAccessChange::Review {
+            connection_id: connection_id.clone(),
+            calendar_ids: calendar_ids.clone(),
+            expected_source_authority: *expected_source_authority,
+            expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
+            expected_grant_id: *expected_grant_id,
+            expected_grant_authority: *expected_grant_authority,
+        },
+        CalendarAccessChangeDto::Pause {
+            grant_id,
+            expected_grant_authority,
+        } => floe_app::CalendarAccessChange::Pause {
+            grant_id: *grant_id,
+            expected_grant_authority: *expected_grant_authority,
+        },
+        CalendarAccessChangeDto::Remove {
+            grant_id,
+            expected_grant_authority,
+        } => floe_app::CalendarAccessChange::Remove {
+            grant_id: *grant_id,
+            expected_grant_authority: *expected_grant_authority,
+        },
+    }
+}
+
+pub(crate) fn calendar_access_dto(
+    overview: floe_app::CalendarAccessOverview,
+) -> CalendarAccessOverviewDto {
+    CalendarAccessOverviewDto {
+        schema_version: PROTOCOL_VERSION,
+        person_id: overview.person_id.to_string(),
+        provider: super::day::calendar_provider_to_dto(overview.provider),
+        connection_id: overview.connection_id,
+        selected_resources: overview.selected_resources,
+        granted_resources: overview.granted_resources,
+        source_authority: overview.source_authority,
+        grant_id: overview.grant_id,
+        grant_authority: overview.grant_authority,
+        consumer_policy: overview.consumer_policy,
+        state: match overview.state {
+            floe_app::CalendarAccessState::NeedsReview => "needs_review".into(),
+            floe_app::CalendarAccessState::Paused => "paused".into(),
+            floe_app::CalendarAccessState::Active => "active".into(),
+            floe_app::CalendarAccessState::Revoked => "revoked".into(),
+        },
+        review_required: overview.review_required,
     }
 }
 

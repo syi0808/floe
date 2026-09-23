@@ -291,6 +291,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         daySnapshot: controller.snapshot,
         agentController: agentController,
         personalAccessGateway: widget.ownerGateways.personalAccess,
+        nativeCalendarAccessGateway: widget.ownerGateways.calendarAccess,
         initialDeviceCalendarDetail: openDeviceCalendarDetail,
       );
     }

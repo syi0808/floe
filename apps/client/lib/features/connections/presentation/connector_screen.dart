@@ -25,6 +25,7 @@ import 'package:floe_client/features/connections/presentation/server_connector_p
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
+import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 import 'package:floe_client/features/settings/presentation/agent_personal_access_settings.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
@@ -42,6 +43,7 @@ class ConnectorScreen extends StatefulWidget {
     this.platform,
     this.agentController,
     this.personalAccessGateway,
+    this.nativeCalendarAccessGateway,
     this.remoteAccessGateway,
     this.connectorAuthorization,
     this.appleContext,
@@ -63,6 +65,7 @@ class ConnectorScreen extends StatefulWidget {
   final AgentController? agentController;
   final RemoteAccessGateway? remoteAccessGateway;
   final AgentPersonalAccessGateway? personalAccessGateway;
+  final NativeCalendarAccessGateway? nativeCalendarAccessGateway;
   final AppleContextApi? appleContext;
   final MacOSContextApi? macOSContext;
   final DaySnapshot? daySnapshot;
@@ -85,6 +88,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   String? activatingCalendarConnectorId;
   String? calendarSelectionError;
   String? selectedLocalConnectionId;
+  Future<NativeCalendarAccessOverview>? observeFuture;
+  String? observeError;
+  bool observeBusy = false;
 
   bool get supportsDeviceCalendar =>
       effectivePlatform == TargetPlatform.iOS ||
@@ -664,6 +670,12 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                 .calendarIntegrationIsUnavailableInThisPreview,
           ),
         ),
+      if (widget.gateway != null &&
+          deviceCalendarConnection != null &&
+          widget.nativeCalendarAccessGateway != null) ...[
+        SizedBox(height: FloeSpace.lg),
+        _deviceCalendarObserve(context, deviceCalendarConnection!),
+      ],
       SizedBox(height: FloeSpace.lg),
       FloeInfoNote(
         text: effectivePlatform == TargetPlatform.android
@@ -672,6 +684,223 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       ),
     ],
   );
+
+  Widget _deviceCalendarObserve(
+    BuildContext context,
+    CalendarConnection connection,
+  ) {
+    observeFuture ??= widget.nativeCalendarAccessGateway!.inspectCalendarAccess(
+      widget.query.personId,
+    );
+    return FloeSquircle(
+      key: const Key('device-calendar-observe'),
+      fill: FloePalette.neutral0,
+      borderColor: FloePalette.neutral200,
+      borderWidth: 1,
+      padding: const EdgeInsets.all(FloeSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Observe with Floe', style: FloeType.title),
+          SizedBox(height: FloeSpace.sm),
+          Text(
+            'Floe reads these calendars on this device. Pausing or removing '
+            'Observe keeps the connection, calendars and credentials in place.',
+            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+          ),
+          SizedBox(height: FloeSpace.base),
+          FutureBuilder<NativeCalendarAccessOverview>(
+            future: observeFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Text('Loading Observe state…');
+              }
+              final overview = snapshot.data;
+              if (overview == null) {
+                return FloeInfoNote(
+                  text:
+                      observeError ??
+                      'Observe state is unavailable right now.',
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _observeStateLabel(overview),
+                    style: FloeType.bodySmall,
+                  ),
+                  SizedBox(height: FloeSpace.sm),
+                  Text(
+                    'Granted ${overview.grantedResources.length} of '
+                    '${overview.selectedResources.length} selected calendars.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  SizedBox(height: FloeSpace.base),
+                  Wrap(
+                    spacing: FloeSpace.sm,
+                    runSpacing: FloeSpace.sm,
+                    children: _observeActions(connection, overview),
+                  ),
+                  if (observeError != null) ...[
+                    SizedBox(height: FloeSpace.base),
+                    FloeInfoNote(text: observeError!),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _observeStateLabel(NativeCalendarAccessOverview overview) {
+    final state = switch (overview.state) {
+      'active' => 'Observing',
+      'paused' => 'Paused',
+      'revoked' => 'Removed',
+      _ => 'Needs review',
+    };
+    if (overview.reviewRequired && overview.state == 'active') {
+      return '$state · review needed';
+    }
+    return state;
+  }
+
+  List<Widget> _observeActions(
+    CalendarConnection connection,
+    NativeCalendarAccessOverview overview,
+  ) {
+    Future<void> run(Future<void> Function() action) async {
+      if (observeBusy) return;
+      setState(() {
+        observeBusy = true;
+        observeError = null;
+      });
+      try {
+        await action();
+      } catch (error) {
+        setState(() => observeError = error.toString());
+      } finally {
+        if (mounted) setState(() => observeBusy = false);
+      }
+    }
+
+    switch (overview.state) {
+      case 'active':
+        return [
+          _observeButton(
+            key: 'device-calendar-observe-pause',
+            label: 'Pause observing',
+            onPressed: observeBusy
+                ? null
+                : () => run(() => _pauseObserve(overview)),
+          ),
+          _observeButton(
+            key: 'device-calendar-observe-remove',
+            label: 'Remove',
+            onPressed: observeBusy
+                ? null
+                : () => run(() => _removeObserve(overview)),
+          ),
+          if (overview.reviewRequired)
+            _observeButton(
+              key: 'device-calendar-observe-review',
+              label: 'Review',
+              onPressed: observeBusy
+                  ? null
+                  : () => run(() => _reviewObserve(connection, overview)),
+            ),
+        ];
+      case 'paused':
+        return [
+          _observeButton(
+            key: 'device-calendar-observe-review',
+            label: 'Resume observing',
+            onPressed: observeBusy
+                ? null
+                : () => run(() => _reviewObserve(connection, overview)),
+          ),
+          _observeButton(
+            key: 'device-calendar-observe-remove',
+            label: 'Remove',
+            onPressed: observeBusy
+                ? null
+                : () => run(() => _removeObserve(overview)),
+          ),
+        ];
+      case 'revoked':
+        return const [];
+      default:
+        return [
+          _observeButton(
+            key: 'device-calendar-observe-review',
+            label: 'Review calendars',
+            onPressed: observeBusy
+                ? null
+                : () => run(() => _reviewObserve(connection, overview)),
+          ),
+        ];
+    }
+  }
+
+  Widget _observeButton({
+    required String key,
+    required String label,
+    required VoidCallback? onPressed,
+  }) => FloeButton.outlined(
+    key: Key(key),
+    onPressed: onPressed,
+    child: Text(label),
+  );
+
+  Future<void> _reviewObserve(
+    CalendarConnection connection,
+    NativeCalendarAccessOverview overview,
+  ) async {
+    final gateway = widget.nativeCalendarAccessGateway!;
+    final authority = connection.sourceAuthority;
+    if (authority == null) {
+      throw const FormatException('Calendar connection has no authority');
+    }
+    final subject = await gateway.previewCalendarSubject(
+      personId: widget.query.personId,
+      provider: connection.provider,
+      connectionId: connection.connectionId,
+      calendarIds: connection.selectedCalendarIds,
+      connectionScope: connection.includeAll ? 'all' : 'selected',
+      connectionRevision: connection.revision,
+      sourceAuthority: authority.toJson(),
+    );
+    final refreshed = await gateway.reviewCalendarAccess(
+      widget.query.personId,
+      connectionId: connection.connectionId,
+      calendarIds: connection.selectedCalendarIds,
+      expectedSourceAuthority: overview.sourceAuthority,
+      expectedNativeSubjectFingerprint: subject.nativeSubjectFingerprint,
+      reviewedOverview: overview,
+    );
+    _replaceObserve(refreshed);
+  }
+
+  Future<void> _pauseObserve(NativeCalendarAccessOverview overview) async {
+    final refreshed = await widget.nativeCalendarAccessGateway!
+        .pauseCalendarAccess(widget.query.personId, reviewedOverview: overview);
+    _replaceObserve(refreshed);
+  }
+
+  Future<void> _removeObserve(NativeCalendarAccessOverview overview) async {
+    final refreshed = await widget.nativeCalendarAccessGateway!
+        .removeCalendarAccess(widget.query.personId, reviewedOverview: overview);
+    _replaceObserve(refreshed);
+  }
+
+  void _replaceObserve(NativeCalendarAccessOverview overview) {
+    setState(() => observeFuture = Future.value(overview));
+  }
 }
 
 AgentConnection _macOSAttentionConnection(

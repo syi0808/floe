@@ -162,6 +162,9 @@ pub enum WorkerAction {
     CalendarSubjectPreview {
         request: Box<CalendarSubjectRequest>,
     },
+    CalendarAccess {
+        change: Box<crate::CalendarAccessConfiguration>,
+    },
     PersonalAccess {
         change: Box<floe_access::PersonalAccessConfiguration>,
     },
@@ -221,6 +224,7 @@ impl WorkerAction {
             Self::ContactsAccess { .. } => "contacts_access",
             Self::CalendarAction { .. } => "calendar_action",
             Self::CalendarSubjectPreview { .. } => "calendar_subject_preview",
+            Self::CalendarAccess { .. } => "calendar_access",
             Self::InspectProposal { .. } => "inspect_proposal",
             Self::ConversationSession { .. } => "conversation_session",
             Self::ConversationTurn { .. } => "conversation_turn",
@@ -245,6 +249,7 @@ impl WorkerAction {
                 | Self::Registry { .. }
                 | Self::PersonalAccess { .. }
                 | Self::ContactsAccess { .. }
+                | Self::CalendarAccess { .. }
                 | Self::CalendarSubjectPreview { .. }
                 | Self::ConversationTurn { .. }
                 | Self::ConversationSession {
@@ -288,6 +293,7 @@ pub struct WorkerResult {
     pub remote_view_grant: Option<RemoteGrantOverview>,
     pub remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
     pub personal_access: Option<floe_access::PersonalAccessOverview>,
+    pub calendar_access: Option<crate::CalendarAccessOverview>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,
     pub failure: Option<AgentFailure>,
 }

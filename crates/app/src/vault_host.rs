@@ -440,6 +440,7 @@ struct Progress {
     remote_view_grant: Option<RemoteGrantOverview>,
     remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
+    calendar_access: Option<crate::CalendarAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
     failure: Option<AgentFailure>,
 }
@@ -981,6 +982,7 @@ impl Worker {
             remote_view_grant: progress.remote_view_grant.clone(),
             remote_view_preview: progress.remote_view_preview.clone(),
             personal_access: progress.personal_access.clone(),
+            calendar_access: progress.calendar_access.clone(),
             calendar_actions: progress.calendar_actions.clone(),
             failure: progress.failure,
         };
@@ -1251,6 +1253,7 @@ struct VaultExecutionResult {
     remote_view_grant: Option<RemoteGrantOverview>,
     remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
+    calendar_access: Option<crate::CalendarAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
     run_receipt: Option<floe_conversation::RunReceipt>,
 }
@@ -1316,6 +1319,7 @@ fn finish_job(
                 progress.remote_view_grant = result.remote_view_grant;
                 progress.remote_view_preview = result.remote_view_preview;
                 progress.personal_access = result.personal_access;
+                progress.calendar_access = result.calendar_access;
                 progress.calendar_actions = result.calendar_actions;
                 progress.done = true;
                 if let Some(receipt) = run_receipt {
@@ -1569,6 +1573,25 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     source_authority: subject.source_authority,
                     native_subject_fingerprint: subject.native_subject_fingerprint,
                 }),
+                ..VaultExecutionResult::ready()
+            })
+        }
+        WorkerAction::CalendarAccess { change } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let command = (**change).clone();
+            let subject = calendar_access::DeviceCalendarSubject { local_context };
+            let overview = calendar_access::apply_calendar_access(
+                core,
+                vault.vault.as_ref(),
+                &subject,
+                job.person,
+                command.device_id.clone(),
+                command.change,
+                job.cancellation.clone(),
+            )
+            .await?;
+            Ok(VaultExecutionResult {
+                calendar_access: Some(overview),
                 ..VaultExecutionResult::ready()
             })
         }
@@ -2438,6 +2461,7 @@ mod tests {
     mod learner_worker;
     mod local_product;
     mod memory_review;
+    mod native_calendar_access;
     mod proposals;
     mod remote_product;
     mod schedule_host;

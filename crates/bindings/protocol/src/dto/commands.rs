@@ -59,6 +59,10 @@ pub enum AppCommandDto {
         connector: String,
         change: super::ContactsAccessChangeDto,
     },
+    #[serde(rename = "access.calendar.configure")]
+    AccessCalendarConfigure {
+        change: super::CalendarAccessChangeDto,
+    },
     #[serde(rename = "experts.registry.configure")]
     ExpertsRegistryConfigure {
         change: super::RegistryConfigurationDto,
@@ -117,6 +121,7 @@ impl AppCommandDto {
                     Err("command.connector")
                 }
             }
+            Self::AccessCalendarConfigure { change } => change.validate(),
             Self::ExpertsRegistryConfigure { change } => {
                 let target_id = match &change.target {
                     super::RegistryConfigurationTargetDto::Installation { id, .. }

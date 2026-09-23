@@ -142,6 +142,18 @@ where
                 result: local_access_result(result, request.command_id)?,
             })
         }
+        AppCommandDto::AccessCalendarConfigure { change } => {
+            let command = floe_app::LocalAccessCommand::Calendar {
+                change: crate::conversion::owners::calendar_access_change(&change),
+            };
+            let result = host_request
+                .services()
+                .local_access_command(host_request.caller(), request.command_id, command)
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.command_id)?,
+            })
+        }
         AppCommandDto::ExpertsRegistryConfigure { change } => {
             let command =
                 floe_app::ExpertCommand::ConfigureRegistry(floe_app::RegistryConfiguration {
@@ -435,6 +447,18 @@ fn query_with_host<
                 });
             let result = services
                 .inspect_local_access(caller, request.request_id, inspection)
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::LocalAccessOperation {
+                result: local_access_result(result, request.request_id)?,
+            })
+        }
+        AppQueryDto::AccessCalendarInspect {} => {
+            let result = services
+                .inspect_local_access(
+                    caller,
+                    request.request_id,
+                    floe_app::LocalAccessInspection::CalendarAccess,
+                )
                 .map_err(service_error)?;
             Ok(AppQueryResultDto::LocalAccessOperation {
                 result: local_access_result(result, request.request_id)?,
@@ -758,6 +782,9 @@ fn local_access_result(
         calendar_subject_preview: result
             .calendar_subject_preview
             .map(crate::conversion::owners::subject_preview_dto),
+        calendar_access: result
+            .calendar_access
+            .map(crate::conversion::owners::calendar_access_dto),
         personal_access: result
             .personal_access
             .map(crate::conversion::owners::personal_access_dto),

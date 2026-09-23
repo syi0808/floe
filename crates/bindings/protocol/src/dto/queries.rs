@@ -59,6 +59,8 @@ pub enum AppQueryDto {
     AccessCalendarPreview {
         request: super::CalendarSubjectIntentDto,
     },
+    #[serde(rename = "access.calendar.inspect")]
+    AccessCalendarInspect {},
     #[serde(rename = "access.personal.inspect")]
     AccessPersonalInspect { connector: String },
     #[serde(rename = "access.contacts.inspect")]
@@ -115,6 +117,7 @@ impl AppQueryDto {
                 ("query.operation_id", operation_id)
             }
             Self::AccessCalendarPreview { request } => return request.validate(),
+            Self::AccessCalendarInspect {} => return Ok(()),
             Self::AccessPersonalInspect { connector } => {
                 return if super::local_access::identifier(connector) {
                     Ok(())

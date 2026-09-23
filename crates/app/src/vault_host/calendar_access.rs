@@ -8,11 +8,15 @@
 
 use std::{future::Future, pin::Pin, time::Duration};
 
-use floe_access::RemoteCallWindow;
+use floe_access::{
+    ConnectionId, ExecutionOwnerId, GrantSourceBinding, RemoteCallWindow,
+    native_calendar_connector, valid_subject_fingerprint, validate_grant_expectation,
+};
 use floe_agent_contract::AgentFailure;
 use floe_context::{
-    CalendarConnectionReader, NativeCalendarGrantReader,
+    CalendarConnectionReader, NativeCalendarGrantReader, NativeCalendarSourceRequest,
     NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
+    preview_native_calendar_subject,
 };
 use floe_execution::Cancellation;
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
@@ -20,6 +24,9 @@ use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 use crate::FloeCore;
+use crate::local_access_services::{
+    CalendarAccessChange, CalendarAccessOverview, CalendarAccessState,
+};
 use crate::local_context::LocalContextHost;
 
 /// How long the device is given to answer for its own calendar subject.
@@ -467,5 +474,256 @@ pub(super) async fn remote_calendar_evidence(
             .map(|calendar| calendar.calendar_id)
             .collect(),
         disconnected: connection.disconnected,
+    })
+}
+
+/// Run one native Calendar Observe change: inspect, review, pause or remove.
+///
+/// The backend is authoritative for the current connection, the admitted
+/// consumers, and the grant expectation comparison. A review observes the
+/// fresh native subject outside any Vault transaction and compares it with
+/// the reviewed subject before the E1 mutation runs; pause and remove only
+/// touch the grant, never the connection, credentials or Day data.
+pub(super) async fn apply_calendar_access<Keys, Subject>(
+    core: &FloeCore,
+    vault: &EncryptedAgentVault<Keys>,
+    subject: &Subject,
+    person_id: PersonId,
+    device_id: String,
+    change: CalendarAccessChange,
+    cancellation: Cancellation,
+) -> Result<CalendarAccessOverview, AgentFailure>
+where
+    Keys: VaultKeyProvider,
+    Subject: NativeCalendarSubjectSource,
+{
+    match change {
+        CalendarAccessChange::Inspect => {
+            let connection = usable_native_connection(core, person_id).await?;
+            let source = native_grant_source(person_id, &device_id, &connection)?;
+            match vault
+                .data_access_grants_for_source(&source, 2)
+                .await?
+                .as_slice()
+            {
+                [] => overview(person_id, &connection, None, vault).await,
+                [grant] => overview(person_id, &connection, Some(grant), vault).await,
+                _ => Err(AgentFailure::VaultUnavailable),
+            }
+        }
+        CalendarAccessChange::Review {
+            connection_id,
+            calendar_ids,
+            expected_source_authority,
+            expected_native_subject_fingerprint,
+            expected_grant_id,
+            expected_grant_authority,
+        } => {
+            if connection_id.trim().is_empty()
+                || calendar_ids.is_empty()
+                || calendar_ids.len() > 4
+                || calendar_ids.iter().any(|id| {
+                    id.is_empty()
+                        || id.len() > 256
+                        || id.trim() != id
+                        || id.chars().any(char::is_control)
+                })
+                || !expected_source_authority.is_valid()
+                || !valid_subject_fingerprint(&expected_native_subject_fingerprint)
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let expected_grant =
+                validate_grant_expectation(expected_grant_id, expected_grant_authority)?;
+            let connection = usable_native_connection(core, person_id).await?;
+            if connection.connection_id != connection_id
+                || connection.source_authority != expected_source_authority
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+            let selected = connection
+                .calendars
+                .iter()
+                .map(|calendar| calendar.calendar_id.clone())
+                .collect::<Vec<_>>();
+            if !calendar_ids.iter().all(|id| selected.contains(id)) {
+                return Err(AgentFailure::StaleContext);
+            }
+            let fresh = preview_native_calendar_subject(
+                &CoreCalendarConnections { core, person_id },
+                subject,
+                &NativeCalendarSourceRequest {
+                    person_id,
+                    provider: connection.provider,
+                    device_id: device_id.clone(),
+                    calendar_ids: calendar_ids.clone(),
+                    connection_scope: connection.scope,
+                    source_authority: Some(connection.source_authority),
+                    reviewed_native_subject_fingerprint: None,
+                    connection_id: Some(connection.connection_id.clone()),
+                },
+                &subject_window(cancellation),
+            )
+            .await?;
+            if fresh.native_subject_fingerprint != expected_native_subject_fingerprint {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let current = usable_native_connection(core, person_id).await?;
+            if current.connection_id != connection.connection_id
+                || current.source_authority != connection.source_authority
+                || current.revision != connection.revision
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+            let grant = vault
+                .review_native_calendar_grant(
+                    &current.connection_id,
+                    current.provider,
+                    &device_id,
+                    &calendar_ids,
+                    current.source_authority,
+                    &calendar_first_party_consumers()?,
+                    &expected_native_subject_fingerprint,
+                    expected_grant,
+                )
+                .await?;
+            overview(person_id, &current, Some(&grant), vault).await
+        }
+        CalendarAccessChange::Pause {
+            grant_id,
+            expected_grant_authority,
+        } => {
+            if !grant_id.is_valid() || !expected_grant_authority.is_valid() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let current = usable_native_connection(core, person_id).await?;
+            let grant = vault
+                .pause_native_calendar_grant(
+                    grant_id,
+                    expected_grant_authority,
+                    &current.connection_id,
+                    current.provider,
+                    &device_id,
+                    current.source_authority,
+                )
+                .await?;
+            overview(person_id, &current, Some(&grant), vault).await
+        }
+        CalendarAccessChange::Remove {
+            grant_id,
+            expected_grant_authority,
+        } => {
+            if !grant_id.is_valid() || !expected_grant_authority.is_valid() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let current = usable_native_connection(core, person_id).await?;
+            let grant = vault
+                .revoke_native_calendar_grant(
+                    grant_id,
+                    expected_grant_authority,
+                    &current.connection_id,
+                    current.provider,
+                    &device_id,
+                    current.source_authority,
+                )
+                .await?;
+            overview(person_id, &current, Some(&grant), vault).await
+        }
+    }
+}
+
+async fn usable_native_connection(
+    core: &FloeCore,
+    person_id: PersonId,
+) -> Result<floe_day::CalendarConnection, AgentFailure> {
+    let connection = core
+        .calendar_connection(person_id)
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)?
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+    if !matches!(
+        connection.provider,
+        floe_context_contract::CalendarProvider::EventKit
+            | floe_context_contract::CalendarProvider::Android
+    ) {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    if connection.disconnected {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(connection)
+}
+
+fn native_grant_source(
+    person_id: PersonId,
+    device_id: &str,
+    connection: &floe_day::CalendarConnection,
+) -> Result<GrantSourceBinding, AgentFailure> {
+    let connector = native_calendar_connector(connection.provider)
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    GrantSourceBinding::try_new(
+        person_id,
+        ConnectionId::try_new(&connection.connection_id).map_err(|_| AgentFailure::InvalidInput)?,
+        floe_access::ConnectorId::try_new(connector).map_err(|_| AgentFailure::InvalidInput)?,
+        ExecutionOwnerId::try_new(device_id).map_err(|_| AgentFailure::InvalidInput)?,
+        connection.source_authority,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
+}
+
+async fn overview<Keys: VaultKeyProvider>(
+    person_id: PersonId,
+    connection: &floe_day::CalendarConnection,
+    grant: Option<&floe_access::DataAccessGrant>,
+    vault: &EncryptedAgentVault<Keys>,
+) -> Result<CalendarAccessOverview, AgentFailure> {
+    let (state, review_required, grant_id, grant_authority, consumer_policy, granted) = match grant
+    {
+            None => (
+                CalendarAccessState::NeedsReview,
+                true,
+                None,
+                None,
+                None,
+                Vec::new(),
+            ),
+            Some(grant) => {
+                let policy = vault.calendar_grant_policy_authority(grant.id()).await?;
+                let state = match grant.state() {
+                    floe_access::GrantState::Active => CalendarAccessState::Active,
+                    floe_access::GrantState::Paused => CalendarAccessState::Paused,
+                    floe_access::GrantState::Revoked => CalendarAccessState::Revoked,
+                };
+                (
+                    state,
+                    grant.review_required(),
+                    Some(grant.id()),
+                    Some(grant.authority()),
+                    Some(policy),
+                    grant
+                        .scope()
+                        .resources()
+                        .iter()
+                        .map(|resource| resource.as_str().to_owned())
+                        .collect(),
+                )
+            }
+        };
+    Ok(CalendarAccessOverview {
+        person_id,
+        provider: connection.provider,
+        connection_id: connection.connection_id.clone(),
+        selected_resources: connection
+            .calendars
+            .iter()
+            .map(|calendar| calendar.calendar_id.clone())
+            .collect(),
+        granted_resources: granted,
+        source_authority: connection.source_authority,
+        grant_id,
+        grant_authority,
+        consumer_policy,
+        state,
+        review_required,
     })
 }

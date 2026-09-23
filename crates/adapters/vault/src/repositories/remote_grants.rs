@@ -128,7 +128,7 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         &'a self,
         grant_id: GrantId,
     ) -> BoxFuture<'a, Result<floe_access::ConsumerPolicyAuthority, AgentFailure>> {
-        Box::pin(async move { self.remote_calendar_grant_policy(grant_id).await })
+        Box::pin(async move { self.calendar_grant_policy_authority(grant_id).await })
     }
 
     fn calendar_grant<'a>(

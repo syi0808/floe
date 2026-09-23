@@ -115,6 +115,7 @@ pub use knowledge_services::{
 };
 #[cfg(unix)]
 pub use local_access_services::{
+    CalendarAccessChange, CalendarAccessConfiguration, CalendarAccessOverview, CalendarAccessState,
     CalendarSubjectIntent, LocalAccessCommand, LocalAccessCommands, LocalAccessInspection,
     LocalAccessQueries, LocalAccessResult,
 };

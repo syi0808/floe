@@ -90,7 +90,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ///
     /// Callers hold the grant already, so a missing row is corrupt state rather
     /// than a review the Person owes.
-    pub async fn remote_calendar_grant_policy(
+    pub async fn calendar_grant_policy_authority(
         &self,
         grant_id: GrantId,
     ) -> Result<ConsumerPolicyAuthority, AgentFailure> {
@@ -482,7 +482,7 @@ mod tests {
         let (_root, vault, person) = vault().await;
         let authority = SourceAuthority::new();
         let first = fresh_review(&vault, person, authority, "primary").await;
-        let policy = vault.remote_calendar_grant_policy(first.id()).await.unwrap();
+        let policy = vault.calendar_grant_policy_authority(first.id()).await.unwrap();
         let second = vault
             .review_and_activate_remote_calendar_grant(
                 first.id(),
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(second.id(), first.id());
         assert_eq!(second.authority(), first.authority());
         assert_eq!(
-            vault.remote_calendar_grant_policy(first.id()).await.unwrap(),
+            vault.calendar_grant_policy_authority(first.id()).await.unwrap(),
             policy
         );
         let grants = vault.list_data_access_grants(128).await.unwrap();
@@ -527,7 +527,7 @@ mod tests {
         let (_root, vault, person) = vault().await;
         let authority = SourceAuthority::new();
         let grant = fresh_review(&vault, person, authority, "primary").await;
-        let policy = vault.remote_calendar_grant_policy(grant.id()).await.unwrap();
+        let policy = vault.calendar_grant_policy_authority(grant.id()).await.unwrap();
         let paused = vault
             .pause_remote_calendar_grant(grant.id(), grant.authority())
             .await
@@ -576,7 +576,7 @@ mod tests {
         let authority = SourceAuthority::new();
         let grant_a = fresh_review(&vault, person, authority, "calendar-a").await;
         let grant_b = fresh_review(&vault, person, authority, "calendar-b").await;
-        let policy_b = vault.remote_calendar_grant_policy(grant_b.id()).await.unwrap();
+        let policy_b = vault.calendar_grant_policy_authority(grant_b.id()).await.unwrap();
         assert_eq!(
             vault
                 .review_and_activate_remote_calendar_grant(
@@ -605,7 +605,7 @@ mod tests {
         let (_root, vault, person) = vault().await;
         let first_authority = SourceAuthority::new();
         let grant = fresh_review(&vault, person, first_authority, "primary").await;
-        let policy = vault.remote_calendar_grant_policy(grant.id()).await.unwrap();
+        let policy = vault.calendar_grant_policy_authority(grant.id()).await.unwrap();
         let rotated_authority = SourceAuthority::new();
         let rotated = vault
             .review_and_activate_remote_calendar_grant(
@@ -620,7 +620,7 @@ mod tests {
         assert_eq!(rotated.id(), grant.id());
         assert_ne!(rotated.authority(), grant.authority());
         assert_eq!(rotated.source().source_authority(), rotated_authority);
-        let advanced = vault.remote_calendar_grant_policy(grant.id()).await.unwrap();
+        let advanced = vault.calendar_grant_policy_authority(grant.id()).await.unwrap();
         assert_ne!(advanced, policy);
         let binding = vault
             .remote_calendar_grant_binding(CONNECTOR, CONNECTION, rotated_authority, "primary")
@@ -635,7 +635,7 @@ mod tests {
         let (_root, vault, person) = vault().await;
         let authority = SourceAuthority::new();
         let grant = fresh_review(&vault, person, authority, "primary").await;
-        let policy = vault.remote_calendar_grant_policy(grant.id()).await.unwrap();
+        let policy = vault.calendar_grant_policy_authority(grant.id()).await.unwrap();
         let extended = vec![
             GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
             GrantConsumer::builtin("floe.builtin.commitments").unwrap(),
@@ -652,7 +652,7 @@ mod tests {
             .unwrap();
         assert_ne!(updated.authority(), grant.authority());
         assert_ne!(
-            vault.remote_calendar_grant_policy(grant.id()).await.unwrap(),
+            vault.calendar_grant_policy_authority(grant.id()).await.unwrap(),
             policy
         );
     }
@@ -662,7 +662,7 @@ mod tests {
         let (_root, vault, person) = vault().await;
         let authority = SourceAuthority::new();
         let grant = fresh_review(&vault, person, authority, "primary").await;
-        let policy = vault.remote_calendar_grant_policy(grant.id()).await.unwrap();
+        let policy = vault.calendar_grant_policy_authority(grant.id()).await.unwrap();
         let raw = vault.database.connect().unwrap();
         raw.execute(
             "DELETE FROM calendar_grant_policies WHERE grant_id = ?",
@@ -699,8 +699,8 @@ mod tests {
             let grant_a = fresh_review(&vault, person, authority, "calendar-a").await;
             let grant_b = fresh_review(&vault, person, authority, "calendar-b").await;
             (
-                vault.remote_calendar_grant_policy(grant_a.id()).await.unwrap(),
-                vault.remote_calendar_grant_policy(grant_b.id()).await.unwrap(),
+                vault.calendar_grant_policy_authority(grant_a.id()).await.unwrap(),
+                vault.calendar_grant_policy_authority(grant_b.id()).await.unwrap(),
             )
         };
         let vault = EncryptedAgentVault::open(root.path(), person, keys)
@@ -723,7 +723,7 @@ mod tests {
         let (_root, vault, person) = vault().await;
         let authority = SourceAuthority::new();
         let grant = fresh_review(&vault, person, authority, "primary").await;
-        let policy = vault.remote_calendar_grant_policy(grant.id()).await.unwrap();
+        let policy = vault.calendar_grant_policy_authority(grant.id()).await.unwrap();
         for (expected, expected_policy) in [
             (Some(grant.authority()), None),
             (None, Some(policy)),

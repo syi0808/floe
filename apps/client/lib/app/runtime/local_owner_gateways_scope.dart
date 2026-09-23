@@ -4,6 +4,7 @@ import 'package:floe_client/features/settings/domain/agent_personal_access.dart'
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
+import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 
 final class LocalOwnerGateways {
@@ -11,6 +12,7 @@ final class LocalOwnerGateways {
     this.vault,
     this.registry,
     this.personalAccess,
+    this.calendarAccess,
     this.memory,
     this.memoryReview,
     this.connections,
@@ -19,6 +21,7 @@ final class LocalOwnerGateways {
   final AgentVaultGateway? vault;
   final AgentRegistryGateway? registry;
   final AgentPersonalAccessGateway? personalAccess;
+  final NativeCalendarAccessGateway? calendarAccess;
   final AgentMemoryGateway? memory;
   final AgentMemoryReviewGateway? memoryReview;
   final AgentConnectionsGateway? connections;

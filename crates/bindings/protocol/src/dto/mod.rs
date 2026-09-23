@@ -36,7 +36,7 @@ mod knowledge;
 pub use knowledge::KnowledgeOperationResultDto;
 mod local_access;
 pub use local_access::{
-    CalendarSubjectIntentDto,
+    CalendarAccessChangeDto, CalendarAccessOverviewDto, CalendarSubjectIntentDto,
     LocalAccessResultDto,
 };
 mod queries;
@@ -52,11 +52,11 @@ pub use agent::{
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
     AgentSessionDto, AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,
-    CalendarActionDecisionDto, CalendarActionOperationDto,
-    CalendarSubjectPreviewDto, ConnectorSnapshotDto, ContactsAccessChangeDto, EpistemicStatusDto,
-    FeasibilityGrantQueryDto, KnowledgeCandidateDto, KnowledgeDecisionResultDto,
-    PersonalAccessChangeDto, PersonalAccessOverviewDto, PersonalMemoryKindDto,
-    RegistryConfigurationDto, RegistryConfigurationTargetDto, RegistryOverviewDto,
+    CalendarActionDecisionDto, CalendarActionOperationDto, CalendarSubjectPreviewDto,
+    ConnectorSnapshotDto, ContactsAccessChangeDto, EpistemicStatusDto, FeasibilityGrantQueryDto,
+    KnowledgeCandidateDto, KnowledgeDecisionResultDto, PersonalAccessChangeDto,
+    PersonalAccessOverviewDto, PersonalMemoryKindDto, RegistryConfigurationDto,
+    RegistryConfigurationTargetDto, RegistryOverviewDto,
 };
 pub use calendar::{
     CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,

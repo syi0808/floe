@@ -5,6 +5,7 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/day/application/calendar_gateway.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
@@ -202,6 +203,75 @@ void main() {
     expect(find.text('Calendars available to Floe'), findsOneWidget);
     expect(find.text('Data Floe can use'), findsNothing);
     expect(find.byKey(const ValueKey('calendar-access-setup')), findsNothing);
+  });
+
+  testWidgets('device detail manages Observe through preview, review and pause', (
+    tester,
+  ) async {
+    final access = _StubCalendarAccessGateway();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ConnectorScreen(
+              gateway: _DeviceCalendarGateway(),
+              query: DayQuery(
+                personId: 'person',
+                date: DateTime.utc(2026, 9, 4),
+                now: DateTime.utc(2026, 9, 4),
+                timezoneOffsetSeconds: 0,
+              ),
+              connection: const CalendarConnection(
+                connectionId: 'connection',
+                deviceId: 'test-device',
+                provider: 'event_kit',
+                revision: 1,
+                sourceAuthority: CalendarSourceAuthority(
+                  incarnation: '00000000-0000-4000-8000-000000000009',
+                  epoch: 1,
+                ),
+                calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
+              ),
+              onChanged: () async {},
+              platform: TargetPlatform.macOS,
+              initialDeviceCalendarDetail: true,
+              nativeCalendarAccessGateway: access,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-calendar-observe')),
+      findsOneWidget,
+    );
+    expect(find.text('Needs review'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-calendar-observe-review')),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-calendar-observe-review')),
+    );
+    await tester.tap(find.byKey(const ValueKey('device-calendar-observe-review')));
+    await tester.pumpAndSettle();
+    expect(access.calls, ['inspect', 'preview', 'review']);
+    expect(access.reviewedFingerprint, 'f' * 64);
+    expect(find.text('Observing'), findsOneWidget);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-calendar-observe-pause')),
+    );
+    await tester.tap(find.byKey(const ValueKey('device-calendar-observe-pause')));
+    await tester.pumpAndSettle();
+    expect(access.calls.last, 'pause');
+    expect(access.pausedGrantId, isNotNull);
+    expect(find.text('Paused'), findsOneWidget);
   });
 
   testWidgets('device-native and disconnected server catalog are composed', (
@@ -634,6 +704,108 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway {
     this.provider = provider;
     boundCalendars = calendars;
     return FakeDayGateway().loadDay(query);
+  }
+}
+
+final class _StubCalendarAccessGateway
+    implements NativeCalendarAccessGateway {
+  NativeCalendarAccessOverview overview = const NativeCalendarAccessOverview(
+    personId: 'person',
+    provider: 'event_kit',
+    connectionId: 'connection',
+    selectedResources: ['home'],
+    grantedResources: [],
+    sourceAuthority: {
+      'incarnation': '00000000-0000-4000-8000-000000000009',
+      'epoch': 1,
+    },
+    state: 'needs_review',
+    reviewRequired: true,
+  );
+  final List<String> calls = [];
+  String? reviewedFingerprint;
+  String? pausedGrantId;
+
+  NativeCalendarAccessOverview _granted(String state) =>
+      NativeCalendarAccessOverview(
+        personId: overview.personId,
+        provider: overview.provider,
+        connectionId: overview.connectionId,
+        selectedResources: overview.selectedResources,
+        grantedResources: const ['home'],
+        sourceAuthority: overview.sourceAuthority,
+        state: state,
+        reviewRequired: false,
+        grantId: 'grant',
+        grantAuthority: const {'access_epoch': 1},
+        consumerPolicy: const {'epoch': 1},
+      );
+
+  @override
+  Future<NativeCalendarAccessOverview> inspectCalendarAccess(
+    String personId,
+  ) async {
+    calls.add('inspect');
+    return overview;
+  }
+
+  @override
+  Future<NativeCalendarSubjectPreview> previewCalendarSubject({
+    required String personId,
+    required String provider,
+    required String connectionId,
+    required List<String> calendarIds,
+    required String connectionScope,
+    required int connectionRevision,
+    required Map<String, Object?> sourceAuthority,
+  }) async {
+    calls.add('preview');
+    return NativeCalendarSubjectPreview(
+      provider: provider,
+      deviceId: 'test-device',
+      calendarIds: calendarIds,
+      connectionScope: connectionScope,
+      connectionId: connectionId,
+      connectionRevision: connectionRevision,
+      sourceAuthority: sourceAuthority,
+      nativeSubjectFingerprint: 'f' * 64,
+    );
+  }
+
+  @override
+  Future<NativeCalendarAccessOverview> reviewCalendarAccess(
+    String personId, {
+    required String connectionId,
+    required List<String> calendarIds,
+    required Map<String, Object?> expectedSourceAuthority,
+    required String expectedNativeSubjectFingerprint,
+    required NativeCalendarAccessOverview reviewedOverview,
+  }) async {
+    calls.add('review');
+    reviewedFingerprint = expectedNativeSubjectFingerprint;
+    overview = _granted('active');
+    return overview;
+  }
+
+  @override
+  Future<NativeCalendarAccessOverview> pauseCalendarAccess(
+    String personId, {
+    required NativeCalendarAccessOverview reviewedOverview,
+  }) async {
+    calls.add('pause');
+    pausedGrantId = reviewedOverview.grantId;
+    overview = _granted('paused');
+    return overview;
+  }
+
+  @override
+  Future<NativeCalendarAccessOverview> removeCalendarAccess(
+    String personId, {
+    required NativeCalendarAccessOverview reviewedOverview,
+  }) async {
+    calls.add('remove');
+    overview = _granted('revoked');
+    return overview;
   }
 }
 

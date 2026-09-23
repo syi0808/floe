@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
 use crate::{
     AgentFailure, AppComposition, CalendarProvider, CalendarScope, CalendarSubjectPreview,
-    CallerContext, ContactsAccessChange, PersonalAccessChange, PersonalAccessOverview,
+    CallerContext, ContactsAccessChange, PersonId, PersonalAccessChange, PersonalAccessOverview,
     ServiceError, SourceAuthority, VaultState, WorkerAction,
 };
 
@@ -27,11 +27,75 @@ pub enum LocalAccessCommand {
         connector: String,
         change: ContactsAccessChange,
     },
+    Calendar {
+        change: CalendarAccessChange,
+    },
+}
+
+/// A native Calendar Observe change.
+///
+/// The review echoes what the Person saw: the connection, the reviewed
+/// selection, the reviewed source authority and native subject, and the
+/// reviewed grant expectation. Consumers, purpose, processing and scope stay
+/// backend-derived; the wire carries none of them. Inspect is query-only.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CalendarAccessChange {
+    Inspect,
+    Review {
+        connection_id: String,
+        calendar_ids: Vec<String>,
+        expected_source_authority: floe_context_contract::SourceAuthority,
+        expected_native_subject_fingerprint: String,
+        expected_grant_id: Option<floe_access::GrantId>,
+        expected_grant_authority: Option<floe_access::GrantAuthority>,
+    },
+    Pause {
+        grant_id: floe_access::GrantId,
+        expected_grant_authority: floe_access::GrantAuthority,
+    },
+    Remove {
+        grant_id: floe_access::GrantId,
+        expected_grant_authority: floe_access::GrantAuthority,
+    },
+}
+
+/// A native Calendar Observe command: the change plus the device it runs on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CalendarAccessConfiguration {
+    pub device_id: String,
+    pub change: CalendarAccessChange,
+}
+
+/// Native Calendar Observe state: the current selection plus the current
+/// grant, if the Person granted one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CalendarAccessOverview {
+    pub person_id: PersonId,
+    pub provider: CalendarProvider,
+    pub connection_id: String,
+    pub selected_resources: Vec<String>,
+    pub granted_resources: Vec<String>,
+    pub source_authority: SourceAuthority,
+    pub grant_id: Option<floe_access::GrantId>,
+    pub grant_authority: Option<floe_access::GrantAuthority>,
+    pub consumer_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
+    pub state: CalendarAccessState,
+    pub review_required: bool,
+}
+
+/// Native Calendar Observe lifecycle: no grant, or the current grant state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalendarAccessState {
+    NeedsReview,
+    Paused,
+    Active,
+    Revoked,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LocalAccessInspection {
     CalendarSubject(CalendarSubjectIntent),
+    CalendarAccess,
     Personal {
         connector: String,
     },
@@ -48,6 +112,7 @@ pub struct LocalAccessResult {
     pub done: bool,
     pub state: Option<VaultState>,
     pub calendar_subject_preview: Option<CalendarSubjectPreview>,
+    pub calendar_access: Option<CalendarAccessOverview>,
     pub personal_access: Option<PersonalAccessOverview>,
     pub failure: Option<AgentFailure>,
 }
@@ -140,6 +205,7 @@ impl AppComposition {
             done: result.done,
             state: result.state,
             calendar_subject_preview: result.calendar_subject_preview,
+            calendar_access: result.calendar_access,
             personal_access: result.personal_access,
             failure: result.failure,
         })
@@ -159,6 +225,12 @@ impl LocalAccessCommand {
             Self::Contacts { connector, change } => WorkerAction::ContactsAccess {
                 change: Box::new(crate::ContactsAccessConfiguration {
                     connector: connector.clone(),
+                    device_id: caller.device_id().into(),
+                    change: change.clone(),
+                }),
+            },
+            Self::Calendar { change } => WorkerAction::CalendarAccess {
+                change: Box::new(CalendarAccessConfiguration {
                     device_id: caller.device_id().into(),
                     change: change.clone(),
                 }),
@@ -183,6 +255,10 @@ impl LocalAccessInspection {
                 change: ContactsAccessChange::Inspect {
                     selected_handles: selected_handles.clone(),
                 },
+            }
+            .action(caller),
+            Self::CalendarAccess => LocalAccessCommand::Calendar {
+                change: CalendarAccessChange::Inspect,
             }
             .action(caller),
             Self::CalendarSubject(request) => WorkerAction::CalendarSubjectPreview {
