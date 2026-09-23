@@ -560,11 +560,11 @@ impl PersonalViewSource<'_> {
                 .await
             {
                 Ok(view) => {
-                    if view.range_start_unix_ms != query.range_start_unix_ms()
-                        || view.range_end_unix_ms != query.range_end_unix_ms()
-                    {
-                        return Err(AgentFailure::StaleContext);
-                    }
+                    floe_context::validate_calendar_context_view_for_query(
+                        &view,
+                        query,
+                        chrono::Utc::now().timestamp_millis(),
+                    )?;
                     views.push(view);
                 }
                 Err(AgentFailure::CapabilityUnavailable) => {}

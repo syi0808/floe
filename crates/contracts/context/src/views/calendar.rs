@@ -37,6 +37,55 @@ mod query_tests {
         assert!(CalendarViewQuery::try_new(1_000, 2_000, None, 129).is_err());
         assert!(CalendarViewQuery::try_new(1_000, 2_000, Some("".into()), 1).is_err());
     }
+
+    #[test]
+    fn returned_page_must_match_the_exact_query() {
+        let query = CalendarViewQuery::try_new(1_000, 2_000, None, 1).unwrap();
+        let mut view = CalendarContextView {
+            schema_version: AGENT_VERSION,
+            view_id: CALENDAR_CONTEXT_VIEW_ID.into(),
+            source_handle: "calendar:test".into(),
+            observed_at_unix_ms: 100_000,
+            expires_at_unix_ms: 200_000,
+            range_start_unix_ms: 1_000,
+            range_end_unix_ms: 2_000,
+            coverage_complete: true,
+            next_cursor: None,
+            items: vec![CalendarContextItem {
+                evidence_handle: "event:one".into(),
+                untrusted_title: "Review".into(),
+                starts_at_unix_ms: 1_200,
+                ends_at_unix_ms: 1_300,
+                all_day: false,
+            }],
+        };
+        assert!(validate_calendar_context_view_for_query(&view, &query, 150_000).is_ok());
+        view.range_end_unix_ms = 3_000;
+        assert_eq!(
+            validate_calendar_context_view_for_query(&view, &query, 150_000),
+            Err(AgentFailure::StaleContext)
+        );
+        view.range_end_unix_ms = 2_000;
+        view.items.push(CalendarContextItem {
+            evidence_handle: "event:two".into(),
+            untrusted_title: "Follow-up".into(),
+            starts_at_unix_ms: 1_400,
+            ends_at_unix_ms: 1_500,
+            all_day: false,
+        });
+        assert_eq!(
+            validate_calendar_context_view_for_query(&view, &query, 150_000),
+            Err(AgentFailure::StaleContext)
+        );
+        view.items.pop();
+        view.coverage_complete = false;
+        view.next_cursor = Some("next".into());
+        let next_query = CalendarViewQuery::try_new(1_000, 2_000, Some("next".into()), 1).unwrap();
+        assert_eq!(
+            validate_calendar_context_view_for_query(&view, &next_query, 150_000),
+            Err(AgentFailure::StaleContext)
+        );
+    }
 }
 
 impl CalendarViewQuery {
@@ -155,6 +204,23 @@ pub fn validate_calendar_context_view(
         {
             return Err(AgentFailure::InvalidInput);
         }
+    }
+    Ok(())
+}
+
+pub fn validate_calendar_context_view_for_query(
+    view: &CalendarContextView,
+    query: &CalendarViewQuery,
+    now_unix_ms: i64,
+) -> Result<(), AgentFailure> {
+    query.validate()?;
+    validate_calendar_context_view(view, now_unix_ms)?;
+    if view.range_start_unix_ms != query.range_start_unix_ms()
+        || view.range_end_unix_ms != query.range_end_unix_ms()
+        || view.items.len() > query.limit()
+        || query.cursor().is_some() && view.next_cursor.as_deref() == query.cursor()
+    {
+        return Err(AgentFailure::StaleContext);
     }
     Ok(())
 }
