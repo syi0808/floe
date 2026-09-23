@@ -1,7 +1,7 @@
 # Expert access and conversation interaction convergence
 
 - **Status:** execution plan
-- **Baseline:** \`main\` at \`0615b343bb752da85487a1a728927f0e3affdf5b\`
+- **Baseline:** `main` at `0615b343bb752da85487a1a728927f0e3affdf5b`
 - **Scope:** built-in Expert runtime, Calendar source acquisition, Expert Registry, Access/DataAccessGrant authority, connector permission product model, conversation interaction escalation, Flutter chat/connection surfaces, protocol/persistence cleanup
 - **Compatibility posture:** pre-stable internal APIs and local development data may be replaced directly. Do not add compatibility paths or migrate disposable local state merely to preserve the current Calendar vertical.
 - **Primary product target:** Apple ecosystem. Android code may be adjusted only where shared contracts require compilation; do not expand Android parity work as part of this plan.
