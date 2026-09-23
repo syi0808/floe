@@ -1,9 +1,9 @@
 # Checkpoint 03 — Expert Registry and Access authority convergence
 
-- **Status:** residual active
+- **Status:** complete
 - **Execution baseline:** main at dd4652997b9bd88668bcd59e98a2f3d1a1300368 (plan commit; code baseline bbce2fa2ae2da4bffb05185f39d8d50aa3e6b82a)
-- **Landed commits:** 03-A `3ca515af`, 03-B `7cda37e8`, 03-C `a725739c`, 03-D `aaefc659`. A post-implementation audit reopened bounded residual work in 03-E.
-- **Next:** 03-E residual closure; Checkpoint 04 remains blocked
+- **Landed commits:** 03-A `3ca515af`, 03-B `7cda37e8`, 03-C `a725739c`, 03-D `aaefc659`, 03-E `eddf7f92`, `f5436ca4`, `a36f2771`, `5af131a9`, `d180cecd`.
+- **Next:** Checkpoint 04 connector permission product model
 - **Precondition:** Checkpoint 02 is complete. Schedule already runs only through BuiltinExpertEndpoint and Context/Access.
 - **Scope:** remove source-access authority from Expert Registry, remove the Calendar-Expert setup vertical, replace Calendar setup/mapping persistence with source-owned Access records, and remove the old App/wire/Flutter Calendar-Expert management path.
 - **Compatibility posture:** pre-stable. Do not preserve old Registry/Calendar setup wire or migrate disposable local authorization state.
@@ -14,9 +14,9 @@ This file is the authoritative index for Checkpoint 03. Execute the child plans 
 2. [03-B — Calendar Access persistence convergence](03-b-calendar-access-persistence.md)
 3. [03-C — App, protocol and Flutter ownership cutover](03-c-app-protocol-flutter-cutover.md)
 4. [03-D — deletion, verification and documentation convergence](03-d-deletion-verification.md) — landed at `aaefc659`
-5. [03-E — residual authority and Calendar access closure](03-e-residual-authority-calendar-access.md) — active
+5. [03-E — residual authority and Calendar access closure](03-e-residual-authority-calendar-access.md) — landed at `d180cecd`
 
-03-A through 03-D are landed. Execute only 03-E from the aaefc659 baseline unless a 03-E stop condition proves an earlier ownership assumption wrong. Do not restore the deleted Calendar-Expert surface. Do not start Checkpoint 04 product permission redesign or Checkpoint 05 conversation interactions until 03-E closes.
+03-A through 03-E are landed. The deleted Calendar-Expert surface was not restored. Checkpoint 04 product permission redesign may now proceed on the converged Access/Connections ownership.
 
 ---
 
@@ -276,22 +276,14 @@ Delete remaining old files/types/tests, update current docs, perform residual se
 
 ### 03-E — residual authority and Calendar access closure
 
-Post-03-D audit of aaefc659 found four bounded acceptance gaps:
+Post-03-D audit of aaefc659 found four bounded acceptance gaps; [03-E](03-e-residual-authority-calendar-access.md) closed them (`eddf7f92`–`d180cecd`):
 
-- remote Calendar source-wide uniqueness rejects valid sibling resource grants;
-- native existing-grant mutations do not carry the GrantAuthority the Person reviewed;
-- ConsumerPolicyAuthority lifecycle/error handling is incomplete;
-- native Calendar Observe management has subject preview but no Access-owned mutation/overview product path.
+- remote Calendar source-wide uniqueness rejected valid sibling resource grants — sibling grants coexist, exact-resource duplicates fail closed;
+- native existing-grant mutations did not carry the GrantAuthority the Person reviewed — review/pause/remove are bound to reviewed CAS;
+- ConsumerPolicyAuthority lifecycle/error handling was incomplete — stable on exact no-op, advances on semantic change, failures fail closed;
+- native Calendar Observe management had subject preview but no Access-owned product path — one inspect/review/pause/remove path with no Registry identity.
 
-Execute [03-E](03-e-residual-authority-calendar-access.md) before Checkpoint 04.
-
-Exit gate:
-
-- remote sibling resources coexist and exact-resource duplicates fail closed;
-- native and remote existing-grant mutation is bound to reviewed CAS expectation;
-- ConsumerPolicyAuthority is stable only for an exact semantic no-op and policy errors fail closed;
-- native Calendar has one Access-owned inspect/review/pause/remove path with no Registry identity;
-- the full 03-E regression and repository verification gates pass.
+Exit gate passed, including the full 03-E regression and repository verification gates.
 
 ## 6. Global invariants during implementation
 
@@ -376,7 +368,7 @@ Use a fresh isolated development profile for persistence/macOS acceptance becaus
 - [x] crates/modules/experts/src/registry/calendar_setup.rs is deleted.
 - [x] crates/modules/experts/src/calendar_access.rs is deleted.
 - [x] Calendar grant persistence contains no Registry setup/install/assignment identity.
-- [ ] native and remote Calendar reads select the exact DataAccessGrant by current source/resource/consumer without rejecting valid sibling resources.
+- [x] native and remote Calendar reads select the exact DataAccessGrant by current source/resource/consumer without rejecting valid sibling resources.
 - [x] Calendar consumer-policy/native-review metadata is keyed by grant/source authority, not Expert setup.
 - [x] calendar_grant_mappings and remote_calendar_grant_mappings are deleted.
 - [x] old Calendar grant/setup authorization state is not migrated.
@@ -385,12 +377,12 @@ Use a fresh isolated development profile for persistence/macOS acceptance becaus
 - [x] access.calendar commands contain no Registry instance/revision/setup id.
 - [x] WorkerResult / App result no longer expose calendar_experts.
 - [x] AgentCalendarExpertController, AgentCalendarExperts and AgentCalendarSettings are deleted.
-- [ ] connector detail uses an Access/Connections-owned native Calendar Observe management path; the deleted Expert Calendar UI is not restored.
+- [x] connector detail uses an Access/Connections-owned native Calendar Observe management path; the deleted Expert Calendar UI is not restored.
 - [x] Schedule success, missing-access and /focus proposal flows still pass.
 - [x] canonical first-party Calendar consumers remain exact real package identities.
-- [ ] existing-grant Calendar mutations honor the GrantId/GrantAuthority state the Person reviewed.
-- [ ] ConsumerPolicyAuthority is stable on exact semantic no-op and advances on reviewed policy change; policy load failures fail closed.
-- [ ] full Rust/architecture/FFI/Flutter/macOS gates pass after 03-E.
+- [x] existing-grant Calendar mutations honor the GrantId/GrantAuthority state the Person reviewed.
+- [x] ConsumerPolicyAuthority is stable on exact semantic no-op and advances on reviewed policy change; policy load failures fail closed.
+- [x] full Rust/architecture/FFI/Flutter/macOS gates pass after 03-E.
 
 ---
 

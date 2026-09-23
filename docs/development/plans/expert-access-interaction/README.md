@@ -2,7 +2,7 @@
 
 - **Status:** execution plan
 - **Baseline:** `main` at `0615b343bb752da85487a1a728927f0e3affdf5b`
-- **Current execution snapshot:** code baseline `main` at `aaefc6592e4df8f0f4b04a9fd33653aded868419`. Checkpoints 01 and 02 are complete. Checkpoint 03-A through 03-D landed, but a post-implementation audit reopened Checkpoint 03 for the bounded 03-E residual closure before Checkpoint 04.
+- **Current execution snapshot:** code baseline `main` at `d180cecdfc41d6f100cd9fe3389f7f53b6effca3`. Checkpoints 01, 02, and 03 (03-A through 03-E) are complete. Checkpoint 04 is next.
 - **Scope:** built-in Expert runtime, Calendar source acquisition, Expert Registry, Access/DataAccessGrant authority, connector permission product model, conversation interaction escalation, Flutter chat/connection surfaces, protocol/persistence cleanup
 - **Compatibility posture:** pre-stable internal APIs and local development data may be replaced directly. Do not add compatibility paths or migrate disposable local state merely to preserve the current Calendar vertical.
 - **Primary product target:** Apple ecosystem. Android code may be adjusted only where shared contracts require compilation; do not expand Android parity work as part of this plan.
@@ -255,19 +255,19 @@ Read and execute these files in order.
 
 1. [01 — contracts and recoverable source interaction foundation](01-contracts-and-interaction-foundation.md) — **complete**
 2. [02 — Schedule common-runtime convergence + Calendar consumer-policy prerequisite](02-calendar-source-and-schedule-convergence.md) — **complete**
-3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md) — **active**
+3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md) — **complete**
    - [03-A — Registry source-authority removal](03-a-registry-source-authority.md)
    - [03-B — Calendar Access persistence convergence](03-b-calendar-access-persistence.md)
    - [03-C — App, protocol and Flutter ownership cutover](03-c-app-protocol-flutter-cutover.md)
-   - [03-D — deletion, verification and documentation convergence](03-d-deletion-verification.md) — **landed; completion audit reopened residuals**
-   - [03-E — residual authority and Calendar access closure](03-e-residual-authority-calendar-access.md) — **active**
-4. [04 — connector permission product model](04-connector-permission-product-model.md) — **blocked on 03-E**
+   - [03-D — deletion, verification and documentation convergence](03-d-deletion-verification.md)
+   - [03-E — residual authority and Calendar access closure](03-e-residual-authority-calendar-access.md) — **complete**
+4. [04 — connector permission product model](04-connector-permission-product-model.md) — **next**
 5. [05 — Conversation and Flutter interaction/resume](05-conversation-and-flutter-interaction.md)
 6. [06 — obsolete-path deletion, verification and documentation convergence](06-deletion-verification-and-doc-convergence.md)
 
 Do not skip directly to Flutter. A chat permission button is unsafe until its target and decision path are owned by the canonical Access/Connections path.
 
-Checkpoint 02 moved the narrow Calendar first-party consumer-policy prerequisite forward and is complete. Checkpoint 03-A through 03-D established the source-independent Registry and source-owned Calendar grant path, but the post-03-D audit found bounded behavioral residuals in grant selection/CAS/policy lifecycle and the missing native Access management surface. Execute 03-E only; do not reopen the deleted Expert Calendar vertical.
+Checkpoint 02 moved the narrow Calendar first-party consumer-policy prerequisite forward and is complete. Checkpoint 03-A through 03-D established the source-independent Registry and source-owned Calendar grant path, and 03-E closed the post-03-D behavioral residuals in grant selection/CAS/policy lifecycle plus the native Access management surface. The deleted Expert Calendar vertical was not reopened.
 
 Do not make connection-time Observe implicit before Checkpoint 03 has removed the competing Expert Registry permission authority. Do not start Checkpoint 04's final connection ceremony or Checkpoint 05's durable chat interactions from a Checkpoint 03 patch.
 
