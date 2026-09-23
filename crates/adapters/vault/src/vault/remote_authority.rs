@@ -995,7 +995,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let mut policy_rows = transaction
             .query(
-                "SELECT policy_incarnation, policy_epoch FROM remote_calendar_grant_mappings WHERE grant_id = ? AND person_id = ?",
+                "SELECT policy_incarnation, policy_epoch FROM calendar_grant_policies WHERE grant_id = ? AND person_id = ?",
                 (grant_wire.id.clone(), self.person_id.to_string()),
             )
             .await
@@ -2584,7 +2584,7 @@ mod tests {
             let corruption_connection = vault.database.connect().unwrap();
             corruption_connection
                 .execute(
-                    "UPDATE remote_calendar_grant_mappings SET payload = '{}' WHERE grant_id = ?",
+                    "UPDATE calendar_grant_policies SET payload = '{}' WHERE grant_id = ?",
                     [grant.id().as_uuid().to_string()],
                 )
                 .await

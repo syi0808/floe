@@ -283,6 +283,38 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(grants)
     }
 
+    /// Every grant for one exact source identity, newest authority first.
+    ///
+    /// The source must match by full identity (person, connector, connection,
+    /// execution owner, authority). Callers that need one grant fail when the
+    /// source enumerates zero or more than one.
+    pub async fn data_access_grants_for_source(
+        &self,
+        source: &GrantSourceBinding,
+        limit: usize,
+    ) -> Result<Vec<DataAccessGrant>, AgentFailure> {
+        if limit == 0 || limit > MAX_ACCESS_GRANTS {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        if source.person_id() != self.person_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let connection = self.connection()?;
+        self.ensure_access_grant_schema(&connection).await?;
+        let mut rows = connection.query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? AND source_incarnation = ? AND source_epoch = ? ORDER BY access_epoch DESC, grant_id LIMIT ?", (self.person_id.to_string(), self.vault_id.to_string(), source.connection_id().as_str().to_owned(), source.connector().as_str().to_owned(), source.execution_owner().as_str().to_owned(), source.source_authority().incarnation().to_string(), source.source_authority().epoch().get() as i64, i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?)).await.map_err(storage)?;
+        let mut grants = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let grant =
+                decode_grant(&row).map_err(|failure| self.reject_access_corruption(failure))?;
+            if !grant.source().same_identity(source) {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            grants.push(grant);
+        }
+        self.check_access()?;
+        Ok(grants)
+    }
+
     pub async fn activate_data_access_grant(
         &self,
         id: GrantId,
@@ -618,7 +650,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    async fn ensure_access_grant_schema_transaction(
+    pub(super) async fn ensure_access_grant_schema_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
     ) -> Result<(), AgentFailure> {
@@ -872,7 +904,7 @@ fn grant_values(
         payload,
     ))
 }
-fn decode_grant(row: &Row) -> Result<DataAccessGrant, AgentFailure> {
+pub(super) fn decode_grant(row: &Row) -> Result<DataAccessGrant, AgentFailure> {
     let grant: DataAccessGrant = decode_payload(&row.get::<String>(11).map_err(storage)?)?;
     grant
         .validate()

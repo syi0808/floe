@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 
 mod access_grants;
 mod agent_actions;
+mod calendar_grant_policy;
 mod calendar_grants;
 mod context_cleanup;
 mod context_dependencies;
@@ -229,8 +230,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
         vault.initialize_personal_grant_store(true).await?;
-        vault.initialize_calendar_grant_store().await?;
-        vault.initialize_remote_calendar_grant_store(true).await?;
+        vault.initialize_calendar_grant_policy_store(true).await?;
         vault.initialize_remote_view_grant_store(true).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;
@@ -315,8 +315,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_agent_action_store().await?;
         vault.initialize_personal_grant_store(false).await?;
-        vault.initialize_calendar_grant_store().await?;
-        vault.initialize_remote_calendar_grant_store(false).await?;
+        vault.initialize_calendar_grant_policy_store(false).await?;
         vault.initialize_remote_view_grant_store(false).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_conversation_store().await?;

@@ -446,8 +446,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let grant_id = dependency.grant_id().as_uuid().to_string();
         let person_id = self.person_id.to_string();
         let mut rows = transaction.query(
-            "SELECT policy_incarnation, policy_epoch FROM calendar_grant_mappings WHERE grant_id = ? AND person_id = ? UNION ALL SELECT policy_incarnation, policy_epoch FROM remote_calendar_grant_mappings WHERE grant_id = ? AND person_id = ?",
-            (grant_id.clone(), person_id.clone(), grant_id, person_id),
+            "SELECT policy_incarnation, policy_epoch FROM calendar_grant_policies WHERE grant_id = ? AND person_id = ?",
+            (grant_id, person_id),
         ).await.map_err(storage)?;
         let row = rows
             .next()

@@ -354,13 +354,6 @@ impl<Keys: VaultKeyProvider> CalendarSetupStore for VaultCalendarSetups<'_, Keys
         Box::pin(self.vault.calendar_expert_overview())
     }
 
-    fn granted_connection_id<'a>(
-        &'a self,
-        setup_id: uuid::Uuid,
-    ) -> BoxFuture<'a, Result<String, AgentFailure>> {
-        Box::pin(self.vault.calendar_grant_connection_id(setup_id))
-    }
-
     fn install<'a>(
         &'a self,
         request: CalendarExpertSetup,

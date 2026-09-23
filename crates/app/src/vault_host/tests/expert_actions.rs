@@ -519,9 +519,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
         .unwrap();
     let grant = fixture
         .vault
-        .authorize_calendar_grant(
-            setup.setup_id,
-            installed.setup.view_handle,
+        .authorize_current_native_calendar_grant(
             "eventkit-connection",
             CalendarProvider::EventKit,
             "test-device",

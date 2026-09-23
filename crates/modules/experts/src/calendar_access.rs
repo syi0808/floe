@@ -48,12 +48,6 @@ pub trait CalendarSourceAdmission: Sync {
 pub trait CalendarSetupStore: Sync {
     fn overview<'a>(&'a self) -> BoxFuture<'a, Result<CalendarExpertOverview, AgentFailure>>;
 
-    /// The connection a granted native setup already reads under.
-    fn granted_connection_id<'a>(
-        &'a self,
-        setup_id: Uuid,
-    ) -> BoxFuture<'a, Result<String, AgentFailure>>;
-
     fn install<'a>(
         &'a self,
         request: CalendarExpertSetup,
@@ -97,19 +91,16 @@ pub async fn apply_calendar_access(
 ) -> Result<CalendarExpertOverview, AgentFailure> {
     let overview = store.overview().await?;
     if let Some((setup, view)) = native_setup(&overview, configuration.setup_id) {
-        let source = if requires_live_source(&configuration.change) {
-            let request = setup_request(&configuration, setup, view);
-            CalendarAccessSource::Native {
-                connection_id: admission
-                    .admit(&request)
-                    .await?
-                    .ok_or(AgentFailure::AccessReviewRequired)?
-                    .connection_id,
-            }
-        } else {
-            CalendarAccessSource::Native {
-                connection_id: store.granted_connection_id(setup.setup_id).await?,
-            }
+        // Access finds grants by source identity, never by setup. Every native
+        // change re-admits the live source so the write stands on a current
+        // connection; there is no stored setup-to-connection link.
+        let request = setup_request(&configuration, setup, view);
+        let source = CalendarAccessSource::Native {
+            connection_id: admission
+                .admit(&request)
+                .await?
+                .ok_or(AgentFailure::AccessReviewRequired)?
+                .connection_id,
         };
         return store.configure(configuration, source).await;
     }
@@ -152,16 +143,6 @@ fn native_setup(
             )
         })?;
     Some((setup, view))
-}
-
-/// Whether the change puts the Expert back in front of a live calendar.
-///
-/// Turning it off, or removing it, takes nothing new from the device.
-fn requires_live_source(change: &CalendarAccessChange) -> bool {
-    matches!(
-        change,
-        CalendarAccessChange::SetEnabled { enabled: true } | CalendarAccessChange::SetScope { .. }
-    )
 }
 
 /// The source an installed setup would be re-admitted under.

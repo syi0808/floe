@@ -912,8 +912,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
-            self.bump_calendar_policies_for_registry_change(&transaction, &previous, snapshot)
-                .await?;
             self.update_registry(&transaction, expected_revision, snapshot.revision, payload)
                 .await?;
             let completed_task = if let Some((
@@ -1138,8 +1136,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     if scope.is_none() && next != *staged {
                         return Err(AgentFailure::Conflict);
                     }
-                    self.bump_calendar_policies_for_registry_change(&transaction, &stored, &next)
-                        .await?;
                     let registry_revision = if scope.is_some() {
                         stored.revision
                     } else {
