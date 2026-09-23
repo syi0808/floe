@@ -107,7 +107,7 @@ The Expert must not provide:
 
 The reader resolves authoritative current connection/grant state behind its owner boundaries.
 
-Implementation note: Context now has a signed remote Calendar View read and reauthorization operation that binds an exact resource, consumer, query, grant authority and source preview. The App host has not switched to it, and native Calendar acquisition and Schedule endpoint deletion remain in this checkpoint.
+Implementation note: Context now has a signed remote Calendar View read and reauthorization operation that binds an exact resource, consumer, query, grant authority and source preview. The common App host injects that read for selected remote resources and records the returned dependency; native Calendar acquisition and Schedule endpoint deletion remain in this checkpoint.
 
 ### 1.3 Native + remote parity at the semantic boundary
 

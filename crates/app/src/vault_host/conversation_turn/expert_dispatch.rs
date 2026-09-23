@@ -6,11 +6,11 @@
 //! endpoints exist and which readers back the host port they use.
 
 use super::expert_host::{
-    CapturingRecorder, ConversationContextReader, ConversationContextReaderApi, ExpertModelHost,
-    PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
-    PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
-    PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, expert_policy,
-    read_context_source,
+    CalendarContextReaderApi, CapturingRecorder, ConversationContextReader,
+    ConversationContextReaderApi, ExpertModelHost, PersonalAttentionReader,
+    PersonalAttentionReaderApi, PersonalPeopleReader, PersonalPeopleReaderApi, PersonalViewSource,
+    PersonalWellbeingReader, PersonalWellbeingReaderApi, RemoteCalendarContextReader,
+    ResultRecorder, StoreResultRecorder, expert_policy, read_context_source,
 };
 use super::*;
 use std::sync::{Arc, Mutex};
@@ -164,6 +164,15 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 )),
                 None => None,
             };
+            let calendar_reader =
+                source_client
+                    .as_ref()
+                    .map(|client| RemoteCalendarContextReader {
+                        core: &self.core,
+                        vault: &self.vault,
+                        source_client: client,
+                        device_id: &context.device_id,
+                    });
             let remote_resolver = remote_reader
                 .as_ref()
                 .map(|reader| remote_views::RemoteDependencyResolver { reader });
@@ -212,6 +221,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 scope,
                 availability,
                 source_client: source_client.as_ref(),
+                calendar_reader: calendar_reader
+                    .as_ref()
+                    .map(|reader| reader as &dyn CalendarContextReaderApi),
                 policy: &policy,
                 context: &context.agent_context,
                 local_context: &self.local_context,
@@ -295,6 +307,7 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) scope: &'model floe_execution::ExecutionScope,
     pub(super) availability: floe_inference::InferenceAvailability,
     pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
+    pub(super) calendar_reader: Option<&'model dyn CalendarContextReaderApi>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
     pub(super) local_context: &'model LocalContextHost,
@@ -337,6 +350,7 @@ impl<'turn, 'model, 'msg> DelegatedMessageExperts<'turn, 'model, 'msg> {
     ) -> PersonalViewSource<'a> {
         PersonalViewSource {
             source_client: self.experts.source_client,
+            calendar_reader: self.experts.calendar_reader,
             person_id: request.person_id,
             people_reader: self.experts.people_reader,
             wellbeing_reader: self.experts.wellbeing_reader,

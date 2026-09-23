@@ -20,7 +20,6 @@ use floe_context::{
 use floe_inference::{InferenceExecutionConstraint, InferenceExecutor};
 use floe_kernel::{PersonId, TaskId};
 use floe_provider_adapters::sources::ServerSourceClient;
-use floe_provider_adapters::sources::server::CalendarContextRequest;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 
@@ -455,6 +454,7 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
 
 pub(super) struct PersonalViewSource<'a> {
     pub(super) source_client: Option<&'a ServerSourceClient>,
+    pub(super) calendar_reader: Option<&'a dyn CalendarContextReaderApi>,
     pub(super) person_id: PersonId,
     pub(super) people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
     pub(super) wellbeing_reader: Option<&'a dyn PersonalWellbeingReaderApi>,
@@ -530,46 +530,34 @@ impl PersonalViewSource<'_> {
         cancellation: &floe_execution::Cancellation,
     ) -> Result<Vec<CalendarContextView>, AgentFailure> {
         query.validate()?;
-        if self.source_client.is_none() {
-            return Ok(vec![]);
-        }
-        let source_client = self
-            .source_client
+        let reader = self
+            .calendar_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        // Source enumeration happens here, when the Expert actually needs it:
-        // the catalog is observed lazily, never pre-resolved for the turn.
-        let connections = source_client
-            .observe_calendar_connections(deadline, cancellation)
+        self.record_result_independent()?;
+        let reads = reader
+            .read(
+                self.person_id,
+                self.consumer_name,
+                query,
+                deadline,
+                cancellation,
+            )
             .await?;
         let mut views = Vec::new();
-        for connection in &connections {
-            match source_client
-                .read_calendar_context_view(
-                    CalendarContextRequest {
-                        connector_id: &connection.connector_id,
-                        connection_id: &connection.connection_id,
-                        connection_revision: connection.connection_revision,
-                        range_start_unix_ms: query.range_start_unix_ms(),
-                        range_end_unix_ms: query.range_end_unix_ms(),
-                        cursor: query.cursor().unwrap_or(""),
-                        limit: query.limit(),
-                    },
-                    deadline,
-                    cancellation,
-                )
-                .await
-            {
-                Ok(view) => {
-                    floe_context::validate_calendar_context_view_for_query(
-                        &view,
-                        query,
-                        chrono::Utc::now().timestamp_millis(),
-                    )?;
-                    views.push(view);
-                }
-                Err(AgentFailure::CapabilityUnavailable) => {}
-                Err(error) => return Err(error),
+        for (view, dependency) in reads {
+            floe_context::validate_calendar_context_view_for_query(
+                &view,
+                query,
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+            if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
+                recorder.record(
+                    self.dependency_turn_id,
+                    self.dependency_result_id,
+                    dependency,
+                )?;
             }
+            views.push(view);
         }
         Ok(views)
     }
@@ -766,6 +754,123 @@ pub(super) trait PersonalWellbeingReaderApi: Send + Sync {
                 + 'a,
         >,
     >;
+}
+
+pub(super) trait CalendarContextReaderApi: Send + Sync {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        query: &'a floe_context_contract::CalendarViewQuery,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_execution::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<(
+                            CalendarContextView,
+                            floe_context_contract::ContextDependency,
+                        )>,
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
+}
+
+pub(super) struct RemoteCalendarContextReader<'a, Keys: VaultKeyProvider> {
+    pub(super) core: &'a FloeCore,
+    pub(super) vault: &'a EncryptedAgentVault<Keys>,
+    pub(super) source_client: &'a ServerSourceClient,
+    pub(super) device_id: &'a str,
+}
+
+impl<Keys: VaultKeyProvider> CalendarContextReaderApi for RemoteCalendarContextReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        query: &'a floe_context_contract::CalendarViewQuery,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_execution::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<(
+                            CalendarContextView,
+                            floe_context_contract::ContextDependency,
+                        )>,
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            if person_id != self.vault.person_id()
+                || self.source_client.source().person_id() != person_id.to_string()
+                || self.source_client.source().device_id() != self.device_id
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let connection = self
+                .core
+                .calendar_connection(person_id)
+                .await
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if connection.disconnected
+                || connection.device_id != self.device_id
+                || connection.revision == 0
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+            let connector_id = floe_access::hosted_calendar_connector(connection.provider)
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if connection.calendars.is_empty() {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let person_text = person_id.to_string();
+            let pairing = floe_context::RemotePairingIdentity {
+                person_id: &person_text,
+                client_id: self.source_client.source().client_id(),
+                device_id: self.device_id,
+            };
+            let window = floe_context::RemoteCallWindow {
+                deadline,
+                cancellation: cancellation.clone(),
+            };
+            let authorized_client = floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                self.source_client,
+                self.vault,
+            );
+            let mut reads = Vec::with_capacity(connection.calendars.len());
+            for calendar in &connection.calendars {
+                let (view, dependency, _) = floe_context::read_remote_calendar_view(
+                    self.vault,
+                    &authorized_client,
+                    floe_context::RemoteCalendarViewRead {
+                        person_id,
+                        pairing,
+                        connector_id,
+                        connection_id: &connection.connection_id,
+                        connection_revision: connection.revision,
+                        resource: &calendar.calendar_id,
+                        consumer_name: consumer,
+                        query,
+                        window: &window,
+                        process_incarnation_id: self.core.lease_registry.process_incarnation(),
+                    },
+                )
+                .await?;
+                reads.push((view, dependency));
+            }
+            Ok(reads)
+        })
+    }
 }
 
 pub(super) struct PersonalAttentionReader<'a, Keys: VaultKeyProvider> {
@@ -1132,9 +1237,12 @@ mod tests {
             },
         });
         let outcome = ExpertReasoner::step(&host, step).await.unwrap();
-        assert_eq!(outcome.steps, vec![ExpertStep::Answer {
-            text: "Calendar access is needed.".into(),
-        }]);
+        assert_eq!(
+            outcome.steps,
+            vec![ExpertStep::Answer {
+                text: "Calendar access is needed.".into(),
+            }]
+        );
         let calls = executor.calls();
         let envelope = &calls[0].0.projection.envelope;
         let exchange = envelope.conversation.current_turn.last().unwrap();

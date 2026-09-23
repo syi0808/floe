@@ -420,8 +420,8 @@ mod tests {
     // and source host the delegated endpoints prepare.
     use super::expert_dispatch::ConversationExperts;
     use super::expert_host::{
-        PersonalAttentionReader, PersonalAttentionReaderApi, ResultRecorder, StoreResultRecorder,
-        expert_policy,
+        CalendarContextReaderApi, PersonalAttentionReader, PersonalAttentionReaderApi,
+        ResultRecorder, StoreResultRecorder, expert_policy,
     };
     use floe_agent_contract::ModelPlacement;
     use floe_agent_contract::{ModelRequest, ModelResponse};
@@ -569,6 +569,109 @@ mod tests {
                     dependency,
                     scope,
                 ))
+            })
+        }
+    }
+
+    impl CalendarContextReaderApi for FixtureRemoteReader<'_> {
+        fn read<'a>(
+            &'a self,
+            person_id: PersonId,
+            consumer: &'a str,
+            query: &'a floe_context_contract::CalendarViewQuery,
+            deadline: tokio::time::Instant,
+            cancellation: &'a Cancellation,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            Vec<(
+                                floe_context::CalendarContextView,
+                                floe_context_contract::ContextDependency,
+                            )>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                if person_id != self.person_id {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                let connections = self
+                    .source_client
+                    .observe_calendar_connections(deadline, cancellation)
+                    .await?;
+                let mut reads = Vec::new();
+                for connection in connections {
+                    let view = match self
+                        .source_client
+                        .read_calendar_context_view(
+                            floe_provider_adapters::sources::server::CalendarContextRequest {
+                                connector_id: &connection.connector_id,
+                                connection_id: &connection.connection_id,
+                                connection_revision: connection.connection_revision,
+                                range_start_unix_ms: query.range_start_unix_ms(),
+                                range_end_unix_ms: query.range_end_unix_ms(),
+                                cursor: query.cursor().unwrap_or(""),
+                                limit: query.limit(),
+                            },
+                            deadline,
+                            cancellation,
+                        )
+                        .await
+                    {
+                        Ok(view) => view,
+                        Err(AgentFailure::CapabilityUnavailable) => continue,
+                        Err(error) => return Err(error),
+                    };
+                    let source = floe_context_contract::GrantSourceBinding::try_new(
+                        person_id,
+                        floe_context_contract::ConnectionId::try_new(&connection.connection_id)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                        floe_context_contract::ConnectorId::try_new(&connection.connector_id)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                        floe_context_contract::ExecutionOwnerId::try_new(
+                            "00000000-0000-4000-8000-000000000098",
+                        )
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                        floe_context_contract::SourceAuthority::new(),
+                    )
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                    let resource = floe_context_contract::ResourceHandle::try_new(format!(
+                        "calendar.timeline:{}",
+                        connection.connection_id
+                    ))
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                    let now = chrono::Utc::now();
+                    let dependency = floe_context_contract::ContextDependency::try_new(
+                        person_id,
+                        floe_context_contract::GrantId::new(),
+                        floe_context_contract::GrantAuthority::new(),
+                        source,
+                        vec![resource],
+                        vec![floe_context_contract::GrantDataCategory::Derived],
+                        floe_context_contract::GrantOperation::Read,
+                        floe_context_contract::GrantPurpose::Assistant,
+                        floe_context_contract::GrantConsumer::builtin(consumer)
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                        floe_context_contract::ProcessingRestriction::ApprovedRecipient {
+                            recipient: "server-audience".into(),
+                            categories: vec![floe_context_contract::GrantDataCategory::Derived],
+                        },
+                        floe_context_contract::ConsumerPolicyAuthority::new(),
+                        Uuid::new_v4(),
+                        serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?,
+                        Uuid::new_v4(),
+                        Uuid::new_v4(),
+                        now,
+                        now + chrono::Duration::minutes(5),
+                    )
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                    reads.push((view, dependency));
+                }
+                Ok(reads)
             })
         }
     }
@@ -1127,6 +1230,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(true, true).await,
             source_client: None,
+            calendar_reader: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -1538,6 +1642,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(false, true).await,
             source_client: None,
+            calendar_reader: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -1630,6 +1735,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(true, true).await,
             source_client: None,
+            calendar_reader: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -1674,6 +1780,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(true, true).await,
             source_client: None,
+            calendar_reader: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2184,6 +2291,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(false, true).await,
             source_client: Some(&source_client),
+            calendar_reader: Some(&remote_reader),
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2323,10 +2431,8 @@ mod tests {
             let (socket, _) = listener.accept().await.unwrap();
             let (calendar_request, socket) = request(socket).await;
             assert_calendar_request_contract(&calendar_request);
-            let calendar_query: serde_json::Value = serde_json::from_str(
-                calendar_request.split_once("\r\n\r\n").unwrap().1,
-            )
-            .unwrap();
+            let calendar_query: serde_json::Value =
+                serde_json::from_str(calendar_request.split_once("\r\n\r\n").unwrap().1).unwrap();
             respond(
                 socket,
                 serde_json::json!({
@@ -2425,6 +2531,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(false, true).await,
             source_client: Some(&source_client),
+            calendar_reader: Some(&remote_reader),
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2609,6 +2716,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(false, true).await,
             source_client: Some(&source_client),
+            calendar_reader: Some(&remote_reader),
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2889,6 +2997,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(true, true).await,
             source_client: None,
+            calendar_reader: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2955,6 +3064,7 @@ mod tests {
             scope: &scope,
             availability: test_model_availability(true, true).await,
             source_client: None,
+            calendar_reader: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
