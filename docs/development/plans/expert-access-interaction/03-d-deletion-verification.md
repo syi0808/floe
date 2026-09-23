@@ -3,6 +3,7 @@
 - **Execution baseline:** Checkpoint 03-C completion (`a725739c`) on the Checkpoint 03 chain over main dd4652997b9bd88668bcd59e98a2f3d1a1300368
 - **Depends on:** 03-A, 03-B and 03-C complete
 - **Goal:** prove one source authority, delete transition-only surfaces, update current architecture docs and run the full applicable verification gates.
+- **Landed:** `aaefc659`. A post-implementation audit found bounded behavioral/product-surface residuals that are now owned by [03-E](03-e-residual-authority-calendar-access.md). 03-D itself is historical execution evidence, not the current completion gate.
 
 03-D must not introduce a new permission model or compatibility layer. If a removed symbol still has a production caller, migrate that caller to the canonical owner and delete the old symbol.
 
