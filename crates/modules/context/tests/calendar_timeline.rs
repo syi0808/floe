@@ -296,7 +296,10 @@ impl CalendarSource for ObservationAccess {
 }
 
 /// A remote producer that returns a projection it already bounded.
-struct ProjectedObservationAccess;
+#[derive(Default)]
+struct ProjectedObservationAccess {
+    cursors: Mutex<Vec<Option<String>>>,
+}
 
 impl CalendarReadAdmission for ProjectedObservationAccess {}
 
@@ -320,6 +323,8 @@ impl CalendarSource for ProjectedObservationAccess {
         &self,
         request: CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
+        self.cursors.lock().unwrap().push(request.cursor.clone());
+        let first_page = request.cursor.is_none();
         Ok(Some(ProjectedCalendarObservation {
             stamp: CalendarReadAccessStamp {
                 schema_version: 1,
@@ -335,10 +340,15 @@ impl CalendarSource for ProjectedObservationAccess {
             expires_at: now() + TimeDelta::minutes(5),
             range_start: request.starts_at,
             range_end: request.ends_at,
-            coverage_complete: false,
-            next_cursor: Some("next-page".into()),
+            coverage_complete: !first_page,
+            next_cursor: first_page.then(|| "next-page".into()),
             items: vec![ProjectedCalendarItem {
-                evidence_handle: "opaque-server-event".into(),
+                evidence_handle: if first_page {
+                    "opaque-server-event"
+                } else {
+                    "opaque-server-event-page-two"
+                }
+                .into(),
                 untrusted_title: "Server review".into(),
                 starts_at: request.starts_at + TimeDelta::minutes(10),
                 ends_at: request.starts_at + TimeDelta::minutes(40),
@@ -510,14 +520,9 @@ async fn native_subject_change_during_read_denies_projection() {
 async fn projected_observation_preserves_server_coverage_and_opaque_provenance() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
-    let views = CalendarTimelineViews::new(
-        &fixture.leases,
-        &fixture,
-        &ProjectedObservationAccess,
-        grant.clone(),
-        now,
-    )
-    .unwrap();
+    let access = ProjectedObservationAccess::default();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
     let view = views.timeline(request(&grant)).await.unwrap();
 
     assert_eq!(view.source_handle, "calendar.timeline:server");
@@ -531,6 +536,34 @@ async fn projected_observation_preserves_server_coverage_and_opaque_provenance()
             &Uuid::NAMESPACE_URL,
             b"floe:calendar:calendar.timeline:server:opaque-server-event"
         )
+    );
+    let mut next = request(&grant);
+    next.cursor = view.next_cursor;
+    let second = views.timeline(next).await.unwrap();
+    assert!(second.coverage_complete);
+    assert!(second.next_cursor.is_none());
+    assert_ne!(
+        second.items[0].evidence_handle,
+        view.items[0].evidence_handle
+    );
+    assert_eq!(
+        *access.cursors.lock().unwrap(),
+        vec![None, Some("next-page".into())]
+    );
+}
+
+#[tokio::test]
+async fn cursor_read_never_falls_back_to_an_unpaged_mirror() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let access = Access::default();
+    let views =
+        CalendarTimelineViews::new(&fixture.leases, &fixture, &access, grant.clone(), now).unwrap();
+    let mut read = request(&grant);
+    read.cursor = Some("next-page".into());
+    assert_eq!(
+        views.timeline(read).await,
+        Err(AgentFailure::CapabilityUnavailable)
     );
 }
 

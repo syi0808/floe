@@ -2690,6 +2690,7 @@ async fn failed_native_read_does_not_pin_an_authority_before_a_later_success() {
         expected_native_subject_fingerprint: None,
         starts_at: fixture.grant.starts_at,
         ends_at: fixture.grant.ends_at,
+        cursor: None,
         deadline: Instant::now() + Duration::from_secs(5),
         cancellation: Cancellation::default(),
     };
@@ -2767,6 +2768,7 @@ async fn consumer_policy_disable_reenable_invalidates_a_pinned_native_read() {
         expected_native_subject_fingerprint: None,
         starts_at: fixture.grant.starts_at,
         ends_at: fixture.grant.ends_at,
+        cursor: None,
         deadline: Instant::now() + Duration::from_secs(5),
         cancellation: Cancellation::default(),
     };

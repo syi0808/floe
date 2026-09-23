@@ -245,6 +245,7 @@ impl<
             },
             range_start_unix_ms: range_start.timestamp_millis(),
             range_end_unix_ms: range_end.timestamp_millis(),
+            cursor: request.cursor.clone(),
             timezone_offset_seconds: self.grant.day.timezone_offset_seconds,
             end_timezone_offset_seconds: self.grant.day.end_timezone_offset_seconds,
             max_items: request.max_items.min(MAX_TIMELINE_VIEW_ITEMS),
@@ -568,8 +569,13 @@ impl<
         if request.person_id != self.grant.person_id || request.handle != self.grant.handle {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if request.max_items == 0 || request.max_bytes == 0 || request.cursor.is_some() {
+        if request.max_items == 0 || request.max_bytes == 0 {
             return Err(AgentFailure::BudgetExceeded);
+        }
+        if request.cursor.as_ref().is_some_and(|cursor| {
+            cursor.trim().is_empty() || cursor.len() > 2048 || cursor.chars().any(char::is_control)
+        }) {
+            return Err(AgentFailure::InvalidInput);
         }
         self.grant.validate((self.clock)())?;
         let (range_start, range_end) = requested_range(request, &self.grant)?;
@@ -635,6 +641,7 @@ impl<
                     .into(),
                 starts_at: range_start,
                 ends_at: range_end,
+                cursor: request.cursor.clone(),
                 deadline,
                 cancellation: request.cancellation.clone(),
             })
@@ -663,6 +670,9 @@ impl<
                 )
                 .await;
         }
+        if request.cursor.is_some() {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
         let observed = self
             .access
             .observe(CalendarObserveRequest {
@@ -677,6 +687,7 @@ impl<
                     .into(),
                 starts_at: range_start,
                 ends_at: range_end,
+                cursor: None,
                 deadline,
                 cancellation: request.cancellation.clone(),
             })
@@ -1009,6 +1020,7 @@ impl<
                     || cursor.len() > 2048
                     || cursor.chars().any(char::is_control)
             })
+            || request.cursor.is_some() && observation.next_cursor == request.cursor
         {
             return Err(AgentFailure::CapabilityUnavailable);
         }

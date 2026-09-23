@@ -2323,6 +2323,10 @@ mod tests {
             let (socket, _) = listener.accept().await.unwrap();
             let (calendar_request, socket) = request(socket).await;
             assert_calendar_request_contract(&calendar_request);
+            let calendar_query: serde_json::Value = serde_json::from_str(
+                calendar_request.split_once("\r\n\r\n").unwrap().1,
+            )
+            .unwrap();
             respond(
                 socket,
                 serde_json::json!({
@@ -2333,8 +2337,8 @@ mod tests {
                         "source_handle": "calendar:selected",
                         "observed_at_unix_ms": now - 1,
                         "expires_at_unix_ms": now + 240_000,
-                        "range_start_unix_ms": now - 86_400_000,
-                        "range_end_unix_ms": now + 86_400_000,
+                        "range_start_unix_ms": calendar_query["range_start_unix_ms"],
+                        "range_end_unix_ms": calendar_query["range_end_unix_ms"],
                         "coverage_complete": true,
                         "items": [{
                             "evidence_handle": "calendar:review",
@@ -2778,6 +2782,10 @@ mod tests {
                     }
                     match (agent_id, *path) {
                         (FOCUS_AGENT_ID, "/v1/views/calendar.timeline") => {
+                            let calendar_query: serde_json::Value = serde_json::from_str(
+                                optional_request.split_once("\r\n\r\n").unwrap().1,
+                            )
+                            .unwrap();
                             respond(
                                 socket,
                                 serde_json::json!({
@@ -2788,8 +2796,8 @@ mod tests {
                                         "source_handle": "calendar:selected",
                                         "observed_at_unix_ms": now - 1,
                                         "expires_at_unix_ms": now + 240_000,
-                                        "range_start_unix_ms": now - 86_400_000,
-                                        "range_end_unix_ms": now + 86_400_000,
+                                        "range_start_unix_ms": calendar_query["range_start_unix_ms"],
+                                        "range_end_unix_ms": calendar_query["range_end_unix_ms"],
                                         "coverage_complete": true,
                                         "items": [{
                                             "evidence_handle": "calendar:review",

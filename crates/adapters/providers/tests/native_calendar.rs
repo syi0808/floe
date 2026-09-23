@@ -136,6 +136,7 @@ fn observe_request_with_ids(
         expected_native_subject_fingerprint: None,
         starts_at: chrono::Utc::now(),
         ends_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        cursor: None,
         deadline,
         cancellation,
     }

@@ -1132,7 +1132,7 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
                     floe_context::MAX_CALENDAR_CONTEXT_BYTES as u32,
                     request.starts_at.timestamp_millis(),
                     request.ends_at.timestamp_millis(),
-                    "",
+                    request.cursor.as_deref().unwrap_or(""),
                     floe_context::MAX_CALENDAR_CONTEXT_ITEMS,
                     request.deadline,
                     &request.cancellation,
@@ -1149,7 +1149,7 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
             let query_sha256 = calendar_query_sha256(
                 request.starts_at.timestamp_millis(),
                 request.ends_at.timestamp_millis(),
-                "",
+                request.cursor.as_deref().unwrap_or(""),
                 floe_context::MAX_CALENDAR_CONTEXT_ITEMS,
             )?;
             let admission_expected = self.expectation(
@@ -2011,6 +2011,7 @@ mod tests {
                     expected_native_subject_fingerprint: None,
                     starts_at: request_time,
                     ends_at: request_time + chrono::Duration::hours(1),
+                    cursor: None,
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(10),
                     cancellation: floe_execution::Cancellation::default(),
                 })
@@ -2608,6 +2609,7 @@ mod tests {
             expected_native_subject_fingerprint: None,
             starts_at: now - chrono::Duration::minutes(1),
             ends_at: now + chrono::Duration::minutes(1),
+            cursor: None,
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
             cancellation: floe_execution::Cancellation::default(),
         };

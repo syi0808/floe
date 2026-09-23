@@ -26,6 +26,7 @@ pub struct CalendarObserveRequest {
     pub expected_native_subject_fingerprint: Option<String>,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
+    pub cursor: Option<String>,
     pub deadline: Instant,
     pub cancellation: Cancellation,
 }
