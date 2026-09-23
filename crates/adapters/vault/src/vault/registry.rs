@@ -582,7 +582,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    pub async fn settle_calendar_expert_task_checked(
+    pub async fn settle_expert_task_checked(
         &self,
         completion: floe_experts::ExpertTaskCompletion,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
@@ -606,9 +606,30 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|_| AgentFailure::PolicyDenied)?;
         if settlement.assignment_id.is_nil()
             || settlement.invocation_id.is_nil()
+            || settlement.owner() != task_snapshot.agent_id
+            || task_snapshot.task_id != task_id
+            || task_snapshot.principal != self.person_id.to_string()
             || task_snapshot.state != TaskState::Completed
             || task_snapshot.coverage != coverage
             || task_snapshot.result.as_deref() != Some(settlement.task_result.as_str())
+            || settlement
+                .staged_registry
+                .assignments
+                .iter()
+                .find(|assignment| assignment.id == settlement.assignment_id)
+                .is_none_or(|assignment| {
+                    assignment.person_id != self.person_id
+                        || assignment.private_state.last_invocation_id
+                            != Some(settlement.invocation_id)
+                        || !settlement
+                            .staged_registry
+                            .installations
+                            .iter()
+                            .any(|installation| {
+                                installation.id == assignment.installation_id
+                                    && installation.package.id == task_snapshot.agent_id
+                            })
+                })
         {
             return Err(AgentFailure::Conflict);
         }
@@ -953,7 +974,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .await?
                     .ok_or(AgentFailure::NotFound)?;
                 if current.invocation_key.as_uuid() != invocation_id
-                    || current.snapshot.agent_id != "floe.builtin.schedule"
+                    || current.snapshot.agent_id != task_snapshot.agent_id
+                    || !previous.assignments.iter().any(|assignment| {
+                        assignment.id == assignment_id
+                            && assignment.person_id == self.person_id
+                            && previous.installations.iter().any(|installation| {
+                                installation.id == assignment.installation_id
+                                    && installation.package.id == task_snapshot.agent_id
+                            })
+                    })
                 {
                     return Err(AgentFailure::Conflict);
                 }

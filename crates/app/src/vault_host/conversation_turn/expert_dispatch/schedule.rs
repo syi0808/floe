@@ -41,8 +41,6 @@ use floe_provider_adapters::sources::ServerSourceClient;
 
 pub(in crate::vault_host) mod agent;
 
-pub(crate) use agent::CALENDAR_EXPERT_SETTLEMENT_OWNER;
-
 use super::super::CompositeDependencyResolver;
 use crate::vault_host::{personal_grants, remote_views};
 

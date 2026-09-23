@@ -4,24 +4,16 @@ use crate::{
     EncryptedAgentVault, VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture, EndpointSettlement, TaskId, TaskSnapshot};
-use floe_experts::{
-    ExpertSettlement as CalendarExpertSettlement,
-    ExpertTaskCompletion as CalendarExpertTaskCompletion,
-};
+use floe_experts::{ExpertSettlement, ExpertTaskCompletion};
 use floe_experts::{TaskActivation, TaskAdmission, TaskRecord, TaskRepository};
 
 pub struct VaultTaskRepository<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
-    /// Which endpoint's settlements this repository will accept.
-    settlement_owner: String,
 }
 
 impl<Keys> VaultTaskRepository<Keys> {
-    pub fn new(vault: Arc<EncryptedAgentVault<Keys>>, settlement_owner: impl Into<String>) -> Self {
-        Self {
-            vault,
-            settlement_owner: settlement_owner.into(),
-        }
+    pub fn new(vault: Arc<EncryptedAgentVault<Keys>>) -> Self {
+        Self { vault }
     }
 }
 
@@ -70,8 +62,7 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
     }
 
     fn validate_settlement(&self, settlement: &EndpointSettlement) -> Result<(), AgentFailure> {
-        CalendarExpertSettlement::from_endpoint_settlement(settlement, &self.settlement_owner)
-            .map(|_| ())
+        ExpertSettlement::from_endpoint_settlement(settlement, settlement.owner()).map(|_| ())
     }
 
     fn settle<'a>(
@@ -93,13 +84,11 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
                     )
                     .await;
             };
-            let settlement = CalendarExpertSettlement::from_endpoint_settlement(
-                &settlement,
-                &self.settlement_owner,
-            )?;
+            let settlement =
+                ExpertSettlement::from_endpoint_settlement(&settlement, &snapshot.agent_id)?;
             self.vault
-                .settle_calendar_expert_task_checked(
-                    CalendarExpertTaskCompletion {
+                .settle_expert_task_checked(
+                    ExpertTaskCompletion {
                         settlement,
                         task_id,
                         expected_task_revision: expected_aggregate_revision,

@@ -292,6 +292,8 @@ with generic Expert settlement semantics.
 
 ### 4.2 VaultTaskRepository
 
+Implementation note: the repository no longer receives a Schedule-wide settlement owner. The current Schedule path emits its package id as owner, and Vault checks owner, Task agent/principal/id, invocation and Registry assignment/package identity during the atomic settlement. Schedule's old App endpoint remains until the generic dispatch replaces it.
+
 At crates/adapters/vault/src/repositories/task.rs baseline lines 13, 72 and 101:
 
 the repository currently receives one settlement_owner string and dispatches to settle_calendar_expert_task_checked().

@@ -51,8 +51,6 @@ pub struct CalendarExpertEndpointResult {
     pub settlement: CalendarExpertSettlement,
 }
 
-pub const CALENDAR_EXPERT_SETTLEMENT_OWNER: &str = "floe.builtin.schedule/v1";
-
 /// The Schedule Expert settles through the common Task settlement.
 pub type CalendarExpertSettlement = floe_experts::ExpertSettlement;
 
@@ -209,7 +207,7 @@ impl FloeCore {
             .lock()
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .settle_registered_expert_invocation(
-                CALENDAR_EXPERT_SETTLEMENT_OWNER,
+                floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
                 revision,
                 request.assignment_id,
                 request.invocation_id,

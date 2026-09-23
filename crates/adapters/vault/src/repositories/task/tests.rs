@@ -72,12 +72,12 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
             .await
             .unwrap(),
     );
-    let repository = VaultTaskRepository::new(Arc::clone(&vault), "floe.builtin.schedule/v1");
+    let repository = VaultTaskRepository::new(Arc::clone(&vault));
     assert_eq!(
         repository.validate_settlement(
             &floe_agent_contract::EndpointSettlement::try_new("unknown", "{}").unwrap()
         ),
-        Err(AgentFailure::CapabilityUnavailable)
+        Err(AgentFailure::InvalidModelOutput)
     );
     let activation = repository.activate().await.unwrap();
     let task_id = TaskId::new();
@@ -110,10 +110,7 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
         .await
         .unwrap();
     let reopened = Arc::new(reopened);
-    let repository = Arc::new(crate::VaultTaskRepository::new(
-        Arc::clone(&reopened),
-        "floe.builtin.schedule/v1",
-    ));
+    let repository = Arc::new(crate::VaultTaskRepository::new(Arc::clone(&reopened)));
     let (_coordinator, recovered) = floe_experts::TaskCoordinator::activate(
         floe_experts::Directory::default(),
         repository,

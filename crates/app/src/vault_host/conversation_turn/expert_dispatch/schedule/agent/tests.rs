@@ -679,7 +679,7 @@ impl Fixture {
         working: &VaultTaskRecord,
     ) -> Result<VaultTaskRecord, AgentFailure> {
         self.vault
-            .settle_calendar_expert_task_checked(
+            .settle_expert_task_checked(
                 CalendarExpertTaskCompletion {
                     settlement: result.settlement,
                     task_id: working.snapshot.task_id,
@@ -2182,18 +2182,17 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
         .clone()
         .into_endpoint_settlement()
         .unwrap();
-    let settlement =
-        CalendarExpertSettlement::from_endpoint_settlement(
-            &endpoint_settlement,
-            crate::vault_host::conversation_turn::expert_dispatch::schedule::CALENDAR_EXPERT_SETTLEMENT_OWNER,
-        )
-        .unwrap();
+    let settlement = CalendarExpertSettlement::from_endpoint_settlement(
+        &endpoint_settlement,
+        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+    )
+    .unwrap();
     let mut forged_snapshot = completed_snapshot.clone();
     forged_snapshot.result = Some("forged result".into());
     assert_eq!(
         fixture
             .vault
-            .settle_calendar_expert_task_checked(
+            .settle_expert_task_checked(
                 CalendarExpertTaskCompletion {
                     settlement: settlement.clone(),
                     task_id: working.snapshot.task_id,
@@ -2209,7 +2208,7 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
     assert_eq!(fixture.state().await.revision, fixture.revision);
     let completed = fixture
         .vault
-        .settle_calendar_expert_task_checked(
+        .settle_expert_task_checked(
             CalendarExpertTaskCompletion {
                 settlement,
                 task_id: working.snapshot.task_id,
@@ -2303,7 +2302,32 @@ async fn completion_commit_only_advances_the_selected_assignment() {
     assert_eq!(
         fixture
             .vault
-            .settle_calendar_expert_task_checked(completion(misnamed), || Ok(()))
+            .settle_expert_task_checked(completion(misnamed), || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let foreign_owner = CalendarExpertSettlement::new(
+        "floe.builtin.commitments",
+        result.settlement.expected_registry_revision,
+        result.settlement.staged_registry.clone(),
+        result.settlement.assignment_id,
+        result.settlement.invocation_id,
+        result.settlement.dependencies.clone(),
+        result.settlement.task_result.clone(),
+    );
+    assert_eq!(
+        fixture
+            .vault
+            .settle_expert_task_checked(completion(foreign_owner), || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let mut foreign_task = completion(result.settlement.clone());
+    foreign_task.task_snapshot.agent_id = "floe.builtin.commitments".into();
+    assert_eq!(
+        fixture
+            .vault
+            .settle_expert_task_checked(foreign_task, || Ok(()))
             .await,
         Err(AgentFailure::Conflict)
     );
@@ -2318,20 +2342,20 @@ async fn completion_commit_only_advances_the_selected_assignment() {
     assert_eq!(
         fixture
             .vault
-            .settle_calendar_expert_task_checked(completion(forged), || Ok(()))
+            .settle_expert_task_checked(completion(forged), || Ok(()))
             .await,
         Err(AgentFailure::Conflict)
     );
     assert_eq!(fixture.state().await.revision, fixture.revision);
     fixture
         .vault
-        .settle_calendar_expert_task_checked(completion(result.settlement.clone()), || Ok(()))
+        .settle_expert_task_checked(completion(result.settlement.clone()), || Ok(()))
         .await
         .unwrap();
     assert_eq!(
         fixture
             .vault
-            .settle_calendar_expert_task_checked(completion(result.settlement), || Ok(()))
+            .settle_expert_task_checked(completion(result.settlement), || Ok(()))
             .await,
         Err(AgentFailure::Conflict)
     );
@@ -2370,7 +2394,7 @@ async fn direct_schedule_settlement_rolls_back_task_and_registry_together() {
     assert_eq!(
         fixture
             .vault
-            .settle_calendar_expert_task_checked(
+            .settle_expert_task_checked(
                 CalendarExpertTaskCompletion {
                     settlement: result.settlement,
                     task_id: working.snapshot.task_id,

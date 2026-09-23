@@ -230,10 +230,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             },
             schedule_endpoint.clone(),
         )?;
-        let repository = Arc::new(VaultTaskRepository::new(
-            Arc::clone(&vault),
-            conversation_turn::expert_dispatch::schedule::CALENDAR_EXPERT_SETTLEMENT_OWNER,
-        ));
+        let repository = Arc::new(VaultTaskRepository::new(Arc::clone(&vault)));
         let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
             directory.clone(),
             repository,
