@@ -9,7 +9,7 @@
 use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::PersonId;
-use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{AgentContext, Artifact, EndpointSettlement, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, ExpertModel};
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, NativeContextView, PeopleView,
@@ -107,6 +107,8 @@ pub struct BuiltinExpertOutput {
     pub artifact_name: String,
     pub summary: String,
     pub data: String,
+    pub artifacts: Vec<Artifact>,
+    pub settlement: Option<EndpointSettlement>,
 }
 
 impl BuiltinExpertOutput {
@@ -120,7 +122,19 @@ impl BuiltinExpertOutput {
             artifact_name: artifact_name.to_owned(),
             summary,
             data: serde_json::to_string(result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+            artifacts: vec![],
+            settlement: None,
         })
+    }
+
+    pub fn with_artifacts(mut self, artifacts: Vec<Artifact>) -> Self {
+        self.artifacts = artifacts;
+        self
+    }
+
+    pub fn with_settlement(mut self, settlement: EndpointSettlement) -> Self {
+        self.settlement = Some(settlement);
+        self
     }
 }
 

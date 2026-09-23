@@ -5,7 +5,9 @@
 //! role/content/tool-call shapes both transports use today. Preambles never
 //! cross: they were dropped from the wire on the old path too.
 
-use floe_agent_contract::{ModelConversationEntry, TaskState};
+use floe_agent_contract::{
+    ArtifactPart, ModelConversationEntry, TaskState, USER_INTERACTION_MEDIA_TYPE,
+};
 use serde_json::{Value, json};
 
 pub fn embedded_json(value: &str) -> Value {
@@ -50,13 +52,31 @@ fn wire_entry(entry: &ModelConversationEntry) -> Vec<Value> {
                     "status": "success",
                     "content": embedded_json(&result.text),
                 }),
-                Some(issue) => json!({
-                    "role": "tool",
-                    "tool_call_id": call.call_id,
-                    "capability_id": call.tool_id,
-                    "status": "error",
-                    "failure": issue.failure,
-                }),
+                Some(issue) => {
+                    let user_action = result.artifacts.iter().any(|artifact| {
+                        artifact.parts.iter().any(|part| matches!(part,
+                            ArtifactPart::Data { media_type, .. } if media_type == USER_INTERACTION_MEDIA_TYPE
+                        ))
+                    });
+                    if user_action {
+                        json!({
+                            "role": "tool",
+                            "tool_call_id": call.call_id,
+                            "capability_id": call.tool_id,
+                            "status": "error",
+                            "failure": issue.failure,
+                            "content": result.text,
+                        })
+                    } else {
+                        json!({
+                            "role": "tool",
+                            "tool_call_id": call.call_id,
+                            "capability_id": call.tool_id,
+                            "status": "error",
+                            "failure": issue.failure,
+                        })
+                    }
+                }
             };
             vec![call_message, result_message]
         }
@@ -87,8 +107,8 @@ fn wire_entry(entry: &ModelConversationEntry) -> Vec<Value> {
             }
             // The status/content split mirrors the old delegation rendering:
             // errors keep their content payload rather than a failure slot.
-            let completed = receipt.snapshot.state == TaskState::Completed
-                && receipt.snapshot.issue.is_none();
+            let completed =
+                receipt.snapshot.state == TaskState::Completed && receipt.snapshot.issue.is_none();
             let result_message = json!({
                 "role": "tool",
                 "tool_call_id": request.task_id.as_uuid(),
@@ -162,6 +182,41 @@ mod tests {
         let rendered = wire_messages(&[ModelConversationEntry::ToolExchange { call, result }]);
         assert_eq!(rendered[1]["status"], "error");
         assert!(rendered[1].get("failure").is_some());
+    }
+
+    #[test]
+    fn user_action_tool_error_renders_bounded_summary_not_interaction_identity() {
+        let ModelConversationEntry::ToolExchange { call, mut result } = tool_exchange() else {
+            unreachable!()
+        };
+        let interaction_id = uuid::Uuid::new_v4();
+        result.issue = Some(OutcomeIssue {
+            failure: AgentFailure::CapabilityUnavailable,
+            retryable: false,
+        });
+        result.text = "Calendar access needs approval".into();
+        result.artifacts.push(floe_agent_contract::Artifact {
+            artifact_id: uuid::Uuid::new_v4(),
+            name: "user_interaction".into(),
+            parts: vec![ArtifactPart::Data {
+                media_type: USER_INTERACTION_MEDIA_TYPE.into(),
+                data: serde_json::json!({
+                    "interaction_id": interaction_id,
+                    "kind": "source_access",
+                    "status": "pending"
+                })
+                .to_string(),
+            }],
+            coverage: floe_agent_contract::DependencyCoverage::Independent,
+        });
+        let rendered = wire_messages(&[ModelConversationEntry::ToolExchange { call, result }]);
+        assert_eq!(rendered[1]["status"], "error");
+        assert_eq!(rendered[1]["content"], "Calendar access needs approval");
+        assert!(
+            !rendered[1]
+                .to_string()
+                .contains(&interaction_id.to_string())
+        );
     }
 
     fn delegation_context() -> floe_agent_contract::DelegationExecutionContext {
@@ -260,10 +315,8 @@ mod tests {
 
     #[test]
     fn delegation_wire_preserves_context_refs() {
-        let rendered = wire_messages(&[delegation_entry(vec![
-            "turn:1".into(),
-            "evidence:9".into(),
-        ])]);
+        let rendered =
+            wire_messages(&[delegation_entry(vec!["turn:1".into(), "evidence:9".into()])]);
         assert_eq!(rendered.len(), 2);
         assert_eq!(
             rendered[0]["tool_calls"][0]["function"]["arguments"]["context_refs"],

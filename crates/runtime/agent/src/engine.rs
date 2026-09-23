@@ -2488,9 +2488,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cursor_ack_loss_replays_result_without_side_effect() {
+    async fn cursor_ack_loss_replays_user_action_without_redispatch() {
         // Run 1 journals intent and result, then loses the cursor ack.
-        let tools = Tools {
+        let tools = UserActionTools {
             calls: Arc::new(AtomicUsize::new(0)),
         };
         let (mut journal, run_events) = RecordingJournal::new();
@@ -2550,9 +2550,9 @@ mod tests {
             task_issue: None,
             tool_artifacts: result.artifacts.clone(),
             tool_coverage: result.coverage.clone(),
-            tool_issue: None,
+            tool_issue: result.issue.as_ref().map(|issue| issue.failure),
         };
-        let tools = Tools {
+        let tools = UserActionTools {
             calls: Arc::new(AtomicUsize::new(0)),
         };
         let (journal, resumed_events) = RecordingJournal::new();
@@ -2599,6 +2599,7 @@ mod tests {
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(report.execution_id, batch.execution_id);
         assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result.artifacts.len(), 1);
         let resumed_events = resumed_events.lock().unwrap();
         let replayed = resumed_events
             .iter()
@@ -3747,6 +3748,44 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct UserActionTools {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ToolPort for UserActionTools {
+        fn invoke<'a>(
+            &'a self,
+            call: ToolCall,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(ToolResult {
+                    call_id: call.call_id,
+                    text: "Calendar access needs approval".into(),
+                    artifacts: vec![floe_agent_contract::Artifact {
+                        artifact_id: Uuid::new_v4(),
+                        name: "user_interaction".into(),
+                        parts: vec![floe_agent_contract::ArtifactPart::Data {
+                            media_type: floe_agent_contract::USER_INTERACTION_MEDIA_TYPE.into(),
+                            data: serde_json::to_string(&floe_agent_contract::UserInteractionRef {
+                                interaction_id: Uuid::new_v4(),
+                                kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+                                status: floe_agent_contract::UserInteractionStatus::Pending,
+                            }).unwrap(),
+                        }],
+                        coverage: DependencyCoverage::Independent,
+                    }],
+                    coverage: DependencyCoverage::Unknown,
+                    issue: Some(floe_agent_contract::OutcomeIssue {
+                        failure: AgentFailure::CapabilityUnavailable,
+                        retryable: false,
+                    }),
+                })
+            })
+        }
+    }
+
     impl ToolPort for DeniedTools {
         fn invoke<'a>(
             &'a self,
@@ -3834,6 +3873,37 @@ mod tests {
         let issue = result.issue.expect("denial observation carries its issue");
         assert_eq!(issue.failure, AgentFailure::CapabilityDenied);
         assert!(issue.retryable);
+    }
+
+    #[tokio::test]
+    async fn user_action_tool_is_journaled_and_manager_answers_after_observation() {
+        let tools = UserActionTools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let model = ToolThenAnswer {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (journal, events) = RecordingJournal::new();
+        let (projection, _) = Projector::new();
+        let report = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &model, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.output.as_deref(), Some("done"));
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
+        let events = events.lock().unwrap();
+        assert_eq!(events.iter().filter(|event| matches!(event, JournalEvent::ToolIntent { .. })).count(), 1);
+        let results = events.iter().filter_map(|event| match event {
+            JournalEvent::ToolResult { result } => Some(result),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].coverage, DependencyCoverage::Unknown);
+        assert_eq!(results[0].artifacts.len(), 1);
     }
 
     struct AlwaysTool;

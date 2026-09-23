@@ -506,7 +506,9 @@ async fn run_schedule_reasoning<Model: ExpertReasoner, Views: ExpertViews>(
                         call_id,
                         capability_id,
                         input,
-                        result: output,
+                        observation: floe_agent_contract::ExpertCapabilityObservation::Success {
+                            result: output,
+                        },
                     });
                 }
             }

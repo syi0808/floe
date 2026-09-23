@@ -150,6 +150,21 @@ impl ToolResult {
                 .artifacts
                 .iter()
                 .any(|artifact| artifact.validate(maximum_bytes).is_err())
+            || self.artifacts.iter().any(|artifact| {
+                artifact.parts.iter().any(|part| match part {
+                    ArtifactPart::Data { media_type, data }
+                        if media_type == crate::USER_INTERACTION_MEDIA_TYPE =>
+                    {
+                        self.issue.is_none()
+                            || matches!(self.coverage, DependencyCoverage::Dependent { .. })
+                            || artifact.coverage != DependencyCoverage::Independent
+                            || serde_json::from_str::<crate::UserInteractionRef>(data)
+                                .map(|reference| reference.validate().is_err())
+                                .unwrap_or(true)
+                    }
+                    _ => false,
+                })
+            })
             || serde_json::to_vec(self)
                 .map(|encoded| encoded.len() > maximum_bytes)
                 .unwrap_or(true)
@@ -173,4 +188,56 @@ pub(crate) fn bounded(value: &str, max: usize) -> bool {
         && !value
             .chars()
             .any(|character| character.is_control() && character != '\n')
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+    use crate::{UserInteractionKind, UserInteractionRef, UserInteractionStatus};
+
+    #[test]
+    fn interaction_observation_requires_issue_and_no_source_coverage() {
+        let call_id = Uuid::new_v4();
+        let mut result = ToolResult {
+            call_id,
+            text: "Calendar access needs approval".into(),
+            artifacts: vec![Artifact {
+                artifact_id: Uuid::new_v4(),
+                name: "user_interaction".into(),
+                parts: vec![ArtifactPart::Data {
+                    media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
+                    data: serde_json::to_string(&UserInteractionRef {
+                        interaction_id: Uuid::new_v4(),
+                        kind: UserInteractionKind::SourceAccess,
+                        status: UserInteractionStatus::Pending,
+                    })
+                    .unwrap(),
+                }],
+                coverage: DependencyCoverage::Independent,
+            }],
+            coverage: DependencyCoverage::Unknown,
+            issue: Some(OutcomeIssue {
+                failure: AgentFailure::CapabilityUnavailable,
+                retryable: false,
+            }),
+        };
+        assert!(result.validate(call_id, 4096).is_ok());
+        result.issue = None;
+        assert_eq!(
+            result.validate(call_id, 4096),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        result.issue = Some(OutcomeIssue {
+            failure: AgentFailure::CapabilityUnavailable,
+            retryable: false,
+        });
+        result.artifacts[0].parts = vec![ArtifactPart::Data {
+            media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
+            data: "{}".into(),
+        }];
+        assert_eq!(
+            result.validate(call_id, 4096),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+    }
 }

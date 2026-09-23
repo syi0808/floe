@@ -398,7 +398,11 @@ fn canonical_model_input(
         rewrite_tool_calls(&mut message)?;
         if message["role"] == "tool" {
             let content = if message["status"] == "error" {
-                json!({"status":"error", "failure": message["failure"]})
+                if message.get("content").is_some() {
+                    json!({"status":"error", "failure": message["failure"], "content": message["content"]})
+                } else {
+                    json!({"status":"error", "failure": message["failure"]})
+                }
             } else {
                 json!({"status":"success", "content": message["content"]})
             };
@@ -736,7 +740,11 @@ fn model_input(request: &ModelTransportRequest) -> Result<serde_json::Value, Age
         rewrite_tool_calls(&mut message)?;
         if message["role"] == "tool" {
             let content = if message["status"] == "error" {
-                json!({"status":"error", "failure": message["failure"]})
+                if message.get("content").is_some() {
+                    json!({"status":"error", "failure": message["failure"], "content": message["content"]})
+                } else {
+                    json!({"status":"error", "failure": message["failure"]})
+                }
             } else {
                 json!({"status":"success", "content": message["content"]})
             };

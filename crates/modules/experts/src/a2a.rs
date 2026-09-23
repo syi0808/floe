@@ -79,6 +79,8 @@ pub struct A2ATask {
     pub artifacts: Vec<A2AArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<AgentFailure>,
+    #[serde(skip)]
+    pub settlement: Option<floe_agent_contract::EndpointSettlement>,
 }
 
 impl A2ATask {
@@ -215,6 +217,7 @@ impl<Agent: InProcessAgent> A2AHost for InProcessA2ATransport<'_, Agent> {
             history: vec![request.message.clone()],
             artifacts: vec![],
             failure: None,
+            settlement: None,
         };
         {
             let mut tasks = self
@@ -413,6 +416,7 @@ mod tests {
                     }],
                 }],
                 failure: None,
+                settlement: None,
             })
         }
     }

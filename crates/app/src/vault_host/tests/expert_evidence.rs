@@ -40,6 +40,7 @@ pub(in crate::vault_host) fn delegation_message(
                 ],
             }],
             failure: None,
+            settlement: None,
         },
     }
 }

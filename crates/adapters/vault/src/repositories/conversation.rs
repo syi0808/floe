@@ -732,6 +732,7 @@ fn legacy_task(run_id: RunId, receipt: &TaskReceipt) -> Result<A2ATask, AgentFai
         history: vec![],
         artifacts,
         failure: receipt.snapshot.issue,
+        settlement: None,
     })
 }
 

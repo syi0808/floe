@@ -294,6 +294,7 @@ impl InProcessAgent for TestScheduleHost {
                 ],
             }],
             failure: None,
+            settlement: None,
         })
     }
 }

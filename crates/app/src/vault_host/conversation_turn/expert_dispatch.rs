@@ -588,6 +588,8 @@ impl InProcessAgent for ConversationExperts<'_> {
             &output.artifact_name,
             output.summary,
             output.data,
+            output.artifacts,
+            output.settlement,
         )?;
         tracing::info!(
             expert = task.agent_id,

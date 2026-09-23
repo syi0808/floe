@@ -129,8 +129,44 @@ pub enum ExpertTranscriptEntry {
         call_id: Uuid,
         capability_id: String,
         input: String,
+        observation: ExpertCapabilityObservation,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExpertCapabilityObservation {
+    Success {
         result: String,
     },
+    Unavailable {
+        reason_code: String,
+    },
+    NeedsUserAction {
+        interaction: crate::UserInteractionRef,
+        summary: String,
+    },
+}
+
+impl ExpertCapabilityObservation {
+    pub fn validate(&self, maximum_bytes: usize) -> Result<(), AgentFailure> {
+        let valid = match self {
+            Self::Success { result } => crate::message::bounded(result, maximum_bytes),
+            Self::Unavailable { reason_code } => crate::message::bounded(reason_code, 128),
+            Self::NeedsUserAction {
+                interaction,
+                summary,
+            } => {
+                interaction.validate().is_ok()
+                    && crate::message::bounded(summary, maximum_bytes.min(512))
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(AgentFailure::InvalidModelOutput)
+        }
+    }
 }
 
 /// One step of an Expert's own reasoning.
@@ -220,4 +256,35 @@ pub trait SourceHistoryBoundary: Sync {
         completed: bool,
         has_artifacts: bool,
     ) -> bool;
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn failed_capability_observations_are_bounded_and_typed() {
+        assert_eq!(
+            ExpertCapabilityObservation::Unavailable {
+                reason_code: "".into(),
+            }
+            .validate(4096),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        assert_eq!(
+            ExpertCapabilityObservation::NeedsUserAction {
+                interaction: crate::UserInteractionRef {
+                    interaction_id: Uuid::nil(),
+                    kind: crate::UserInteractionKind::SourceAccess,
+                    status: crate::UserInteractionStatus::Pending,
+                },
+                summary: "Calendar access needs approval".into(),
+            }
+            .validate(4096),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        assert!(ExpertCapabilityObservation::Unavailable {
+            reason_code: "temporarily_unavailable".into(),
+        }.validate(4096).is_ok());
+    }
 }

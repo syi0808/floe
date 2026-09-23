@@ -176,11 +176,51 @@ fn expert_conversation(
                 call_id,
                 capability_id,
                 input,
-                result,
+                observation,
             } => {
                 if call_id.is_nil() {
                     return Err(AgentFailure::InvalidInput);
                 }
+                observation.validate(4096)?;
+                let (text, artifacts, issue) = match observation {
+                    floe_agent_contract::ExpertCapabilityObservation::Success { result } => {
+                        (result, vec![], None)
+                    }
+                    floe_agent_contract::ExpertCapabilityObservation::Unavailable {
+                        reason_code,
+                    } => (
+                        reason_code,
+                        vec![],
+                        Some(floe_agent_contract::OutcomeIssue {
+                            failure: AgentFailure::CapabilityUnavailable,
+                            retryable: false,
+                        }),
+                    ),
+                    floe_agent_contract::ExpertCapabilityObservation::NeedsUserAction {
+                        interaction,
+                        summary,
+                    } => {
+                        let data = serde_json::to_string(&interaction)
+                            .map_err(|_| AgentFailure::InvalidModelOutput)?;
+                        (
+                            summary,
+                            vec![floe_agent_contract::Artifact {
+                                artifact_id: Uuid::new_v4(),
+                                name: "user_interaction".into(),
+                                parts: vec![floe_agent_contract::ArtifactPart::Data {
+                                    media_type: floe_agent_contract::USER_INTERACTION_MEDIA_TYPE
+                                        .into(),
+                                    data,
+                                }],
+                                coverage: DependencyCoverage::Independent,
+                            }],
+                            Some(floe_agent_contract::OutcomeIssue {
+                                failure: AgentFailure::CapabilityUnavailable,
+                                retryable: false,
+                            }),
+                        )
+                    }
+                };
                 let definition_revision = catalog
                     .tools
                     .iter()
@@ -197,10 +237,10 @@ fn expert_conversation(
                     },
                     result: ToolResult {
                         call_id,
-                        text: result,
-                        artifacts: vec![],
+                        text,
+                        artifacts,
                         coverage: DependencyCoverage::Independent,
-                        issue: None,
+                        issue,
                     },
                 });
             }
@@ -1059,6 +1099,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expert_can_answer_after_user_action_capability_observation() {
+        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+            text: "Calendar access is needed.".into(),
+            artifacts: vec![],
+        }])]);
+        let scope = test_scope();
+        let captured = Mutex::new(Vec::new());
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+        };
+        let mut step = test_step();
+        let interaction_id = Uuid::new_v4();
+        step.transcript.push(ExpertTranscriptEntry::Capability {
+            call_id: Uuid::new_v4(),
+            capability_id: "calendar.read".into(),
+            input: "{}".into(),
+            observation: floe_agent_contract::ExpertCapabilityObservation::NeedsUserAction {
+                interaction: floe_agent_contract::UserInteractionRef {
+                    interaction_id,
+                    kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+                    status: floe_agent_contract::UserInteractionStatus::Pending,
+                },
+                summary: "Calendar access needs approval".into(),
+            },
+        });
+        let outcome = ExpertReasoner::step(&host, step).await.unwrap();
+        assert_eq!(outcome.steps, vec![ExpertStep::Answer {
+            text: "Calendar access is needed.".into(),
+        }]);
+        let calls = executor.calls();
+        let envelope = &calls[0].0.projection.envelope;
+        let exchange = envelope.conversation.current_turn.last().unwrap();
+        let ModelConversationEntry::ToolExchange { result, .. } = exchange else {
+            panic!("expected capability observation");
+        };
+        assert!(result.issue.is_some());
+        assert_eq!(result.coverage, DependencyCoverage::Independent);
+        assert_eq!(result.artifacts.len(), 1);
+    }
+
+    #[tokio::test]
     async fn single_answer_accepts_exactly_one_answer_with_inference_usage() {
         let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
             text: "Protect focus.".into(),
@@ -1298,7 +1381,9 @@ mod tests {
             call_id,
             capability_id: "calendar.read".into(),
             input: "{}".into(),
-            result: "no conflicts".into(),
+            observation: floe_agent_contract::ExpertCapabilityObservation::Success {
+                result: "no conflicts".into(),
+            },
         });
         let outcome = ExpertReasoner::step(&host, step).await.unwrap();
         assert_eq!(outcome.schema_version, AGENT_VERSION);
@@ -1348,7 +1433,9 @@ mod tests {
                 call_id: Uuid::new_v4(),
                 capability_id: "calendar.write".into(),
                 input: "{}".into(),
-                result: "done".into(),
+                observation: floe_agent_contract::ExpertCapabilityObservation::Success {
+                    result: "done".into(),
+                },
             });
         // Non-read-only and wrong-schema capabilities are denied like the
         // legacy transport denied them.

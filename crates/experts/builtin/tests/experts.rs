@@ -1262,7 +1262,11 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
             ]
         );
         assert_eq!(steps[1].transcript.len(), 2);
-        let ExpertTranscriptEntry::Capability { result, .. } = &steps[1].transcript[1] else {
+        let ExpertTranscriptEntry::Capability {
+            observation: floe_agent_contract::ExpertCapabilityObservation::Success { result },
+            ..
+        } = &steps[1].transcript[1]
+        else {
             panic!("expected formatted Schedule result");
         };
         assert!(result.contains("starts_at_local"));
@@ -1331,7 +1335,10 @@ async fn schedule_times_include_the_year_only_when_the_range_crosses_years() {
         .transcript
         .iter()
         .filter_map(|entry| match entry {
-            ExpertTranscriptEntry::Capability { result, .. } => Some(result),
+            ExpertTranscriptEntry::Capability {
+                observation: floe_agent_contract::ExpertCapabilityObservation::Success { result },
+                ..
+            } => Some(result),
             _ => None,
         })
         .collect::<Vec<_>>();

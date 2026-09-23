@@ -1099,6 +1099,7 @@ mod tests {
                     history: vec![request.message],
                     artifacts: vec![],
                     failure: None,
+                    settlement: None,
                 })
             })
         }

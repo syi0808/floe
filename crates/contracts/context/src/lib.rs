@@ -13,6 +13,7 @@ mod authorized_read;
 pub mod calendar;
 mod evidence;
 mod memory;
+mod source_access;
 pub mod views;
 
 pub use assembly::{OptionalSource, acquire_optional_source, record_source_issue};
@@ -23,6 +24,9 @@ pub use floe_kernel::PersonId;
 pub use memory::{
     ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
     MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
+};
+pub use source_access::{
+    SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome, SourceUnavailable,
 };
 pub use views::*;
 

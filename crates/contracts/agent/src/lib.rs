@@ -12,6 +12,7 @@ mod envelope;
 mod expert;
 mod expert_model;
 mod history;
+mod interaction;
 mod message;
 mod model;
 mod model_conversation;
@@ -49,7 +50,7 @@ pub use expert::{
     ViewCancellation, check_running,
 };
 pub use expert_model::{
-    CapabilityDescriptor, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement,
+    CapabilityDescriptor, ExpertCapabilityObservation, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement,
     ExpertReasoner, ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry,
     SourceHistoryBoundary, EXPERT_INFERENCE_CONSUMER,
 };
@@ -68,6 +69,9 @@ pub use floe_kernel::{
     AgentRetryPolicy, CommandId, PersonId, RunId, ScopeId, TaskId, TraceContext,
 };
 pub use history::{HistoryMessageSize, bounded_history_start};
+pub use interaction::{
+    USER_INTERACTION_MEDIA_TYPE, UserInteractionKind, UserInteractionRef, UserInteractionStatus,
+};
 pub use message::{
     AgentCard, AgentMessage, Artifact, ArtifactPart, MessageRole, OutcomeIssue, ToolResult,
 };
