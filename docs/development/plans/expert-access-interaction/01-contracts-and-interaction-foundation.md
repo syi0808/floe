@@ -275,6 +275,8 @@ Why a first-class message is preferred over hiding the interaction only inside a
 
 If introducing the variant now forces broad unrelated wire churn, the checkpoint may instead add the lower-level artifact/reference contract first and defer AgentMessage::Interaction to checkpoint 05. Record that deferral explicitly; do not introduce two permanent interaction representations.
 
+Implementation deferral: `AgentMessage::Interaction` and its protocol mirror remain checkpoint 05 work. Checkpoint 01 carries only `UserInteractionRef` in Tool/Task artifacts and Expert capability observations, avoiding a second message representation before Conversation owns durable interaction identity and emission.
+
 ## 7. Persistence boundary decision
 
 Do not add a new business module merely to hold one reference if Conversation can own the lifecycle without dependency inversion.
@@ -364,6 +366,8 @@ Every AccessReviewRequired/ConsentRequired hit in a source read should be classi
 2. test explicitly asserting old behavior before cutover;
 3. unrelated model/provider consent;
 4. bug.
+
+Checkpoint 01 residual classification: `AccessReviewRequired` from the current Schedule App endpoint, Access personal/native Calendar reads, and Context personal/remote source reads is legacy source-denial behavior to replace in checkpoints 02–04. Their current tests continue to assert the old path until cutover. Model-dispatch recipient consent and hard identity/integrity denials remain separate; no AgentFailure-name-to-interaction mapping was added to Agent Runtime.
 
 Do not claim source interaction foundation complete if expected source denials still have no typed target available to the caller that owns that source.
 
