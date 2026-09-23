@@ -59,33 +59,18 @@ ccb72e691b  Cut Schedule over to the common Directory endpoint
 - **Final package:** `schedule/{mod.rs,dispatch.rs,expert.rs,plan.rs}` only.
 - **Verification reported at completion:** workspace check/tests, architecture boundary check, FFI build, `git diff --check`, Flutter analyze/tests/macOS build, and focused Context/Access/provider/Vault residual tests all passed.
 
-Current production split:
+Final production path:
 
 ~~~text
-Schedule
-  -> ScheduleEndpoint
-  -> select_active_setup
-  -> CalendarExpertSetup / CalendarViewBinding
-  -> run_calendar_expert_endpoint
-  -> schedule::ExpertHost
-
-Other built-ins
+Directory
   -> BuiltinExpertEndpoint
   -> registered_experts
-  -> BuiltinExpertHost
-  -> domain dispatch
+  -> schedule::dispatch
+  -> BuiltinExpertHost::calendar_views
+  -> Context / Access
 ~~~
 
-Do not add another Calendar abstraction while both paths remain alive.
-
-### Frozen-area changes are allowed only when
-
-1. a new common Schedule-path test exists;
-2. that test fails;
-3. the failure cannot be expressed by the current Context/Access contract;
-4. the fix is the smallest owner-correct change.
-
-Do not proactively add new reader layers, permission reason variants, source metadata, or Checkpoint 03 authority work.
+The old Schedule endpoint/setup-bound execution path is deleted. Further Calendar authority cleanup belongs to Checkpoint 03; do not reintroduce a parallel Schedule runtime while removing the remaining Registry/setup/mapping authority.
 
 ---
 
