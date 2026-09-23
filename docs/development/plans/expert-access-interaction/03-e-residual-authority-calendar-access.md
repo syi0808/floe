@@ -1,10 +1,10 @@
 # Checkpoint 03-E — residual authority and Calendar access closure
 
-- **Status:** active execution plan
+- **Status:** complete
 - **Baseline:** main at aaefc6592e4df8f0f4b04a9fd33653aded868419
 - **Depends on:** 03-A through 03-D landed
 - **Goal:** close the post-03-D behavioral and product-surface residuals without reopening the removed Expert/Calendar authority vertical.
-- **Exit:** Checkpoint 03 may be marked complete again only after every 03-E acceptance item passes. Checkpoint 04 remains blocked until then.
+- **Exit:** every 03-E acceptance item passed; Checkpoint 03 is re-closed and Checkpoint 04 is next. The 03-E commits are recorded in the [Checkpoint 03 index](03-expert-registry-and-access-authority.md).
 
 03-A through 03-D established the correct ownership topology. Do not redesign it in this slice.
 
@@ -841,31 +841,31 @@ A compile break between commits is acceptable only within the active semantic sl
 
 ## 10. Definition of done
 
-- [ ] sibling remote Calendar resources can hold separate grants and each read succeeds under its own exact grant.
-- [ ] multiple grants that admit the same exact remote resource fail closed.
-- [ ] repeated remote review updates/reviews the exact current grant rather than blindly creating a duplicate.
-- [ ] remote review is bound to the grant/policy expectation the Person reviewed.
-- [ ] native review/update is bound to reviewed GrantId + GrantAuthority CAS.
-- [ ] native pause/remove is bound to reviewed GrantAuthority and current source ownership.
-- [ ] no Calendar mutation manufactures expected authority from a freshly loaded grant.
-- [ ] ConsumerPolicyAuthority is stable on exact semantic no-op review.
-- [ ] ConsumerPolicyAuthority advances on reviewed source/scope/consumer/native-subject semantic change.
-- [ ] CalendarGrantPolicy load/corruption failure is never converted to first-review absence.
-- [ ] grant + policy mutation remains atomic.
-- [ ] no DB transaction spans EventKit/provider I/O.
-- [ ] native Calendar has an Access-owned inspect/review/pause/remove public path.
-- [ ] native Calendar Access public payload contains no Registry/setup identity and no caller-supplied consumer policy.
-- [ ] remote Calendar remains on the existing Access-owned RemoteAccess path.
-- [ ] pausing/removing Observe does not disconnect the Calendar connection or alter OS permission.
-- [ ] Registry revision is unaffected by Calendar Observe mutations.
-- [ ] old Calendar-Expert APIs/wire/UI remain deleted.
-- [ ] Schedule missing-access and successful Calendar paths still pass.
-- [ ] /focus evidence and current dependency reauthorization still pass.
-- [ ] legacy grant mapping tables remain rejected and never migrated.
-- [ ] residual searches are clean with only explicitly justified historical/rejection matches.
-- [ ] Rust/architecture/FFI/Flutter/macOS gates pass.
-- [ ] Go gates pass if server changed.
-- [ ] Checkpoint 03 index/README are reconverged and only then mark Checkpoint 04 next.
+- [x] sibling remote Calendar resources can hold separate grants and each read succeeds under its own exact grant.
+- [x] multiple grants that admit the same exact remote resource fail closed.
+- [x] repeated remote review updates/reviews the exact current grant rather than blindly creating a duplicate.
+- [x] remote review is bound to the grant/policy expectation the Person reviewed.
+- [x] native review/update is bound to reviewed GrantId + GrantAuthority CAS.
+- [x] native pause/remove is bound to reviewed GrantAuthority and current source ownership.
+- [x] no Calendar mutation manufactures expected authority from a freshly loaded grant.
+- [x] ConsumerPolicyAuthority is stable on exact semantic no-op review.
+- [x] ConsumerPolicyAuthority advances on reviewed source/scope/consumer/native-subject semantic change.
+- [x] CalendarGrantPolicy load/corruption failure is never converted to first-review absence.
+- [x] grant + policy mutation remains atomic.
+- [x] no DB transaction spans EventKit/provider I/O.
+- [x] native Calendar has an Access-owned inspect/review/pause/remove public path.
+- [x] native Calendar Access public payload contains no Registry/setup identity and no caller-supplied consumer policy.
+- [x] remote Calendar remains on the existing Access-owned RemoteAccess path.
+- [x] pausing/removing Observe does not disconnect the Calendar connection or alter OS permission.
+- [x] Registry revision is unaffected by Calendar Observe mutations.
+- [x] old Calendar-Expert APIs/wire/UI remain deleted.
+- [x] Schedule missing-access and successful Calendar paths still pass.
+- [x] /focus evidence and current dependency reauthorization still pass.
+- [x] legacy grant mapping tables remain rejected and never migrated.
+- [x] residual searches are clean with only explicitly justified historical/rejection matches.
+- [x] Rust/architecture/FFI/Flutter/macOS gates pass.
+- [x] Go gates pass if server changed. (Server unchanged in 03-E: no Go gate required.)
+- [x] Checkpoint 03 index/README are reconverged and only then mark Checkpoint 04 next.
 
 ---
 

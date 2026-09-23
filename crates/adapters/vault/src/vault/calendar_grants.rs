@@ -1603,4 +1603,60 @@ mod tests {
         assert_eq!(current.grant_id, rotated.id());
         assert_ne!(current.consumer_policy, old_dependency.consumer_policy());
     }
+
+    #[tokio::test]
+    async fn fresh_native_grant_and_policy_survive_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = floe_kernel::PersonId::new();
+        let keys = TestKeys::default();
+        let authority = SourceAuthority::new();
+        let calendars = vec!["home".to_owned()];
+        let fingerprint = "a".repeat(64);
+        let (grant_id, grant_authority, consumer_policy) = {
+            let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+                .await
+                .unwrap();
+            let grant = fresh_grant(
+                &vault,
+                authority,
+                &calendars,
+                &calendar_consumers(),
+                &fingerprint,
+            )
+            .await;
+            let admission = authorize(
+                &vault,
+                "opaque-eventkit-connection",
+                &calendars,
+                authority,
+                "floe.builtin.schedule",
+                &fingerprint,
+            )
+            .await
+            .unwrap();
+            assert_eq!(admission.grant_id, grant.id());
+            (
+                grant.id(),
+                grant.authority(),
+                admission.consumer_policy,
+            )
+        };
+        let vault = EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap();
+        let admission = authorize(
+            &vault,
+            "opaque-eventkit-connection",
+            &calendars,
+            authority,
+            "floe.builtin.schedule",
+            &fingerprint,
+        )
+        .await
+        .unwrap();
+        assert_eq!(admission.grant_id, grant_id);
+        assert_eq!(admission.authority, grant_authority);
+        assert_eq!(admission.consumer_policy, consumer_policy);
+    }
 }
