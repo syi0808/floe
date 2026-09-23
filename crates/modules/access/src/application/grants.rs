@@ -69,6 +69,22 @@ pub fn authorize_grant(
     Ok(())
 }
 
+/// The reviewed grant expectation a Calendar mutation runs under.
+/// Both halves must be present or both absent; a half expectation is invalid
+/// input, never a fresh review.
+pub fn validate_grant_expectation(
+    expected_id: Option<floe_context_contract::GrantId>,
+    expected_authority: Option<GrantAuthority>,
+) -> Result<Option<(floe_context_contract::GrantId, GrantAuthority)>, floe_kernel::AgentFailure> {
+    match (expected_id, expected_authority) {
+        (None, None) => Ok(None),
+        (Some(id), Some(authority)) if id.is_valid() && authority.is_valid() => {
+            Ok(Some((id, authority)))
+        }
+        _ => Err(floe_kernel::AgentFailure::InvalidInput),
+    }
+}
+
 pub fn apply_grant_mutation(
     grant: &mut DataAccessGrant,
     person_id: PersonId,
@@ -185,5 +201,42 @@ mod tests {
             Err(GrantPolicyError::Transition(GrantTransitionError::Conflict))
         );
         assert_eq!(grant, active);
+    }
+
+    #[test]
+    fn grant_expectation_requires_both_halves_and_valid_authorities() {
+        use floe_kernel::AgentFailure;
+
+        let id = GrantId::new();
+        let authority = GrantAuthority::new();
+        assert_eq!(validate_grant_expectation(None, None), Ok(None));
+        assert_eq!(
+            validate_grant_expectation(Some(id), Some(authority)),
+            Ok(Some((id, authority)))
+        );
+        assert_eq!(
+            validate_grant_expectation(Some(id), None),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            validate_grant_expectation(None, Some(authority)),
+            Err(AgentFailure::InvalidInput)
+        );
+        let nil_id: GrantId = serde_json::from_value(serde_json::json!(uuid::Uuid::nil())).unwrap();
+        assert!(!nil_id.is_valid());
+        assert_eq!(
+            validate_grant_expectation(Some(nil_id), Some(authority)),
+            Err(AgentFailure::InvalidInput)
+        );
+        let nil_authority: GrantAuthority = serde_json::from_value(serde_json::json!({
+            "incarnation": uuid::Uuid::nil(),
+            "access_epoch": 1,
+        }))
+        .unwrap();
+        assert!(!nil_authority.is_valid());
+        assert_eq!(
+            validate_grant_expectation(Some(id), Some(nil_authority)),
+            Err(AgentFailure::InvalidInput)
+        );
     }
 }

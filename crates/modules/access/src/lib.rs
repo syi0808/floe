@@ -36,7 +36,7 @@ pub use application::{
     remote_dependency_source_admits, remote_view_scope, remote_view_source,
     review_and_activate_remote_view_grant, review_remote_view_grant, source_matches_producer,
     subject_unchanged, valid_subject_fingerprint, validate_grant_dependency,
-    validate_read_authority, validate_read_continuity,
+    validate_grant_expectation, validate_read_authority, validate_read_continuity,
 };
 pub use application::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,

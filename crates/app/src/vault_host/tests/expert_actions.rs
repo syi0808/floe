@@ -484,6 +484,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
             source_authority,
             &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             &"a".repeat(64),
+            None,
         )
         .await
         .unwrap();

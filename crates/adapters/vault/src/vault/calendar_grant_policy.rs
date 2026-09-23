@@ -1,4 +1,6 @@
-use floe_access::{ConsumerPolicyAuthority, GrantId};
+use floe_access::{
+    ConsumerPolicyAuthority, DataAccessGrant, GrantId, GrantScope, GrantSourceBinding,
+};
 use floe_agent_contract::AgentFailure;
 use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
@@ -148,6 +150,38 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
+    pub(super) async fn maybe_calendar_grant_policy_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        grant_id: GrantId,
+    ) -> Result<Option<CalendarGrantPolicy>, AgentFailure> {
+        let mut rows = transaction
+            .query(
+                "SELECT grant_id, person_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_policies WHERE grant_id = ? AND person_id = ?",
+                (
+                    grant_id.as_uuid().to_string(),
+                    self.person_id.to_string(),
+                ),
+            )
+            .await
+            .map_err(storage)?;
+        let Some(row) = rows.next().await.map_err(storage)? else {
+            return Ok(None);
+        };
+        if rows.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        decode_policy_row(
+            &row.get::<String>(0).map_err(storage)?,
+            &row.get::<String>(1).map_err(storage)?,
+            &row.get::<String>(2).map_err(storage)?,
+            row.get::<i64>(3).map_err(storage)?,
+            row.get::<Option<String>>(4).map_err(storage)?.as_deref(),
+            &row.get::<String>(5).map_err(storage)?,
+        )
+        .map(Some)
+    }
+
     pub(super) async fn calendar_grant_policy(
         &self,
         grant_id: GrantId,
@@ -258,6 +292,42 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?
             .ok_or(AgentFailure::VaultUnavailable)?;
         Ok(())
+    }
+}
+
+/// The consumer-policy authority a Calendar review establishes.
+/// Only an exact semantic no-op preserves the previous authority: same source,
+/// same scope, and same reviewed native subject. Any reviewed change advances
+/// it. A previous grant without its policy row is corrupt state, never a first
+/// review.
+pub(super) fn evolve_calendar_consumer_policy(
+    previous_grant: Option<&DataAccessGrant>,
+    previous_policy: Option<&CalendarGrantPolicy>,
+    next_source: &GrantSourceBinding,
+    next_scope: &GrantScope,
+    next_fingerprint: Option<&str>,
+) -> Result<ConsumerPolicyAuthority, AgentFailure> {
+    match (previous_grant, previous_policy) {
+        (None, None) => Ok(ConsumerPolicyAuthority::new()),
+        (None, Some(_)) | (Some(_), None) => Err(AgentFailure::VaultUnavailable),
+        (Some(grant), Some(policy)) => {
+            if policy.grant_id != grant.id()
+                || policy.person_id != grant.source().person_id()
+                || !policy.consumer_policy.is_valid()
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            let unchanged = grant.source() == next_source
+                && grant.scope() == next_scope
+                && policy.reviewed_native_subject_fingerprint.as_deref() == next_fingerprint;
+            if unchanged {
+                return Ok(policy.consumer_policy);
+            }
+            policy
+                .consumer_policy
+                .advance()
+                .ok_or(AgentFailure::BudgetExceeded)
+        }
     }
 }
 

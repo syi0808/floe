@@ -22,6 +22,7 @@ pub use authority::{
 pub use dependency::validate_grant_dependency;
 pub use grants::{
     AccessGrantMutation, GrantPolicyError, apply_grant_mutation, authorize_grant, create_grant,
+    validate_grant_expectation,
 };
 pub use native_calendar::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
