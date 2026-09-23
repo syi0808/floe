@@ -604,10 +604,12 @@ mod tests {
             Box<
                 dyn Future<
                         Output = Result<
-                            Vec<(
-                                floe_context::CalendarContextView,
-                                floe_context_contract::ContextDependency,
-                            )>,
+                            floe_context_contract::SourceReadOutcome<
+                                Vec<(
+                                    floe_context::CalendarContextView,
+                                    floe_context_contract::ContextDependency,
+                                )>,
+                            >,
                             AgentFailure,
                         >,
                     > + Send
@@ -642,7 +644,11 @@ mod tests {
                         .await
                     {
                         Ok(view) => view,
-                        Err(AgentFailure::CapabilityUnavailable) => continue,
+                        Err(AgentFailure::CapabilityUnavailable) => {
+                            return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                                floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+                            ));
+                        }
                         Err(error) => return Err(error),
                     };
                     let source = floe_context_contract::GrantSourceBinding::try_new(
@@ -690,7 +696,7 @@ mod tests {
                     .map_err(|_| AgentFailure::InvalidInput)?;
                     reads.push((view, dependency));
                 }
-                Ok(reads)
+                Ok(floe_context_contract::SourceReadOutcome::Ready(reads))
             })
         }
     }

@@ -431,11 +431,9 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         floe_context_contract::SourceReadOutcome<Vec<floe_context::CalendarContextView>>,
     > {
         Box::pin(async move {
-            let result = self
-                .personal_views(request, &request.agent_id)
+            self.personal_views(request, &request.agent_id)
                 .calendar_views(&query, request.deadline, &request.cancellation)
-                .await;
-            calendar_read_outcome(result, &request.agent_id)
+                .await
         })
     }
 
@@ -544,41 +542,6 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
 /// The consumer identity a general assistant read is made under.
 const ASSISTANT_CONSUMER: &str = "assistant";
 
-fn calendar_read_outcome<Value>(
-    result: Result<Value, AgentFailure>,
-    consumer: &str,
-) -> Result<floe_context_contract::SourceReadOutcome<Value>, AgentFailure> {
-    match result {
-        Ok(value) => Ok(floe_context_contract::SourceReadOutcome::Ready(value)),
-        Err(AgentFailure::CapabilityUnavailable) => {
-            Ok(floe_context_contract::SourceReadOutcome::Unavailable(
-                floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
-            ))
-        }
-        Err(AgentFailure::AccessReviewRequired) => {
-            let requirement = floe_context_contract::SourceAccessRequirement::try_new(
-                "calendar",
-                None,
-                None,
-                floe_context_contract::GrantOperation::Read,
-                floe_context_contract::GrantConsumer::builtin(consumer)
-                    .map_err(|_| AgentFailure::CapabilityDenied)?,
-                floe_context_contract::GrantPurpose::Assistant,
-                vec![],
-                None,
-                floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
-                None,
-                false,
-            )
-            .map_err(|_| AgentFailure::InvalidInput)?;
-            Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
-                requirement,
-            ))
-        }
-        Err(error) => Err(error),
-    }
-}
-
 impl InProcessAgent for ConversationExperts<'_> {
     /// The Experts this turn may offer, for the execution classes observed.
     ///
@@ -657,63 +620,5 @@ impl InProcessAgent for ConversationExperts<'_> {
             "expert_invocation_completed"
         );
         Ok(task)
-    }
-}
-
-#[cfg(test)]
-mod calendar_outcome_tests {
-    use super::*;
-    use floe_context_contract::{
-        GrantOperation, GrantPurpose, SourceAccessRequirementKind, SourceReadOutcome,
-        SourceUnavailable,
-    };
-
-    #[test]
-    fn calendar_absence_is_not_empty_success_or_an_integrity_mask() {
-        assert_eq!(
-            calendar_read_outcome::<Vec<String>>(Ok(vec![]), "floe.builtin.schedule").unwrap(),
-            SourceReadOutcome::Ready(vec![])
-        );
-        assert_eq!(
-            calendar_read_outcome::<Vec<String>>(
-                Err(AgentFailure::CapabilityUnavailable),
-                "floe.builtin.schedule",
-            )
-            .unwrap(),
-            SourceReadOutcome::Unavailable(SourceUnavailable::TemporarilyUnavailable)
-        );
-        for failure in [
-            AgentFailure::CapabilityDenied,
-            AgentFailure::PolicyDenied,
-            AgentFailure::StaleContext,
-            AgentFailure::StorageUnavailable,
-            AgentFailure::Cancelled,
-        ] {
-            assert_eq!(
-                calendar_read_outcome::<Vec<String>>(Err(failure), "floe.builtin.schedule",),
-                Err(failure)
-            );
-        }
-    }
-
-    #[test]
-    fn calendar_review_requirement_names_the_requesting_expert() {
-        let outcome = calendar_read_outcome::<Vec<String>>(
-            Err(AgentFailure::AccessReviewRequired),
-            "floe.builtin.schedule",
-        )
-        .unwrap();
-        let SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
-            panic!("calendar review must remain actionable");
-        };
-        assert_eq!(requirement.source_id(), "calendar");
-        assert_eq!(requirement.consumer().identifier(), "floe.builtin.schedule");
-        assert_eq!(requirement.operation(), GrantOperation::Read);
-        assert_eq!(requirement.purpose(), GrantPurpose::Assistant);
-        assert_eq!(
-            requirement.reason(),
-            SourceAccessRequirementKind::ReviewChangedSource
-        );
-        assert!(!requirement.inline_resolution());
     }
 }

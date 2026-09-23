@@ -528,13 +528,14 @@ impl PersonalViewSource<'_> {
         query: &floe_context_contract::CalendarViewQuery,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<Vec<CalendarContextView>, AgentFailure> {
+    ) -> Result<floe_context_contract::SourceReadOutcome<Vec<CalendarContextView>>, AgentFailure>
+    {
         query.validate()?;
         let reader = self
             .calendar_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
         self.record_result_independent()?;
-        let reads = reader
+        let outcome = reader
             .read(
                 self.person_id,
                 self.consumer_name,
@@ -543,6 +544,19 @@ impl PersonalViewSource<'_> {
                 cancellation,
             )
             .await?;
+        let reads = match outcome {
+            floe_context_contract::SourceReadOutcome::Ready(reads) => reads,
+            floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                    reason,
+                ));
+            }
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) => {
+                return Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                    requirement,
+                ));
+            }
+        };
         let mut views = Vec::new();
         for (view, dependency) in reads {
             floe_context::validate_calendar_context_view_for_query(
@@ -559,7 +573,7 @@ impl PersonalViewSource<'_> {
             }
             views.push(view);
         }
-        Ok(views)
+        Ok(floe_context_contract::SourceReadOutcome::Ready(views))
     }
 
     pub(super) async fn confirmed_interaction_views(
@@ -768,16 +782,103 @@ pub(super) trait CalendarContextReaderApi: Send + Sync {
         Box<
             dyn Future<
                     Output = Result<
-                        Vec<(
-                            CalendarContextView,
-                            floe_context_contract::ContextDependency,
-                        )>,
+                        floe_context_contract::SourceReadOutcome<
+                            Vec<(
+                                CalendarContextView,
+                                floe_context_contract::ContextDependency,
+                            )>,
+                        >,
                         AgentFailure,
                     >,
                 > + Send
                 + 'a,
         >,
     >;
+}
+
+fn calendar_access_requirement<Value>(
+    connection: Option<&floe_day::CalendarConnection>,
+    consumer: &str,
+    reason: floe_context_contract::SourceAccessRequirementKind,
+) -> Result<floe_context_contract::SourceReadOutcome<Value>, AgentFailure> {
+    let connector = connection.and_then(|connection| {
+        floe_access::native_calendar_connector(connection.provider)
+            .or_else(|| floe_access::hosted_calendar_connector(connection.provider))
+    });
+    let connector_id = connector
+        .map(|value| floe_context_contract::ConnectorId::try_new(value.to_owned()))
+        .transpose()
+        .map_err(|_| AgentFailure::StaleContext)?;
+    let connection_id = connection
+        .map(|connection| {
+            floe_context_contract::ConnectionId::try_new(connection.connection_id.clone())
+        })
+        .transpose()
+        .map_err(|_| AgentFailure::StaleContext)?;
+    let resources = connection
+        .and_then(|connection| {
+            connection
+                .calendars
+                .iter()
+                .map(|calendar| {
+                    floe_context_contract::ResourceHandle::try_new(calendar.calendar_id.clone())
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+        })
+        .unwrap_or_default();
+    let source_authority = connection
+        .map(|connection| connection.source_authority)
+        .filter(|authority| authority.is_valid());
+    let inline_resolution = connector_id.is_some()
+        && connection_id.is_some()
+        && !resources.is_empty()
+        && source_authority.is_some()
+        && reason != floe_context_contract::SourceAccessRequirementKind::Reconnect;
+    let requirement = floe_context_contract::SourceAccessRequirement::try_new(
+        floe_experts_builtin::BuiltinContextSource::Calendar.source_id(),
+        connector_id,
+        connection_id,
+        floe_context_contract::GrantOperation::Read,
+        floe_context_contract::GrantConsumer::builtin(consumer)
+            .map_err(|_| AgentFailure::CapabilityDenied)?,
+        floe_context_contract::GrantPurpose::Assistant,
+        resources,
+        None,
+        reason,
+        source_authority,
+        inline_resolution,
+    )
+    .map_err(|_| AgentFailure::StaleContext)?;
+    Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+        requirement,
+    ))
+}
+
+fn calendar_read_outcome<Value>(
+    result: Result<Value, AgentFailure>,
+    connection: &floe_day::CalendarConnection,
+    consumer: &str,
+) -> Result<floe_context_contract::SourceReadOutcome<Value>, AgentFailure> {
+    match result {
+        Ok(value) => Ok(floe_context_contract::SourceReadOutcome::Ready(value)),
+        Err(AgentFailure::CapabilityUnavailable) => {
+            Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+            ))
+        }
+        Err(AgentFailure::AccessReviewRequired) => calendar_access_requirement(
+            Some(connection),
+            consumer,
+            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
+        ),
+        Err(AgentFailure::CredentialExpired) => calendar_access_requirement(
+            Some(connection),
+            consumer,
+            floe_context_contract::SourceAccessRequirementKind::Reconnect,
+        ),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) struct CurrentCalendarContextReader<'a, Keys: VaultKeyProvider> {
@@ -799,10 +900,12 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
         Box<
             dyn Future<
                     Output = Result<
-                        Vec<(
-                            CalendarContextView,
-                            floe_context_contract::ContextDependency,
-                        )>,
+                        floe_context_contract::SourceReadOutcome<
+                            Vec<(
+                                CalendarContextView,
+                                floe_context_contract::ContextDependency,
+                            )>,
+                        >,
                         AgentFailure,
                     >,
                 > + Send
@@ -817,18 +920,33 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                 .core
                 .calendar_connection(person_id)
                 .await
-                .map_err(|_| AgentFailure::StorageUnavailable)?
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
-            if connection.disconnected
-                || connection.device_id != self.device_id
-                || connection.revision == 0
-            {
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+            let Some(connection) = connection else {
+                return calendar_access_requirement(
+                    None,
+                    consumer,
+                    floe_context_contract::SourceAccessRequirementKind::SelectResource,
+                );
+            };
+            if connection.device_id != self.device_id || connection.revision == 0 {
                 return Err(AgentFailure::StaleContext);
             }
-            if connection.calendars.is_empty() {
-                return Err(AgentFailure::AccessReviewRequired);
+            if connection.disconnected {
+                return calendar_access_requirement(
+                    Some(&connection),
+                    consumer,
+                    floe_context_contract::SourceAccessRequirementKind::Reconnect,
+                );
             }
-            if connection.provider == floe_context_contract::CalendarProvider::EventKit {
+            if connection.calendars.is_empty() {
+                return calendar_access_requirement(
+                    Some(&connection),
+                    consumer,
+                    floe_context_contract::SourceAccessRequirementKind::SelectResource,
+                );
+            }
+            let result = async {
+                if connection.provider == floe_context_contract::CalendarProvider::EventKit {
                 #[cfg(target_os = "macos")]
                 {
                     let connections = crate::vault_host::calendar_access::CoreCalendarConnections {
@@ -848,7 +966,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                         self.device_id.to_owned(),
                         connection.provider,
                         calendar_ids,
-                        connection.connection_id,
+                        connection.connection_id.clone(),
                         connection.revision,
                     );
                     let window = floe_context::RemoteCallWindow {
@@ -875,7 +993,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                 {
                     return Err(AgentFailure::CapabilityUnavailable);
                 }
-            }
+                }
             let source_client = self
                 .source_client
                 .ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -921,7 +1039,10 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                 .await?;
                 reads.push((view, dependency));
             }
-            Ok(reads)
+                Ok(reads)
+            }
+            .await;
+            calendar_read_outcome(result, &connection, consumer)
         })
     }
 }
@@ -1131,7 +1252,122 @@ impl<Keys: VaultKeyProvider> ConversationContextReaderApi for ConversationContex
 mod tests {
     use super::*;
     use floe_agent_contract::{ExpertModel, ExpertReasoner};
-    use std::collections::VecDeque;
+    use std::collections::{BTreeMap, VecDeque};
+
+    fn calendar_connection() -> floe_day::CalendarConnection {
+        floe_day::CalendarConnection {
+            connection_id: "connection".into(),
+            device_id: "device".into(),
+            disconnected: false,
+            scope: floe_context_contract::CalendarScope::Selected,
+            provider: floe_context_contract::CalendarProvider::EventKit,
+            calendars: vec![floe_day::CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            revision: 1,
+            source_authority: floe_context_contract::SourceAuthority::new(),
+            last_success_at: None,
+            last_range: None,
+            error: None,
+            error_at: None,
+            source_statuses: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn calendar_review_requirement_binds_current_connection_and_expert() {
+        let connection = calendar_connection();
+        let outcome = calendar_read_outcome::<Vec<String>>(
+            Err(AgentFailure::AccessReviewRequired),
+            &connection,
+            "floe.builtin.schedule",
+        )
+        .unwrap();
+        let floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
+            panic!("calendar review must remain actionable");
+        };
+        assert_eq!(requirement.source_id(), "floe.source.calendar");
+        assert_eq!(requirement.consumer().identifier(), "floe.builtin.schedule");
+        assert_eq!(
+            requirement.connector_id().unwrap().as_str(),
+            "calendar.event_kit"
+        );
+        assert_eq!(requirement.connection_id().unwrap().as_str(), "connection");
+        assert_eq!(requirement.resources()[0].as_str(), "primary");
+        assert_eq!(
+            requirement.source_authority(),
+            Some(connection.source_authority)
+        );
+        assert!(requirement.inline_resolution());
+    }
+
+    #[test]
+    fn calendar_unavailability_and_integrity_failure_stay_distinct() {
+        let connection = calendar_connection();
+        assert_eq!(
+            calendar_read_outcome::<Vec<String>>(Ok(vec![]), &connection, "floe.builtin.schedule")
+                .unwrap(),
+            floe_context_contract::SourceReadOutcome::Ready(vec![])
+        );
+        assert_eq!(
+            calendar_read_outcome::<Vec<String>>(
+                Err(AgentFailure::CapabilityUnavailable),
+                &connection,
+                "floe.builtin.schedule",
+            )
+            .unwrap(),
+            floe_context_contract::SourceReadOutcome::Unavailable(
+                floe_context_contract::SourceUnavailable::TemporarilyUnavailable
+            )
+        );
+        for failure in [
+            AgentFailure::CapabilityDenied,
+            AgentFailure::PolicyDenied,
+            AgentFailure::StaleContext,
+            AgentFailure::StorageUnavailable,
+            AgentFailure::Cancelled,
+        ] {
+            assert_eq!(
+                calendar_read_outcome::<Vec<String>>(
+                    Err(failure),
+                    &connection,
+                    "floe.builtin.schedule",
+                ),
+                Err(failure)
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_calendar_requirement_cannot_offer_inline_grant() {
+        let outcome = calendar_access_requirement::<Vec<String>>(
+            None,
+            "floe.builtin.schedule",
+            floe_context_contract::SourceAccessRequirementKind::SelectResource,
+        )
+        .unwrap();
+        let floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
+            panic!("missing connection must request source selection");
+        };
+        assert!(requirement.connection_id().is_none());
+        assert!(requirement.resources().is_empty());
+        assert!(!requirement.inline_resolution());
+
+        let mut connection = calendar_connection();
+        connection.calendars[0].calendar_id = "x".repeat(257);
+        let outcome = calendar_access_requirement::<Vec<String>>(
+            Some(&connection),
+            "floe.builtin.schedule",
+            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
+        )
+        .unwrap();
+        let floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
+            panic!("unrepresentable resource must not become an inline grant");
+        };
+        assert!(requirement.resources().is_empty());
+        assert!(!requirement.inline_resolution());
+    }
 
     struct FakeExecutor {
         calls: Mutex<
