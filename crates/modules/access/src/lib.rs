@@ -37,6 +37,7 @@ pub use application::{
 pub use application::{
     CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview,
     admit_native_calendar_setup, admit_native_calendar_subject, is_native_calendar,
+    native_calendar_connector,
     native_calendar_connection_unchanged, native_calendar_source_current, reviewed_native_subject,
 };
 pub use application::{
@@ -90,6 +91,6 @@ pub use application::calendar_lease::{CalendarLeaseKey, calendar_lease_dependenc
 pub use application::calendar_read::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, CalendarReadAdmission,
     admission_matches, admission_matches_dependency, admits_calendar_read,
-    admits_calendar_read_request, admits_processing,
+    admits_calendar_read_request, admits_native_calendar_read, admits_processing,
 };
 pub use floe_context_contract::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};

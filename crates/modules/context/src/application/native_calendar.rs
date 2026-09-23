@@ -9,13 +9,19 @@
 use std::future::Future;
 
 use floe_access::{
-    NativeCalendarConnection, NativeCalendarReview, RemoteCallWindow, admit_native_calendar_setup,
-    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
-    reviewed_native_subject,
+    CalendarReadAccessAdmission, CalendarReadAccessRequest, NativeCalendarConnection,
+    NativeCalendarReview, ReadAuthorityEvidence, ReadAuthorityIdentity, RemoteCallWindow,
+    admit_native_calendar_setup, admit_native_calendar_subject, admits_native_calendar_read,
+    is_native_calendar, native_calendar_connection_unchanged, reviewed_native_subject,
+    validate_read_authority,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
-use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
+use floe_context_contract::{
+    CalendarProvider, CalendarReadAccessStamp, CalendarScope, SourceAuthority,
+};
 use floe_day::CalendarConnection;
+
+use crate::CalendarSource;
 
 /// The native calendar source a caller is asking about.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +86,137 @@ pub trait NativeCalendarSubjectSource: Sync {
         &self,
         request: NativeSubjectRequest,
     ) -> impl Future<Output = Result<NativeSubjectObservation, AgentFailure>> + Send;
+}
+
+pub trait NativeCalendarGrantReader: Sync {
+    fn admit(
+        &self,
+        connection: &CalendarConnection,
+        person_id: PersonId,
+        calendar_ids: &[String],
+        consumer: &str,
+        native_subject_fingerprint: &str,
+    ) -> impl Future<Output = Result<CalendarReadAccessAdmission, AgentFailure>> + Send;
+}
+
+pub struct AdmittedNativeCalendarRead {
+    pub connection: CalendarConnection,
+    pub stamp: CalendarReadAccessStamp,
+    pub admission: CalendarReadAccessAdmission,
+}
+
+pub async fn admit_current_native_calendar_read(
+    connections: &impl CalendarConnectionReader,
+    source: &impl CalendarSource,
+    grants: &impl NativeCalendarGrantReader,
+    person_id: PersonId,
+    device_id: &str,
+    consumer: &str,
+    window: &RemoteCallWindow,
+) -> Result<AdmittedNativeCalendarRead, AgentFailure> {
+    check_window(window)?;
+    let connection = connections
+        .calendar_connection()
+        .await?
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+    if !is_native_calendar(connection.provider) {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    if connection.disconnected
+        || connection.device_id != device_id
+        || connection.revision == 0
+        || !connection.source_authority.is_valid()
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    let mut calendar_ids = connection_calendar_ids(&connection);
+    calendar_ids.sort();
+    if calendar_ids.is_empty()
+        || calendar_ids.len() > 4
+        || calendar_ids.windows(2).any(|pair| pair[0] == pair[1])
+        || calendar_ids
+            .iter()
+            .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    let consumer_identity = floe_access::GrantConsumer::builtin(consumer)
+        .map_err(|_| AgentFailure::CapabilityDenied)?;
+    let mut stamp = source
+        .check(CalendarReadAccessRequest {
+            person_id,
+            device_id: device_id.to_owned(),
+            provider: connection.provider,
+            calendar_ids: calendar_ids.clone(),
+            expected_native_subject_fingerprint: None,
+            deadline: window.deadline,
+            cancellation: window.cancellation.clone(),
+        })
+        .await?;
+    check_window(window)?;
+    stamp.calendar_ids.sort();
+    validate_read_authority(
+        &ReadAuthorityIdentity {
+            person_id,
+            device_id,
+            provider: &connection.provider,
+            resource_ids: &calendar_ids,
+        },
+        &ReadAuthorityEvidence {
+            schema_version: stamp.schema_version,
+            identity: ReadAuthorityIdentity {
+                person_id: stamp.person_id,
+                device_id: &stamp.device_id,
+                provider: &stamp.provider,
+                resource_ids: &stamp.calendar_ids,
+            },
+            subject_fingerprint: &stamp.native_subject_fingerprint,
+            generation: &stamp.generation,
+        },
+    )?;
+    let admission = grants
+        .admit(
+            &connection,
+            person_id,
+            &calendar_ids,
+            consumer,
+            &stamp.native_subject_fingerprint,
+        )
+        .await?;
+    admits_native_calendar_read(
+        &admission,
+        person_id,
+        &connection.connection_id,
+        connection.provider,
+        device_id,
+        &calendar_ids,
+        connection.source_authority,
+        &consumer_identity,
+    )?;
+    check_window(window)?;
+    let refreshed = connections
+        .calendar_connection()
+        .await?
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+    if refreshed != connection {
+        return Err(AgentFailure::StaleContext);
+    }
+    check_window(window)?;
+    Ok(AdmittedNativeCalendarRead {
+        connection,
+        stamp,
+        admission,
+    })
+}
+
+fn check_window(window: &RemoteCallWindow) -> Result<(), AgentFailure> {
+    if window.cancellation.is_cancelled() {
+        return Err(AgentFailure::Cancelled);
+    }
+    if tokio::time::Instant::now() >= window.deadline {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    Ok(())
 }
 
 fn evidence(connection: &CalendarConnection) -> NativeCalendarConnection<'_> {

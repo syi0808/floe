@@ -9,8 +9,8 @@ use std::future::Future;
 
 use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, ConsumerPolicyAuthority, ContextDependency,
-    GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose, GrantScope,
-    GrantSourceBinding, ProcessingRestriction,
+    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+    GrantScope, GrantSourceBinding, ProcessingRestriction, SourceAuthority,
 };
 use floe_execution::Cancellation;
 use floe_kernel::AgentFailure;
@@ -178,6 +178,53 @@ pub fn admits_calendar_read(
                 .iter()
                 .any(|calendar_id| calendar_id == resource.as_str())
         })
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    Ok(())
+}
+
+pub fn admits_native_calendar_read(
+    admission: &CalendarReadAccessAdmission,
+    person_id: PersonId,
+    connection_id: &str,
+    provider: CalendarProvider,
+    device_id: &str,
+    calendar_ids: &[String],
+    source_authority: SourceAuthority,
+    consumer: &GrantConsumer,
+) -> Result<(), AgentFailure> {
+    let connector = super::native_calendar::native_calendar_connector(provider)
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    if admission.person_id != person_id
+        || admission.source.person_id() != person_id
+        || admission.source.connection_id().as_str() != connection_id
+        || admission.source.connector().as_str() != connector
+        || admission.source.execution_owner().as_str() != device_id
+        || admission.source.source_authority() != source_authority
+        || admission.scope.resources().len() != calendar_ids.len()
+        || admission.scope.resources().iter().any(|resource| {
+            !calendar_ids
+                .iter()
+                .any(|calendar_id| calendar_id == resource.as_str())
+        })
+        || admission.scope.categories().len() != 2
+        || !admission
+            .scope
+            .categories()
+            .contains(&GrantDataCategory::Metadata)
+        || !admission
+            .scope
+            .categories()
+            .contains(&GrantDataCategory::Content)
+        || admission.scope.operations() != [GrantOperation::Read]
+        || admission.scope.purposes() != [GrantPurpose::Assistant]
+        || admission.scope.consumers() != [consumer.clone()]
+        || admission.scope.processing() != &ProcessingRestriction::LocalOnly
+        || admission.operation != GrantOperation::Read
+        || admission.purpose != GrantPurpose::Assistant
+        || admission.consumer != *consumer
+        || admission.processing != ProcessingRestriction::LocalOnly
     {
         return Err(AgentFailure::CapabilityDenied);
     }

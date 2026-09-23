@@ -109,6 +109,8 @@ The reader resolves authoritative current connection/grant state behind its owne
 
 Implementation note: Context now has a signed remote Calendar View read and reauthorization operation that binds an exact resource, consumer, query, grant authority and source preview. The common App host injects that read for selected remote resources and records the returned dependency; native Calendar acquisition and Schedule endpoint deletion remain in this checkpoint.
 
+Context now has a native admission sequence over the current connection, device stamp and grant, and Vault can resolve that grant without a Schedule setup/view key, rejecting ambiguous old mappings. Native observation/projection is not yet wired to this admission sequence. The old Schedule endpoint continues to name its exact setup until that endpoint is deleted; the grant mapping still checks Registry state internally until checkpoint 03 removes that authority.
+
 ### 1.3 Native + remote parity at the semantic boundary
 
 Current common PersonalViewSource.calendar_views() only reads through ServerSourceClient and returns an empty list when no remote source client exists. That behavior is insufficient.

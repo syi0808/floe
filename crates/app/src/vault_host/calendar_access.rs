@@ -11,8 +11,8 @@ use std::time::Duration;
 use floe_access::RemoteCallWindow;
 use floe_agent_contract::AgentFailure;
 use floe_context::{
-    CalendarConnectionReader, NativeCalendarSourceRequest, NativeCalendarSubjectSource,
-    NativeSubjectObservation, NativeSubjectRequest,
+    CalendarConnectionReader, NativeCalendarGrantReader, NativeCalendarSourceRequest,
+    NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
 };
 use floe_execution::Cancellation;
 use floe_experts::{
@@ -51,6 +51,51 @@ impl CalendarConnectionReader for CoreCalendarConnections<'_> {
             .calendar_connection(self.person_id)
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)
+    }
+}
+
+pub(super) struct VaultNativeCalendarGrants<'a, Keys: VaultKeyProvider> {
+    pub vault: &'a EncryptedAgentVault<Keys>,
+}
+
+impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGrants<'_, Keys> {
+    async fn admit(
+        &self,
+        connection: &floe_day::CalendarConnection,
+        person_id: PersonId,
+        calendar_ids: &[String],
+        consumer: &str,
+        native_subject_fingerprint: &str,
+    ) -> Result<floe_access::CalendarReadAccessAdmission, AgentFailure> {
+        if person_id != self.vault.person_id() {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let consumer = floe_access::GrantConsumer::builtin(consumer)
+            .map_err(|_| AgentFailure::CapabilityDenied)?;
+        let admission = self
+            .vault
+            .authorize_current_native_calendar_grant(
+                &connection.connection_id,
+                connection.provider,
+                &connection.device_id,
+                calendar_ids,
+                connection.source_authority,
+                floe_access::GrantOperation::Read,
+                floe_access::GrantPurpose::Assistant,
+                consumer.clone(),
+                floe_access::ProcessingRestriction::LocalOnly,
+                Some(native_subject_fingerprint),
+            )
+            .await?;
+        Ok(floe_access::CalendarReadAccessAdmission::device_local(
+            person_id,
+            admission.grant_id,
+            admission.authority,
+            admission.source,
+            admission.scope,
+            admission.consumer_policy,
+            consumer,
+        ))
     }
 }
 

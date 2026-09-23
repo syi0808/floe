@@ -26,6 +26,7 @@ pub use grants::{
 pub use native_calendar::{
     CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview,
     admit_native_calendar_setup, admit_native_calendar_subject, is_native_calendar,
+    native_calendar_connector,
     native_calendar_connection_unchanged, native_calendar_source_current, reviewed_native_subject,
 };
 pub use personal_grants::{

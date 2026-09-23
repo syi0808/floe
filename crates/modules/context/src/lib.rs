@@ -58,8 +58,9 @@ pub use application::model_projection::{
     ContextProjectionInput, ContextProjectionRole, assemble_context_projection, context_manifest,
 };
 pub use application::native_calendar::{
-    AdmittedNativeCalendarSource, CalendarConnectionReader, NativeCalendarSourceRequest,
-    NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
+    AdmittedNativeCalendarRead, AdmittedNativeCalendarSource, CalendarConnectionReader,
+    NativeCalendarGrantReader, NativeCalendarSourceRequest, NativeCalendarSubjectSource,
+    NativeSubjectObservation, NativeSubjectRequest, admit_current_native_calendar_read,
     admit_native_calendar_source, preview_native_calendar_subject,
 };
 pub use application::observations::{

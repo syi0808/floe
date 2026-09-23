@@ -47,6 +47,62 @@ struct CalendarGrantMapping {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn authorize_current_native_calendar_grant(
+        &self,
+        connection_id: &str,
+        provider: CalendarProvider,
+        device_id: &str,
+        calendar_ids: &[String],
+        source_authority: SourceAuthority,
+        operation: GrantOperation,
+        purpose: GrantPurpose,
+        consumer: GrantConsumer,
+        processing: ProcessingRestriction,
+        native_subject_fingerprint: Option<&str>,
+    ) -> Result<CalendarGrantAdmission, AgentFailure> {
+        if !matches!(
+            provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_mappings WHERE connection_id = ? AND person_id = ?",
+                (connection_id, self.person_id.to_string()),
+            )
+            .await
+            .map_err(storage)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let mapping = decode_mapping(&row)?;
+        if rows.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        drop(rows);
+        drop(connection);
+        self.authorize_calendar_grant(
+            mapping.setup_id,
+            mapping.view_handle,
+            connection_id,
+            provider,
+            device_id,
+            calendar_ids,
+            source_authority,
+            operation,
+            purpose,
+            consumer,
+            processing,
+            native_subject_fingerprint,
+        )
+        .await
+    }
+
     pub(super) async fn initialize_calendar_grant_store(&self) -> Result<(), AgentFailure> {
         let connection = self.connection()?;
         let mut rows = connection
@@ -898,11 +954,10 @@ fn validate_native_subject_fingerprint(value: &str) -> Result<String, AgentFailu
 }
 
 fn connector(provider: CalendarProvider) -> Result<ConnectorId, AgentFailure> {
-    ConnectorId::try_new(match provider {
-        CalendarProvider::EventKit => "calendar.event_kit",
-        CalendarProvider::Android => "calendar.android",
-        _ => return Err(AgentFailure::CapabilityUnavailable),
-    })
+    ConnectorId::try_new(
+        floe_access::native_calendar_connector(provider)
+            .ok_or(AgentFailure::CapabilityUnavailable)?,
+    )
     .map_err(|_| AgentFailure::InvalidInput)
 }
 
@@ -1204,6 +1259,39 @@ mod tests {
             .unwrap();
         assert_eq!(admission.scope.resources().len(), 1);
         assert_eq!(admission.grant_scope.resources().len(), 2);
+        let current = vault
+            .authorize_current_native_calendar_grant(
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(current, admission);
+        assert_eq!(
+            vault
+                .authorize_current_native_calendar_grant(
+                    "another-eventkit-connection",
+                    CalendarProvider::EventKit,
+                    "test-device",
+                    &["home".into()],
+                    source_authority,
+                    GrantOperation::Read,
+                    GrantPurpose::Assistant,
+                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
+                )
+                .await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
         let subject_mismatch = vault
             .authorize_calendar_grant(
                 installed.setup.setup_id,

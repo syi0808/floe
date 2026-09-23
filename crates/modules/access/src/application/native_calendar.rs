@@ -64,6 +64,14 @@ pub fn is_native_calendar(provider: CalendarProvider) -> bool {
     )
 }
 
+pub fn native_calendar_connector(provider: CalendarProvider) -> Option<&'static str> {
+    match provider {
+        CalendarProvider::EventKit => Some("calendar.event_kit"),
+        CalendarProvider::Android => Some("calendar.android"),
+        _ => None,
+    }
+}
+
 fn binds(connection: NativeCalendarConnection<'_>, review: NativeCalendarReview<'_>) -> bool {
     !connection.disconnected
         && connection.device_id == review.device_id
