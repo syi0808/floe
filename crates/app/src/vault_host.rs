@@ -426,7 +426,6 @@ struct Progress {
     state: Option<VaultState>,
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
-    calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
     memory_review: Option<floe_knowledge::MemoryReviewResult>,
@@ -968,7 +967,6 @@ impl Worker {
             state: progress.state,
             session: progress.session.clone(),
             registry: progress.registry.clone(),
-            calendar_experts: progress.calendar_experts.clone(),
             calendar_subject_preview: progress.calendar_subject_preview.clone(),
             proposal: progress.proposal.clone(),
             memory_review: progress.memory_review.clone(),
@@ -1240,7 +1238,6 @@ struct VaultExecutionResult {
     state: VaultState,
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
-    calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
     memory_review: Option<floe_knowledge::MemoryReviewResult>,
@@ -1306,7 +1303,6 @@ fn finish_job(
                 progress.state = Some(result.state);
                 progress.session = result.session;
                 progress.registry = result.registry;
-                progress.calendar_experts = result.calendar_experts;
                 progress.calendar_subject_preview = result.calendar_subject_preview;
                 progress.proposal = result.proposal;
                 progress.memory_review = result.memory_review;
@@ -1539,39 +1535,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ..VaultExecutionResult::ready()
             })
         }
-        WorkerAction::CalendarExperts { setup } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let store = calendar_access::VaultCalendarSetups {
-                vault: vault.vault.as_ref(),
-                packaging: builtin_expert_packaging(BuiltinExpertKind::Schedule),
-                consumers: calendar_access::calendar_first_party_consumers()?,
-                cancellation: job.cancellation.clone(),
-            };
-            let overview = match setup {
-                Some(request) => {
-                    let admission = calendar_access::DeviceCalendarAdmission::new(
-                        core,
-                        local_context,
-                        job.person,
-                        job.cancellation.clone(),
-                    );
-                    Box::pin(floe_experts::install_calendar_expert(
-                        &store,
-                        &admission,
-                        (**request).clone(),
-                    ))
-                    .await?
-                }
-                None => Box::pin(floe_experts::CalendarSetupStore::overview(&store)).await?,
-            };
-            if job.cancellation.is_cancelled() {
-                return Err(AgentFailure::Cancelled);
-            }
-            Ok(VaultExecutionResult {
-                calendar_experts: Some(overview),
-                ..VaultExecutionResult::ready()
-            })
-        }
         WorkerAction::CalendarSubjectPreview { request } => {
             let admission = calendar_access::DeviceCalendarAdmission::new(
                 core,
@@ -1606,34 +1569,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     source_authority: subject.source_authority,
                     native_subject_fingerprint: subject.native_subject_fingerprint,
                 }),
-                ..VaultExecutionResult::ready()
-            })
-        }
-        WorkerAction::CalendarAccess { change } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let store = calendar_access::VaultCalendarSetups {
-                vault: vault.vault.as_ref(),
-                packaging: builtin_expert_packaging(BuiltinExpertKind::Schedule),
-                consumers: calendar_access::calendar_first_party_consumers()?,
-                cancellation: job.cancellation.clone(),
-            };
-            let admission = calendar_access::DeviceCalendarAdmission::new(
-                core,
-                local_context,
-                job.person,
-                job.cancellation.clone(),
-            );
-            let overview = Box::pin(floe_experts::apply_calendar_access(
-                &store,
-                &admission,
-                (**change).clone(),
-            ))
-            .await?;
-            if job.cancellation.is_cancelled() {
-                return Err(AgentFailure::Cancelled);
-            }
-            Ok(VaultExecutionResult {
-                calendar_experts: Some(overview),
                 ..VaultExecutionResult::ready()
             })
         }

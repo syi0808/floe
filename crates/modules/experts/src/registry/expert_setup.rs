@@ -8,13 +8,62 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::{AGENT_VERSION, PersonId};
-use floe_agent_contract::{AgentFailure, PackageKind};
+use floe_agent_contract::AgentFailure;
 
 use super::{
     AgentId, AgentPackage, AgentRegistry, BuiltinExpertAssignmentReceipt,
-    BuiltinExpertSetupReceipt, ExpertPrivateState, PackageAssignment, PackageImplementation,
-    PackageInstallation, RegistryOverview,
+    BuiltinExpertSetupReceipt, ExpertMetadata, ExpertPrivateState, PackageAssignment,
+    PackageImplementation, PackageInstallation, RegistryOverview,
 };
+use floe_agent_contract::{DataClass, PackageKind, PackageRef};
+
+/// How the crate that owns an Expert wants it packaged in the registry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpertPackaging {
+    pub expert: AgentId,
+    pub tool_id: String,
+    pub version: String,
+    pub publisher: String,
+    pub metadata: ExpertMetadata,
+    pub state_schema_version: u32,
+}
+
+impl ExpertPackaging {
+    /// The tool and Expert packages this declaration installs for `data_class`.
+    pub fn packages(&self, data_class: DataClass) -> [AgentPackage; 2] {
+        let tool = PackageRef {
+            kind: PackageKind::Tool,
+            id: self.tool_id.clone(),
+            version: self.version.clone(),
+        };
+        [
+            AgentPackage {
+                schema_version: AGENT_VERSION,
+                reference: tool.clone(),
+                publisher: self.publisher.clone(),
+                implementation: PackageImplementation::TimelineRead { data_class },
+                expert_metadata: None,
+                required_tools: vec![],
+                state_schema_version: self.state_schema_version,
+            },
+            AgentPackage {
+                schema_version: AGENT_VERSION,
+                reference: PackageRef {
+                    kind: PackageKind::Expert,
+                    id: self.expert.as_str().to_owned(),
+                    version: self.version.clone(),
+                },
+                publisher: self.publisher.clone(),
+                implementation: PackageImplementation::Builtin {
+                    expert: self.expert.clone(),
+                },
+                expert_metadata: Some(self.metadata.clone()),
+                required_tools: vec![tool],
+                state_schema_version: self.state_schema_version,
+            },
+        ]
+    }
+}
 
 /// One Expert's installation, as its owning crate declares it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -152,7 +201,6 @@ impl AgentRegistry {
                     installation_id: receipt.tool_installation_id,
                     enabled: false,
                     granted_tool_assignments: vec![],
-                    granted_view_handles: vec![],
                     private_state: ExpertPrivateState::default(),
                 },
                 PackageAssignment {
@@ -161,7 +209,6 @@ impl AgentRegistry {
                     installation_id: receipt.expert_installation_id,
                     enabled: false,
                     granted_tool_assignments: vec![receipt.tool_assignment_id],
-                    granted_view_handles: vec![],
                     private_state: ExpertPrivateState::default(),
                 },
             ]);
@@ -306,8 +353,6 @@ impl AgentRegistry {
                     || !tool_assignment.granted_tool_assignments.is_empty()
                     || expert_assignment.granted_tool_assignments
                         != [expert_receipt.tool_assignment_id]
-                    || !tool_assignment.granted_view_handles.is_empty()
-                    || !expert_assignment.granted_view_handles.is_empty()
                 {
                     return Err(AgentFailure::Conflict);
                 }

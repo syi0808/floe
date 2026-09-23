@@ -1,7 +1,6 @@
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
@@ -12,7 +11,6 @@ import '../../support/agent_vault_gateway.dart';
 void main() {
   final operations = <String, Future<void> Function(AgentController)>{
     'registry': (controller) => controller.loadRegistry(),
-    'calendar': (controller) => controller.loadCalendarExperts(),
     'connections': (controller) => controller.connectionController.load(),
     'memory': (controller) => controller.memoryController.load(),
     'memory review': (controller) => controller.memoryController.loadReview(),
@@ -75,7 +73,6 @@ void main() {
 final class _FailureGateway extends TestVaultGateway
     implements
         AgentRegistryGateway,
-        AgentCalendarExpertGateway,
         AgentConnectionsGateway,
         AgentMemoryGateway,
         AgentMemoryReviewGateway {
@@ -95,8 +92,6 @@ final class _FailureGateway extends TestVaultGateway
   Future<AgentRegistryView?> readRegistry(String personId) => _read();
 
   @override
-  Future<AgentCalendarExperts> readCalendarExperts(String personId) => _read();
-
   @override
   Future<List<AgentConnection>> readConnections(String personId) => _read();
 

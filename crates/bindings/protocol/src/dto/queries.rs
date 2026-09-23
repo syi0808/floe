@@ -70,8 +70,6 @@ pub enum AppQueryDto {
     AccessLocalReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "experts.registry.inspect")]
     ExpertsRegistryInspect {},
-    #[serde(rename = "experts.calendar.inspect")]
-    ExpertsCalendarInspect {},
     #[serde(rename = "experts.read_result")]
     ExpertsReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "conversation.session.get")]
@@ -139,7 +137,7 @@ impl AppQueryDto {
             Self::AccessLocalReadResult { operation_id, .. } => {
                 ("query.operation_id", operation_id)
             }
-            Self::ExpertsRegistryInspect {} | Self::ExpertsCalendarInspect {} => return Ok(()),
+            Self::ExpertsRegistryInspect {} => return Ok(()),
             Self::ExpertsReadResult { operation_id, .. } => ("query.operation_id", operation_id),
             Self::ConversationSessionGet { session_id } => ("query.session_id", session_id),
             Self::ConversationSessionReadResult { operation_id, .. } => {

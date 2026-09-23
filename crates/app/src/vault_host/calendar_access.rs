@@ -15,11 +15,6 @@ use floe_context::{
     NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
 };
 use floe_execution::Cancellation;
-use floe_experts::{
-    AdmittedCalendarSource, BoxFuture, CalendarAccessConfiguration, CalendarAccessSource,
-    CalendarExpertOverview, CalendarExpertSetup, CalendarSetupStore, CalendarSourceAdmission,
-    ExpertPackaging,
-};
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
@@ -297,110 +292,6 @@ impl<'host> DeviceCalendarAdmission<'host> {
             device: DeviceCalendarSubject { local_context },
             window: subject_window(cancellation),
         }
-    }
-
-    /// The source a request names, stated the way Context asks about one.
-    pub(super) fn source_request(
-        &self,
-        request: &CalendarExpertSetup,
-    ) -> NativeCalendarSourceRequest {
-        NativeCalendarSourceRequest {
-            person_id: self.connections.person_id,
-            provider: request.provider,
-            device_id: request.device_id.clone(),
-            calendar_ids: request.calendar_ids.clone(),
-            connection_scope: request.connection_scope,
-            source_authority: request.source_authority,
-            reviewed_native_subject_fingerprint: request
-                .reviewed_native_subject_fingerprint
-                .clone(),
-            connection_id: None,
-        }
-    }
-}
-
-impl CalendarSourceAdmission for DeviceCalendarAdmission<'_> {
-    fn admit<'a>(
-        &'a self,
-        request: &'a CalendarExpertSetup,
-    ) -> BoxFuture<'a, Result<Option<AdmittedCalendarSource>, AgentFailure>> {
-        Box::pin(async move {
-            let admitted = floe_context::admit_native_calendar_source(
-                &self.connections,
-                &self.device,
-                &self.source_request(request),
-                &self.window,
-            )
-            .await?;
-            Ok(admitted.map(|admitted| AdmittedCalendarSource {
-                connection_id: admitted.connection_id,
-                source_authority: admitted.source_authority,
-                native_subject_fingerprint: admitted.native_subject_fingerprint,
-            }))
-        })
-    }
-}
-
-/// The Person's encrypted Expert registry, as a calendar change writes it.
-pub(super) struct VaultCalendarSetups<'a, Keys> {
-    pub vault: &'a EncryptedAgentVault<Keys>,
-    pub packaging: ExpertPackaging,
-    pub consumers: Vec<floe_access::GrantConsumer>,
-    pub cancellation: Cancellation,
-}
-
-impl<Keys: VaultKeyProvider> CalendarSetupStore for VaultCalendarSetups<'_, Keys> {
-    fn overview<'a>(&'a self) -> BoxFuture<'a, Result<CalendarExpertOverview, AgentFailure>> {
-        Box::pin(self.vault.calendar_expert_overview())
-    }
-
-    fn install<'a>(
-        &'a self,
-        request: CalendarExpertSetup,
-        connection_id: String,
-    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
-        Box::pin(async move {
-            self.vault
-                .install_calendar_expert_with_connection(
-                    request,
-                    &self.packaging,
-                    connection_id,
-                    &self.consumers,
-                    self.cancellation.clone(),
-                )
-                .await?;
-            Ok(())
-        })
-    }
-
-    fn configure<'a>(
-        &'a self,
-        configuration: CalendarAccessConfiguration,
-        source: CalendarAccessSource,
-    ) -> BoxFuture<'a, Result<CalendarExpertOverview, AgentFailure>> {
-        Box::pin(async move {
-            match source {
-                CalendarAccessSource::Registry => {
-                    self.vault
-                        .configure_calendar_access(
-                            configuration,
-                            &self.consumers,
-                            self.cancellation.clone(),
-                        )
-                        .await
-                }
-                CalendarAccessSource::Native { connection_id } => {
-                    self.vault
-                        .configure_calendar_access_with_connection(
-                            configuration,
-                            connection_id,
-                            &self.consumers,
-                            self.cancellation.clone(),
-                        )
-                        .await
-                }
-            }
-        })
     }
 }
 

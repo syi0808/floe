@@ -58,10 +58,6 @@ final class AppRuntime {
     readModel: readModel,
   );
   late final registry = NativeRegistryGateway(_transport);
-  late final calendarExperts = NativeCalendarExpertGateway(
-    _transport,
-    deviceId: deviceId,
-  );
   late final personalAccess = NativePersonalAccessGateway(
     _transport,
     deviceId: deviceId,
@@ -72,7 +68,6 @@ final class AppRuntime {
   late final owners = LocalOwnerGateways(
     vault: vault,
     registry: registry,
-    calendarExperts: calendarExperts,
     personalAccess: personalAccess,
     memory: memory,
     memoryReview: memory,

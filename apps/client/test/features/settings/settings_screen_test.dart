@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/experts/presentation/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
@@ -19,7 +18,6 @@ import 'package:flutter_test/flutter_test.dart';
 import '../actions/calendar_action_execution_test.dart' show Executor;
 import '../../support/server_credentials.dart';
 import '../../support/agent_registry.dart';
-import '../../support/agent_calendar_experts.dart';
 
 void main() {
   testWidgets('assistant permission management lives in Settings', (
@@ -62,7 +60,7 @@ void main() {
     tester,
   ) async {
     final controller = AgentController(
-      gateway: TestCalendarExpertGateway(),
+      gateway: TestRegistryGateway(),
       personId: registryPerson,
     );
     addTearDown(controller.dispose);
@@ -80,7 +78,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.byType(AgentCalendarSettings), findsNothing);
     expect(find.text('Data Floe can use'), findsNothing);
     expect(find.text('AI processing'), findsOneWidget);
   });

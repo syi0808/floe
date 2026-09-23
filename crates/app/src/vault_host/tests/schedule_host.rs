@@ -84,14 +84,12 @@ impl TestScheduleHost {
             person_id,
             tool_installation,
             vec![],
-            vec![],
         )?;
         let assignment_id = registry.assign(
             registry.revision(),
             person_id,
             expert_installation,
             vec![tool_assignment],
-            vec![],
         )?;
         for installation in [tool_installation, expert_installation] {
             registry.set_installation_enabled(registry.revision(), installation, true)?;

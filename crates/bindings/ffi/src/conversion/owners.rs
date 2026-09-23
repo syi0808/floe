@@ -205,9 +205,7 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
         .unwrap_or_else(|| "unknown".into());
     let source_stage = matches!(
         stage,
-        "calendar_access"
-            | "calendar_experts"
-            | "calendar_subject_preview"
+        "calendar_subject_preview"
             | "calendar_action"
             | "personal_access"
             | "contacts_access"
@@ -474,9 +472,7 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         AgentFailure::AccessReviewRequired
             if matches!(
                 stage,
-                "calendar_access"
-                    | "calendar_experts"
-                    | "calendar_subject_preview"
+                "calendar_subject_preview"
                     | "calendar_action"
                     | "personal_access"
                     | "contacts_access"
@@ -920,7 +916,7 @@ mod tests {
                 .contains(&AgentFailureSafeAction::Retry)
         );
 
-        let setup = failure_envelope(&AgentFailure::Conflict, "calendar_access", "request");
+        let setup = failure_envelope(&AgentFailure::Conflict, "registry", "request");
         assert_eq!(
             setup.recovery_action,
             AgentVaultRecoveryActionDto::RefreshContext
@@ -928,7 +924,7 @@ mod tests {
 
         let review = failure_envelope(
             &AgentFailure::AccessReviewRequired,
-            "calendar_access",
+            "calendar_action",
             "request",
         );
         assert_eq!(
@@ -966,7 +962,7 @@ mod tests {
             AgentFailure::Interrupted,
             AgentFailure::DeadlineExceeded,
         ] {
-            let envelope = failure_envelope(&failure, "calendar_experts", "request");
+            let envelope = failure_envelope(&failure, "registry", "request");
             assert_eq!(envelope.recovery_action, AgentVaultRecoveryActionDto::None);
             assert!(!envelope.retryable);
         }

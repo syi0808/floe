@@ -49,10 +49,6 @@ pub enum AppCommandDto {
         candidate_id: Uuid,
         decision: super::AgentMemoryReviewDecisionKindDto,
     },
-    #[serde(rename = "access.calendar.configure")]
-    AccessCalendarConfigure {
-        change: super::CalendarGrantConfigurationDto,
-    },
     #[serde(rename = "access.personal.configure")]
     AccessPersonalConfigure {
         connector: String,
@@ -66,10 +62,6 @@ pub enum AppCommandDto {
     #[serde(rename = "experts.registry.configure")]
     ExpertsRegistryConfigure {
         change: super::RegistryConfigurationDto,
-    },
-    #[serde(rename = "experts.calendar.install")]
-    ExpertsCalendarInstall {
-        setup: super::CalendarExpertInstallDto,
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
@@ -117,7 +109,6 @@ impl AppCommandDto {
                     Ok(())
                 }
             }
-            Self::AccessCalendarConfigure { change } => change.validate(),
             Self::AccessPersonalConfigure { connector, .. }
             | Self::AccessContactsConfigure { connector, .. } => {
                 if super::local_access::identifier(connector) {
@@ -129,8 +120,7 @@ impl AppCommandDto {
             Self::ExpertsRegistryConfigure { change } => {
                 let target_id = match &change.target {
                     super::RegistryConfigurationTargetDto::Installation { id, .. }
-                    | super::RegistryConfigurationTargetDto::Assignment { id, .. }
-                    | super::RegistryConfigurationTargetDto::CalendarView { id, .. } => id,
+                    | super::RegistryConfigurationTargetDto::Assignment { id, .. } => id,
                 };
                 if change.instance_id.is_nil()
                     || target_id.is_nil()
@@ -142,7 +132,6 @@ impl AppCommandDto {
                     Ok(())
                 }
             }
-            Self::ExpertsCalendarInstall { setup } => setup.validate(),
             Self::ConversationSessionStart {} | Self::ConversationSessionResume {} => Ok(()),
             Self::ConversationSessionRecover { session_id, .. } => {
                 if session_id.is_nil() {

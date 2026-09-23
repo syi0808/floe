@@ -45,8 +45,6 @@ async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_ent
         .await
         .unwrap();
     let after = fixture.vault.expert_registry().await.unwrap().unwrap();
-    assert_eq!(after.calendar_views, before.calendar_views);
-    assert_eq!(after.calendar_setups, before.calendar_setups);
     assert_eq!(after.revision, before.revision + 1);
     assert_eq!(
         fixture

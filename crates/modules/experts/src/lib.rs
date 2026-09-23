@@ -6,7 +6,6 @@
 
 mod a2a;
 mod builtin_setup;
-mod calendar_access;
 mod directory;
 mod dispatch;
 mod registry;
@@ -19,12 +18,8 @@ pub use a2a::{
     EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
 };
 pub use builtin_setup::{
-    BuiltinExpertRefresh, BuiltinExpertStore, ExpertRefreshOutcome, ensure_builtin_experts,
-    expert_refresh_outcome,
-};
-pub use calendar_access::{
-    AdmittedCalendarSource, BoxFuture, CalendarAccessSource, CalendarSetupStore,
-    CalendarSourceAdmission, apply_calendar_access, install_calendar_expert,
+    BoxFuture, BuiltinExpertRefresh, BuiltinExpertStore, ExpertRefreshOutcome,
+    ensure_builtin_experts, expert_refresh_outcome,
 };
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
 pub use dispatch::{
@@ -39,13 +34,11 @@ pub use floe_agent_contract::{
 };
 pub use registry::{
     AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
-    BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, CalendarAccessChange,
-    CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
-    CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarSourceBinding,
-    CalendarViewBinding, ExpertMetadata, ExpertPackaging, ExpertPrivateState, ExpertRule,
-    ExpertSetupSpec, NoSetupValidator, PackageAssignment, PackageImplementation,
-    PackageInstallation, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
-    RegistrySnapshot, ResolvedExpert, SetupValidator, SourceGrant, eligible_cards_for_availability,
+    BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, ExpertMetadata,
+    ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec, NoSetupValidator,
+    PackageAssignment, PackageImplementation, PackageInstallation, RegistryConfiguration,
+    RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, ResolvedExpert,
+    SetupValidator, SourceGrant, eligible_cards_for_availability,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

@@ -31,7 +31,6 @@ use floe_actions::ExpertProposalReference;
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::Cancellation;
 use floe_context_contract::CalendarProvider;
-use floe_context_contract::CalendarScope;
 use floe_context_contract::ContextDependency;
 use floe_context_contract::DataClass;
 use floe_context_contract::GrantConsumer;
@@ -44,9 +43,6 @@ use floe_conversation::AgentMessage;
 use floe_day::Event;
 use floe_experts::A2APart;
 use floe_experts::AgentRegistry;
-use floe_experts::CalendarAccessChange;
-use floe_experts::CalendarAccessConfiguration;
-use floe_experts::CalendarExpertSetup;
 use floe_experts::ExpertFocusProposal;
 use floe_experts::ExpertInput;
 use floe_experts::ExpertInsight;
@@ -477,43 +473,17 @@ async fn delegated_actions_require_vault_owner_approval() {
 #[tokio::test]
 async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
     let fixture = Fixture::new().await;
-    let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
-    let setup = CalendarExpertSetup {
-        instance_id: fixture.vault.registry_instance_id(),
-        expected_revision: snapshot.revision,
-        setup_id: Uuid::new_v4(),
-        provider: CalendarProvider::EventKit,
-        device_id: "test-device".into(),
-        calendar_ids: vec!["home".into()],
-        connection_scope: CalendarScope::Selected,
-        connection_revision: 1,
-        source_authority: Some(SourceAuthority::new()),
-        reviewed_native_subject_fingerprint: Some("a".repeat(64)),
-    };
-    let source_authority = setup.source_authority.unwrap();
-    let installed = fixture
-        .vault
-        .install_calendar_expert_with_connection(
-            setup.clone(),
-            &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
-            "eventkit-connection".into(),
-            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
+    let source_authority = SourceAuthority::new();
     fixture
         .vault
-        .configure_calendar_access_with_connection(
-            CalendarAccessConfiguration {
-                instance_id: setup.instance_id,
-                expected_revision: installed.registry.revision,
-                setup_id: setup.setup_id,
-                change: CalendarAccessChange::SetEnabled { enabled: true },
-            },
-            "eventkit-connection".into(),
+        .review_native_calendar_grant(
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            &["home".into()],
+            source_authority,
             &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
-            Cancellation::default(),
+            &"a".repeat(64),
         )
         .await
         .unwrap();

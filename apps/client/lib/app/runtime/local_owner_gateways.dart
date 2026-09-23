@@ -1,11 +1,9 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 
 import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
@@ -316,142 +314,6 @@ final class NativeProposalGateway implements AgentProposalGateway {
           : ownerQuery(_transport, operationId, intent),
       read: (operationId, release) =>
           ownerResult(_transport, 'actions.read_result', operationId, release),
-      decode: decode,
-    );
-  }
-}
-
-final class NativeCalendarExpertGateway implements AgentCalendarExpertGateway {
-  NativeCalendarExpertGateway(this._transport, {required this.deviceId});
-
-  final AppWireTransport _transport;
-  final OwnerOperationObserver _operations = OwnerOperationObserver();
-  final String deviceId;
-
-  @override
-  Future<AgentCalendarExperts> readCalendarExperts(String personId) async {
-    return _observe(
-      personId,
-      {'kind': 'experts.calendar.inspect'},
-      decode: (result) {
-        return _calendarExperts(personId, result);
-      },
-    );
-  }
-
-  @override
-  Future<CalendarSubjectPreview> previewCalendarSubject(
-    CalendarSubjectPreviewRequest request,
-  ) async {
-    if (request.deviceId != deviceId) {
-      throw const FormatException('Calendar preview device mismatch');
-    }
-    return _observe(
-      request.personId,
-      {'kind': 'access.calendar.preview', 'request': request.toJson()},
-      decode: (result) {
-        if (result['state'] != 'ready' ||
-            result['calendar_subject_preview'] is! Map) {
-          throw const FormatException('Missing Calendar subject preview');
-        }
-        final preview = CalendarSubjectPreview.fromJson(
-          result['calendar_subject_preview'],
-        );
-        final expectedCalendarIds = [...request.calendarIds]..sort();
-        if (preview.provider != request.provider ||
-            preview.deviceId != request.deviceId ||
-            preview.connectionId != request.connectionId ||
-            preview.connectionScope != request.connectionScope ||
-            !listEquals(preview.calendarIds, expectedCalendarIds) ||
-            preview.sourceAuthority != request.sourceAuthority) {
-          throw const FormatException('Calendar preview identity mismatch');
-        }
-        return preview;
-      },
-    );
-  }
-
-  @override
-  Future<AgentCalendarExperts> installCalendarExpert(
-    AgentCalendarSetup setup,
-  ) async {
-    if (setup.deviceId != deviceId) {
-      throw const FormatException('Calendar setup device mismatch');
-    }
-    final serialized = setup.toJson();
-    return _observe(
-      setup.personId,
-      {'kind': 'experts.calendar.install', 'setup': serialized},
-      decode: (result) {
-        final overview = _calendarExperts(setup.personId, result);
-        if (overview.receiptFor(setup) == null) {
-          throw const FormatException('Missing Calendar setup receipt');
-        }
-        return overview;
-      },
-    );
-  }
-
-  @override
-  Future<AgentCalendarExperts> configureCalendarAccess(
-    AgentCalendarAccessRequest request,
-  ) async {
-    if (request.operation == AgentCalendarAccessOperation.setScope &&
-        request.deviceId != deviceId) {
-      throw const FormatException('Calendar scope device mismatch');
-    }
-    final serialized = request.toJson();
-    return _observe(
-      request.personId,
-      {'kind': 'access.calendar.configure', 'change': serialized},
-      decode: (result) {
-        return _calendarExperts(request.personId, result);
-      },
-    );
-  }
-
-  AgentCalendarExperts _calendarExperts(
-    String personId,
-    Map<String, dynamic> result,
-  ) {
-    final overview = AgentCalendarExperts.fromJson(
-      Map<String, dynamic>.from(result['calendar_experts'] as Map),
-    );
-    if (overview.registry.personId != personId || result['state'] != 'ready') {
-      throw const FormatException('Calendar Expert Person or vault mismatch');
-    }
-    return overview;
-  }
-
-  Future<T> _observe<T>(
-    String personId,
-    Map<String, Object?> intent, {
-    required T Function(Map<String, dynamic>) decode,
-  }) {
-    final access = (intent['kind']! as String).startsWith('access.');
-    final command = const <String>{
-      'experts.calendar.install',
-      'access.calendar.configure',
-    }.contains(intent['kind']);
-    return _operations.observe(
-      scope: personId,
-      intent: ownerIntent(intent),
-      stage: const {
-        "experts.calendar.inspect": "calendar_experts",
-        "experts.calendar.install": "calendar_experts",
-        "access.calendar.configure": "calendar_access",
-        "access.calendar.preview": "calendar_subject_preview",
-      }[intent['kind']]!,
-      resultKind: access ? 'local_access_operation' : 'expert_operation',
-      start: (operationId) => command
-          ? ownerCommand(_transport, operationId, intent)
-          : ownerQuery(_transport, operationId, intent),
-      read: (operationId, release) => ownerResult(
-        _transport,
-        access ? 'access.local.read_result' : 'experts.read_result',
-        operationId,
-        release,
-      ),
       decode: decode,
     );
   }

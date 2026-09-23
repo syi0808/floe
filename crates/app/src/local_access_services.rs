@@ -17,33 +17,8 @@ pub struct CalendarSubjectIntent {
     pub source_authority: SourceAuthority,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CalendarGrantChange {
-    SetEnabled {
-        enabled: bool,
-    },
-    SetScope {
-        provider: CalendarProvider,
-        calendar_ids: Vec<String>,
-        connection_scope: CalendarScope,
-        connection_revision: u64,
-        source_authority: Option<SourceAuthority>,
-        reviewed_native_subject_fingerprint: Option<String>,
-    },
-    Remove,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CalendarGrantConfiguration {
-    pub instance_id: Uuid,
-    pub expected_revision: u64,
-    pub setup_id: Uuid,
-    pub change: CalendarGrantChange,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum LocalAccessCommand {
-    Calendar(CalendarGrantConfiguration),
     Personal {
         connector: String,
         change: PersonalAccessChange,
@@ -72,7 +47,6 @@ pub struct LocalAccessResult {
     pub stage: String,
     pub done: bool,
     pub state: Option<VaultState>,
-    pub calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     pub calendar_subject_preview: Option<CalendarSubjectPreview>,
     pub personal_access: Option<PersonalAccessOverview>,
     pub failure: Option<AgentFailure>,
@@ -165,7 +139,6 @@ impl AppComposition {
             stage: result.stage,
             done: result.done,
             state: result.state,
-            calendar_experts: result.calendar_experts,
             calendar_subject_preview: result.calendar_subject_preview,
             personal_access: result.personal_access,
             failure: result.failure,
@@ -188,38 +161,6 @@ impl LocalAccessCommand {
                     connector: connector.clone(),
                     device_id: caller.device_id().into(),
                     change: change.clone(),
-                }),
-            },
-            Self::Calendar(configuration) => WorkerAction::CalendarAccess {
-                change: Box::new(floe_experts::CalendarAccessConfiguration {
-                    instance_id: configuration.instance_id,
-                    expected_revision: configuration.expected_revision,
-                    setup_id: configuration.setup_id,
-                    change: match &configuration.change {
-                        CalendarGrantChange::SetEnabled { enabled } => {
-                            floe_experts::CalendarAccessChange::SetEnabled { enabled: *enabled }
-                        }
-                        CalendarGrantChange::Remove => {
-                            floe_experts::CalendarAccessChange::Remove {}
-                        }
-                        CalendarGrantChange::SetScope {
-                            provider,
-                            calendar_ids,
-                            connection_scope,
-                            connection_revision,
-                            source_authority,
-                            reviewed_native_subject_fingerprint,
-                        } => floe_experts::CalendarAccessChange::SetScope {
-                            provider: *provider,
-                            device_id: caller.device_id().into(),
-                            calendar_ids: calendar_ids.clone(),
-                            connection_scope: *connection_scope,
-                            connection_revision: *connection_revision,
-                            source_authority: *source_authority,
-                            reviewed_native_subject_fingerprint:
-                                reviewed_native_subject_fingerprint.clone(),
-                        },
-                    },
                 }),
             },
         }

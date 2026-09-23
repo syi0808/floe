@@ -22,8 +22,6 @@ import 'package:floe_client/features/day/presentation/calendar_panel.dart';
 import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_status_presentation.dart';
 import 'package:floe_client/features/connections/presentation/server_connector_panel.dart';
-import 'package:floe_client/features/experts/presentation/agent_calendar_expert_dialog.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
@@ -43,8 +41,6 @@ class ConnectorScreen extends StatefulWidget {
     this.deviceId,
     this.platform,
     this.agentController,
-    this.calendarSources,
-    this.calendarSourceChanges,
     this.personalAccessGateway,
     this.remoteAccessGateway,
     this.connectorAuthorization,
@@ -65,8 +61,6 @@ class ConnectorScreen extends StatefulWidget {
   final String? deviceId;
   final TargetPlatform? platform;
   final AgentController? agentController;
-  final AgentCalendarSources? Function()? calendarSources;
-  final Listenable? calendarSourceChanges;
   final RemoteAccessGateway? remoteAccessGateway;
   final AgentPersonalAccessGateway? personalAccessGateway;
   final AppleContextApi? appleContext;
@@ -670,18 +664,6 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                 .calendarIntegrationIsUnavailableInThisPreview,
           ),
         ),
-      if (effectivePlatform == TargetPlatform.macOS &&
-          widget.agentController != null) ...[
-        const SizedBox(height: FloeSpace.lg),
-        FloeSquircle(
-          padding: const EdgeInsets.all(FloeSpace.lg),
-          child: AgentCalendarSettings(
-            controller: widget.agentController!,
-            sources: widget.calendarSources,
-            sourceChanges: widget.calendarSourceChanges,
-          ),
-        ),
-      ],
       SizedBox(height: FloeSpace.lg),
       FloeInfoNote(
         text: effectivePlatform == TargetPlatform.android

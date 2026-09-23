@@ -116,49 +116,6 @@ where
                 result: knowledge_result(result, request.command_id)?,
             })
         }
-        AppCommandDto::AccessCalendarConfigure { change } => {
-            let change = floe_app::CalendarGrantConfiguration {
-                instance_id: change.instance_id,
-                expected_revision: change.expected_revision,
-                setup_id: change.setup_id,
-                change: match change.change {
-                    floe_protocol::CalendarGrantChangeDto::SetEnabled { enabled } => {
-                        floe_app::CalendarGrantChange::SetEnabled { enabled }
-                    }
-                    floe_protocol::CalendarGrantChangeDto::Remove {} => {
-                        floe_app::CalendarGrantChange::Remove
-                    }
-                    floe_protocol::CalendarGrantChangeDto::SetScope {
-                        provider,
-                        calendar_ids,
-                        connection_scope,
-                        connection_revision,
-                        source_authority,
-                        reviewed_native_subject_fingerprint,
-                    } => floe_app::CalendarGrantChange::SetScope {
-                        provider: crate::conversion::calendar_provider_from_dto(provider),
-                        calendar_ids,
-                        connection_scope: crate::conversion::calendar_scope_from_dto(
-                            connection_scope,
-                        ),
-                        connection_revision,
-                        source_authority,
-                        reviewed_native_subject_fingerprint,
-                    },
-                },
-            };
-            let result = host_request
-                .services()
-                .local_access_command(
-                    host_request.caller(),
-                    request.command_id,
-                    floe_app::LocalAccessCommand::Calendar(change),
-                )
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::LocalAccessOperation {
-                result: local_access_result(result, request.command_id)?,
-            })
-        }
         AppCommandDto::AccessPersonalConfigure { connector, change } => {
             let command = floe_app::LocalAccessCommand::Personal {
                 connector,
@@ -199,34 +156,7 @@ where
                             id,
                             enabled,
                         } => floe_app::RegistryConfigurationTarget::Assignment { id, enabled },
-                        floe_protocol::RegistryConfigurationTargetDto::CalendarView {
-                            id,
-                            enabled,
-                        } => floe_app::RegistryConfigurationTarget::CalendarView { id, enabled },
                     },
-                });
-            let result = host_request
-                .services()
-                .expert_command(host_request.caller(), request.command_id, command)
-                .map_err(service_error)?;
-            Ok(AppCommandResultDto::ExpertOperation {
-                result: expert_result(result, request.command_id)?,
-            })
-        }
-        AppCommandDto::ExpertsCalendarInstall { setup } => {
-            let command =
-                floe_app::ExpertCommand::InstallCalendar(floe_app::CalendarExpertInstall {
-                    instance_id: setup.instance_id,
-                    expected_revision: setup.expected_revision,
-                    setup_id: setup.setup_id,
-                    provider: crate::conversion::calendar_provider_from_dto(setup.provider),
-                    calendar_ids: setup.calendar_ids,
-                    connection_scope: crate::conversion::calendar_scope_from_dto(
-                        setup.connection_scope,
-                    ),
-                    connection_revision: setup.connection_revision,
-                    source_authority: setup.source_authority,
-                    reviewed_native_subject_fingerprint: setup.reviewed_native_subject_fingerprint,
                 });
             let result = host_request
                 .services()
@@ -551,12 +481,8 @@ fn query_with_host<
                 result: local_access_result(result, operation_id)?,
             })
         }
-        AppQueryDto::ExpertsRegistryInspect {} | AppQueryDto::ExpertsCalendarInspect {} => {
-            let inspection = if matches!(request.query, AppQueryDto::ExpertsRegistryInspect {}) {
-                floe_app::ExpertInspection::Registry
-            } else {
-                floe_app::ExpertInspection::Calendar
-            };
+        AppQueryDto::ExpertsRegistryInspect {} => {
+            let inspection = floe_app::ExpertInspection::Registry;
             let result = services
                 .inspect_experts(caller, request.request_id, inspection)
                 .map_err(service_error)?;
@@ -808,12 +734,6 @@ fn expert_result(
             .map(floe_protocol::wire::protocol_payload)
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
-        calendar_experts: result
-            .calendar_experts
-            .as_ref()
-            .map(floe_protocol::wire::protocol_payload)
-            .transpose()
-            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         failure: result.failure.as_ref().map(|failure| {
             crate::conversion::owners::failure_envelope(
                 failure,
@@ -835,12 +755,6 @@ fn local_access_result(
         operation_id,
         done: result.done,
         state: result.state.map(crate::conversion::owners::vault_state_dto),
-        calendar_experts: result
-            .calendar_experts
-            .as_ref()
-            .map(floe_protocol::wire::protocol_payload)
-            .transpose()
-            .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
         calendar_subject_preview: result
             .calendar_subject_preview
             .map(crate::conversion::owners::subject_preview_dto),

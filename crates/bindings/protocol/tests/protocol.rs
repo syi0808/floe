@@ -3,82 +3,6 @@ use std::collections::BTreeMap;
 use floe_protocol::*;
 
 #[test]
-fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_keys() {
-    let action = serde_json::json!({
-        "kind": "experts.calendar.install",
-        "setup": {
-            "instance_id": "00000000-0000-4000-8000-000000000001",
-            "expected_revision": 0,
-            "setup_id": "00000000-0000-4000-8000-000000000002",
-            "provider": "event_kit",
-            "calendar_ids": ["explicit-calendar"],
-            "connection_scope": "selected",
-            "connection_revision": 7
-        }
-    });
-    let parsed: AppCommandDto = serde_json::from_value(action.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
-    for field in [
-        "enabled",
-        "person_id",
-        "key",
-        "data_class",
-        "private_state",
-        "view_handle",
-    ] {
-        let mut forged = action.clone();
-        forged["setup"][field] = serde_json::json!(true);
-        assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
-    }
-    let view_change = serde_json::json!({
-        "kind": "experts.registry.configure", "change": {
-            "instance_id": "00000000-0000-4000-8000-000000000001",
-            "expected_revision": 1,
-            "target": {"kind": "calendar_view", "id": "00000000-0000-4000-8000-000000000002", "enabled": false}
-        }
-    });
-    let parsed: AppCommandDto = serde_json::from_value(view_change.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), view_change);
-}
-
-#[test]
-fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
-    for change in [
-        serde_json::json!({"kind": "set_enabled", "enabled": true}),
-        serde_json::json!({
-            "kind": "set_scope",
-            "provider": "event_kit",
-            "calendar_ids": ["home", "work"],
-            "connection_scope": "all",
-            "connection_revision": 8
-        }),
-        serde_json::json!({"kind": "remove"}),
-    ] {
-        let action = serde_json::json!({
-            "kind": "access.calendar.configure",
-            "change": {
-                "instance_id": "00000000-0000-4000-8000-000000000001",
-                "expected_revision": 4,
-                "setup_id": "00000000-0000-4000-8000-000000000002",
-                "change": change
-            }
-        });
-        let parsed: AppCommandDto = serde_json::from_value(action.clone()).unwrap();
-        assert_eq!(serde_json::to_value(parsed).unwrap(), action);
-    }
-    let forged = serde_json::json!({
-        "kind": "access.calendar.configure",
-        "change": {
-            "instance_id": "00000000-0000-4000-8000-000000000001",
-            "expected_revision": 4,
-            "setup_id": "00000000-0000-4000-8000-000000000002",
-            "change": {"kind": "remove", "keep_assignments": true}
-        }
-    });
-    assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
-}
-
-#[test]
 fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations() {
     let change = serde_json::json!({
         "instance_id": "00000000-0000-4000-8000-000000000001",
@@ -88,7 +12,7 @@ fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operati
     let action = serde_json::json!({"kind": "experts.registry.configure", "change": change});
     let parsed: AppCommandDto = serde_json::from_value(action.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), action);
-    for field in ["granted_view_handles", "private_state", "person_id"] {
+    for field in ["granted_views", "private_state", "person_id"] {
         let mut forged = action.clone();
         forged["change"]["target"][field] = serde_json::json!([]);
         assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());

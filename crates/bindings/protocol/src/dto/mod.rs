@@ -25,7 +25,7 @@ mod envelope;
 mod errors;
 mod events;
 mod experts;
-pub use experts::{CalendarExpertInstallDto, ExpertOperationResultDto};
+pub use experts::ExpertOperationResultDto;
 mod context;
 mod local_context;
 pub use context::{
@@ -36,7 +36,7 @@ mod knowledge;
 pub use knowledge::KnowledgeOperationResultDto;
 mod local_access;
 pub use local_access::{
-    CalendarGrantChangeDto, CalendarGrantConfigurationDto, CalendarSubjectIntentDto,
+    CalendarSubjectIntentDto,
     LocalAccessResultDto,
 };
 mod queries;
@@ -52,7 +52,7 @@ pub use agent::{
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto, AgentRetryPolicy,
     AgentSessionDto, AgentVaultFailureDto, AgentVaultRecoveryActionDto, AgentVaultStateDto,
-    CalendarActionDecisionDto, CalendarActionOperationDto, CalendarExpertOverviewDto,
+    CalendarActionDecisionDto, CalendarActionOperationDto,
     CalendarSubjectPreviewDto, ConnectorSnapshotDto, ContactsAccessChangeDto, EpistemicStatusDto,
     FeasibilityGrantQueryDto, KnowledgeCandidateDto, KnowledgeDecisionResultDto,
     PersonalAccessChangeDto, PersonalAccessOverviewDto, PersonalMemoryKindDto,

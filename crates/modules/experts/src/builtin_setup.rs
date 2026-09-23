@@ -6,7 +6,7 @@
 use floe_agent_contract::AgentFailure;
 use uuid::Uuid;
 
-use crate::calendar_access::BoxFuture;
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 use crate::registry::{BuiltinExpertSetup, BuiltinExpertSetupResult};
 
 /// When a setup that does not exist yet may be created.

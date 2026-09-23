@@ -1,6 +1,5 @@
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
@@ -11,7 +10,6 @@ final class LocalOwnerGateways {
   const LocalOwnerGateways({
     this.vault,
     this.registry,
-    this.calendarExperts,
     this.personalAccess,
     this.memory,
     this.memoryReview,
@@ -20,7 +18,6 @@ final class LocalOwnerGateways {
   });
   final AgentVaultGateway? vault;
   final AgentRegistryGateway? registry;
-  final AgentCalendarExpertGateway? calendarExperts;
   final AgentPersonalAccessGateway? personalAccess;
   final AgentMemoryGateway? memory;
   final AgentMemoryReviewGateway? memoryReview;

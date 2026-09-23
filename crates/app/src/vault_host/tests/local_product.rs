@@ -99,13 +99,6 @@ fn admitted_sessions_and_management_reads_share_canonical_owners_not_fixture_ses
         .is_some()
     );
     assert!(
-        submit(LocalOperationIntent::ExpertInspection(
-            crate::ExpertInspection::Calendar
-        ))
-        .calendar_experts
-        .is_some()
-    );
-    assert!(
         submit(LocalOperationIntent::KnowledgeInspection(
             crate::KnowledgeInspection::Memory
         ))
@@ -140,29 +133,6 @@ fn terminal_session_reads_can_overlap_the_finishing_turn_job() {
 #[test]
 fn local_expert_and_access_intents_inject_only_the_admitted_device() {
     let caller = remote_caller(PersonId::new(), "verified-device");
-    let setup = crate::CalendarExpertInstall {
-        instance_id: Uuid::new_v4(),
-        expected_revision: 0,
-        setup_id: Uuid::new_v4(),
-        provider: CalendarProvider::EventKit,
-        calendar_ids: vec!["calendar".into()],
-        connection_scope: crate::CalendarScope::Selected,
-        connection_revision: 1,
-        source_authority: Some(crate::SourceAuthority::new()),
-        reviewed_native_subject_fingerprint: Some("a".repeat(64)),
-    };
-    let WorkerAction::CalendarExperts { setup: Some(bound) } =
-        LocalOperationIntent::ExpertCommand(crate::ExpertCommand::InstallCalendar(setup.clone()))
-            .action(&caller)
-    else {
-        panic!("wrong owner action")
-    };
-    assert_eq!(bound.device_id, caller.device_id());
-    assert_eq!(
-        bound.reviewed_native_subject_fingerprint,
-        setup.reviewed_native_subject_fingerprint
-    );
-    assert_eq!(bound.source_authority, setup.source_authority);
     let expected_grant_id = crate::GrantId::new();
     let expected_grant_authority = crate::GrantAuthority::new();
     let intent = LocalOperationIntent::LocalAccessCommand(crate::LocalAccessCommand::Personal {

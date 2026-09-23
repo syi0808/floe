@@ -1,38 +1,18 @@
 use uuid::Uuid;
 
 use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
-use crate::{
-    AgentFailure, AppComposition, CalendarProvider, CalendarScope, CallerContext, ServiceError,
-    SourceAuthority, VaultState,
-};
+use crate::{AgentFailure, AppComposition, CallerContext, ServiceError, VaultState};
 
-pub use floe_experts::{
-    CalendarExpertOverview, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
-};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CalendarExpertInstall {
-    pub instance_id: Uuid,
-    pub expected_revision: u64,
-    pub setup_id: Uuid,
-    pub provider: CalendarProvider,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: CalendarScope,
-    pub connection_revision: u64,
-    pub source_authority: Option<SourceAuthority>,
-    pub reviewed_native_subject_fingerprint: Option<String>,
-}
+pub use floe_experts::{RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpertCommand {
     ConfigureRegistry(RegistryConfiguration),
-    InstallCalendar(CalendarExpertInstall),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExpertInspection {
     Registry,
-    Calendar,
 }
 
 #[derive(Clone, Debug)]
@@ -42,7 +22,6 @@ pub struct ExpertOperationResult {
     pub done: bool,
     pub state: Option<VaultState>,
     pub registry: Option<RegistryOverview>,
-    pub calendar_experts: Option<CalendarExpertOverview>,
     pub failure: Option<AgentFailure>,
 }
 
@@ -134,25 +113,7 @@ impl AppComposition {
             done: result.done,
             state: result.state,
             registry: result.registry,
-            calendar_experts: result.calendar_experts,
             failure: result.failure,
         })
-    }
-}
-
-impl CalendarExpertInstall {
-    pub(crate) fn bind(&self, caller: &CallerContext) -> floe_experts::CalendarExpertSetup {
-        floe_experts::CalendarExpertSetup {
-            instance_id: self.instance_id,
-            expected_revision: self.expected_revision,
-            setup_id: self.setup_id,
-            provider: self.provider,
-            device_id: caller.device_id().into(),
-            calendar_ids: self.calendar_ids.clone(),
-            connection_scope: self.connection_scope,
-            connection_revision: self.connection_revision,
-            source_authority: self.source_authority,
-            reviewed_native_subject_fingerprint: self.reviewed_native_subject_fingerprint.clone(),
-        }
     }
 }

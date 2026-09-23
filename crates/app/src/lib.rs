@@ -96,9 +96,8 @@ pub use day_services::{
 pub use error::{CoreError, ErrorCode};
 #[cfg(unix)]
 pub use expert_services::{
-    CalendarExpertInstall, CalendarExpertOverview, ExpertCommand, ExpertCommands, ExpertInspection,
-    ExpertOperationResult, ExpertQueries, RegistryConfiguration, RegistryConfigurationTarget,
-    RegistryOverview,
+    ExpertCommand, ExpertCommands, ExpertInspection, ExpertOperationResult, ExpertQueries,
+    RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
 };
 /// The acquisition values one local-context command carries.
 pub use floe_context::valid_native_subject_fingerprint;
@@ -116,8 +115,8 @@ pub use knowledge_services::{
 };
 #[cfg(unix)]
 pub use local_access_services::{
-    CalendarGrantChange, CalendarGrantConfiguration, CalendarSubjectIntent, LocalAccessCommand,
-    LocalAccessCommands, LocalAccessInspection, LocalAccessQueries, LocalAccessResult,
+    CalendarSubjectIntent, LocalAccessCommand, LocalAccessCommands, LocalAccessInspection,
+    LocalAccessQueries, LocalAccessResult,
 };
 pub use local_context::{
     CalendarObservationPublication, LocalContextCommand, LocalContextHost, LocalContextOutcome,

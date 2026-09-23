@@ -60,17 +60,9 @@ impl LocalOperationIntent {
             Self::ExpertInspection(ExpertInspection::Registry) => {
                 WorkerAction::Registry { change: None }
             }
-            Self::ExpertInspection(ExpertInspection::Calendar) => {
-                WorkerAction::CalendarExperts { setup: None }
-            }
             Self::ExpertCommand(ExpertCommand::ConfigureRegistry(change)) => {
                 WorkerAction::Registry {
                     change: Some(change.clone()),
-                }
-            }
-            Self::ExpertCommand(ExpertCommand::InstallCalendar(setup)) => {
-                WorkerAction::CalendarExperts {
-                    setup: Some(Box::new(setup.bind(caller))),
                 }
             }
             Self::LocalAccessCommand(command) => command.action(caller),

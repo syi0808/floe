@@ -4,9 +4,7 @@ use floe_agent_contract::{DataClass, ExpertFocusProposal, ExpertInsight, ExpertR
 use floe_context_contract::CalendarProvider;
 use floe_conversation::AgentMessage;
 use floe_day::CalendarRange;
-use floe_experts::{
-    AgentRegistry, CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget,
-};
+use floe_experts::{AgentRegistry, RegistryConfiguration, RegistryConfigurationTarget};
 
 use super::expert_evidence::delegation_message;
 use super::*;
@@ -24,62 +22,21 @@ async fn seed(
     let vault = EncryptedAgentVault::create(root, person, keys)
         .await
         .unwrap();
-    let setup = vault
-        .install_calendar_expert(
-            CalendarExpertSetup {
-                instance_id: vault.registry_instance_id(),
-                expected_revision: 0,
-                setup_id: Uuid::new_v4(),
-                provider: CalendarProvider::Fixture,
-                device_id: "test-device".into(),
-                calendar_ids: vec!["test-calendar".into()],
-                connection_scope: floe_context_contract::CalendarScope::Selected,
-                connection_revision: 1,
-                source_authority: None,
-                reviewed_native_subject_fingerprint: None,
-            },
-            &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
-            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
-            Cancellation::default(),
-        )
-        .await
+    // A synthetic Schedule-like package so the recorded evidence carries
+    // Synthetic data for the Fixture provider destination.
+    let host = super::schedule_host::TestScheduleHost::new_with_instance(
+        person,
+        vault.registry_instance_id(),
+    )
+    .unwrap();
+    let seeded = host.snapshot().unwrap();
+    vault.initialize_expert_registry(&seeded).await.unwrap();
+    let expert_assignment_id = seeded
+        .assignments
+        .iter()
+        .find(|entry| !entry.granted_tool_assignments.is_empty())
         .unwrap()
-        .setup;
-    for target in [
-        RegistryConfigurationTarget::Installation {
-            id: setup.tool_installation_id,
-            enabled: true,
-        },
-        RegistryConfigurationTarget::Installation {
-            id: setup.expert_installation_id,
-            enabled: true,
-        },
-        RegistryConfigurationTarget::Assignment {
-            id: setup.tool_assignment_id,
-            enabled: true,
-        },
-        RegistryConfigurationTarget::Assignment {
-            id: setup.expert_assignment_id,
-            enabled: true,
-        },
-        RegistryConfigurationTarget::CalendarView {
-            id: setup.view_handle,
-            enabled: true,
-        },
-    ] {
-        let registry = vault.registry_overview().await.unwrap().unwrap();
-        vault
-            .configure_registry(
-                RegistryConfiguration {
-                    instance_id: registry.instance_id,
-                    expected_revision: registry.revision,
-                    target,
-                },
-                Cancellation::default(),
-            )
-            .await
-            .unwrap();
-    }
+        .id;
     let now = fixture_now();
     let day = CalendarRange {
         start_date: now.date_naive(),
@@ -113,13 +70,12 @@ async fn seed(
     let snapshot = vault.expert_registry().await.unwrap().unwrap();
     let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
     let registry_revision = registry.revision();
-    let schedule =
-        floe_experts::AgentId::try_new(BuiltinExpertKind::Schedule.package_id()).unwrap();
+    let schedule = floe_experts::AgentId::try_new("floe.schedule").unwrap();
     let resolved = registry
         .resolve_builtin(
             registry.instance_id(),
             person,
-            setup.expert_assignment_id,
+            expert_assignment_id,
             registry_revision,
             &schedule,
         )
@@ -130,7 +86,7 @@ async fn seed(
         invocation_id: Uuid::new_v4(),
         instance_id: vault.registry_instance_id(),
         person_id: person,
-        assignment_id: setup.expert_assignment_id,
+        assignment_id: expert_assignment_id,
         package: resolved.package.reference.clone(),
         evidence_id,
         source_handle: format!("calendar.timeline:{evidence_id}:{revision}"),

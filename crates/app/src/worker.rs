@@ -154,12 +154,6 @@ pub enum WorkerAction {
     Registry {
         change: Option<floe_experts::RegistryConfiguration>,
     },
-    CalendarExperts {
-        setup: Option<Box<floe_experts::CalendarExpertSetup>>,
-    },
-    CalendarAccess {
-        change: Box<floe_experts::CalendarAccessConfiguration>,
-    },
     CalendarSubjectPreview {
         request: Box<CalendarSubjectRequest>,
     },
@@ -218,8 +212,6 @@ impl WorkerAction {
             Self::Unlock => "unlock",
             Self::Lock => "lock",
             Self::Registry { .. } => "registry",
-            Self::CalendarExperts { .. } => "calendar_experts",
-            Self::CalendarAccess { .. } => "calendar_access",
             Self::PersonalAccess { .. } => "personal_access",
             Self::ContactsAccess { .. } => "contacts_access",
             Self::CalendarAction { .. } => "calendar_action",
@@ -246,8 +238,6 @@ impl WorkerAction {
             self,
             Self::Status
                 | Self::Registry { .. }
-                | Self::CalendarExperts { .. }
-                | Self::CalendarAccess { .. }
                 | Self::PersonalAccess { .. }
                 | Self::ContactsAccess { .. }
                 | Self::CalendarSubjectPreview { .. }
@@ -279,7 +269,6 @@ pub struct WorkerResult {
     pub state: Option<VaultState>,
     pub session: Option<floe_conversation::AgentSession>,
     pub registry: Option<floe_experts::RegistryOverview>,
-    pub calendar_experts: Option<floe_experts::CalendarExpertOverview>,
     pub calendar_subject_preview: Option<CalendarSubjectPreview>,
     pub proposal: Option<CalendarProposalInspection>,
     pub memory_review: Option<MemoryReviewResult>,

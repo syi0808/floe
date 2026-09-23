@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_experts.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
@@ -19,9 +18,7 @@ import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
-import 'package:floe_client/features/experts/application/agent_calendar_expert_controller.dart';
 import 'package:floe_client/features/connections/application/agent_connection_controller.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
 
 enum AgentProgress {
   idle,
@@ -51,11 +48,6 @@ final class AgentController extends ChangeNotifier {
           owners.registry ??
           (gateway is AgentRegistryGateway
               ? gateway as AgentRegistryGateway
-              : null),
-      calendarExperts:
-          owners.calendarExperts ??
-          (gateway is AgentCalendarExpertGateway
-              ? gateway as AgentCalendarExpertGateway
               : null),
       memory:
           owners.memory ??
@@ -111,21 +103,6 @@ final class AgentController extends ChangeNotifier {
           vaultState == AgentVaultState.ready,
       onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
     )..addListener(_notify);
-    calendarExpertController = AgentCalendarExpertController(
-      gateway: owners.calendarExperts,
-      registryGateway: owners.registry,
-      registryController: registryController,
-      personId: personId,
-      canOperate: () =>
-          !_busy &&
-          !registryController.busy &&
-          !memoryController.busy &&
-          !_sealed &&
-          !_disposed &&
-          _locking == null &&
-          vaultState == AgentVaultState.ready,
-      onFatalFailure: (error) => _failFromError(error, 'storage_unavailable'),
-    )..addListener(_notify);
     connectionController = AgentConnectionController(
       gateway: owners.connections,
       personId: personId,
@@ -133,7 +110,6 @@ final class AgentController extends ChangeNotifier {
           !_busy &&
           !registryController.busy &&
           !memoryController.busy &&
-          !calendarExpertController.busy &&
           !_sealed &&
           !_disposed &&
           _locking == null,
@@ -173,9 +149,6 @@ final class AgentController extends ChangeNotifier {
   AgentRegistryView? get registry => registryController.registry;
   String? get registryFailure => registryController.failure;
   bool get registryLoaded => registryController.loaded;
-  late final AgentCalendarExpertController calendarExpertController;
-  AgentCalendarExperts? get calendarExperts => calendarExpertController.experts;
-  String? get calendarExpertFailure => calendarExpertController.failure;
   late final AgentMemoryController memoryController;
   late final AgentConnectionController connectionController;
   List<AgentConnection>? get connections => connectionController.connections;
@@ -277,69 +250,6 @@ final class AgentController extends ChangeNotifier {
     _proposalFailures.clear();
   }
 
-  AgentCalendarSetup? get pendingCalendarSetup =>
-      calendarExpertController.pendingSetup;
-  bool get hasCalendarExpertManagement =>
-      hasRegistryManagement && calendarExpertController.available;
-  bool get canManageCalendarExperts =>
-      hasCalendarExpertManagement && calendarExpertController.canManage;
-
-  Future<void> loadCalendarExperts() => calendarExpertController.load();
-
-  Future<void> installCalendarExpert({
-    required String setupId,
-    required String provider,
-    required String deviceId,
-    required List<String> calendarIds,
-    required String connectionScope,
-    required int connectionRevision,
-    required CalendarSourceAuthority sourceAuthority,
-    CalendarSubjectPreview? reviewedPreview,
-  }) => calendarExpertController.install(
-    setupId: setupId,
-    provider: provider,
-    deviceId: deviceId,
-    calendarIds: calendarIds,
-    connectionScope: connectionScope,
-    connectionRevision: connectionRevision,
-    sourceAuthority: sourceAuthority,
-    reviewedPreview: reviewedPreview,
-  );
-
-  Future<void> retryCalendarSetup() => calendarExpertController.retrySetup();
-
-  void discardUncommittedCalendarSetup() =>
-      calendarExpertController.discardUncommittedSetup();
-
-  Future<void> configureCalendarView(String handle, bool enabled) =>
-      calendarExpertController.configureView(handle, enabled);
-
-  Future<void> setCalendarAccessEnabled(String setupId, bool enabled) =>
-      calendarExpertController.setCalendarAccessEnabled(setupId, enabled);
-
-  Future<void> changeCalendarAccessScope({
-    required String setupId,
-    required String provider,
-    required String deviceId,
-    required List<String> calendarIds,
-    required String connectionScope,
-    required int connectionRevision,
-    required CalendarSourceAuthority sourceAuthority,
-    CalendarSubjectPreview? reviewedPreview,
-  }) => calendarExpertController.changeCalendarAccessScope(
-    setupId: setupId,
-    provider: provider,
-    deviceId: deviceId,
-    calendarIds: calendarIds,
-    connectionScope: connectionScope,
-    connectionRevision: connectionRevision,
-    sourceAuthority: sourceAuthority,
-    reviewedPreview: reviewedPreview,
-  );
-
-  Future<void> removeCalendarAccess(String setupId) =>
-      calendarExpertController.removeCalendarAccess(setupId);
-
   bool get hasRegistryManagement => usesVault && registryController.available;
 
   bool get hasMemoryReview => usesVault && memoryController.hasReview;
@@ -369,13 +279,10 @@ final class AgentController extends ChangeNotifier {
   ) => registryController.configure(target, id, enabled);
 
   Future<void> configureCapability(String installationId, bool enabled) async {
-    final changed = await registryController.configureCapability(
+    await registryController.configureCapability(
       installationId,
       enabled,
     );
-    if (changed && hasCalendarExpertManagement && canManageCalendarExperts) {
-      await loadCalendarExperts();
-    }
   }
 
   bool get usesVault => owners.vault != null;
@@ -388,7 +295,6 @@ final class AgentController extends ChangeNotifier {
       _busy ||
       registryController.busy ||
       memoryController.busy ||
-      calendarExpertController.busy ||
       connectionController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
@@ -399,8 +305,7 @@ final class AgentController extends ChangeNotifier {
   bool get _conversationBusy =>
       _busy ||
       registryController.busy ||
-      memoryController.busy ||
-      calendarExpertController.busy;
+      memoryController.busy;
   bool get canStartConversation => !_conversationBusy && !_disposed && !running;
   bool get canSend =>
       !_conversationBusy &&
@@ -698,7 +603,6 @@ final class AgentController extends ChangeNotifier {
     _sealed = true;
     _clearProposals();
     registryController.clear();
-    calendarExpertController.clear();
     memoryController.clear();
     connectionController.clear();
     session = null;
@@ -797,7 +701,6 @@ final class AgentController extends ChangeNotifier {
     if (usesVault && (sealSession ?? false)) {
       _sealed = true;
       registryController.clear();
-      calendarExpertController.clear();
       memoryController.clear();
       connectionController.clear();
       session = null;
@@ -812,7 +715,6 @@ final class AgentController extends ChangeNotifier {
     _conversationRuntime?.readModel.removeListener(_notify);
     registryController.removeListener(_notify);
     memoryController.removeListener(_notify);
-    calendarExpertController.removeListener(_notify);
     connectionController.removeListener(_notify);
     if (_conversationRuntime == null) unawaited(stop());
     super.dispose();

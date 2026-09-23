@@ -21,7 +21,6 @@ macro_rules! response_payload {
 response_payload!(AgentEventDto);
 response_payload!(AgentFailureDto);
 response_payload!(AgentSessionDto);
-response_payload!(CalendarExpertOverviewDto);
 response_payload!(ConnectorSnapshotDto);
 response_payload!(EpistemicStatusDto);
 response_payload!(KnowledgeCandidateDto);
@@ -77,7 +76,6 @@ pub struct RegistryConfigurationDto {
 pub enum RegistryConfigurationTargetDto {
     Installation { id: Uuid, enabled: bool },
     Assignment { id: Uuid, enabled: bool },
-    CalendarView { id: Uuid, enabled: bool },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

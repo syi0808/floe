@@ -3,18 +3,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::CalendarScope;
 use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
 
-mod calendar_setup;
 mod expert_setup;
 
-pub use calendar_setup::{
-    CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
-    CalendarExpertSetupResult, ExpertPackaging,
-};
 pub use expert_setup::{
-    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec,
+    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertPackaging, ExpertSetupSpec,
     eligible_cards_for_availability,
 };
 
@@ -64,25 +58,6 @@ pub struct BuiltinExpertAssignmentReceipt {
 }
 
 pub use floe_agent_contract::SourceGrant;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CalendarExpertSetupReceipt {
-    pub setup_id: Uuid,
-    pub person_id: PersonId,
-    pub expected_revision: u64,
-    pub connection_scope: CalendarScope,
-    pub connection_revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reviewed_native_subject_fingerprint: Option<String>,
-    pub view_handle: Uuid,
-    pub tool_installation_id: Uuid,
-    pub expert_installation_id: Uuid,
-    pub tool_assignment_id: Uuid,
-    pub expert_assignment_id: Uuid,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -212,7 +187,6 @@ pub struct PackageAssignment {
     pub installation_id: Uuid,
     pub enabled: bool,
     pub granted_tool_assignments: Vec<Uuid>,
-    pub granted_view_handles: Vec<Uuid>,
     pub private_state: ExpertPrivateState,
 }
 
@@ -245,63 +219,7 @@ pub struct RegistrySnapshot {
     pub packages: Vec<AgentPackage>,
     pub installations: Vec<PackageInstallation>,
     pub assignments: Vec<PackageAssignment>,
-    pub calendar_views: Vec<CalendarViewBinding>,
-    pub calendar_setups: Vec<CalendarExpertSetupReceipt>,
-    pub revoked_calendar_setups: Vec<Uuid>,
     pub builtin_setups: Vec<BuiltinExpertSetupReceipt>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CalendarViewBinding {
-    pub handle: Uuid,
-    pub person_id: PersonId,
-    pub provider: floe_agent_contract::CalendarProvider,
-    pub device_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_agent_contract::CalendarScope,
-    pub connection_revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
-    pub enabled: bool,
-}
-
-impl CalendarViewBinding {
-    pub fn data_class(&self) -> DataClass {
-        match self.provider {
-            floe_agent_contract::CalendarProvider::Fixture => DataClass::Synthetic,
-            floe_agent_contract::CalendarProvider::EventKit
-            | floe_agent_contract::CalendarProvider::Google
-            | floe_agent_contract::CalendarProvider::Microsoft
-            | floe_agent_contract::CalendarProvider::Android => DataClass::Personal,
-        }
-    }
-
-    fn validate(&self) -> Result<(), AgentFailure> {
-        let device_binding_valid = !self.device_id.trim().is_empty() && self.device_id.len() <= 128;
-        if self.handle.is_nil()
-            || !device_binding_valid
-            || self.calendar_ids.is_empty()
-            || self.calendar_ids.len() > 4
-            || self
-                .calendar_ids
-                .iter()
-                .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
-            || self.calendar_ids.windows(2).any(|pair| pair[0] >= pair[1])
-            || self.connection_revision == 0
-            || (matches!(
-                self.provider,
-                floe_agent_contract::CalendarProvider::EventKit
-                    | floe_agent_contract::CalendarProvider::Android
-            ) && self.source_authority.is_none())
-            || self
-                .source_authority
-                .is_some_and(|authority| !authority.is_valid())
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -322,7 +240,6 @@ pub struct AssignmentOverview {
     pub installation_id: Uuid,
     pub enabled: bool,
     pub granted_tool_count: usize,
-    pub granted_view_count: usize,
     pub state_revision: u64,
     pub completed_invocations: u64,
 }
@@ -340,7 +257,6 @@ pub struct RegistryConfiguration {
 pub enum RegistryConfigurationTarget {
     Installation { id: Uuid, enabled: bool },
     Assignment { id: Uuid, enabled: bool },
-    CalendarView { id: Uuid, enabled: bool },
 }
 
 pub struct AgentRegistry {
@@ -375,7 +291,6 @@ impl AgentRegistry {
                     installation_id: assignment.installation_id,
                     enabled: assignment.enabled,
                     granted_tool_count: assignment.granted_tool_assignments.len(),
-                    granted_view_count: assignment.granted_view_handles.len(),
                     state_revision: assignment.private_state.revision,
                     completed_invocations: assignment.private_state.completed_invocations,
                 })
@@ -392,9 +307,6 @@ impl AgentRegistry {
                 packages: vec![],
                 installations: vec![],
                 assignments: vec![],
-                calendar_views: vec![],
-                calendar_setups: vec![],
-                revoked_calendar_setups: vec![],
                 builtin_setups: vec![],
             },
         }
@@ -436,23 +348,11 @@ impl AgentRegistry {
         if snapshot.packages.len() > 64
             || snapshot.installations.len() > 128
             || snapshot.assignments.len() > 256
-            || snapshot.calendar_views.len() > 256
-            || snapshot.calendar_setups.len() > 64
-            || snapshot.revoked_calendar_setups.len() > 64
             || snapshot.builtin_setups.len() > 64
         {
             return Err(AgentFailure::BudgetExceeded);
         }
         let registry = Self { snapshot };
-        for (index, binding) in registry.snapshot.calendar_views.iter().enumerate() {
-            binding.validate()?;
-            if registry.snapshot.calendar_views[..index]
-                .iter()
-                .any(|other| other.handle == binding.handle)
-            {
-                return Err(AgentFailure::Conflict);
-            }
-        }
         for (index, package) in registry.snapshot.packages.iter().enumerate() {
             package.validate()?;
             if registry.snapshot.packages[..index]
@@ -490,21 +390,8 @@ impl AgentRegistry {
         }
         // The registry keeps these records, so it validates them itself; the
         // port is for setup an owner outside this crate adds on top.
-        registry.validate_calendar_setups()?;
         registry.validate_builtin_setups()?;
         setups.validate_setups(&registry)?;
-        for (index, setup_id) in registry.snapshot.revoked_calendar_setups.iter().enumerate() {
-            if setup_id.is_nil()
-                || registry.snapshot.revoked_calendar_setups[..index].contains(setup_id)
-                || !registry
-                    .snapshot
-                    .calendar_setups
-                    .iter()
-                    .any(|setup| setup.setup_id == *setup_id)
-            {
-                return Err(AgentFailure::Conflict);
-            }
-        }
         Ok(registry)
     }
 
@@ -557,7 +444,6 @@ impl AgentRegistry {
         person_id: PersonId,
         installation_id: Uuid,
         granted_tool_assignments: Vec<Uuid>,
-        granted_view_handles: Vec<Uuid>,
     ) -> Result<Uuid, AgentFailure> {
         self.check_revision(expected_revision)?;
         if self.snapshot.assignments.len() >= 256 {
@@ -569,7 +455,6 @@ impl AgentRegistry {
             installation_id,
             enabled: false,
             granted_tool_assignments,
-            granted_view_handles,
             private_state: ExpertPrivateState::default(),
         };
         self.validate_grants(&assignment)?;
@@ -788,74 +673,6 @@ impl AgentRegistry {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn register_calendar_view(
-        &mut self,
-        expected_revision: u64,
-        person_id: PersonId,
-        provider: floe_agent_contract::CalendarProvider,
-        device_id: String,
-        mut calendar_ids: Vec<String>,
-        connection_scope: floe_agent_contract::CalendarScope,
-        connection_revision: u64,
-        source_authority: Option<floe_agent_contract::SourceAuthority>,
-    ) -> Result<Uuid, AgentFailure> {
-        self.check_revision(expected_revision)?;
-        if self.snapshot.calendar_views.len() >= 256 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        calendar_ids.sort();
-        let binding = CalendarViewBinding {
-            handle: Uuid::new_v4(),
-            person_id,
-            provider,
-            device_id,
-            calendar_ids,
-            connection_scope,
-            connection_revision,
-            source_authority,
-            enabled: false,
-        };
-        binding.validate()?;
-        let handle = binding.handle;
-        self.advance()?;
-        self.snapshot.calendar_views.push(binding);
-        Ok(handle)
-    }
-
-    pub fn set_calendar_view_enabled(
-        &mut self,
-        expected_revision: u64,
-        person_id: PersonId,
-        handle: Uuid,
-        enabled: bool,
-    ) -> Result<(), AgentFailure> {
-        self.check_revision(expected_revision)?;
-        let index = self
-            .snapshot
-            .calendar_views
-            .iter()
-            .position(|binding| binding.person_id == person_id && binding.handle == handle)
-            .ok_or(AgentFailure::NotFound)?;
-        self.advance()?;
-        self.snapshot.calendar_views[index].enabled = enabled;
-        Ok(())
-    }
-
-    pub fn calendar_view(
-        &self,
-        person_id: PersonId,
-        handle: Uuid,
-    ) -> Result<&CalendarViewBinding, AgentFailure> {
-        self.snapshot
-            .calendar_views
-            .iter()
-            .find(|binding| {
-                binding.person_id == person_id && binding.handle == handle && binding.enabled
-            })
-            .ok_or(AgentFailure::CapabilityDenied)
-    }
-
     /// Resolve one built-in assignment to the Expert it installs.
     ///
     /// This validates Registry/package/tool/private-state identity only.
@@ -942,52 +759,7 @@ impl AgentRegistry {
         &self,
         assignment: &PackageAssignment,
     ) -> Result<(), AgentFailure> {
-        let installation = self.installation(assignment.installation_id)?;
-        let package = self.package(&installation.package)?;
-        for handle in &assignment.granted_view_handles {
-            if let Some(binding) = self
-                .snapshot
-                .calendar_views
-                .iter()
-                .find(|binding| binding.handle == *handle)
-            {
-                if binding.person_id != assignment.person_id {
-                    return Err(AgentFailure::CapabilityDenied);
-                }
-                if let PackageImplementation::TimelineRead { data_class } = package.implementation
-                    && data_class != binding.data_class()
-                {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-            }
-        }
-        if assignment.granted_view_handles.len() > 4
-            || assignment
-                .granted_view_handles
-                .iter()
-                .enumerate()
-                .any(|(index, view)| assignment.granted_view_handles[..index].contains(view))
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        match package.reference.kind {
-            PackageKind::Tool if assignment.granted_tool_assignments.is_empty() => Ok(()),
-            PackageKind::Expert if assignment.granted_tool_assignments.len() == 1 => {
-                let tool =
-                    self.assignment(assignment.person_id, assignment.granted_tool_assignments[0])?;
-                let tool_installation = self.installation(tool.installation_id)?;
-                if package.required_tools != [tool_installation.package.clone()]
-                    || assignment
-                        .granted_view_handles
-                        .iter()
-                        .any(|view| !tool.granted_view_handles.contains(view))
-                {
-                    return Err(AgentFailure::CapabilityDenied);
-                }
-                Ok(())
-            }
-            _ => Err(AgentFailure::CapabilityDenied),
-        }
+        self.validate_tool_linkage(assignment)
     }
 
     pub(crate) fn validate_tool_linkage(
@@ -1112,53 +884,6 @@ impl AgentRegistry {
     }
 }
 
-/// The installed calendar setup one bound view belongs to.
-///
-/// A calendar-scoped read names a view handle; what the Person's registry
-/// records under it — which setup, at which scope and under which authority —
-/// is the registry's own answer.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CalendarSourceBinding {
-    pub setup_id: Uuid,
-    pub view_handle: Uuid,
-    pub provider: floe_agent_contract::CalendarProvider,
-    pub device_id: String,
-    pub calendar_ids: Vec<String>,
-    pub connection_scope: floe_agent_contract::CalendarScope,
-    pub source_authority: Option<floe_agent_contract::SourceAuthority>,
-}
-
-impl AgentRegistry {
-    /// The installed setup that binds one calendar view for this Person.
-    ///
-    /// A view with no setup behind it is not one this Person reviewed, whatever
-    /// a grant says about it.
-    pub fn calendar_source_binding(
-        &self,
-        person_id: PersonId,
-        view_handle: Uuid,
-    ) -> Result<CalendarSourceBinding, AgentFailure> {
-        let setup = self
-            .snapshot
-            .calendar_setups
-            .iter()
-            .find(|setup| setup.person_id == person_id && setup.view_handle == view_handle)
-            .ok_or(AgentFailure::AccessReviewRequired)?;
-        let binding = self
-            .calendar_view(person_id, view_handle)
-            .map_err(|_| AgentFailure::AccessReviewRequired)?;
-        Ok(CalendarSourceBinding {
-            setup_id: setup.setup_id,
-            view_handle,
-            provider: binding.provider,
-            device_id: binding.device_id.clone(),
-            calendar_ids: binding.calendar_ids.clone(),
-            connection_scope: binding.connection_scope,
-            source_authority: binding.source_authority,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1223,7 +948,6 @@ mod tests {
                 installation_id: Uuid::new_v4(),
                 enabled: true,
                 granted_tool_assignments: vec![],
-                granted_view_handles: vec![],
                 private_state: ExpertPrivateState::default(),
             },
             data_class: DataClass::Personal,

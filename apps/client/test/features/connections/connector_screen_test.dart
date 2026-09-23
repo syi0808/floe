@@ -7,7 +7,6 @@ import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
 import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
-import 'package:floe_client/features/experts/presentation/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
@@ -17,7 +16,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/server_credentials.dart';
-import '../../support/agent_calendar_experts.dart';
 import '../../support/agent_registry.dart';
 
 void main() {
@@ -142,7 +140,7 @@ void main() {
     tester,
   ) async {
     final controller = AgentController(
-      gateway: TestCalendarExpertGateway(),
+      gateway: TestRegistryGateway(),
       personId: registryPerson,
     );
     final source = ValueNotifier<AgentCalendarSources?>(
@@ -190,8 +188,6 @@ void main() {
               platform: TargetPlatform.macOS,
               initialDeviceCalendarDetail: true,
               agentController: controller,
-              calendarSources: () => source.value,
-              calendarSourceChanges: source,
             ),
           ),
         ),
@@ -204,9 +200,8 @@ void main() {
     );
     expect(find.text('Allowed'), findsOneWidget);
     expect(find.text('Calendars available to Floe'), findsOneWidget);
-    expect(find.byType(AgentCalendarSettings), findsOneWidget);
-    expect(find.text('Data Floe can use'), findsOneWidget);
-    expect(find.byKey(const ValueKey('calendar-access-setup')), findsOneWidget);
+    expect(find.text('Data Floe can use'), findsNothing);
+    expect(find.byKey(const ValueKey('calendar-access-setup')), findsNothing);
   });
 
   testWidgets('device-native and disconnected server catalog are composed', (

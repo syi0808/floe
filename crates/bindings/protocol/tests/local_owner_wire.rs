@@ -87,8 +87,6 @@ fn local_owner_commands_reject_identity_topology_and_malformed_ids() {
         json!({"kind":"conversation.session.resume"}),
         json!({"kind":"conversation.session.recover", "session_id":Uuid::new_v4(), "expected_revision":1}),
         json!({"kind":"experts.registry.configure", "change":{"instance_id":Uuid::new_v4(), "expected_revision":1, "target":{"kind":"installation", "id":Uuid::new_v4(), "enabled":true}}}),
-        json!({"kind":"experts.calendar.install", "setup":{"instance_id":Uuid::new_v4(), "expected_revision":0, "setup_id":Uuid::new_v4(), "provider":"event_kit", "calendar_ids":["calendar"], "connection_scope":"selected", "connection_revision":1, "source_authority":null, "reviewed_native_subject_fingerprint":null}}),
-        json!({"kind":"access.calendar.configure", "change":{"instance_id":Uuid::new_v4(), "expected_revision":1, "setup_id":Uuid::new_v4(), "change":{"kind":"set_enabled", "enabled":false}}}),
         json!({"kind":"access.personal.configure", "connector":"attention.macos", "change":{"kind":"set_enabled", "enabled":false}}),
         json!({"kind":"access.contacts.configure", "connector":"contacts.apple", "change":{"kind":"set_enabled", "enabled":false}}),
         json!({"kind":"knowledge.memory.decide", "candidate_id":Uuid::new_v4(), "decision":"approve"}),

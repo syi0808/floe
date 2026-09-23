@@ -42,7 +42,6 @@ import 'package:floe_client/features/conversation/application/agent_conversation
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
-import 'package:floe_client/features/experts/domain/agent_calendar_sources.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
@@ -292,8 +291,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         daySnapshot: controller.snapshot,
         agentController: agentController,
         personalAccessGateway: widget.ownerGateways.personalAccess,
-        calendarSources: _agentCalendarSources,
-        calendarSourceChanges: controller,
         initialDeviceCalendarDetail: openDeviceCalendarDetail,
       );
     }
@@ -602,19 +599,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     _selectDestination(_DestinationView.connections, openCalendarDetail: true);
   }
 
-  AgentCalendarSources? _agentCalendarSources() {
-    final snapshot = controller.snapshot;
-    final connection = snapshot?.calendar;
-    if (controller.loadState != DayLoadState.ready ||
-        snapshot == null ||
-        connection == null) {
-      return null;
-    }
-    return AgentCalendarSources(
-      personId: snapshot.personId,
-      connection: connection,
-    );
-  }
 
   void _closeAssistant() {
     setState(() => assistantOpen = false);

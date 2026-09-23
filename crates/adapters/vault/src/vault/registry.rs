@@ -153,7 +153,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     self.save_expert_registry_change_checked(
                         revision,
                         &registry.snapshot(),
-                        None,
                         Some(setup.setup_id),
                         None,
                         None,
@@ -197,206 +196,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(cards)
     }
 
-    pub async fn calendar_expert_overview(
-        &self,
-    ) -> Result<floe_experts::CalendarExpertOverview, AgentFailure> {
-        let registry = match self.expert_registry().await? {
-            Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?,
-            None => AgentRegistry::new(self.vault_id),
-        };
-        let overview = registry.calendar_expert_overview(self.person_id);
-        self.check_access()?;
-        Ok(overview)
-    }
-
-    pub async fn install_calendar_expert(
-        &self,
-        request: floe_experts::CalendarExpertSetup,
-        packaging: &floe_experts::ExpertPackaging,
-        consumers: &[floe_access::GrantConsumer],
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
-        if matches!(
-            request.provider,
-            floe_agent_contract::CalendarProvider::EventKit
-                | floe_agent_contract::CalendarProvider::Android
-        ) {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        let connection_id = request.setup_id.to_string();
-        self.install_calendar_expert_with_connection(
-            request,
-            packaging,
-            connection_id,
-            consumers,
-            cancellation,
-        )
-        .await
-    }
-
-    pub async fn install_calendar_expert_with_connection(
-        &self,
-        request: floe_experts::CalendarExpertSetup,
-        packaging: &floe_experts::ExpertPackaging,
-        connection_id: String,
-        consumers: &[floe_access::GrantConsumer],
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
-        let check = || {
-            if cancellation.is_cancelled() {
-                Err(AgentFailure::Cancelled)
-            } else {
-                Ok(())
-            }
-        };
-        check()?;
-        if request.instance_id != self.vault_id {
-            return Err(AgentFailure::NotFound);
-        }
-        let previous = self.expert_registry().await?;
-        let mut registry = match &previous {
-            Some(snapshot) => AgentRegistry::restore(snapshot.clone(), self.vault_id)?,
-            None => AgentRegistry::new(self.vault_id),
-        };
-        let revision = registry.revision();
-        let setup = registry.install_calendar_expert(self.person_id, &request, packaging)?;
-        if registry.revision() != revision {
-            self.persist_calendar_install(
-                previous.as_ref(),
-                &registry.snapshot(),
-                &request,
-                &setup,
-                &connection_id,
-                consumers,
-                &check,
-            )
-            .await?;
-        }
-        self.check_access()?;
-        check()?;
-        Ok(floe_experts::CalendarExpertSetupResult {
-            setup,
-            registry: registry.overview(self.person_id),
-        })
-    }
-
-    pub async fn configure_calendar_access(
-        &self,
-        configuration: floe_experts::CalendarAccessConfiguration,
-        consumers: &[floe_access::GrantConsumer],
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::CalendarExpertOverview, AgentFailure> {
-        let native = self
-            .expert_registry()
-            .await?
-            .map(|snapshot| {
-                snapshot
-                    .calendar_setups
-                    .iter()
-                    .find(|setup| setup.setup_id == configuration.setup_id)
-                    .and_then(|setup| {
-                        snapshot
-                            .calendar_views
-                            .iter()
-                            .find(|view| view.handle == setup.view_handle)
-                    })
-                    .map(|view| {
-                        matches!(
-                            view.provider,
-                            floe_agent_contract::CalendarProvider::EventKit
-                                | floe_agent_contract::CalendarProvider::Android
-                        )
-                    })
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        if native {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        let connection_id = configuration.setup_id.to_string();
-        self.configure_calendar_access_with_connection(
-            configuration,
-            connection_id,
-            consumers,
-            cancellation,
-        )
-        .await
-    }
-
-    pub async fn configure_calendar_access_with_connection(
-        &self,
-        configuration: floe_experts::CalendarAccessConfiguration,
-        connection_id: String,
-        consumers: &[floe_access::GrantConsumer],
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::CalendarExpertOverview, AgentFailure> {
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        if configuration.instance_id != self.vault_id {
-            return Err(AgentFailure::NotFound);
-        }
-        let snapshot = self
-            .expert_registry()
-            .await?
-            .ok_or(AgentFailure::NotFound)?;
-        let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
-        let previous = registry.snapshot();
-        let native = previous
-            .calendar_setups
-            .iter()
-            .find(|setup| setup.setup_id == configuration.setup_id)
-            .and_then(|setup| {
-                previous
-                    .calendar_views
-                    .iter()
-                    .find(|view| view.handle == setup.view_handle)
-                    .map(|view| {
-                        matches!(
-                            view.provider,
-                            floe_agent_contract::CalendarProvider::EventKit
-                                | floe_agent_contract::CalendarProvider::Android
-                        )
-                    })
-            })
-            .unwrap_or(false);
-        registry.configure_calendar_access(self.person_id, &configuration)?;
-        let check = || {
-            if cancellation.is_cancelled() {
-                Err(AgentFailure::Cancelled)
-            } else {
-                Ok(())
-            }
-        };
-        if native {
-            self.persist_calendar_change(
-                &configuration,
-                &previous,
-                &registry.snapshot(),
-                &connection_id,
-                consumers,
-                &check,
-            )
-            .await?;
-        } else {
-            self.save_expert_registry_change_checked(
-                configuration.expected_revision,
-                &registry.snapshot(),
-                Some(configuration.setup_id),
-                None,
-                None,
-                None,
-                &check,
-            )
-            .await?;
-        }
-        self.check_access()?;
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        Ok(registry.calendar_expert_overview(self.person_id))
-    }
-
     pub async fn registry_overview(
         &self,
     ) -> Result<Option<floe_experts::RegistryOverview>, AgentFailure> {
@@ -429,13 +228,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .ok_or(AgentFailure::NotFound)?;
         let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
         match configuration.target {
-            floe_experts::RegistryConfigurationTarget::CalendarView { id, enabled } => registry
-                .set_calendar_view_enabled(
-                    configuration.expected_revision,
-                    self.person_id,
-                    id,
-                    enabled,
-                )?,
             floe_experts::RegistryConfigurationTarget::Installation { id, enabled } => {
                 registry.set_installation_enabled(configuration.expected_revision, id, enabled)?
             }
@@ -539,7 +331,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None,
             None,
             None,
-            None,
             check,
         )
         .await?;
@@ -601,7 +392,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             settlement.expected_registry_revision,
             &settlement.staged_registry,
             None,
-            None,
             Some(settlement.assignment_id),
             Some((
                 task_id,
@@ -619,7 +409,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
-        mutable_calendar_setup: Option<uuid::Uuid>,
         mutable_builtin_setup: Option<uuid::Uuid>,
         mutable_assignment: Option<uuid::Uuid>,
         task_completion: Option<(TaskId, u64, u64, &TaskSnapshot)>,
@@ -658,7 +447,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     || before.installation_id != after.installation_id
                     || before.enabled != after.enabled
                     || before.granted_tool_assignments != after.granted_tool_assignments
-                    || before.granted_view_handles != after.granted_view_handles
                     || before.private_state.schema_version != after.private_state.schema_version
                     || before.private_state.revision.checked_add(1)
                         != Some(after.private_state.revision)
@@ -683,27 +471,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::Conflict);
                 }
             }
-            let mutable_calendar_view = mutable_calendar_setup.and_then(|setup_id| {
-                previous
-                    .calendar_setups
-                    .iter()
-                    .find(|receipt| receipt.setup_id == setup_id)
-                    .map(|receipt| receipt.view_handle)
-            });
-            let calendar_receipt_allowed =
-                |before: &floe_experts::CalendarExpertSetupReceipt,
-                 after: &floe_experts::CalendarExpertSetupReceipt| {
-                    before == after
-                        || (mutable_calendar_setup == Some(before.setup_id)
-                            && before.setup_id == after.setup_id
-                            && before.person_id == after.person_id
-                            && before.expected_revision == after.expected_revision
-                            && before.view_handle == after.view_handle
-                            && before.tool_installation_id == after.tool_installation_id
-                            && before.expert_installation_id == after.expert_installation_id
-                            && before.tool_assignment_id == after.tool_assignment_id
-                            && before.expert_assignment_id == after.expert_assignment_id)
-                };
             let builtin_receipt_allowed =
                 |before: &floe_experts::BuiltinExpertSetupReceipt,
                  after: &floe_experts::BuiltinExpertSetupReceipt| {
@@ -724,14 +491,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                                 },
                             ))
                 };
-            if previous.calendar_setups.iter().any(|before| {
-                !snapshot
-                    .calendar_setups
-                    .iter()
-                    .any(|after| calendar_receipt_allowed(before, after))
-            }) {
-                return Err(AgentFailure::Conflict);
-            }
             if previous.builtin_setups.iter().any(|before| {
                 !snapshot
                     .builtin_setups
@@ -776,90 +535,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::Conflict);
                 }
             }
-            if previous
-                .revoked_calendar_setups
-                .iter()
-                .any(|setup_id| !snapshot.revoked_calendar_setups.contains(setup_id))
-                || snapshot.revoked_calendar_setups.iter().any(|setup_id| {
-                    !previous.revoked_calendar_setups.contains(setup_id)
-                        && !previous
-                            .calendar_setups
-                            .iter()
-                            .any(|setup| setup.setup_id == *setup_id)
-                })
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            for receipt in &snapshot.calendar_setups {
-                if let Some(before) = previous
-                    .calendar_setups
-                    .iter()
-                    .find(|before| before.setup_id == receipt.setup_id)
-                {
-                    if calendar_receipt_allowed(before, receipt) {
-                        continue;
-                    }
-                    return Err(AgentFailure::Conflict);
-                }
-                if receipt.expected_revision != expected_revision
-                    || previous
-                        .calendar_views
-                        .iter()
-                        .any(|binding| binding.handle == receipt.view_handle)
-                    || previous.installations.iter().any(|installation| {
-                        [receipt.tool_installation_id, receipt.expert_installation_id]
-                            .contains(&installation.id)
-                    })
-                    || previous.assignments.iter().any(|assignment| {
-                        [receipt.tool_assignment_id, receipt.expert_assignment_id]
-                            .contains(&assignment.id)
-                    })
-                    || snapshot.installations.iter().any(|installation| {
-                        [receipt.tool_installation_id, receipt.expert_installation_id]
-                            .contains(&installation.id)
-                            && installation.enabled
-                    })
-                    || snapshot.assignments.iter().any(|assignment| {
-                        [receipt.tool_assignment_id, receipt.expert_assignment_id]
-                            .contains(&assignment.id)
-                            && assignment.enabled
-                    })
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-            }
-            for binding in &snapshot.calendar_views {
-                match previous
-                    .calendar_views
-                    .iter()
-                    .find(|entry| entry.handle == binding.handle)
-                {
-                    Some(entry)
-                        if entry.person_id == binding.person_id
-                            && entry.provider == binding.provider
-                            && entry.device_id == binding.device_id
-                            && entry.calendar_ids == binding.calendar_ids
-                            && entry.connection_scope == binding.connection_scope
-                            && entry.connection_revision == binding.connection_revision
-                            && entry.source_authority == binding.source_authority => {}
-                    Some(entry)
-                        if mutable_calendar_view == Some(binding.handle)
-                            && entry.person_id == binding.person_id => {}
-                    None if !binding.enabled
-                        && !previous.assignments.iter().any(|assignment| {
-                            assignment.granted_view_handles.contains(&binding.handle)
-                        }) => {}
-                    _ => return Err(AgentFailure::Conflict),
-                }
-            }
-            if previous.calendar_views.iter().any(|entry| {
-                !snapshot
-                    .calendar_views
-                    .iter()
-                    .any(|binding| binding.handle == entry.handle)
-            }) {
-                return Err(AgentFailure::Conflict);
-            }
             for assignment in &snapshot.assignments {
                 match previous
                     .assignments
@@ -878,7 +553,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             && entry.enabled == assignment.enabled
                             && entry.granted_tool_assignments
                                 == assignment.granted_tool_assignments
-                            && entry.granted_view_handles == assignment.granted_view_handles
                             && entry.private_state.schema_version
                                 == assignment.private_state.schema_version
                             && entry.private_state.revision.checked_add(1)
@@ -1258,13 +932,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     fn registry_payload(&self, snapshot: &RegistrySnapshot) -> Result<String, AgentFailure> {
-        if snapshot
-            .calendar_views
-            .iter()
-            .any(|binding| binding.person_id != self.person_id)
-        {
-            return Err(AgentFailure::NotFound);
-        }
         if snapshot
             .assignments
             .iter()
