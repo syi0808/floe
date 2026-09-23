@@ -8,14 +8,16 @@
 //! nowhere but here.
 
 use floe_context_contract::{
-    CalendarProvider, ConnectionId, ConnectorId, ExecutionOwnerId, GrantAuthority, GrantConsumer,
-    GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
-    ProcessingRestriction, ResourceHandle, SourceAuthority,
+    CalendarProvider, ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId,
+    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+    GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
 use floe_kernel::{AgentFailure, PersonId};
 
+use crate::GrantState;
 use crate::application::native_calendar::CALENDAR_EXPERT_CONSUMER as REMOTE_CALENDAR_CONSUMER;
 use crate::application::remote_authority::admit_enrollment_pairing;
+use crate::application::remote_view::RemoteViewSourceReference;
 use crate::application::remote_view::{RemoteProducerIdentity, producer_is_pinned};
 use crate::data_access_grant::DataAccessGrant;
 use crate::ports::remote_grants::{
@@ -151,6 +153,45 @@ pub fn remote_calendar_scope(resource: &str) -> Result<GrantScope, AgentFailure>
         ProcessingRestriction::LocalOnly,
     )
     .map_err(|_| AgentFailure::InvalidInput)
+}
+
+pub fn admit_remote_calendar_read(
+    grant: &DataAccessGrant,
+    consumer: &GrantConsumer,
+    resource: &str,
+) -> Result<(), AgentFailure> {
+    if grant.state() != GrantState::Active
+        || grant.review_required()
+        || !matches!(
+            grant.source().connector().as_str(),
+            "calendar.google" | "calendar.microsoft"
+        )
+        || grant.scope().resources().len() != 1
+        || grant.scope().resources()[0].as_str() != resource
+        || grant.scope().categories() != [GrantDataCategory::Content]
+        || !grant.scope().operations().contains(&GrantOperation::Read)
+        || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        || !grant.scope().consumers().contains(consumer)
+        || grant.scope().processing() != &ProcessingRestriction::LocalOnly
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+pub fn remote_calendar_dependency_source_admits(
+    dependency: &ContextDependency,
+    reference: &RemoteViewSourceReference,
+    connection_revision: u64,
+) -> Result<(), AgentFailure> {
+    if dependency.processing() != &ProcessingRestriction::LocalOnly
+        || reference.source_authority != dependency.source().source_authority()
+        || reference.execution_owner != dependency.source().execution_owner().as_str()
+        || reference.connection_revision != connection_revision
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
 }
 
 /// Show the Person what they would be granting.

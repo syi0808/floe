@@ -141,4 +141,27 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
             })
         })
     }
+
+    fn calendar_grant_binding<'a>(
+        &'a self,
+        connector_id: &'a str,
+        connection_id: &'a str,
+        source_authority: SourceAuthority,
+        resource: &'a str,
+    ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
+        Box::pin(async move {
+            let binding = self
+                .remote_calendar_grant_binding(
+                    connector_id,
+                    connection_id,
+                    source_authority,
+                    resource,
+                )
+                .await?;
+            Ok(RemoteGrantBinding {
+                grant: binding.grant,
+                consumer_policy: binding.consumer_policy,
+            })
+        })
+    }
 }

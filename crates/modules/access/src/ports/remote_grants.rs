@@ -168,4 +168,12 @@ pub trait RemoteGrantStore: Sync {
         connection_id: &'a str,
         source_authority: SourceAuthority,
     ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>>;
+
+    fn calendar_grant_binding<'a>(
+        &'a self,
+        connector_id: &'a str,
+        connection_id: &'a str,
+        source_authority: SourceAuthority,
+        resource: &'a str,
+    ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>>;
 }

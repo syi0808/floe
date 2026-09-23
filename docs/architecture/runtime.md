@@ -82,6 +82,8 @@ Experts are agents with identity and Task lifecycle, not provider-native Tools. 
 
 Schedule has one production model-execution path: `ScheduleEndpoint` → `run_calendar_expert_endpoint` → `ExpertModelHost` → `InferenceExecutor`. Calendar source acquisition, exact dependency coverage, grant revalidation and atomic Task/Expert settlement remain with their existing owners. There is no parallel Schedule Session/agent-turn model runtime. Test-only persisted Delegation/ExpertResult fixtures support proposal inspection and publication tests without another model runtime. The synthetic App AgentFixture runtime and its ABI are deleted. Test-only owner fixtures do not keep a second Conversation runtime alive.
 
+Context exposes a signed remote Calendar View read and dependency reauthorization under a selected DataAccessGrant resource, with Access checking the Calendar-specific local-only scope and Vault resolving its consumer-policy binding. The current Schedule endpoint and common optional Calendar host have not yet been cut over to that read; their existing acquisition paths remain in App.
+
 Schedule planning receives remote **source** availability from the composed capability, not a model route. Google/Microsoft enumeration remains lazy and provider-specific; Access owns Calendar authorization, while Schedule owns the requirement that freshly remote-acquired Calendar data uses DeviceOnly reasoning.
 
 ## Consequential actions

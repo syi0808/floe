@@ -10,11 +10,16 @@ use chrono::Utc;
 use floe_access::{
     DependencyAuthorization, RemoteCallWindow, RemoteGrantStore, RemoteGrantTransport,
     RemotePairingIdentity, RemoteSourceQuery, active_resource_grant, admit_remote_view_binding,
-    admit_remote_view_source, remote_dependency_binding_matches, remote_dependency_live,
-    remote_dependency_resource, remote_dependency_source_admits, remote_view_source,
+    admit_remote_view_source, remote_calendar_dependency_source_admits,
+    remote_dependency_binding_matches, remote_dependency_live, remote_dependency_resource,
+    remote_dependency_source_admits, remote_view_source, source_matches_producer,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
-use floe_context_contract::{ContextDependency, GrantConsumer, GrantScope, GrantSourceBinding};
+use floe_context_contract::{
+    CALENDAR_CONTEXT_VIEW_ID, CalendarContextView, CalendarViewQuery, ContextDependency,
+    GrantConsumer, GrantScope, GrantSourceBinding, MAX_CALENDAR_CONTEXT_BYTES,
+    ProcessingRestriction, validate_calendar_context_view_for_query,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -43,6 +48,158 @@ pub trait RemoteViewTransport: RemoteGrantTransport {
         read: AdmittedRemoteRead<'a>,
         window: &'a RemoteCallWindow,
     ) -> BoxFuture<'a, Result<Value, AgentFailure>>;
+}
+
+pub struct RemoteCalendarViewRead<'a> {
+    pub person_id: PersonId,
+    pub pairing: RemotePairingIdentity<'a>,
+    pub connector_id: &'a str,
+    pub connection_id: &'a str,
+    pub connection_revision: u64,
+    pub resource: &'a str,
+    pub consumer_name: &'a str,
+    pub query: &'a CalendarViewQuery,
+    pub window: &'a RemoteCallWindow,
+    pub process_incarnation_id: Uuid,
+}
+
+pub async fn read_remote_calendar_view(
+    store: &impl RemoteGrantStore,
+    transport: &impl RemoteViewTransport,
+    read: RemoteCalendarViewRead<'_>,
+) -> Result<(CalendarContextView, ContextDependency, GrantScope), AgentFailure> {
+    check_window(read.window)?;
+    read.query.validate()?;
+    if read.pairing.person_id != read.person_id.to_string()
+        || !matches!(read.connector_id, "calendar.google" | "calendar.microsoft")
+        || read.connection_revision == 0
+        || read.resource.is_empty()
+        || read.process_incarnation_id.is_nil()
+        || read.pairing.client_id.is_empty()
+        || read.pairing.device_id.is_empty()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let consumer =
+        GrantConsumer::builtin(read.consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    let grants = store.grants(128).await?;
+    let grant = active_resource_grant(&grants, read.person_id, &consumer, |source| {
+        (source.connector().as_str() == read.connector_id
+            && source.connection_id().as_str() == read.connection_id)
+            .then(|| read.resource.to_owned())
+    })?;
+    floe_access::admit_remote_calendar_read(&grant, &consumer, read.resource)?;
+    let source_query = RemoteSourceQuery {
+        view_id: CALENDAR_CONTEXT_VIEW_ID,
+        connector_id: read.connector_id,
+        connection_id: read.connection_id,
+        resource: read.resource,
+    };
+    let preview = transport
+        .view_source_preview(source_query, read.window)
+        .await?;
+    let reference = store
+        .verify_view_source_preview(&preview, read.pairing, source_query)
+        .await?;
+    source_matches_producer(&reference, &preview.producer, preview.connection_revision)?;
+    admit_remote_view_source(&reference, grant.source())?;
+    if reference.connection_revision != read.connection_revision {
+        return Err(AgentFailure::StaleContext);
+    }
+    let binding = store
+        .calendar_grant_binding(
+            read.connector_id,
+            read.connection_id,
+            reference.source_authority,
+            read.resource,
+        )
+        .await?;
+    admit_remote_view_binding(&binding.grant, &grant, grant.source(), read.resource)?;
+    let query = serde_json::json!({
+        "range_start_unix_ms": read.query.range_start_unix_ms(),
+        "range_end_unix_ms": read.query.range_end_unix_ms(),
+        "cursor": read.query.cursor().unwrap_or(""),
+        "limit": read.query.limit(),
+    });
+    let value = transport
+        .read_admitted_view(
+            AdmittedRemoteRead {
+                view_id: CALENDAR_CONTEXT_VIEW_ID,
+                binding: &binding,
+                consumer: read.consumer_name,
+                resource: read.resource,
+                connection_revision: reference.connection_revision,
+                max_items: read.query.limit(),
+                max_bytes: MAX_CALENDAR_CONTEXT_BYTES,
+                query,
+                pairing: read.pairing,
+            },
+            read.window,
+        )
+        .await?;
+    check_window(read.window)?;
+    let current_grants = store.grants(128).await?;
+    let current_grant =
+        active_resource_grant(&current_grants, read.person_id, &consumer, |source| {
+            (source.connector().as_str() == read.connector_id
+                && source.connection_id().as_str() == read.connection_id)
+                .then(|| read.resource.to_owned())
+        })?;
+    floe_access::grant_unchanged(&grant, &current_grant)?;
+    let current_preview = transport
+        .view_source_preview(source_query, read.window)
+        .await?;
+    let current_reference = store
+        .verify_view_source_preview(&current_preview, read.pairing, source_query)
+        .await?;
+    source_matches_producer(
+        &current_reference,
+        &current_preview.producer,
+        current_preview.connection_revision,
+    )?;
+    if current_reference != reference
+        || current_preview.connection_revision != read.connection_revision
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    let current_binding = store
+        .calendar_grant_binding(
+            read.connector_id,
+            read.connection_id,
+            current_reference.source_authority,
+            read.resource,
+        )
+        .await?;
+    admit_remote_view_binding(
+        &current_binding.grant,
+        &grant,
+        grant.source(),
+        read.resource,
+    )?;
+    if current_binding.consumer_policy != binding.consumer_policy {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    check_window(read.window)?;
+    let view: CalendarContextView =
+        serde_json::from_value(value).map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    validate_calendar_context_view_for_query(&view, read.query, Utc::now().timestamp_millis())?;
+    let dependency = remote_view_dependency(
+        read.person_id,
+        &binding.grant,
+        binding.consumer_policy,
+        remote_view_source(&reference)?,
+        read.resource,
+        consumer,
+        serde_json::to_vec(read.query).map_err(|_| AgentFailure::InvalidInput)?,
+        Uuid::new_v4(),
+        read.process_incarnation_id,
+        view.observed_at_unix_ms,
+        view.expires_at_unix_ms,
+    )?;
+    if dependency.processing() != &ProcessingRestriction::LocalOnly {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok((view, dependency, binding.grant.scope().clone()))
 }
 
 /// The resource handle a grant must name to admit this view from this source.
@@ -134,8 +291,8 @@ pub async fn read_remote_view(
         &resource,
         consumer,
         query_fingerprint.to_vec(),
-        process_incarnation_id,
         Uuid::new_v4(),
+        process_incarnation_id,
         observed,
         expires,
     )?;
@@ -171,7 +328,15 @@ pub async fn authorize_remote_dependency(
     let resource = remote_dependency_resource(grant, dependency)?;
     let source_connection = dependency.source().connection_id();
     let connection_id = source_connection.as_str();
-    let view_id = split_remote_view_resource(resource, connection_id)?;
+    let calendar = matches!(
+        dependency.source().connector().as_str(),
+        "calendar.google" | "calendar.microsoft"
+    );
+    let view_id = if calendar {
+        CALENDAR_CONTEXT_VIEW_ID
+    } else {
+        split_remote_view_resource(resource, connection_id)?
+    };
     let window = RemoteCallWindow {
         deadline: authorization.deadline,
         cancellation: authorization.cancellation.clone(),
@@ -186,23 +351,434 @@ pub async fn authorize_remote_dependency(
     let reference = store
         .verify_view_source_preview(&preview, pairing, source_query)
         .await?;
-    remote_dependency_source_admits(
-        dependency,
-        &reference,
-        preview.connection_revision,
-        &preview.producer.audience,
-    )?;
-    let binding = store
-        .view_grant_binding(
-            view_id,
-            dependency.source().connector().as_str(),
-            connection_id,
-            reference.source_authority,
-        )
-        .await?;
+    let binding = if calendar {
+        remote_calendar_dependency_source_admits(
+            dependency,
+            &reference,
+            preview.connection_revision,
+        )?;
+        store
+            .calendar_grant_binding(
+                dependency.source().connector().as_str(),
+                connection_id,
+                reference.source_authority,
+                resource,
+            )
+            .await?
+    } else {
+        remote_dependency_source_admits(
+            dependency,
+            &reference,
+            preview.connection_revision,
+            &preview.producer.audience,
+        )?;
+        store
+            .view_grant_binding(
+                view_id,
+                dependency.source().connector().as_str(),
+                connection_id,
+                reference.source_authority,
+            )
+            .await?
+    };
     remote_dependency_binding_matches(
         binding.consumer_policy,
         binding.grant.authority(),
         dependency,
     )
+}
+
+#[cfg(test)]
+mod calendar_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use floe_access::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, DataAccessGrant, ExecutionOwnerId,
+        GrantAuthority, GrantId, GrantScope, GrantSourceBinding, RemoteCalendarQuery,
+        RemoteGrantBinding, RemoteProducerIdentity, RemoteViewSourceReference,
+        SignedCalendarPreview, SignedSourcePreview, SourceAuthority,
+    };
+    use floe_context_contract::{CALENDAR_CONTEXT_VIEW_ID, CalendarContextItem};
+    use floe_execution::Cancellation;
+    use tokio::time::{Duration, Instant};
+
+    use super::*;
+
+    struct CalendarFixture {
+        grant: DataAccessGrant,
+        reference: RemoteViewSourceReference,
+        view: CalendarContextView,
+        policy: ConsumerPolicyAuthority,
+        reads: AtomicUsize,
+        source_changes_after_read: bool,
+    }
+
+    impl CalendarFixture {
+        fn new(person_id: PersonId, connection_id: &str, query: &CalendarViewQuery) -> Self {
+            let source_authority = SourceAuthority::new();
+            let source = GrantSourceBinding::try_new(
+                person_id,
+                ConnectionId::try_new(connection_id).unwrap(),
+                ConnectorId::try_new("calendar.google").unwrap(),
+                ExecutionOwnerId::try_new("server-owner").unwrap(),
+                source_authority,
+            )
+            .unwrap();
+            let scope = floe_access::remote_calendar_scope("primary").unwrap();
+            let mut grant = DataAccessGrant::new(
+                GrantId::new(),
+                Uuid::new_v4(),
+                source.clone(),
+                scope.clone(),
+            )
+            .unwrap();
+            grant
+                .activate_review(grant.authority(), source, scope)
+                .unwrap();
+            let now = Utc::now().timestamp_millis();
+            Self {
+                grant,
+                reference: RemoteViewSourceReference {
+                    view_id: CALENDAR_CONTEXT_VIEW_ID.into(),
+                    person_id: person_id.to_string(),
+                    client_id: "client".into(),
+                    device_id: "device".into(),
+                    audience: "server-audience".into(),
+                    connector_id: "calendar.google".into(),
+                    connection_id: connection_id.into(),
+                    connection_revision: 7,
+                    execution_owner: "server-owner".into(),
+                    source_authority,
+                    resource: "primary".into(),
+                    provider_identity: "account".into(),
+                },
+                view: CalendarContextView {
+                    schema_version: 1,
+                    view_id: CALENDAR_CONTEXT_VIEW_ID.into(),
+                    source_handle: "calendar:test".into(),
+                    observed_at_unix_ms: now - 1,
+                    expires_at_unix_ms: now + 60_000,
+                    range_start_unix_ms: query.range_start_unix_ms(),
+                    range_end_unix_ms: query.range_end_unix_ms(),
+                    coverage_complete: false,
+                    next_cursor: Some("page-two".into()),
+                    items: vec![CalendarContextItem {
+                        evidence_handle: "event:one".into(),
+                        untrusted_title: "Review".into(),
+                        starts_at_unix_ms: now,
+                        ends_at_unix_ms: now + 1_000,
+                        all_day: false,
+                    }],
+                },
+                policy: ConsumerPolicyAuthority::new(),
+                reads: AtomicUsize::new(0),
+                source_changes_after_read: false,
+            }
+        }
+    }
+
+    impl RemoteGrantTransport for CalendarFixture {
+        fn producer_identity<'a>(
+            &'a self,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn view_source_preview<'a>(
+            &'a self,
+            query: RemoteSourceQuery<'a>,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>> {
+            Box::pin(async move {
+                assert_eq!(query.view_id, CALENDAR_CONTEXT_VIEW_ID);
+                assert_eq!(query.resource, "primary");
+                Ok(SignedSourcePreview {
+                    descriptor_b64url: "signed".into(),
+                    producer_signature: "signature".into(),
+                    connection_revision: 7,
+                    producer: RemoteProducerIdentity {
+                        schema_version: 1,
+                        instance_id: "server".into(),
+                        execution_owner: "server-owner".into(),
+                        audience: "server-audience".into(),
+                        key_id: "key".into(),
+                        public_key: "key".into(),
+                        fingerprint: "fingerprint".into(),
+                    },
+                })
+            })
+        }
+
+        fn calendar_source_preview<'a>(
+            &'a self,
+            _: RemoteCalendarQuery<'a>,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<SignedCalendarPreview, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+    }
+
+    impl RemoteViewTransport for CalendarFixture {
+        fn read_admitted_view<'a>(
+            &'a self,
+            read: AdmittedRemoteRead<'a>,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<Value, AgentFailure>> {
+            Box::pin(async move {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(read.view_id, CALENDAR_CONTEXT_VIEW_ID);
+                assert_eq!(read.consumer, "calendar.expert");
+                assert_eq!(read.resource, "primary");
+                assert_eq!(read.connection_revision, 7);
+                serde_json::to_value(&self.view).map_err(|_| AgentFailure::InvalidInput)
+            })
+        }
+    }
+
+    impl RemoteGrantStore for CalendarFixture {
+        fn pinned_producer<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn verify_view_source_preview<'a>(
+            &'a self,
+            _: &'a SignedSourcePreview,
+            _: RemotePairingIdentity<'a>,
+            _: RemoteSourceQuery<'a>,
+        ) -> BoxFuture<'a, Result<RemoteViewSourceReference, AgentFailure>> {
+            Box::pin(async move {
+                let mut reference = self.reference.clone();
+                if self.source_changes_after_read && self.reads.load(Ordering::SeqCst) > 0 {
+                    reference.source_authority = SourceAuthority::new();
+                }
+                Ok(reference)
+            })
+        }
+
+        fn grants<'a>(
+            &'a self,
+            _: usize,
+        ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
+            Box::pin(async move { Ok(vec![self.grant.clone()]) })
+        }
+
+        fn find_view_grant<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a GrantSourceBinding,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn activate_view_grant<'a>(
+            &'a self,
+            _: &'a str,
+            _: GrantId,
+            _: Option<GrantAuthority>,
+            _: GrantSourceBinding,
+            _: GrantScope,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn verify_calendar_source_preview<'a>(
+            &'a self,
+            _: &'a SignedCalendarPreview,
+            _: RemotePairingIdentity<'a>,
+            _: RemoteCalendarQuery<'a>,
+        ) -> BoxFuture<'a, Result<floe_access::RemoteCalendarSourceReference, AgentFailure>>
+        {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn activate_calendar_grant<'a>(
+            &'a self,
+            _: GrantId,
+            _: Option<GrantAuthority>,
+            _: GrantSourceBinding,
+            _: GrantScope,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn calendar_grant<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn pause_calendar_grant<'a>(
+            &'a self,
+            _: GrantId,
+            _: GrantAuthority,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn view_grant_binding<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+            _: SourceAuthority,
+        ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn calendar_grant_binding<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: SourceAuthority,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
+            Box::pin(async move {
+                Ok(RemoteGrantBinding {
+                    grant: self.grant.clone(),
+                    consumer_policy: self.policy,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn calendar_read_and_dependency_recheck_use_the_same_grant_and_resource() {
+        let person_id = PersonId::new();
+        let connection_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp_millis();
+        let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 1).unwrap();
+        let fixture = CalendarFixture::new(person_id, &connection_id, &query);
+        let window = RemoteCallWindow {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let person_text = person_id.to_string();
+        let pairing = RemotePairingIdentity {
+            person_id: &person_text,
+            client_id: "client",
+            device_id: "device",
+        };
+        let process_incarnation_id = Uuid::new_v4();
+        let (view, dependency, scope) = read_remote_calendar_view(
+            &fixture,
+            &fixture,
+            RemoteCalendarViewRead {
+                person_id,
+                pairing,
+                connector_id: "calendar.google",
+                connection_id: &connection_id,
+                connection_revision: 7,
+                resource: "primary",
+                consumer_name: "calendar.expert",
+                query: &query,
+                window: &window,
+                process_incarnation_id,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(view.next_cursor.as_deref(), Some("page-two"));
+        assert_eq!(dependency.resources()[0].as_str(), "primary");
+        assert_eq!(dependency.process_incarnation_id(), process_incarnation_id);
+        assert_eq!(scope.processing(), &ProcessingRestriction::LocalOnly);
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 1);
+        authorize_remote_dependency(
+            &fixture,
+            &fixture,
+            person_id,
+            pairing,
+            &dependency,
+            &DependencyAuthorization {
+                deadline: window.deadline,
+                cancellation: window.cancellation.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn calendar_read_rejects_ungranted_consumer_and_changed_source() {
+        let person_id = PersonId::new();
+        let connection_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp_millis();
+        let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 1).unwrap();
+        let mut fixture = CalendarFixture::new(person_id, &connection_id, &query);
+        let window = RemoteCallWindow {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let person_text = person_id.to_string();
+        let pairing = RemotePairingIdentity {
+            person_id: &person_text,
+            client_id: "client",
+            device_id: "device",
+        };
+        let read = |consumer_name| RemoteCalendarViewRead {
+            person_id,
+            pairing,
+            connector_id: "calendar.google",
+            connection_id: &connection_id,
+            connection_revision: 7,
+            resource: "primary",
+            consumer_name,
+            query: &query,
+            window: &window,
+            process_incarnation_id: Uuid::new_v4(),
+        };
+        assert!(matches!(
+            read_remote_calendar_view(&fixture, &fixture, read("assistant")).await,
+            Err(AgentFailure::AccessReviewRequired)
+        ));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+        fixture.reference.connection_revision = 8;
+        assert!(matches!(
+            read_remote_calendar_view(&fixture, &fixture, read("calendar.expert")).await,
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn calendar_read_rechecks_source_after_provider_io() {
+        let person_id = PersonId::new();
+        let connection_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp_millis();
+        let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 1).unwrap();
+        let mut fixture = CalendarFixture::new(person_id, &connection_id, &query);
+        fixture.source_changes_after_read = true;
+        let window = RemoteCallWindow {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let person_text = person_id.to_string();
+        let result = read_remote_calendar_view(
+            &fixture,
+            &fixture,
+            RemoteCalendarViewRead {
+                person_id,
+                pairing: RemotePairingIdentity {
+                    person_id: &person_text,
+                    client_id: "client",
+                    device_id: "device",
+                },
+                connector_id: "calendar.google",
+                connection_id: &connection_id,
+                connection_revision: 7,
+                resource: "primary",
+                consumer_name: "calendar.expert",
+                query: &query,
+                window: &window,
+                process_incarnation_id: Uuid::new_v4(),
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(AgentFailure::StaleContext)));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 1);
+    }
 }

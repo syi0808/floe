@@ -200,7 +200,11 @@ impl ServerSourceClient {
             grant_id: &grant_id,
             grant_incarnation: &grant_incarnation,
             grant_epoch: read.grant.authority().access_epoch().get(),
-            purpose: "assistant",
+            purpose: if read.view_id == floe_context::CALENDAR_CONTEXT_VIEW_ID {
+                "everyday_assistance"
+            } else {
+                "assistant"
+            },
             consumer: read.consumer,
             max_items,
             max_bytes,
