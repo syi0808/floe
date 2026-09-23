@@ -148,6 +148,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                 remote: remote_resolver
                     .as_ref()
                     .map(|resolver| resolver as &dyn floe_access::DependencyResolver),
+                calendar: None,
             };
             let service = floe_inference::InferenceService::new(provider, resolver, authority);
             let remote_backend = match source_client.as_ref() {

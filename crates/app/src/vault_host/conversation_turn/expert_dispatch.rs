@@ -7,10 +7,11 @@
 
 use super::expert_host::{
     CalendarContextReaderApi, CapturingRecorder, ConversationContextReader,
-    ConversationContextReaderApi, ExpertModelHost, PersonalAttentionReader,
-    PersonalAttentionReaderApi, PersonalPeopleReader, PersonalPeopleReaderApi, PersonalViewSource,
-    PersonalWellbeingReader, PersonalWellbeingReaderApi, RemoteCalendarContextReader,
-    ResultRecorder, StoreResultRecorder, expert_policy, read_context_source,
+    ConversationContextReaderApi, CurrentCalendarContextReader, ExpertModelHost,
+    PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
+    PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
+    PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, expert_policy,
+    read_context_source,
 };
 use super::*;
 use std::sync::{Arc, Mutex};
@@ -164,23 +165,28 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 )),
                 None => None,
             };
-            let calendar_reader =
-                source_client
-                    .as_ref()
-                    .map(|client| RemoteCalendarContextReader {
-                        core: &self.core,
-                        vault: &self.vault,
-                        source_client: client,
-                        device_id: &context.device_id,
-                    });
+            let calendar_reader = CurrentCalendarContextReader {
+                core: &self.core,
+                vault: &self.vault,
+                source_client: source_client.as_ref(),
+                device_id: &context.device_id,
+            };
             let remote_resolver = remote_reader
                 .as_ref()
                 .map(|reader| remote_views::RemoteDependencyResolver { reader });
+            let calendar_resolver =
+                crate::vault_host::calendar_access::NativeCalendarDependencyResolver {
+                    core: &self.core,
+                    vault: &self.vault,
+                    person_id,
+                    device_id: &context.device_id,
+                };
             let resolver = CompositeDependencyResolver {
                 personal: &personal_resolver,
                 remote: remote_resolver
                     .as_ref()
                     .map(|resolver| resolver as &dyn floe_access::DependencyResolver),
+                calendar: Some(&calendar_resolver),
             };
             let service = floe_inference::InferenceService::new(provider, resolver, authority);
             let attention_reader = PersonalAttentionReader {
@@ -221,9 +227,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 scope,
                 availability,
                 source_client: source_client.as_ref(),
-                calendar_reader: calendar_reader
-                    .as_ref()
-                    .map(|reader| reader as &dyn CalendarContextReaderApi),
+                calendar_reader: Some(&calendar_reader as &dyn CalendarContextReaderApi),
                 policy: &policy,
                 context: &context.agent_context,
                 local_context: &self.local_context,

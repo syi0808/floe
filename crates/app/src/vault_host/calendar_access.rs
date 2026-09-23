@@ -6,7 +6,7 @@
 //! file supplies is the wiring — a device probe, the Person's calendar
 //! connection, and their encrypted registry.
 
-use std::time::Duration;
+use std::{future::Future, pin::Pin, time::Duration};
 
 use floe_access::RemoteCallWindow;
 use floe_agent_contract::AgentFailure;
@@ -96,6 +96,76 @@ impl<Keys: VaultKeyProvider> NativeCalendarGrantReader for VaultNativeCalendarGr
             admission.consumer_policy,
             consumer,
         ))
+    }
+}
+
+pub(super) struct NativeCalendarDependencyResolver<'a, Keys: VaultKeyProvider> {
+    pub core: &'a FloeCore,
+    pub vault: &'a EncryptedAgentVault<Keys>,
+    pub person_id: PersonId,
+    pub device_id: &'a str,
+}
+
+impl<Keys: VaultKeyProvider> floe_access::DependencyResolver
+    for NativeCalendarDependencyResolver<'_, Keys>
+{
+    fn authorize<'a>(
+        &'a self,
+        dependency: &'a floe_context_contract::ContextDependency,
+        request: &'a floe_access::DependencyAuthorization,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            if dependency.person_id() != self.person_id
+                || dependency.source().execution_owner().as_str() != self.device_id
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let connections = CoreCalendarConnections {
+                    core: self.core,
+                    person_id: self.person_id,
+                };
+                let connection =
+                    floe_context::CalendarConnectionReader::calendar_connection(&connections)
+                        .await?
+                        .ok_or(AgentFailure::AccessReviewRequired)?;
+                if connection.provider != floe_context_contract::CalendarProvider::EventKit {
+                    return Err(AgentFailure::StaleContext);
+                }
+                let source =
+                    floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
+                        self.person_id,
+                        self.device_id.to_owned(),
+                        connection.provider,
+                        connection
+                            .calendars
+                            .iter()
+                            .map(|calendar| calendar.calendar_id.clone())
+                            .collect(),
+                        connection.connection_id,
+                        connection.revision,
+                    );
+                let grants = VaultNativeCalendarGrants { vault: self.vault };
+                return floe_context::authorize_native_calendar_dependency(
+                    &connections,
+                    &source,
+                    &grants,
+                    &self.core.lease_registry,
+                    dependency,
+                    &RemoteCallWindow {
+                        deadline: request.deadline,
+                        cancellation: request.cancellation.clone(),
+                    },
+                )
+                .await;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = request;
+                Err(AgentFailure::CapabilityUnavailable)
+            }
+        })
     }
 }
 

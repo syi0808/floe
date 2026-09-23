@@ -56,6 +56,7 @@ const FINALIZATION_TOKENS: u64 = 1_024;
 const FINALIZATION_COST_MICROS: u64 = 10_000;
 
 struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
+    core: &'a FloeCore,
     vault: &'a EncryptedAgentVault<Keys>,
     local_context: &'a LocalContextHost,
     person_id: PersonId,
@@ -73,6 +74,7 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
     local_context: &LocalContextHost,
     task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
@@ -110,6 +112,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         evidence: vec![],
     };
     let inputs = ConversationTurnInputs {
+        core,
         vault,
         local_context,
         person_id,
@@ -189,11 +192,18 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     let remote_resolver = remote_reader
         .as_ref()
         .map(|reader| remote_views::RemoteDependencyResolver { reader });
+    let calendar_resolver = crate::vault_host::calendar_access::NativeCalendarDependencyResolver {
+        core: inputs.core,
+        vault,
+        person_id,
+        device_id: &request.device_id,
+    };
     let resolver = CompositeDependencyResolver {
         personal: &personal_resolver,
         remote: remote_resolver
             .as_ref()
             .map(|resolver| resolver as &dyn floe_access::DependencyResolver),
+        calendar: Some(&calendar_resolver),
     };
     {
         // Canonical root catalog: Expert cards come from the Experts-owned
@@ -384,6 +394,7 @@ pub(super) async fn recover<Keys: VaultKeyProvider + 'static>(
 struct CompositeDependencyResolver<'a> {
     personal: &'a dyn floe_access::DependencyResolver,
     remote: Option<&'a dyn floe_access::DependencyResolver>,
+    calendar: Option<&'a dyn floe_access::DependencyResolver>,
 }
 
 impl floe_access::DependencyResolver for CompositeDependencyResolver<'_> {
@@ -392,7 +403,15 @@ impl floe_access::DependencyResolver for CompositeDependencyResolver<'_> {
         dependency: &'a floe_context_contract::ContextDependency,
         request: &'a floe_access::DependencyAuthorization,
     ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
-        if floe_access::is_device_local_source(dependency.source().connector().as_str()) {
+        if matches!(
+            dependency.source().connector().as_str(),
+            "calendar.event_kit" | "calendar.android"
+        ) {
+            match self.calendar {
+                Some(calendar) => calendar.authorize(dependency, request),
+                None => Box::pin(async { Err(AgentFailure::PolicyDenied) }),
+            }
+        } else if floe_access::is_device_local_source(dependency.source().connector().as_str()) {
             self.personal.authorize(dependency, request)
         } else if let Some(remote) = self.remote {
             remote.authorize(dependency, request)
@@ -2123,6 +2142,7 @@ mod tests {
         let resolver = CompositeDependencyResolver {
             personal: &personal_resolver,
             remote: None,
+            calendar: None,
         };
         let projector = floe_conversation::ConversationModelProjection::new(
             floe_vault::ContextEvidenceReader::new(&vault, session.id),
@@ -3425,6 +3445,7 @@ mod tests {
         let resolver = CompositeDependencyResolver {
             personal: &personal,
             remote: None,
+            calendar: None,
         };
         let projector = floe_conversation::ConversationModelProjection::new(
             floe_vault::ContextEvidenceReader::new(&fixture.vault, session_id),
@@ -3509,6 +3530,7 @@ mod tests {
         let resolver = CompositeDependencyResolver {
             personal: &personal,
             remote: None,
+            calendar: None,
         };
         let dispatch = || floe_access::ModelDispatchRequest {
             person_id: fixture.person_id,
@@ -3646,6 +3668,7 @@ mod tests {
             inner: CompositeDependencyResolver {
                 personal: &personal,
                 remote: None,
+                calendar: None,
             },
             vault: &fixture.vault,
             local_context: &fixture.local_context,

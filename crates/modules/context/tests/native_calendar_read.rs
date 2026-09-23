@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+use chrono::TimeZone;
+
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, ConnectionId, ConnectorId,
     ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory,
@@ -14,13 +16,18 @@ use floe_access::{
     RemoteCallWindow, ResourceHandle,
 };
 use floe_context::{
-    CalendarConnectionReader, CalendarSource, NativeCalendarGrantReader,
-    admit_current_native_calendar_read,
+    CalendarConnectionReader, CalendarObservation, CalendarObserveRequest, CalendarSource,
+    NativeCalendarGrantReader, NativeCalendarViewRead, SourceLeaseRegistry,
+    admit_current_native_calendar_read, authorize_native_calendar_dependency,
+    read_native_calendar_view,
 };
 use floe_context_contract::{
-    CalendarProvider, CalendarReadAccessStamp, CalendarScope, SourceAuthority,
+    CalendarProvider, CalendarReadAccessStamp, CalendarScope, CalendarViewQuery, SourceAuthority,
 };
-use floe_day::{CalendarConnection, CalendarSelection};
+use floe_day::{
+    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarRecord, CalendarSelection,
+    EventSchedule,
+};
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 use tokio::time::Instant;
@@ -42,6 +49,9 @@ struct Device {
     person_id: PersonId,
     fingerprint: String,
     checks: AtomicUsize,
+    observations: AtomicUsize,
+    partial_batch: AtomicBool,
+    records: Mutex<Vec<CalendarRecord>>,
 }
 
 impl CalendarSource for Device {
@@ -60,14 +70,50 @@ impl CalendarSource for Device {
             generation: "generation-1".into(),
         })
     }
+
+    async fn observe(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        self.observations.fetch_add(1, Ordering::SeqCst);
+        if request.expected_native_subject_fingerprint.as_deref() != Some(self.fingerprint.as_str())
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        Ok(Some(CalendarObservation {
+            stamp: CalendarReadAccessStamp {
+                schema_version: 1,
+                person_id: self.person_id,
+                device_id: request.device_id,
+                provider: request.provider,
+                calendar_ids: request.calendar_ids,
+                native_subject_fingerprint: self.fingerprint.clone(),
+                generation: "generation-1".into(),
+            },
+            observed_at: chrono::Utc::now(),
+            batches: if self.partial_batch.load(Ordering::SeqCst) {
+                vec![]
+            } else {
+                vec![CalendarBatch {
+                    calendar_id: "primary".into(),
+                    records: std::mem::take(&mut *self.records.lock().unwrap()),
+                    failure: None,
+                }]
+            },
+        }))
+    }
 }
 
 struct Grants {
     connections: Arc<Mutex<Option<CalendarConnection>>>,
     change_connection: AtomicBool,
+    change_on_second_call: AtomicBool,
     wrong_source: AtomicBool,
     wrong_consumer: AtomicBool,
     calls: AtomicUsize,
+    grant_id: GrantId,
+    authority: GrantAuthority,
+    policy: ConsumerPolicyAuthority,
 }
 
 impl NativeCalendarGrantReader for Grants {
@@ -79,11 +125,13 @@ impl NativeCalendarGrantReader for Grants {
         consumer: &str,
         native_subject_fingerprint: &str,
     ) -> Result<CalendarReadAccessAdmission, AgentFailure> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
+        let call_number = self.calls.fetch_add(1, Ordering::SeqCst);
         if native_subject_fingerprint != "a".repeat(64) {
             return Err(AgentFailure::AccessReviewRequired);
         }
-        if self.change_connection.load(Ordering::SeqCst) {
+        if self.change_connection.load(Ordering::SeqCst)
+            || self.change_on_second_call.load(Ordering::SeqCst) && call_number == 1
+        {
             self.connections.lock().unwrap().as_mut().unwrap().revision += 1;
         }
         let consumer = GrantConsumer::builtin(if self.wrong_consumer.load(Ordering::SeqCst) {
@@ -119,11 +167,11 @@ impl NativeCalendarGrantReader for Grants {
         .unwrap();
         Ok(CalendarReadAccessAdmission::device_local(
             person_id,
-            GrantId::new(),
-            GrantAuthority::new(),
+            self.grant_id,
+            self.authority,
             source,
             scope,
-            ConsumerPolicyAuthority::new(),
+            self.policy,
             consumer,
         ))
     }
@@ -158,13 +206,20 @@ fn fixture() -> (Connections, Device, Grants, PersonId) {
             person_id,
             fingerprint: "a".repeat(64),
             checks: AtomicUsize::new(0),
+            observations: AtomicUsize::new(0),
+            partial_batch: AtomicBool::new(false),
+            records: Mutex::new(vec![]),
         },
         Grants {
             connections: value,
             change_connection: AtomicBool::new(false),
+            change_on_second_call: AtomicBool::new(false),
             wrong_source: AtomicBool::new(false),
             wrong_consumer: AtomicBool::new(false),
             calls: AtomicUsize::new(0),
+            grant_id: GrantId::new(),
+            authority: GrantAuthority::new(),
+            policy: ConsumerPolicyAuthority::new(),
         },
         person_id,
     )
@@ -288,4 +343,221 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
         .await,
         Err(AgentFailure::CapabilityDenied)
     ));
+}
+
+#[tokio::test]
+async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
+    let (connections, device, grants, person_id) = fixture();
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    let leases = SourceLeaseRegistry::new();
+    let (view, dependency) = read_native_calendar_view(
+        &connections,
+        &device,
+        &grants,
+        &leases,
+        NativeCalendarViewRead {
+            person_id,
+            device_id: "device",
+            consumer: "calendar.expert",
+            query: &query,
+            window: &window(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(view.coverage_complete);
+    assert!(view.items.is_empty());
+    assert_eq!(view.range_start_unix_ms, query.range_start_unix_ms());
+    assert_eq!(view.range_end_unix_ms, query.range_end_unix_ms());
+    assert_eq!(dependency.person_id(), person_id);
+    assert_eq!(
+        dependency.source().source_authority(),
+        view_source_authority(&connections)
+    );
+    assert_eq!(device.checks.load(Ordering::SeqCst), 2);
+    assert_eq!(device.observations.load(Ordering::SeqCst), 1);
+    assert_eq!(grants.calls.load(Ordering::SeqCst), 2);
+    assert!(leases.observation(&dependency).is_ok());
+}
+
+fn view_source_authority(connections: &Connections) -> SourceAuthority {
+    connections
+        .value
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .source_authority
+}
+
+#[tokio::test]
+async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
+    let (connections, device, grants, person_id) = fixture();
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    device.partial_batch.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        read_native_calendar_view(
+            &connections,
+            &device,
+            &grants,
+            &SourceLeaseRegistry::new(),
+            NativeCalendarViewRead {
+                person_id,
+                device_id: "device",
+                consumer: "calendar.expert",
+                query: &query,
+                window: &window(),
+            },
+        )
+        .await,
+        Err(AgentFailure::CapabilityUnavailable)
+    ));
+    let query =
+        CalendarViewQuery::try_new(now - 60_000, now + 60_000, Some("next".into()), 8).unwrap();
+    let prior_checks = device.checks.load(Ordering::SeqCst);
+    assert!(matches!(
+        read_native_calendar_view(
+            &connections,
+            &device,
+            &grants,
+            &SourceLeaseRegistry::new(),
+            NativeCalendarViewRead {
+                person_id,
+                device_id: "device",
+                consumer: "calendar.expert",
+                query: &query,
+                window: &window(),
+            },
+        )
+        .await,
+        Err(AgentFailure::CapabilityUnavailable)
+    ));
+    assert_eq!(device.checks.load(Ordering::SeqCst), prior_checks);
+}
+
+#[tokio::test]
+async fn native_view_preserves_all_day_calendar_evidence() {
+    let (connections, device, grants, person_id) = fixture();
+    let date = chrono::Local::now().date_naive();
+    let end_date = date.succ_opt().unwrap();
+    let start = chrono::Local
+        .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+        .earliest()
+        .unwrap()
+        .timestamp_millis();
+    let end = chrono::Local
+        .from_local_datetime(&end_date.and_hms_opt(0, 0, 0).unwrap())
+        .latest()
+        .unwrap()
+        .timestamp_millis();
+    device.records.lock().unwrap().push(CalendarRecord {
+        can_modify: false,
+        calendar_id: "primary".into(),
+        external_id: "event-one".into(),
+        external_revision: "r1".into(),
+        title: "Day off".into(),
+        schedule: EventSchedule::AllDay(AllDaySchedule::new(date, end_date).unwrap()),
+    });
+    let query = CalendarViewQuery::try_new(start - 3_600_000, end + 3_600_000, None, 8).unwrap();
+    let (view, _) = read_native_calendar_view(
+        &connections,
+        &device,
+        &grants,
+        &SourceLeaseRegistry::new(),
+        NativeCalendarViewRead {
+            person_id,
+            device_id: "device",
+            consumer: "calendar.expert",
+            query: &query,
+            window: &window(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(view.items.len(), 1);
+    assert_eq!(view.items[0].starts_at_unix_ms, start);
+    assert_eq!(view.items[0].ends_at_unix_ms, end);
+    assert!(view.items[0].all_day);
+    assert_eq!(view.items[0].untrusted_title, "Day off");
+}
+
+#[tokio::test]
+async fn native_dependency_rechecks_the_current_grant_source() {
+    let (connections, device, grants, person_id) = fixture();
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    let leases = SourceLeaseRegistry::new();
+    let (_, dependency) = read_native_calendar_view(
+        &connections,
+        &device,
+        &grants,
+        &leases,
+        NativeCalendarViewRead {
+            person_id,
+            device_id: "device",
+            consumer: "calendar.expert",
+            query: &query,
+            window: &window(),
+        },
+    )
+    .await
+    .unwrap();
+    authorize_native_calendar_dependency(
+        &connections,
+        &device,
+        &grants,
+        &leases,
+        &dependency,
+        &window(),
+    )
+    .await
+    .unwrap();
+    connections
+        .value
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .source_authority = SourceAuthority::new();
+    assert!(matches!(
+        authorize_native_calendar_dependency(
+            &connections,
+            &device,
+            &grants,
+            &leases,
+            &dependency,
+            &window(),
+        )
+        .await,
+        Err(AgentFailure::StaleContext)
+    ));
+}
+
+#[tokio::test]
+async fn native_view_rejects_connection_change_after_observation() {
+    let (connections, device, grants, person_id) = fixture();
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    grants.change_on_second_call.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        read_native_calendar_view(
+            &connections,
+            &device,
+            &grants,
+            &SourceLeaseRegistry::new(),
+            NativeCalendarViewRead {
+                person_id,
+                device_id: "device",
+                consumer: "calendar.expert",
+                query: &query,
+                window: &window(),
+            },
+        )
+        .await,
+        Err(AgentFailure::StaleContext)
+    ));
+    assert_eq!(device.observations.load(Ordering::SeqCst), 1);
+    assert_eq!(grants.calls.load(Ordering::SeqCst), 2);
 }

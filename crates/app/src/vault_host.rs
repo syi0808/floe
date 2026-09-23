@@ -1436,6 +1436,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     }
     vault.sync_expert_directory().await?;
     let session = match Box::pin(conversation_turn::run(
+        core,
         vault,
         local_context,
         &vault.task_coordinator,

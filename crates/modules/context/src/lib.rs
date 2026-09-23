@@ -12,6 +12,7 @@ mod application {
     pub mod model_coverage;
     pub mod model_projection;
     pub mod native_calendar;
+    pub mod native_calendar_view;
     pub mod observations;
     pub mod personal_lineage;
     pub mod personal_sources;
@@ -62,6 +63,9 @@ pub use application::native_calendar::{
     NativeCalendarGrantReader, NativeCalendarSourceRequest, NativeCalendarSubjectSource,
     NativeSubjectObservation, NativeSubjectRequest, admit_current_native_calendar_read,
     admit_native_calendar_source, preview_native_calendar_subject,
+};
+pub use application::native_calendar_view::{
+    NativeCalendarViewRead, authorize_native_calendar_dependency, read_native_calendar_view,
 };
 pub use application::observations::{
     ALLOWED_VIEW_IDS, ObservationEntry, ObservationRegistry, PublishedCalendarObservation,

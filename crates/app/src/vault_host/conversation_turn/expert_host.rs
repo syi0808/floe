@@ -780,14 +780,14 @@ pub(super) trait CalendarContextReaderApi: Send + Sync {
     >;
 }
 
-pub(super) struct RemoteCalendarContextReader<'a, Keys: VaultKeyProvider> {
+pub(super) struct CurrentCalendarContextReader<'a, Keys: VaultKeyProvider> {
     pub(super) core: &'a FloeCore,
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
-    pub(super) source_client: &'a ServerSourceClient,
+    pub(super) source_client: Option<&'a ServerSourceClient>,
     pub(super) device_id: &'a str,
 }
 
-impl<Keys: VaultKeyProvider> CalendarContextReaderApi for RemoteCalendarContextReader<'_, Keys> {
+impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContextReader<'_, Keys> {
     fn read<'a>(
         &'a self,
         person_id: PersonId,
@@ -810,10 +810,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for RemoteCalendarContextR
         >,
     > {
         Box::pin(async move {
-            if person_id != self.vault.person_id()
-                || self.source_client.source().person_id() != person_id.to_string()
-                || self.source_client.source().device_id() != self.device_id
-            {
+            if person_id != self.vault.person_id() {
                 return Err(AgentFailure::CapabilityDenied);
             }
             let connection = self
@@ -828,15 +825,71 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for RemoteCalendarContextR
             {
                 return Err(AgentFailure::StaleContext);
             }
-            let connector_id = floe_access::hosted_calendar_connector(connection.provider)
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
             if connection.calendars.is_empty() {
                 return Err(AgentFailure::AccessReviewRequired);
             }
+            if connection.provider == floe_context_contract::CalendarProvider::EventKit {
+                #[cfg(target_os = "macos")]
+                {
+                    let connections = crate::vault_host::calendar_access::CoreCalendarConnections {
+                        core: self.core,
+                        person_id,
+                    };
+                    let grants = crate::vault_host::calendar_access::VaultNativeCalendarGrants {
+                        vault: self.vault,
+                    };
+                    let calendar_ids = connection
+                        .calendars
+                        .iter()
+                        .map(|calendar| calendar.calendar_id.clone())
+                        .collect();
+                    let source = floe_provider_adapters::sources::native_calendar::NativeCalendarReadAccess::new(
+                        person_id,
+                        self.device_id.to_owned(),
+                        connection.provider,
+                        calendar_ids,
+                        connection.connection_id,
+                        connection.revision,
+                    );
+                    let window = floe_context::RemoteCallWindow {
+                        deadline,
+                        cancellation: cancellation.clone(),
+                    };
+                    let (view, dependency) = floe_context::read_native_calendar_view(
+                        &connections,
+                        &source,
+                        &grants,
+                        &self.core.lease_registry,
+                        floe_context::NativeCalendarViewRead {
+                            person_id,
+                            device_id: self.device_id,
+                            consumer,
+                            query,
+                            window: &window,
+                        },
+                    )
+                    .await?;
+                    return Ok(vec![(view, dependency)]);
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                }
+            }
+            let source_client = self
+                .source_client
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if source_client.source().person_id() != person_id.to_string()
+                || source_client.source().device_id() != self.device_id
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let connector_id = floe_access::hosted_calendar_connector(connection.provider)
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
             let person_text = person_id.to_string();
             let pairing = floe_context::RemotePairingIdentity {
                 person_id: &person_text,
-                client_id: self.source_client.source().client_id(),
+                client_id: source_client.source().client_id(),
                 device_id: self.device_id,
             };
             let window = floe_context::RemoteCallWindow {
@@ -844,7 +897,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for RemoteCalendarContextR
                 cancellation: cancellation.clone(),
             };
             let authorized_client = floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                self.source_client,
+                source_client,
                 self.vault,
             );
             let mut reads = Vec::with_capacity(connection.calendars.len());
