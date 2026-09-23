@@ -5,7 +5,6 @@
 //! agent identity and a role-neutral invocation.
 
 mod a2a;
-mod assignments;
 mod builtin_setup;
 mod calendar_access;
 mod directory;
@@ -19,10 +18,9 @@ pub use a2a::{
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard,
     EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
 };
-pub use assignments::RegistryAssignments;
 pub use builtin_setup::{
-    BuiltinExpertRefresh, BuiltinExpertStore, BuiltinSourceEvidence, ExpertRefreshOutcome,
-    ensure_builtin_experts, expert_refresh_outcome,
+    BuiltinExpertRefresh, BuiltinExpertStore, ExpertRefreshOutcome, ensure_builtin_experts,
+    expert_refresh_outcome,
 };
 pub use calendar_access::{
     AdmittedCalendarSource, BoxFuture, CalendarAccessSource, CalendarSetupStore,
@@ -36,20 +34,18 @@ pub use dispatch::{
 /// What one Expert is asked to do and what it answers are contract values; what
 /// this module adds is the registry that admits an invocation and records it.
 pub use floe_agent_contract::{
-    ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertInvocation, ExpertResult,
-    MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef, ViewCancellation, check_running,
+    ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertResult,
+    MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
 };
 pub use registry::{
-    AdmittedExpertInvocation, AgentId, AgentPackage, AgentRegistry, AssignmentOverview,
-    BuiltinExpertAssignmentReceipt, BuiltinExpertSetup, BuiltinExpertSetupReceipt,
-    BuiltinExpertSetupResult, BuiltinSourceBinding, BuiltinSourceState, CalendarAccessChange,
+    AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
+    BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, CalendarAccessChange,
     CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
     CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarSourceBinding,
-    CalendarViewBinding, CalendarViewClaim, ExpertMetadata, ExpertPackaging, ExpertPrivateState,
-    ExpertRule, ExpertSetupSpec, NoSetupValidator, PackageAssignment, PackageImplementation,
-    PackageInstallation, RegisteredExpertInvocation, RegistryConfiguration,
-    RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, ResolvedExpert,
-    SetupValidator, SourceGrant, SourceGrants, eligible_cards_for_availability,
+    CalendarViewBinding, ExpertMetadata, ExpertPackaging, ExpertPrivateState, ExpertRule,
+    ExpertSetupSpec, NoSetupValidator, PackageAssignment, PackageImplementation,
+    PackageInstallation, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
+    RegistrySnapshot, ResolvedExpert, SetupValidator, SourceGrant, eligible_cards_for_availability,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

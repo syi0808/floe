@@ -5,27 +5,19 @@ use floe_agent_contract::AgentFailure;
 use crate::wellbeing::{
     WellbeingContextViews, WellbeingExpertResult, run_wellbeing_expert_with_views,
 };
-use crate::{
-    BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    granted_context,
-};
+use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
 
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    crate::require_mandatory_source(host, request)?;
     let wellbeing = host.wellbeing_view(request).await?;
     let mut context = granted_context(host, request);
-    let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        crate::shared::optional_calendar_views(
-            &mut context,
-            host.calendar_views(request, request.nearby_calendar_query()?)
-                .await?,
-        )
-    } else {
-        vec![]
-    };
+    let calendars = crate::shared::optional_calendar_views(
+        &mut context,
+        host.calendar_views(request, request.nearby_calendar_query()?)
+            .await?,
+    );
     let result: WellbeingExpertResult = run_wellbeing_expert_with_views(
         host.model(),
         host.policy(),

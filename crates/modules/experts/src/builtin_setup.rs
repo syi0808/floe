@@ -1,55 +1,25 @@
-//! Keeping the Person's builtin Expert setup in step with the sources that can
-//! answer for it.
+//! Keeping the Person's builtin Expert setup installed.
 //!
-//! Which sources a device can serve is the caller's observation; what that means
-//! for the registry — whether to install, refresh, or leave it alone, and
-//! whether a failure to do so stops the run that needed it — is the registry's
-//! own judgment.
+//! Registry setup is source-independent: it records package topology only.
+//! Source availability is discovered at read time by Context/Access.
 
 use floe_agent_contract::AgentFailure;
 use uuid::Uuid;
 
 use crate::calendar_access::BoxFuture;
-use crate::registry::{
-    BuiltinExpertSetup, BuiltinExpertSetupResult, BuiltinSourceBinding, BuiltinSourceState,
-};
-
-/// What a device knows about whatever serves one builtin source.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BuiltinSourceEvidence {
-    /// Something is serving the source right now.
-    Serving,
-    /// The Person has it, but has turned it off or taken it back.
-    Withheld,
-    /// Nothing serves it on this device.
-    Absent,
-}
-
-impl BuiltinSourceEvidence {
-    /// The state a binding carries for a source under this evidence.
-    ///
-    /// A withheld source is disabled rather than unavailable: the Person still
-    /// has it, and turning it back on is theirs to do.
-    pub const fn state(self) -> BuiltinSourceState {
-        match self {
-            Self::Serving => BuiltinSourceState::Available,
-            Self::Withheld => BuiltinSourceState::Disabled,
-            Self::Absent => BuiltinSourceState::Unavailable,
-        }
-    }
-}
+use crate::registry::{BuiltinExpertSetup, BuiltinExpertSetupResult};
 
 /// When a setup that does not exist yet may be created.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinExpertRefresh {
     /// Install the setup when the Person has none yet.
     InstallIfAbsent,
-    /// Only bring an existing setup up to date. A turn is not where a Person's
+    /// Only validate an existing setup. A turn is not where a Person's
     /// Experts are first installed.
     ExistingOnly,
 }
 
-/// The Person's builtin Expert setup, as a refresh reads and writes it.
+/// The Person's builtin Expert setup, as ensured and read.
 pub trait BuiltinExpertStore: Sync {
     /// The registry instance this Person's setup belongs to.
     fn instance_id(&self) -> Uuid;
@@ -68,22 +38,15 @@ pub trait BuiltinExpertStore: Sync {
         &'a self,
         setup: BuiltinExpertSetup,
     ) -> BoxFuture<'a, Result<BuiltinExpertSetupResult, AgentFailure>>;
-
-    fn refresh<'a>(
-        &'a self,
-        expected_revision: u64,
-        sources: Vec<BuiltinSourceBinding>,
-    ) -> BoxFuture<'a, Result<BuiltinExpertSetupResult, AgentFailure>>;
 }
 
-/// Bring the Person's builtin setup in line with the sources now serving them.
+/// Ensure the Person's builtin setup exists and matches the expected topology.
 ///
-/// A setup already naming these sources is left alone. A racing writer that
-/// moved the revision underneath is not an error the caller has to handle: the
-/// setup is read again and brought up to date against what it now says.
+/// An existing setup is left alone. A racing writer that moved the revision
+/// underneath is not an error the caller has to handle: the setup is read
+/// again and validated against what it now says.
 pub async fn ensure_builtin_experts(
     store: &impl BuiltinExpertStore,
-    sources: Vec<BuiltinSourceBinding>,
     expected_assignments: usize,
     when: BuiltinExpertRefresh,
 ) -> Result<(), AgentFailure> {
@@ -92,33 +55,23 @@ pub async fn ensure_builtin_experts(
         return Ok(());
     }
     let ensured = match &existing {
-        Some(existing) if existing.setup.sources == sources => Ok(existing.clone()),
-        Some(existing) => {
-            store
-                .refresh(existing.registry.revision, sources.clone())
-                .await
-        }
+        Some(existing) => Ok(existing.clone()),
         None => {
             store
                 .install(BuiltinExpertSetup {
                     instance_id: store.instance_id(),
                     expected_revision: store.registry_revision().await?,
                     setup_id: store.setup_id(),
-                    sources: sources.clone(),
                 })
                 .await
         }
     };
     let result = match ensured {
         Ok(result) => result,
-        Err(AgentFailure::Conflict) => {
-            let latest = store.overview().await?.ok_or(AgentFailure::Conflict)?;
-            if latest.setup.sources == sources {
-                latest
-            } else {
-                store.refresh(latest.registry.revision, sources).await?
-            }
-        }
+        Err(AgentFailure::Conflict) => store
+            .overview()
+            .await?
+            .ok_or(AgentFailure::Conflict)?,
         Err(failure) => return Err(failure),
     };
     if result.setup.assignments.len() != expected_assignments {
@@ -127,7 +80,7 @@ pub async fn ensure_builtin_experts(
     Ok(())
 }
 
-/// What a failed refresh means for the run that needed it.
+/// What a failed ensure means for the run that needed it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExpertRefreshOutcome {
     /// The registry says what the run needs it to say.
@@ -138,7 +91,7 @@ pub enum ExpertRefreshOutcome {
     Fatal(AgentFailure),
 }
 
-/// Whether a refresh failure stops the run that needed it.
+/// Whether an ensure failure stops the run that needed it.
 ///
 /// A cancelled run and an unreachable vault are the run's own ground giving
 /// way. Everything else leaves the Person's Experts as they were, which is a

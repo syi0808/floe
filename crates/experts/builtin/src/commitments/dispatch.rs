@@ -13,10 +13,7 @@ use floe_context_contract::CommunicationView;
 use crate::commitments::{
     CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
 };
-use crate::{
-    BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    granted_context,
-};
+use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
 
 /// How much communication this Expert reads in one invocation.
 const COMMUNICATION_LIMIT: usize = 25;
@@ -25,14 +22,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    crate::require_mandatory_source(host, request)?;
     let readable = host.conversation_context_available();
-    let memory_granted =
-        readable && host.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory);
-    let tasks_granted =
-        readable && host.source_granted(&request.agent_id, BuiltinContextSource::Tasks);
     let mut context = granted_context(host, request);
-    if memory_granted {
+    if readable {
         let snapshot = host.memory_context().await?;
         context.memories = snapshot.memories;
         floe_context_contract::record_source_issue(
@@ -42,7 +34,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         );
     }
     let mut task_views = host.staged_task_views().to_vec();
-    if tasks_granted {
+    if readable {
         let acquired =
             floe_context_contract::acquire_optional_source(ContextSource::Tasks, host.task_view())
                 .await?;
@@ -73,26 +65,18 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     let view: CommunicationView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let model = host.model();
-    let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        crate::shared::optional_calendar_views(
-            &mut context,
-            host.calendar_views(request, request.nearby_calendar_query()?)
-                .await?,
-        )
-    } else {
-        vec![]
-    };
+    let calendars = crate::shared::optional_calendar_views(
+        &mut context,
+        host.calendar_views(request, request.nearby_calendar_query()?)
+            .await?,
+    );
     let result: CommitmentsExpertResult = run_commitments_expert_with_views(
         model,
         host.policy(),
         request.mail_invocation(context, view),
         CommitmentsContextViews {
             calendars,
-            tasks: if host.source_granted(&request.agent_id, BuiltinContextSource::Tasks) {
-                task_views
-            } else {
-                vec![]
-            },
+            tasks: task_views,
         },
     )
     .await?;

@@ -82,7 +82,7 @@ final class AgentExpertResult {
           'person_id',
           'assignment_id',
           'package',
-          'view_handle',
+          'evidence_id',
           'source_handle',
           'data_class',
           'expires_at_unix_ms',
@@ -111,7 +111,7 @@ final class AgentExpertResult {
           (json['expires_at_unix_ms']! as num) < 0) {
         return null;
       }
-      for (final key in ['instance_id', 'assignment_id', 'view_handle']) {
+      for (final key in ['instance_id', 'assignment_id', 'evidence_id']) {
         _text(json[key], 128);
       }
       final package = json['package']! as Map<String, dynamic>;
@@ -127,8 +127,8 @@ final class AgentExpertResult {
       AgentExpertInsight? proposal;
       if (proposals.isNotEmpty) {
         final raw = proposals.single as Map<String, dynamic>;
-        _keys(raw, {'starts_at_unix_ms', 'ends_at_unix_ms', 'view_handle'});
-        if (raw['view_handle'] != json['view_handle']) return null;
+        _keys(raw, {'starts_at_unix_ms', 'ends_at_unix_ms', 'evidence_id'});
+        if (raw['evidence_id'] != json['evidence_id']) return null;
         proposal = AgentExpertInsight.parse({
           'kind': 'focus_window',
           'starts_at_unix_ms': raw['starts_at_unix_ms'],

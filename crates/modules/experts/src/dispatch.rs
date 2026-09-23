@@ -569,7 +569,7 @@ mod tests {
                 id: request.agent_id.clone(),
                 version: "1".into(),
             },
-            view_handle: Uuid::new_v4(),
+            evidence_id: Uuid::new_v4(),
             source_handle: "calendar".into(),
             data_class: DataClass::Personal,
             expires_at_unix_ms: 1,

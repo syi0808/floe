@@ -1519,15 +1519,7 @@ fn install_builtin_mail_setup(
         instance_id: vault.registry_instance_id(),
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        sources: vec![floe_experts::BuiltinSourceBinding {
-            source: floe_experts::AgentId::try_new(
-                floe_experts_builtin::BuiltinContextSource::Mail.source_id(),
-            )
-            .unwrap(),
-            view_handle: Uuid::new_v4(),
-            state: floe_experts::BuiltinSourceState::Available,
-        }],
-    };
+        };
     runtime
         .block_on(vault.install_builtin_experts_enabled(
             setup,
@@ -1559,15 +1551,7 @@ fn install_builtin_calendar_setup(
                 instance_id: vault.registry_instance_id(),
                 expected_revision: 0,
                 setup_id: Uuid::new_v4(),
-                sources: vec![floe_experts::BuiltinSourceBinding {
-                    source: floe_experts::AgentId::try_new(
-                        floe_experts_builtin::BuiltinContextSource::Calendar.source_id(),
-                    )
-                    .unwrap(),
-                    view_handle: Uuid::new_v4(),
-                    state: floe_experts::BuiltinSourceState::Available,
-                }],
-            },
+                },
             &crate::vault_host::builtin_setup_specs(),
             floe_execution::Cancellation::default(),
         ))
@@ -1586,7 +1570,7 @@ fn install_builtin_calendar_setup(
 }
 
 #[test]
-fn production_builtin_setup_installs_through_vault_and_grants_sources() {
+fn production_builtin_setup_installs_through_vault_without_sources() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     let keys = Keys::default();
@@ -1606,14 +1590,9 @@ fn production_builtin_setup_installs_through_vault_and_grants_sources() {
         .block_on(vault.builtin_expert_overview())
         .unwrap()
         .unwrap();
-    let grants = floe_experts::SourceGrants::new(Some(overview.setup));
-    assert_eq!(
-        grants.grant(
-            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
-            floe_experts_builtin::BuiltinContextSource::Mail.source_id(),
-        ),
-        floe_experts::SourceGrant::Granted
-    );
+    assert_eq!(overview.setup.assignments.len(), 8);
+    let cards = runtime.block_on(vault.enabled_expert_cards()).unwrap();
+    assert_eq!(cards.len(), 8);
 }
 
 fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
@@ -2966,15 +2945,7 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
                     instance_id: fixture.vault.registry_instance_id(),
                     expected_revision: 0,
                     setup_id: Uuid::new_v4(),
-                    sources: vec![floe_experts::BuiltinSourceBinding {
-                        source: floe_experts::AgentId::try_new(
-                            floe_experts_builtin::BuiltinContextSource::Calendar.source_id(),
-                        )
-                        .unwrap(),
-                        view_handle: Uuid::new_v4(),
-                        state: floe_experts::BuiltinSourceState::Available,
-                    }],
-                },
+                    },
                 &crate::vault_host::builtin_setup_specs(),
                 floe_execution::Cancellation::default(),
             )
@@ -3312,15 +3283,7 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
             instance_id: fixture.vault.registry_instance_id(),
             expected_revision: 0,
             setup_id: Uuid::new_v4(),
-            sources: vec![floe_experts::BuiltinSourceBinding {
-                source: floe_experts::AgentId::try_new(
-                    floe_experts_builtin::BuiltinContextSource::Mail.source_id(),
-                )
-                .unwrap(),
-                view_handle: Uuid::new_v4(),
-                state: floe_experts::BuiltinSourceState::Available,
-            }],
-        };
+            };
         fixture
             .vault
             .install_builtin_experts_enabled(

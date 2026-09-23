@@ -8,8 +8,7 @@ use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
 #[cfg(test)]
-use floe_experts::{A2ATaskState, BuiltinExpertSetupReceipt, EXPERT_RESULT_MEDIA_TYPE};
-use floe_experts_builtin::BuiltinContextSource;
+use floe_experts::{A2ATaskState, EXPERT_RESULT_MEDIA_TYPE};
 #[cfg(test)]
 use floe_experts_builtin::{
     BuiltinExpertKind, commitments::CommitmentsExpertResult,
@@ -1254,7 +1253,6 @@ mod tests {
                 skills: vec!["Review a calendar assignment".into()],
                 supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
             }],
-            grants: Default::default(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[(
                 floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
@@ -1289,34 +1287,6 @@ mod tests {
         assert_eq!(task.id, task_id);
         assert_eq!(task.state, A2ATaskState::Completed);
         assert_eq!(runner.calls.load(Ordering::Acquire), 1);
-    }
-
-    fn test_builtin_setup(
-        person_id: PersonId,
-        sources: &[BuiltinContextSource],
-    ) -> BuiltinExpertSetupReceipt {
-        let instance_id = uuid::Uuid::new_v4();
-        let mut registry = floe_experts::AgentRegistry::new(instance_id);
-        registry
-            .install_builtin_experts(
-                person_id,
-                &floe_experts::BuiltinExpertSetup {
-                    instance_id,
-                    expected_revision: 0,
-                    setup_id: uuid::Uuid::new_v4(),
-                    sources: sources
-                        .iter()
-                        .map(|source| floe_experts::BuiltinSourceBinding {
-                            source: floe_experts::AgentId::try_new(source.source_id())
-                                .expect("builtin source ids are valid"),
-                            view_handle: uuid::Uuid::new_v4(),
-                            state: floe_experts::BuiltinSourceState::Available,
-                        })
-                        .collect(),
-                },
-                &crate::vault_host::builtin_setup_specs(),
-            )
-            .unwrap()
     }
 
     async fn request(mut socket: tokio::net::TcpStream) -> (String, tokio::net::TcpStream) {
@@ -1655,10 +1625,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
-                person_id,
-                &[BuiltinContextSource::Mail],
-            ))),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -1747,7 +1713,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: Default::default(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -1791,7 +1756,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: vec![],
-            grants: Default::default(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -2302,10 +2266,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
-                person_id,
-                &[BuiltinContextSource::Mail, BuiltinContextSource::Calendar],
-            ))),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -2542,15 +2502,6 @@ mod tests {
             task_views: &tasks,
 
             cards: test_expert_cards(),
-            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
-                person_id,
-                &[
-                    BuiltinContextSource::Mail,
-                    BuiltinContextSource::Calendar,
-                    BuiltinContextSource::Tasks,
-                    BuiltinContextSource::ConfirmedMemory,
-                ],
-            ))),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -2725,13 +2676,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
-                person_id,
-                &[
-                    BuiltinContextSource::WorkContext,
-                    BuiltinContextSource::Logistics,
-                ],
-            ))),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -3005,10 +2949,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
-                PersonId::new(),
-                &[BuiltinContextSource::Contacts],
-            ))),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
@@ -3071,10 +3011,6 @@ mod tests {
             context_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            grants: floe_experts::SourceGrants::new(Some(test_builtin_setup(
-                PersonId::new(),
-                &[BuiltinContextSource::Attention],
-            ))),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };

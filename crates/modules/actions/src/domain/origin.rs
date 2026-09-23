@@ -16,7 +16,7 @@ pub struct AgentActionOrigin {
     pub invocation_id: Uuid,
     pub assignment_id: Uuid,
     pub package: PackageRef,
-    pub view_handle: Uuid,
+    pub evidence_id: Uuid,
     pub state_revision: u64,
     pub data_class: DataClass,
     pub automatic: bool,

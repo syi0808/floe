@@ -5,7 +5,7 @@ Map<String, Object?> expertResultFixture() => {
   'person_id': 'test',
   'assignment_id': 'schedule-fixture',
   'package': {'kind': 'expert', 'id': 'floe.schedule', 'version': '1.0.0'},
-  'view_handle': 'view-fixture',
+  'evidence_id': 'view-fixture',
   'source_handle': 'fixture.synthetic.timeline',
   'data_class': 'synthetic',
   'expires_at_unix_ms': 4102444800000,

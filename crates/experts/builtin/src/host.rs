@@ -17,14 +17,12 @@ use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView,
     PeopleView, WellbeingView, WorkContextView,
 };
-use floe_context_contract::{ContextDependency, MemoryContextSnapshot, SourceGrant};
+use floe_context_contract::{ContextDependency, MemoryContextSnapshot};
 use floe_execution::Cancellation;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{
-    BuiltinContextSource, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
-};
+use crate::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};
 use floe_context_contract::{CommunicationView, ConfirmedInteractionView};
 
 /// Every builtin Expert runs one bounded model call with the same ceiling.
@@ -184,19 +182,6 @@ pub trait BuiltinExpertHost: Sync {
 
     fn policy(&self) -> &InferencePolicyDecision;
 
-    /// Whether this Expert may read the named source right now.
-    ///
-    /// The decision belongs to whoever holds the setup; the Expert only asks,
-    /// and decides for itself what a source it cannot read means for its own
-    /// judgment.
-    fn source_grant(&self, agent_id: &str, source: BuiltinContextSource) -> SourceGrant;
-
-    /// Whether the named source is readable at all, for an Expert that only
-    /// enriches its context when it is.
-    fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool {
-        self.source_grant(agent_id, source).is_granted()
-    }
-
     /// Read one authorized remote source view for this Expert.
     fn read_source_view<'a>(
         &'a self,
@@ -266,34 +251,11 @@ pub trait BuiltinExpertHost: Sync {
 
 /// The context one Expert may see.
 ///
-/// Confirmed memories are part of the conversation context, so an Expert that
-/// was never granted them must not read them out of the shared context either.
+/// Conversation context supplied to the Expert is already authorized context.
+/// This is a plain bounded clone; source admission happens at the actual read.
 pub fn granted_context<Host: BuiltinExpertHost + ?Sized>(
-    host: &Host,
+    _host: &Host,
     request: &BuiltinExpertRequest,
 ) -> AgentContext {
-    let mut context = request.context.clone();
-    if !host.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory) {
-        context.memories.clear();
-    }
-    context
-}
-
-/// Every builtin Expert must hold the one source its judgment cannot do without.
-///
-/// Each Expert asserts this for itself before it reads anything else; a missing
-/// mandatory grant is a denial, not a degraded answer.
-pub fn require_mandatory_source<Host: BuiltinExpertHost + ?Sized>(
-    host: &Host,
-    request: &BuiltinExpertRequest,
-) -> Result<(), AgentFailure> {
-    let expert = crate::BuiltinExpertKind::from_package_id(&request.agent_id)
-        .ok_or(AgentFailure::CapabilityDenied)?;
-    match host.source_grant(&request.agent_id, expert.mandatory_source()) {
-        SourceGrant::Granted => Ok(()),
-        // A source that is bound but down right now is a different answer from
-        // one this Expert was never granted, and the Person can act on it.
-        SourceGrant::Unavailable => Err(AgentFailure::CapabilityUnavailable),
-        SourceGrant::NotConfigured | SourceGrant::Denied => Err(AgentFailure::CapabilityDenied),
-    }
+    request.context.clone()
 }

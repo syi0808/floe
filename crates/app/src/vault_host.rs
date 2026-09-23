@@ -30,9 +30,8 @@ use floe_context_contract::CalendarProvider;
 use floe_conversation::AgentOutcome;
 use floe_conversation::{AgentEvent, AgentSession};
 use floe_execution::Cancellation;
-use floe_experts::{BuiltinSourceBinding, BuiltinSourceEvidence};
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement};
+use floe_experts_builtin::BuiltinExpertKind;
 use floe_kernel::PersonId;
 use floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint;
 #[cfg(not(target_os = "android"))]
@@ -1384,21 +1383,9 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     job: &Job,
     request: &ConversationTurnRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
-    let paired_server =
-        floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-            &vault.connections,
-            &job.person.to_string(),
-            &request.device_id,
-        )
-        .ok()
-        .flatten()
-        .is_some();
+    let _ = (core, local_context, request);
     let refreshed = Box::pin(ensure_builtin_experts(
         vault,
-        core,
-        local_context,
-        job.person,
-        paired_server,
         job.cancellation.clone(),
         floe_experts::BuiltinExpertRefresh::ExistingOnly,
     ))
@@ -1704,10 +1691,6 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 ConversationSessionOperation::Start => {
                     ensure_builtin_experts(
                         vault,
-                        core,
-                        local_context,
-                        job.person,
-                        false,
                         job.cancellation.clone(),
                         floe_experts::BuiltinExpertRefresh::InstallIfAbsent,
                     )
@@ -2416,87 +2399,19 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
 
 async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
-    core: &FloeCore,
-    local_context: &LocalContextHost,
-    person_id: PersonId,
-    paired_server: bool,
     cancellation: Cancellation,
     when: floe_experts::BuiltinExpertRefresh,
 ) -> Result<(), AgentFailure> {
-    let _ = local_context;
     floe_experts::ensure_builtin_experts(
         &expert_setup::VaultBuiltinExperts {
             vault,
             specs: builtin_setup_specs(),
             cancellation,
         },
-        builtin_source_bindings(core, person_id, paired_server).await,
         BuiltinExpertKind::ALL.len(),
         when,
     )
     .await
-}
-
-/// What each builtin source is bound to, and how well it is being served.
-///
-/// Which source needs what is the builtin Experts' own declaration and what a
-/// connection state means is Connections'; this reads the two together into the
-/// bindings the registry records.
-async fn builtin_source_bindings(
-    core: &FloeCore,
-    person_id: PersonId,
-    paired_server: bool,
-) -> Vec<BuiltinSourceBinding> {
-    let paired_server = if paired_server {
-        BuiltinSourceEvidence::Serving
-    } else {
-        BuiltinSourceEvidence::Absent
-    };
-    let calendar = core
-        .calendar_connector_snapshot(
-            person_id,
-            &format!("local-{}", std::env::consts::OS),
-            chrono::Utc::now(),
-        )
-        .await
-        .ok()
-        .flatten()
-        .map(|snapshot| snapshot.connection.state);
-    let device_connection = match calendar {
-        Some(state) if state.is_serving() => BuiltinSourceEvidence::Serving,
-        Some(state) if state.is_withheld() => BuiltinSourceEvidence::Withheld,
-        _ => BuiltinSourceEvidence::Absent,
-    };
-    [
-        BuiltinContextSource::Calendar,
-        BuiltinContextSource::Mail,
-        BuiltinContextSource::Tasks,
-        BuiltinContextSource::ConfirmedMemory,
-        BuiltinContextSource::Contacts,
-        BuiltinContextSource::ConfirmedInteractions,
-        BuiltinContextSource::Attention,
-        BuiltinContextSource::WorkContext,
-        BuiltinContextSource::Wellbeing,
-        BuiltinContextSource::Logistics,
-    ]
-    .into_iter()
-    .map(|source| BuiltinSourceBinding {
-        source: source_id(source),
-        view_handle: builtin_source_handle(person_id, source),
-        state: match source.requirement() {
-            BuiltinSourceRequirement::DeviceConnection => device_connection,
-            BuiltinSourceRequirement::Device => BuiltinSourceEvidence::Serving,
-            BuiltinSourceRequirement::PairedServer => paired_server,
-            BuiltinSourceRequirement::Unserved => BuiltinSourceEvidence::Absent,
-        }
-        .state(),
-    })
-    .collect()
-}
-
-/// The registry identity of one builtin source.
-fn source_id(source: BuiltinContextSource) -> floe_experts::AgentId {
-    floe_experts::AgentId::try_new(source.source_id()).expect("builtin source ids are valid")
 }
 
 /// What the builtin Experts declare about themselves, in the shape the registry
@@ -2517,15 +2432,6 @@ fn expert_setup_spec(
     floe_experts::ExpertSetupSpec {
         packages: packaging.packages(declaration.data_class),
         expert,
-        required_sources: declaration
-            .required_sources
-            .iter()
-            .map(|source| {
-                floe_experts::AgentId::try_new(*source).expect("builtin source ids are valid")
-            })
-            .collect(),
-        mandatory_source: floe_experts::AgentId::try_new(declaration.mandatory_source)
-            .expect("builtin source ids are valid"),
     }
 }
 
@@ -2555,25 +2461,6 @@ fn builtin_expert_packaging(kind: BuiltinExpertKind) -> floe_experts::ExpertPack
     let expert = floe_experts::AgentId::try_new(declaration.expert_id)
         .expect("builtin expert ids are valid");
     expert_packaging(&declaration, expert)
-}
-
-fn builtin_source_handle(person_id: PersonId, source: BuiltinContextSource) -> Uuid {
-    let name = match source {
-        BuiltinContextSource::Calendar => "calendar",
-        BuiltinContextSource::Mail => "mail",
-        BuiltinContextSource::Tasks => "tasks",
-        BuiltinContextSource::ConfirmedMemory => "confirmed-memory",
-        BuiltinContextSource::Contacts => "contacts",
-        BuiltinContextSource::ConfirmedInteractions => "confirmed-interactions",
-        BuiltinContextSource::Attention => "attention",
-        BuiltinContextSource::WorkContext => "work-context",
-        BuiltinContextSource::Wellbeing => "wellbeing",
-        BuiltinContextSource::Logistics => "logistics",
-    };
-    Uuid::new_v5(
-        &person_id.0,
-        format!("floe.builtin.source.v1:{name}").as_bytes(),
-    )
 }
 
 /// Whether the client must reload the session before continuing.

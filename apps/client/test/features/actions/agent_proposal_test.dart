@@ -48,7 +48,7 @@ void main() {
     for (final proposals in [
       [original, original],
       [
-        {...original, 'view_handle': 'foreign'},
+        {...original, 'evidence_id': 'foreign'},
       ],
       [
         {...original, 'ends_at_unix_ms': 43200001},

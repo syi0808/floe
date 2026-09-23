@@ -25,6 +25,6 @@ pub use catalog::{
 };
 pub use host::{
     Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft,
-    StatefulFocusProposal, granted_context, require_mandatory_source,
+    StatefulFocusProposal, granted_context,
 };
 pub use shared::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};

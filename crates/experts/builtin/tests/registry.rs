@@ -1,10 +1,7 @@
 use floe_agent_contract::AgentFailure;
 use floe_agent_contract::PersonId;
-use floe_experts::{
-    AgentId, AgentRegistry, BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState,
-    ExpertPackaging, ExpertSetupSpec,
-};
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
+use floe_experts::{AgentId, AgentRegistry, BuiltinExpertSetup, ExpertPackaging, ExpertSetupSpec};
+use floe_experts_builtin::BuiltinExpertKind;
 use uuid::Uuid;
 
 /// The builtin Experts, in the shape the registry installs them.
@@ -30,12 +27,6 @@ fn specs() -> Vec<ExpertSetupSpec> {
             ExpertSetupSpec {
                 packages: packaging.packages(declaration.data_class),
                 expert,
-                required_sources: declaration
-                    .required_sources
-                    .iter()
-                    .map(|source| agent_id(source))
-                    .collect(),
-                mandatory_source: agent_id(declaration.mandatory_source),
             }
         })
         .collect()
@@ -49,16 +40,8 @@ fn expert_id(kind: BuiltinExpertKind) -> AgentId {
     agent_id(kind.package_id())
 }
 
-fn source(source: BuiltinContextSource, state: BuiltinSourceState) -> BuiltinSourceBinding {
-    BuiltinSourceBinding {
-        source: agent_id(source.source_id()),
-        view_handle: Uuid::new_v4(),
-        state,
-    }
-}
-
 #[test]
-fn builtins_only_grant_available_person_scoped_sources_and_publish_enabled_cards() {
+fn builtins_install_without_source_input_and_publish_cards_on_enablement() {
     let person = PersonId::new();
     let other = PersonId::new();
     let instance = Uuid::new_v4();
@@ -67,11 +50,6 @@ fn builtins_only_grant_available_person_scoped_sources_and_publish_enabled_cards
         instance_id: instance,
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        sources: vec![
-            source(BuiltinContextSource::Mail, BuiltinSourceState::Available),
-            source(BuiltinContextSource::Calendar, BuiltinSourceState::Disabled),
-            source(BuiltinContextSource::Tasks, BuiltinSourceState::Unavailable),
-        ],
     };
     let receipt = registry
         .install_builtin_experts(person, &request, &specs())
@@ -80,15 +58,6 @@ fn builtins_only_grant_available_person_scoped_sources_and_publish_enabled_cards
     assert_eq!(registry.enabled_expert_cards(person), []);
     assert_eq!(registry.enabled_expert_cards(other), []);
 
-    let commitments = receipt
-        .assignments
-        .iter()
-        .find(|entry| entry.expert == expert_id(BuiltinExpertKind::Commitments))
-        .unwrap();
-    assert_eq!(
-        commitments.granted_view_handles,
-        [request.sources[0].view_handle]
-    );
     let communication = receipt
         .assignments
         .iter()
@@ -135,7 +104,6 @@ fn builtin_setup_is_idempotent_for_the_same_request() {
         instance_id: instance,
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        sources: vec![],
     };
     let first = registry
         .install_builtin_experts(person, &request, &specs())
@@ -151,60 +119,7 @@ fn builtin_setup_is_idempotent_for_the_same_request() {
 }
 
 #[test]
-fn source_refresh_updates_grants_without_changing_enablement() {
-    let person = PersonId::new();
-    let instance = Uuid::new_v4();
-    let mut registry = AgentRegistry::new(instance);
-    let mail = source(BuiltinContextSource::Mail, BuiltinSourceState::Unavailable);
-    let request = BuiltinExpertSetup {
-        instance_id: instance,
-        expected_revision: 0,
-        setup_id: Uuid::new_v4(),
-        sources: vec![mail.clone()],
-    };
-    let receipt = registry
-        .install_builtin_experts(person, &request, &specs())
-        .unwrap();
-    let communication = receipt
-        .assignments
-        .iter()
-        .find(|entry| entry.expert == expert_id(BuiltinExpertKind::Communication))
-        .unwrap();
-    let revision = registry.revision();
-    let refreshed = registry
-        .refresh_builtin_expert_sources(
-            person,
-            revision,
-            vec![BuiltinSourceBinding {
-                state: BuiltinSourceState::Available,
-                ..mail
-            }],
-        )
-        .unwrap();
-
-    assert_eq!(registry.revision(), revision + 1);
-    assert_eq!(
-        refreshed
-            .assignments
-            .iter()
-            .find(|entry| entry.expert == expert_id(BuiltinExpertKind::Communication))
-            .unwrap()
-            .granted_view_handles,
-        [request.sources[0].view_handle]
-    );
-    assert!(
-        !registry
-            .snapshot()
-            .assignments
-            .iter()
-            .find(|entry| entry.id == communication.expert_assignment_id)
-            .unwrap()
-            .enabled
-    );
-}
-
-#[test]
-fn atomic_enabled_install_only_advertises_executable_experts() {
+fn atomic_enabled_install_advertises_all_builtin_experts_without_sources() {
     let person = PersonId::new();
     let instance = Uuid::new_v4();
     let mut registry = AgentRegistry::new(instance);
@@ -212,16 +127,6 @@ fn atomic_enabled_install_only_advertises_executable_experts() {
         instance_id: instance,
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        sources: vec![
-            source(
-                BuiltinContextSource::Calendar,
-                BuiltinSourceState::Available,
-            ),
-            source(
-                BuiltinContextSource::Attention,
-                BuiltinSourceState::Available,
-            ),
-        ],
     };
     registry
         .install_builtin_experts_enabled(person, &request, &specs())
@@ -242,14 +147,18 @@ fn atomic_enabled_install_only_advertises_executable_experts() {
             .iter()
             .all(|assignment| assignment.enabled)
     );
-    assert_eq!(
-        registry
-            .enabled_expert_cards(person)
-            .iter()
-            .map(|card| card.id.as_str())
-            .collect::<Vec<_>>(),
-        ["floe.builtin.schedule", "floe.builtin.focus-attention",]
-    );
+    let mut cards: Vec<_> = registry
+        .enabled_expert_cards(person)
+        .iter()
+        .map(|card| card.id.clone())
+        .collect();
+    cards.sort();
+    let mut expected: Vec<String> = BuiltinExpertKind::ALL
+        .iter()
+        .map(|kind| kind.package_id().to_owned())
+        .collect();
+    expected.sort();
+    assert_eq!(cards, expected);
 
     let focus = registry.snapshot().builtin_setups[0]
         .assignments
@@ -274,4 +183,6 @@ fn atomic_enabled_install_only_advertises_executable_experts() {
             .unwrap()
             .enabled
     );
+    // Disabling one Expert removes only its card.
+    assert_eq!(registry.enabled_expert_cards(person).len(), 7);
 }

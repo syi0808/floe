@@ -93,15 +93,17 @@ fn setup_is_one_revision_default_off_and_uses_the_builtin_schedule_catalog() {
             assert_eq!(assignment.person_id, person);
             assert_eq!(assignment.private_state, ExpertPrivateState::default());
         }
-        assert_eq!(
-            registry.expert_card(
+        let schedule = AgentId::try_new(BuiltinExpertKind::Schedule.package_id()).unwrap();
+        assert!(matches!(
+            registry.resolve_builtin(
+                registry.instance_id(),
                 person,
                 setup.expert_assignment_id,
                 registry.revision(),
-                setup.view_handle,
+                &schedule,
             ),
             Err(AgentFailure::CapabilityDenied)
-        );
+        ));
         for installation in [setup.tool_installation_id, setup.expert_installation_id] {
             registry
                 .set_installation_enabled(registry.revision(), installation, true)
@@ -117,13 +119,16 @@ fn setup_is_one_revision_default_off_and_uses_the_builtin_schedule_catalog() {
             .unwrap();
         assert_eq!(
             registry
-                .expert_card(
+                .resolve_builtin(
+                    registry.instance_id(),
                     person,
                     setup.expert_assignment_id,
                     registry.revision(),
-                    setup.view_handle,
+                    &schedule,
                 )
                 .unwrap()
+                .package
+                .reference
                 .id,
             BuiltinExpertKind::Schedule.package_id()
         );

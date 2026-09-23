@@ -8,6 +8,7 @@ use floe_experts_builtin::{
 };
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use tokio::time::Instant;
+use uuid::Uuid;
 
 pub(in crate::vault_host::conversation_turn) trait StatefulExpertSettlement: Sync {
     fn settle<'a>(
@@ -54,17 +55,15 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                 .iter()
                 .find(|assignment| assignment.expert.as_str() == request.agent_id)
                 .ok_or(AgentFailure::CapabilityDenied)?;
-            let [view_handle] = assignment.granted_view_handles.as_slice() else {
-                return Err(AgentFailure::CapabilityDenied);
-            };
-            let view_handle = *view_handle;
             let assignment_id = assignment.expert_assignment_id;
-            let resolved = registry.resolve(
+            let expected_expert = floe_experts::AgentId::try_new(request.agent_id.clone())
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            let resolved = registry.resolve_builtin(
                 registry.instance_id(),
                 request.person_id,
                 assignment_id,
                 expected_revision,
-                &[view_handle],
+                &expected_expert,
             )?;
             if resolved.package.reference.id != request.agent_id
                 || !matches!(
@@ -80,6 +79,7 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            let evidence_id = evidence_for_source(&draft.source_handle, &dependencies)?;
             let mut result = ExpertResult {
                 schema_version: AGENT_VERSION,
                 invocation_id: request.invocation_id,
@@ -87,7 +87,7 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                 person_id: request.person_id,
                 assignment_id,
                 package: resolved.package.reference.clone(),
-                view_handle,
+                evidence_id,
                 source_handle: draft.source_handle,
                 data_class: draft.data_class,
                 expires_at_unix_ms: draft.expires_at_unix_ms,
@@ -98,7 +98,7 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                     .map(|proposal| ExpertFocusProposal {
                         starts_at_unix_ms: proposal.starts_at_unix_ms,
                         ends_at_unix_ms: proposal.ends_at_unix_ms,
-                        view_handle,
+                        evidence_id,
                     })
                     .collect(),
                 summary: Some(draft.summary.clone()),
@@ -132,6 +132,41 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
             )
             .map(|output| output.with_settlement(settlement))
         })
+    }
+}
+
+/// The observation backing `source_handle`, from the captured dependencies.
+///
+/// Native Calendar views carry `calendar.observe:{observation_id}`; the exact
+/// captured dependency with that observation backs the result. Other sources
+/// must have exactly one captured dependency.
+fn evidence_for_source(
+    source_handle: &str,
+    dependencies: &[ContextDependency],
+) -> Result<Uuid, AgentFailure> {
+    if let Some(observation) = source_handle.strip_prefix("calendar.observe:") {
+        let observation_id =
+            Uuid::parse_str(observation).map_err(|_| AgentFailure::StaleContext)?;
+        if observation_id.is_nil() {
+            return Err(AgentFailure::StaleContext);
+        }
+        let matches: Vec<_> = dependencies
+            .iter()
+            .filter(|dependency| dependency.observation_id() == observation_id)
+            .collect();
+        let [dependency] = matches.as_slice() else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        Ok(dependency.observation_id())
+    } else {
+        let [dependency] = dependencies else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        let evidence_id = dependency.observation_id();
+        if evidence_id.is_nil() {
+            return Err(AgentFailure::StaleContext);
+        }
+        Ok(evidence_id)
     }
 }
 

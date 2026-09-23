@@ -92,13 +92,16 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
                 };
                 validate_calendar_source_handle(
                     &evidence.source_handle,
-                    evidence.view_handle,
+                    evidence.evidence_id,
                     action.connection_revision,
                 )?;
                 if evidence.source_handle.starts_with("calendar.observe:") {
                     let dependency = store
                         .expert_proposal_dependency(&reference, &evidence)
                         .await?;
+                    if dependency.observation_id() != evidence.evidence_id {
+                        return Err(AgentFailure::Conflict);
+                    }
                     self.fence.observation(&dependency)?;
                     let connection = self
                         .repository
@@ -115,7 +118,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
                     || origin.invocation_id != evidence.invocation_id
                     || origin.assignment_id != evidence.assignment_id
                     || origin.package != evidence.package
-                    || origin.view_handle != evidence.view_handle
+                    || origin.evidence_id != evidence.evidence_id
                     || origin.state_revision != evidence.state_revision
                     || origin.data_class != evidence.data_class
                     || action.title != "Focus time"
@@ -405,7 +408,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         let destination = &request.destination;
         validate_calendar_source_handle(
             &evidence.source_handle,
-            evidence.view_handle,
+            evidence.evidence_id,
             destination.connection_revision,
         )?;
         if !matches!(
@@ -416,6 +419,9 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             return Err(AgentFailure::PolicyDenied);
         }
         let proposal = &evidence.action_proposals[0];
+        if proposal.evidence_id != evidence.evidence_id || evidence.evidence_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
         let schedule = TimedSchedule::new(
             timestamp(proposal.starts_at_unix_ms)?,
             timestamp(proposal.ends_at_unix_ms)?,
@@ -429,7 +435,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             invocation_id: evidence.invocation_id,
             assignment_id: evidence.assignment_id,
             package: evidence.package.clone(),
-            view_handle: evidence.view_handle,
+            evidence_id: evidence.evidence_id,
             state_revision: evidence.state_revision,
             data_class: evidence.data_class,
             automatic: false,
@@ -590,20 +596,24 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
 
 pub fn validate_calendar_source_handle(
     source_handle: &str,
-    view_handle: Uuid,
+    evidence_id: Uuid,
     connection_revision: u64,
 ) -> Result<(), AgentFailure> {
+    if evidence_id.is_nil() {
+        return Err(AgentFailure::StaleContext);
+    }
     if let Some(revision) = source_handle.strip_prefix("calendar.timeline:") {
-        if revision != format!("{}:{}", view_handle, connection_revision) {
+        if revision != format!("{}:{}", evidence_id, connection_revision) {
             return Err(AgentFailure::StaleContext);
         }
     } else if let Some(observation_id) = source_handle.strip_prefix("calendar.lease:") {
-        Uuid::parse_str(observation_id).map_err(|_| AgentFailure::StaleContext)?;
+        let parsed = Uuid::parse_str(observation_id).map_err(|_| AgentFailure::StaleContext)?;
+        if parsed.is_nil() || parsed != evidence_id {
+            return Err(AgentFailure::StaleContext);
+        }
     } else if let Some(observation_id) = source_handle.strip_prefix("calendar.observe:") {
-        if Uuid::parse_str(observation_id)
-            .map_err(|_| AgentFailure::StaleContext)?
-            .is_nil()
-        {
+        let parsed = Uuid::parse_str(observation_id).map_err(|_| AgentFailure::StaleContext)?;
+        if parsed.is_nil() || parsed != evidence_id {
             return Err(AgentFailure::StaleContext);
         }
     }
@@ -678,19 +688,26 @@ mod tests {
 
     #[test]
     fn context_calendar_handle_requires_a_real_observation_identity() {
-        let view = Uuid::new_v4();
         let observation = Uuid::new_v4();
         assert!(validate_calendar_source_handle(
             &format!("calendar.observe:{observation}"),
-            view,
+            observation,
             1,
         )
         .is_ok());
         for handle in ["calendar.observe:invalid", "calendar.observe:00000000-0000-0000-0000-000000000000"] {
             assert_eq!(
-                validate_calendar_source_handle(handle, view, 1),
+                validate_calendar_source_handle(handle, observation, 1),
                 Err(AgentFailure::StaleContext)
             );
         }
+        assert_eq!(
+            validate_calendar_source_handle(
+                &format!("calendar.observe:{observation}"),
+                Uuid::new_v4(),
+                1,
+            ),
+            Err(AgentFailure::StaleContext)
+        );
     }
 }

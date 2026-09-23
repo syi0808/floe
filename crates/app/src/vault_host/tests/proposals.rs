@@ -1,8 +1,6 @@
 use chrono::TimeZone;
 use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
-use floe_agent_contract::{
-    DataClass, ExpertFocusProposal, ExpertInsight, ExpertResult, PackageKind, PackageRef,
-};
+use floe_agent_contract::{DataClass, ExpertFocusProposal, ExpertInsight, ExpertResult};
 use floe_context_contract::CalendarProvider;
 use floe_conversation::AgentMessage;
 use floe_day::CalendarRange;
@@ -115,27 +113,27 @@ async fn seed(
     let snapshot = vault.expert_registry().await.unwrap().unwrap();
     let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
     let registry_revision = registry.revision();
-    let card = registry
-        .expert_card(
+    let schedule =
+        floe_experts::AgentId::try_new(BuiltinExpertKind::Schedule.package_id()).unwrap();
+    let resolved = registry
+        .resolve_builtin(
+            registry.instance_id(),
             person,
             setup.expert_assignment_id,
             registry_revision,
-            setup.view_handle,
+            &schedule,
         )
         .unwrap();
+    let evidence_id = Uuid::new_v4();
     let evidence = ExpertResult {
         schema_version: 1,
         invocation_id: Uuid::new_v4(),
         instance_id: vault.registry_instance_id(),
         person_id: person,
         assignment_id: setup.expert_assignment_id,
-        package: PackageRef {
-            kind: PackageKind::Expert,
-            id: card.id,
-            version: card.version,
-        },
-        view_handle: setup.view_handle,
-        source_handle: format!("calendar.timeline:{}:{revision}", setup.view_handle),
+        package: resolved.package.reference.clone(),
+        evidence_id,
+        source_handle: format!("calendar.timeline:{evidence_id}:{revision}"),
         data_class: DataClass::Synthetic,
         expires_at_unix_ms: (now + chrono::Duration::minutes(2)).timestamp_millis() as u64,
         insights: vec![ExpertInsight::FocusWindow {
@@ -145,7 +143,7 @@ async fn seed(
         action_proposals: vec![ExpertFocusProposal {
             starts_at_unix_ms: (now + chrono::Duration::minutes(5)).timestamp_millis() as u64,
             ends_at_unix_ms: (now + chrono::Duration::minutes(65)).timestamp_millis() as u64,
-            view_handle: setup.view_handle,
+            evidence_id,
         }],
         summary: Some("Synthetic proposal recorded.".into()),
         model_calls: 2,

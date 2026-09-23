@@ -45,9 +45,8 @@ pub use envelope::{
     ScopedInstructions, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
 };
 pub use expert::{
-    AdmittedExpert, ExpertAssignments, ExpertBudget, ExpertFocusProposal, ExpertInput,
-    ExpertInsight, ExpertInvocation, ExpertResult, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
-    ViewCancellation, check_running,
+    ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertResult,
+    MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
 };
 pub use expert_model::{
     CapabilityDescriptor, ExpertCapabilityObservation, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement,

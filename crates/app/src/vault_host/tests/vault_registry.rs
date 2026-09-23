@@ -28,11 +28,6 @@ use floe_experts::RegistryConfigurationTarget;
 use floe_experts::RegistrySnapshot;
 use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
 
-/// The registry names a builtin source by its agent id.
-fn builtin_source_id(source: BuiltinContextSource) -> floe_experts::AgentId {
-    floe_experts::AgentId::try_new(source.source_id()).expect("builtin source ids are valid")
-}
-
 mod builtin_setup;
 mod calendar_setup;
 
@@ -154,7 +149,9 @@ async fn overview_is_read_only_and_configuration_preserves_private_state_and_gra
         .unwrap();
     let encoded = serde_json::to_string(&overview).unwrap();
     assert!(!encoded.contains("last_invocation_id"));
-    assert!(!encoded.contains(&expert.granted_view_handles[0].to_string()));
+    if let Some(handle) = expert.granted_view_handles.first() {
+        assert!(!encoded.contains(&handle.to_string()));
+    }
     assert!(!encoded.contains("private_state"));
     let next = fixture
         .vault
@@ -352,7 +349,7 @@ async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_an_unbou
         match mode {
             0 => forged.calendar_views[0].enabled = true,
             1 => forged.calendar_views[0].person_id = PersonId::new(),
-            _ => forged.calendar_views[0].handle = snapshot.assignments[0].granted_view_handles[0],
+            _ => forged.calendar_views[0].handle = Uuid::nil(),
         }
         assert!(
             fixture
@@ -608,7 +605,8 @@ async fn registry_and_private_state_survive_sessions_reopen_wal_and_checkpoint_e
     let second_result = expert(&fixture.sample().await);
     assert_eq!(second_result.state_revision, 2);
     assert_eq!(first_result.assignment_id, second_result.assignment_id);
-    assert_eq!(first_result.view_handle, second_result.view_handle);
+    assert!(!first_result.evidence_id.is_nil());
+    assert!(!second_result.evidence_id.is_nil());
     let before = fixture.vault.expert_registry().await.unwrap().unwrap();
     for entry in fs::read_dir(fixture.root.path().join(fixture.person.to_string())).unwrap() {
         let bytes = fs::read(entry.unwrap().path()).unwrap();
@@ -902,7 +900,7 @@ async fn scoped_commit_rejects_a_competing_private_state_update() {
                 baseline.revision,
                 &second_staged,
                 result.assignment_id,
-                result.view_handle,
+                result.evidence_id,
                 std::future::ready(Ok(())),
             )
             .await,

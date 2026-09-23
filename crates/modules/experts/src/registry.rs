@@ -14,7 +14,7 @@ pub use calendar_setup::{
     CalendarExpertSetupResult, ExpertPackaging,
 };
 pub use expert_setup::{
-    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec, SourceGrants,
+    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertSetupSpec,
     eligible_cards_for_availability,
 };
 
@@ -43,49 +43,27 @@ impl AgentId {
 }
 
 // Durable setup records the registry stores for an agent. The registry keeps
-// them; the operations that produce them belong to the agent's own crate.
+// package topology only; source permission lives in Access.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuiltinExpertSetupReceipt {
     pub setup_id: Uuid,
     pub person_id: PersonId,
     pub expected_revision: u64,
-    pub sources: Vec<BuiltinSourceBinding>,
     pub assignments: Vec<BuiltinExpertAssignmentReceipt>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct BuiltinSourceBinding {
-    pub source: AgentId,
-    pub view_handle: Uuid,
-    pub state: BuiltinSourceState,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuiltinExpertAssignmentReceipt {
     pub expert: AgentId,
-    /// Every source this Expert declared it reads, in its own order.
-    pub required_sources: Vec<AgentId>,
-    /// The one source it declared it cannot answer without.
-    pub mandatory_source: AgentId,
     pub tool_installation_id: Uuid,
     pub expert_installation_id: Uuid,
     pub tool_assignment_id: Uuid,
     pub expert_assignment_id: Uuid,
-    pub granted_view_handles: Vec<Uuid>,
 }
 
 pub use floe_agent_contract::SourceGrant;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltinSourceState {
-    Available,
-    Disabled,
-    Unavailable,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -743,12 +721,14 @@ impl AgentRegistry {
         if result.schema_version != AGENT_VERSION {
             return Err(AgentFailure::UnsupportedVersion);
         }
-        let resolved = self.resolve(
+        let expected_expert = AgentId::try_new(result.package.id.clone())
+            .ok_or(AgentFailure::InvalidInput)?;
+        let resolved = self.resolve_builtin(
             result.instance_id,
             result.person_id,
             result.assignment_id,
             expected_revision,
-            &[result.view_handle],
+            &expected_expert,
         )?;
         Self::validate_result_content(result, &resolved)?;
         Ok(resolved)
@@ -760,6 +740,7 @@ impl AgentRegistry {
     ) -> Result<(), AgentFailure> {
         if result.package != resolved.package.reference
             || result.data_class != resolved.data_class
+            || result.evidence_id.is_nil()
             || !(1..=8).contains(&result.view_calls)
             || (result.insights.is_empty() && result.summary.is_none())
             || result.insights.len() > 8
@@ -793,7 +774,7 @@ impl AgentRegistry {
                 crate::ExpertInsight::NoFocusWindow => false,
             })
             || result.action_proposals.iter().any(|proposal| {
-                proposal.view_handle != result.view_handle
+                proposal.evidence_id != result.evidence_id
                     || !result
                         .insights
                         .contains(&crate::ExpertInsight::FocusWindow {
@@ -875,72 +856,17 @@ impl AgentRegistry {
             .ok_or(AgentFailure::CapabilityDenied)
     }
 
-    pub fn expert_card(
-        &self,
-        person_id: PersonId,
-        assignment_id: Uuid,
-        expected_revision: u64,
-        view_handle: Uuid,
-    ) -> Result<crate::AgentCard, AgentFailure> {
-        let resolved = self.resolve(
-            self.instance_id(),
-            person_id,
-            assignment_id,
-            expected_revision,
-            &[view_handle],
-        )?;
-        let metadata = resolved
-            .package
-            .expert_metadata
-            .as_ref()
-            .ok_or(AgentFailure::CapabilityDenied)?;
-        let card = crate::AgentCard {
-            schema_version: AGENT_VERSION,
-            protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
-            id: resolved.package.reference.id.clone(),
-            version: resolved.package.reference.version.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            domain_tags: metadata.domain_tags.clone(),
-            skills: metadata.skills.clone(),
-            supported_placements: metadata.supported_placements.clone(),
-        };
-        card.validate()?;
-        Ok(card)
-    }
-
-    pub fn builtin_expert_card(
-        &self,
-        person_id: PersonId,
-        assignment_id: Uuid,
-        expected_revision: u64,
-        view_handle: Uuid,
-        expert: AgentId,
-    ) -> Result<crate::AgentCard, AgentFailure> {
-        let resolved = self.resolve(
-            self.instance_id(),
-            person_id,
-            assignment_id,
-            expected_revision,
-            &[view_handle],
-        )?;
-        if resolved.package.reference.id != expert.as_str()
-            || resolved.package.implementation != (PackageImplementation::Builtin { expert })
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        self.expert_card(person_id, assignment_id, expected_revision, view_handle)
-    }
-
-    /// Resolve one assignment to the Expert it installs, refusing anything that
-    /// is disabled, stale or not granted the views it was asked to read.
-    pub fn resolve(
+    /// Resolve one built-in assignment to the Expert it installs.
+    ///
+    /// This validates Registry/package/tool/private-state identity only.
+    /// Source evidence is validated by Access/Context, never here.
+    pub fn resolve_builtin(
         &self,
         instance_id: Uuid,
         person_id: PersonId,
         assignment_id: Uuid,
         expected_revision: u64,
-        views: &[Uuid],
+        expected_expert: &AgentId,
     ) -> Result<ResolvedExpert, AgentFailure> {
         if instance_id != self.snapshot.instance_id {
             return Err(AgentFailure::NotFound);
@@ -953,20 +879,19 @@ impl AgentRegistry {
         }
         let package = self.package(&installation.package)?;
         if package.reference.kind != PackageKind::Expert
-            || views.len() != 1
-            || views
-                .iter()
-                .any(|view| !assignment.granted_view_handles.contains(view))
+            || package.reference.id != expected_expert.as_str()
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        self.validate_grants(assignment)?;
+        match &package.implementation {
+            PackageImplementation::Builtin { expert } if expert == expected_expert => {}
+            PackageImplementation::Declarative { .. } => {}
+            _ => return Err(AgentFailure::CapabilityDenied),
+        }
+        self.validate_tool_linkage(assignment)?;
         let tool = self.assignment(person_id, assignment.granted_tool_assignments[0])?;
         let tool_installation = self.installation(tool.installation_id)?;
-        if !tool.enabled
-            || !tool_installation.enabled
-            || !tool.granted_view_handles.contains(&views[0])
-        {
+        if !tool.enabled || !tool_installation.enabled {
             return Err(AgentFailure::CapabilityDenied);
         }
         let PackageImplementation::TimelineRead { data_class } =
@@ -974,15 +899,6 @@ impl AgentRegistry {
         else {
             return Err(AgentFailure::CapabilityDenied);
         };
-        if self
-            .snapshot
-            .calendar_views
-            .iter()
-            .any(|binding| binding.handle == views[0])
-            && self.calendar_view(person_id, views[0])?.data_class() != data_class
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
         Ok(ResolvedExpert {
             registry_revision: self.revision(),
             package: package.clone(),
@@ -1074,6 +990,27 @@ impl AgentRegistry {
         }
     }
 
+    pub(crate) fn validate_tool_linkage(
+        &self,
+        assignment: &PackageAssignment,
+    ) -> Result<(), AgentFailure> {
+        let installation = self.installation(assignment.installation_id)?;
+        let package = self.package(&installation.package)?;
+        match package.reference.kind {
+            PackageKind::Tool if assignment.granted_tool_assignments.is_empty() => Ok(()),
+            PackageKind::Expert if assignment.granted_tool_assignments.len() == 1 => {
+                let tool =
+                    self.assignment(assignment.person_id, assignment.granted_tool_assignments[0])?;
+                let tool_installation = self.installation(tool.installation_id)?;
+                if package.required_tools != [tool_installation.package.clone()] {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                Ok(())
+            }
+            _ => Err(AgentFailure::CapabilityDenied),
+        }
+    }
+
     pub(crate) fn package(&self, reference: &PackageRef) -> Result<&AgentPackage, AgentFailure> {
         self.snapshot
             .packages
@@ -1149,101 +1086,7 @@ impl SetupValidator for NoSetupValidator {
     }
 }
 
-/// The calendar view a registered Expert invocation claims to run against.
-///
-/// The claim is the caller's; whether the registry still binds that view to
-/// this Person is the registry's own answer.
-#[derive(Clone, Copy)]
-pub struct CalendarViewClaim<'a> {
-    pub person_id: PersonId,
-    pub handle: Uuid,
-    pub provider: floe_agent_contract::CalendarProvider,
-    pub device_id: &'a str,
-    pub calendar_ids: &'a [String],
-}
-
-/// One invocation of a registered Expert, as it asks to be admitted.
-#[derive(Clone, Copy)]
-pub struct RegisteredExpertInvocation<'a> {
-    pub view: CalendarViewClaim<'a>,
-    pub assignment_id: Uuid,
-    /// The invocation being started, when it must not repeat an earlier one.
-    pub invocation_id: Option<Uuid>,
-    /// The builtin Expert that must answer, when only one may.
-    pub required_builtin: Option<&'a AgentId>,
-}
-
-/// What the registry admitted an invocation as.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdmittedExpertInvocation {
-    pub card: crate::AgentCard,
-    /// The revision the invocation is admitted at, and must settle against.
-    pub revision: u64,
-}
-
 impl AgentRegistry {
-    /// Admit one invocation of a registered Expert.
-    ///
-    /// The view the caller names has to be the one this Person's registry binds
-    /// — same provider, same device, and no calendar the binding does not carry
-    /// — and an invocation the assignment has already answered is a repeat
-    /// rather than a new run.
-    pub fn admit_registered_expert_invocation(
-        &self,
-        request: RegisteredExpertInvocation<'_>,
-    ) -> Result<AdmittedExpertInvocation, AgentFailure> {
-        let view = request.view;
-        let binding = self.calendar_view(view.person_id, view.handle)?;
-        let mut calendars = view.calendar_ids.to_vec();
-        calendars.sort();
-        if binding.provider != view.provider
-            || binding.device_id != view.device_id
-            || calendars
-                .iter()
-                .any(|calendar_id| !binding.calendar_ids.contains(calendar_id))
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let revision = self.revision();
-        let card = match request.required_builtin {
-            Some(expert) => self.builtin_expert_card(
-                view.person_id,
-                request.assignment_id,
-                revision,
-                view.handle,
-                expert.clone(),
-            )?,
-            None => {
-                self.expert_card(view.person_id, request.assignment_id, revision, view.handle)?
-            }
-        };
-        if let Some(invocation_id) = request.invocation_id
-            && self
-                .private_state(view.person_id, request.assignment_id)?
-                .last_invocation_id
-                == Some(invocation_id)
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(AdmittedExpertInvocation { card, revision })
-    }
-
-    /// That this registry still admits an invocation already running.
-    ///
-    /// A card that stops admitting mid-run is the Person having changed their
-    /// registry underneath it, which is a conflict rather than a denial.
-    pub fn still_admits_registered_expert_invocation(
-        &self,
-        request: RegisteredExpertInvocation<'_>,
-    ) -> Result<(), AgentFailure> {
-        self.admit_registered_expert_invocation(request)
-            .map(|_| ())
-            .map_err(|failure| match failure {
-                AgentFailure::CapabilityDenied => AgentFailure::Conflict,
-                failure => failure,
-            })
-    }
-
     /// Stage this registry for the settlement of one registered invocation.
     ///
     /// The Task owner commits the staged registry and the Expert's result
@@ -1319,6 +1162,94 @@ impl AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ExpertFocusProposal, ExpertInsight, ExpertResult};
+
+    fn fixture_result(evidence_id: Uuid, proposal_evidence: Uuid) -> ExpertResult {
+        ExpertResult {
+            schema_version: AGENT_VERSION,
+            invocation_id: Uuid::new_v4(),
+            instance_id: Uuid::new_v4(),
+            person_id: PersonId::new(),
+            assignment_id: Uuid::new_v4(),
+            package: PackageRef {
+                kind: PackageKind::Expert,
+                id: "floe.builtin.schedule".into(),
+                version: "1.0.0".into(),
+            },
+            evidence_id,
+            source_handle: format!("calendar.observe:{evidence_id}"),
+            data_class: DataClass::Personal,
+            expires_at_unix_ms: u64::MAX,
+            insights: vec![ExpertInsight::FocusWindow {
+                starts_at_unix_ms: 1,
+                ends_at_unix_ms: 2,
+            }],
+            action_proposals: vec![ExpertFocusProposal {
+                starts_at_unix_ms: 1,
+                ends_at_unix_ms: 2,
+                evidence_id: proposal_evidence,
+            }],
+            summary: Some("fixture".into()),
+            model_calls: 1,
+            state_revision: 1,
+            view_calls: 1,
+        }
+    }
+
+    #[test]
+    fn result_content_requires_matching_non_nil_evidence_identity() {
+        let registry = AgentRegistry::new(Uuid::new_v4());
+        let package = AgentPackage {
+            schema_version: AGENT_VERSION,
+            reference: PackageRef {
+                kind: PackageKind::Expert,
+                id: "floe.builtin.schedule".into(),
+                version: "1.0.0".into(),
+            },
+            publisher: "floe".into(),
+            implementation: PackageImplementation::Builtin {
+                expert: AgentId::try_new("floe.builtin.schedule").unwrap(),
+            },
+            expert_metadata: None,
+            required_tools: vec![],
+            state_schema_version: 1,
+        };
+        let resolved = ResolvedExpert {
+            registry_revision: 0,
+            package,
+            assignment: PackageAssignment {
+                id: Uuid::new_v4(),
+                person_id: PersonId::new(),
+                installation_id: Uuid::new_v4(),
+                enabled: true,
+                granted_tool_assignments: vec![],
+                granted_view_handles: vec![],
+                private_state: ExpertPrivateState::default(),
+            },
+            data_class: DataClass::Personal,
+        };
+        let _ = &registry;
+        let evidence_id = Uuid::new_v4();
+        assert!(AgentRegistry::validate_result_content(
+            &fixture_result(evidence_id, evidence_id),
+            &resolved,
+        )
+        .is_ok());
+        assert_eq!(
+            AgentRegistry::validate_result_content(
+                &fixture_result(Uuid::nil(), Uuid::nil()),
+                &resolved,
+            ),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            AgentRegistry::validate_result_content(
+                &fixture_result(evidence_id, Uuid::new_v4()),
+                &resolved,
+            ),
+            Err(AgentFailure::InvalidInput)
+        );
+    }
 
     #[test]
     fn settlement_names_the_invoked_assignment_and_stages_the_current_snapshot() {

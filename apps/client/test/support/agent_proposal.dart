@@ -21,7 +21,7 @@ Map<String, Object?> proposalEvidence({String dataClass = 'synthetic'}) =>
         {
           'starts_at_unix_ms': 39600000,
           'ends_at_unix_ms': 43200000,
-          'view_handle': 'view-fixture',
+          'evidence_id': 'view-fixture',
         },
       ],
     });

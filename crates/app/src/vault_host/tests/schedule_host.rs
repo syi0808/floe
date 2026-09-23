@@ -1,10 +1,8 @@
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_context::AgentContext;
 use floe_experts::{
     A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
-    AgentId, AgentPackage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertBudget, ExpertInput,
-    ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertResult, InProcessAgent,
-    PackageImplementation, PackageKind, PackageRef, RegistrySnapshot,
+    AgentId, AgentPackage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertInsight, ExpertMetadata,
+    ExpertResult, InProcessAgent, PackageImplementation, PackageKind, PackageRef, RegistrySnapshot,
 };
 use floe_kernel::PersonId;
 use std::sync::Mutex;
@@ -15,7 +13,7 @@ pub(crate) struct TestScheduleHost {
     instance_id: Uuid,
     assignment_id: Uuid,
     registry: Mutex<AgentRegistry>,
-    view_handle: Uuid,
+    evidence_id: Uuid,
 }
 
 impl TestScheduleHost {
@@ -32,7 +30,6 @@ impl TestScheduleHost {
         person_id: PersonId,
         instance_id: Uuid,
     ) -> Result<Self, AgentFailure> {
-        let handle = Uuid::new_v4();
         let mut registry = AgentRegistry::new(instance_id);
         let tool = PackageRef {
             kind: PackageKind::Tool,
@@ -65,10 +62,7 @@ impl TestScheduleHost {
                 reference: expert.clone(),
                 publisher: "floe".into(),
                 implementation: PackageImplementation::Builtin {
-                    expert: AgentId::try_new(
-                        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
-                    )
-                    .expect("builtin expert ids are valid"),
+                    expert: AgentId::try_new("floe.schedule").expect("fixture ids are valid"),
                 },
                 expert_metadata: Some(ExpertMetadata {
                     name: "Schedule Expert".into(),
@@ -90,14 +84,14 @@ impl TestScheduleHost {
             person_id,
             tool_installation,
             vec![],
-            vec![handle],
+            vec![],
         )?;
         let assignment_id = registry.assign(
             registry.revision(),
             person_id,
             expert_installation,
             vec![tool_assignment],
-            vec![handle],
+            vec![],
         )?;
         for installation in [tool_installation, expert_installation] {
             registry.set_installation_enabled(registry.revision(), installation, true)?;
@@ -135,17 +129,13 @@ impl TestScheduleHost {
         let [assignment] = assignments.as_slice() else {
             return Err(AgentFailure::Conflict);
         };
-        let [handle] = assignment.granted_view_handles.as_slice() else {
-            return Err(AgentFailure::CapabilityDenied);
-        };
         let assignment_id = assignment.id;
-        let handle = *handle;
         Ok(Self {
             person_id,
             instance_id,
             assignment_id,
             registry: Mutex::new(registry),
-            view_handle: handle,
+            evidence_id: Uuid::new_v4(),
         })
     }
 
@@ -183,18 +173,8 @@ impl InProcessAgent for TestScheduleHost {
         self.registry
             .lock()
             .ok()
-            .and_then(|registry| {
-                registry
-                    .expert_card(
-                        person_id,
-                        self.assignment_id,
-                        registry.revision(),
-                        self.view_handle,
-                    )
-                    .ok()
-            })
-            .into_iter()
-            .collect()
+            .map(|registry| registry.enabled_expert_cards(person_id))
+            .unwrap_or_default()
     }
 
     async fn handle_message(
@@ -208,57 +188,25 @@ impl InProcessAgent for TestScheduleHost {
             return Err(AgentFailure::CapabilityDenied);
         }
         let task_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
-        let assignment = request.message.text()?.to_owned();
-        let expected_registry_revision = self
+        let _assignment = request.message.text()?.to_owned();
+        let mut registry = self
             .registry
             .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .revision();
-        let invocation = ExpertInvocation {
-            capabilities: std::sync::Arc::new(NoCapabilityJournal),
-            context: AgentContext {
-                projection_version: 1,
-                persona: None,
-                optional_context_issues: vec![],
-                memories: vec![],
-                evidence: vec![],
-            },
-            schema_version: request.schema_version,
-            invocation_id: task_id,
-            instance_id: self.instance_id,
-            person_id: request.person_id,
-            assignment_id: self.assignment_id,
-            expected_registry_revision,
-            granted_view_handles: vec![self.view_handle],
-            allowed_data_classes: vec![DataClass::Synthetic],
-            current_time_unix_ms: 36_000_000,
-            timezone_offset_seconds: 0,
-            suggested_range_start_unix_ms: Some(36_000_000),
-            suggested_range_end_unix_ms: Some(43_200_000),
-            input: ExpertInput::Analyze {
-                request: assignment,
-                focus_minutes: Some(60),
-            },
-            budget: ExpertBudget {
-                max_output_bytes: request.max_output_bytes,
-                ..ExpertBudget::default()
-            },
-            deadline: request.deadline,
-            cancellation: request.cancellation,
-        };
-        let assignments = floe_experts::RegistryAssignments::new(&self.registry);
-        let admitted =
-            floe_agent_contract::ExpertAssignments::admit(&assignments, &invocation, Some(60))?;
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
         let mut result = ExpertResult {
             schema_version: 1,
             invocation_id: task_id,
             instance_id: self.instance_id,
             person_id: self.person_id,
             assignment_id: self.assignment_id,
-            package: admitted.package.clone(),
-            view_handle: self.view_handle,
+            package: PackageRef {
+                kind: PackageKind::Expert,
+                id: "floe.schedule".into(),
+                version: "1.0.0".into(),
+            },
+            evidence_id: self.evidence_id,
             source_handle: "fixture.synthetic.timeline".into(),
-            data_class: admitted.data_class,
+            data_class: DataClass::Synthetic,
             expires_at_unix_ms: u64::MAX,
             insights: vec![ExpertInsight::Commitment {
                 evidence_handle: Uuid::new_v4(),
@@ -272,12 +220,17 @@ impl InProcessAgent for TestScheduleHost {
             state_revision: 0,
             view_calls: 1,
         };
-        result.state_revision = floe_agent_contract::ExpertAssignments::settle(
-            &assignments,
-            &invocation,
-            &admitted,
-            &result,
+        // Settle private state, then record through the Registry result path.
+        let expected = AgentId::try_new("floe.schedule").expect("fixture ids are valid");
+        let resolved = registry.resolve_builtin(
+            registry.instance_id(),
+            self.person_id,
+            self.assignment_id,
+            registry.revision(),
+            &expected,
         )?;
+        result.state_revision = registry.complete(&resolved, task_id)?;
+        registry.validate_recorded_result(&result)?;
         let data = serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?;
         Ok(A2ATask {
             id: task_id,
@@ -302,16 +255,5 @@ impl InProcessAgent for TestScheduleHost {
             failure: None,
             settlement: None,
         })
-    }
-}
-
-struct NoCapabilityJournal;
-
-impl floe_agent_contract::CapabilityJournal for NoCapabilityJournal {
-    fn record<'a>(
-        &'a self,
-        _record: floe_agent_contract::CapabilityExecution,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
-        Box::pin(async { Ok(()) })
     }
 }

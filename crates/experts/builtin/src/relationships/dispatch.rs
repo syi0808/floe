@@ -8,10 +8,7 @@ use floe_agent_contract::AgentFailure;
 use crate::relationships::{
     RelationshipsContextViews, RelationshipsExpertResult, run_relationships_expert_with_views,
 };
-use crate::{
-    BuiltinContextSource, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
-    granted_context,
-};
+use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
 
 /// This Expert reads people context as itself, not as the assistant.
 pub const CONSUMER: &str = "contacts.expert";
@@ -20,16 +17,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    crate::require_mandatory_source(host, request)?;
     let people = host.people_view(request).await?;
-    let confirmed_interactions = if host.source_granted(
-        &request.agent_id,
-        BuiltinContextSource::ConfirmedInteractions,
-    ) {
-        host.confirmed_interaction_views(request, &people).await?
-    } else {
-        vec![]
-    };
+    let confirmed_interactions = host.confirmed_interaction_views(request, &people).await?;
     let result: RelationshipsExpertResult = run_relationships_expert_with_views(
         host.model(),
         host.policy(),

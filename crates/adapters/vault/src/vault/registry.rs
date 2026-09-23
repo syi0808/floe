@@ -31,7 +31,6 @@ fn expert_identity_matches(
         || current_assignment.installation_id != staged_assignment.installation_id
         || current_assignment.enabled != staged_assignment.enabled
         || current_assignment.granted_tool_assignments != staged_assignment.granted_tool_assignments
-        || current_assignment.granted_view_handles != staged_assignment.granted_view_handles
     {
         return false;
     }
@@ -53,27 +52,9 @@ fn expert_identity_matches(
     {
         return false;
     }
-    let current_view = current
-        .calendar_views
-        .iter()
-        .find(|view| view.handle == result.view_handle);
-    let staged_view = staged
-        .calendar_views
-        .iter()
-        .find(|view| view.handle == result.view_handle);
-    match (current_view, staged_view) {
-        (Some(current_view), Some(staged_view)) => {
-            current_view.person_id == staged_view.person_id
-                && current_view.provider == staged_view.provider
-                && current_view.device_id == staged_view.device_id
-                && current_view.calendar_ids == staged_view.calendar_ids
-                && current_view.connection_scope == staged_view.connection_scope
-                && current_view.source_authority == staged_view.source_authority
-                && current_view.enabled == staged_view.enabled
-        }
-        (None, None) => true,
-        _ => false,
-    }
+    // Evidence identity is source-observation based and validated by
+    // Access/Context, never by Registry view state.
+    !result.evidence_id.is_nil()
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -188,47 +169,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         check()?;
-        Ok(floe_experts::BuiltinExpertSetupResult {
-            setup,
-            registry: registry.overview(self.person_id),
-        })
-    }
-
-    pub async fn refresh_builtin_expert_sources(
-        &self,
-        expected_revision: u64,
-        sources: Vec<floe_experts::BuiltinSourceBinding>,
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::BuiltinExpertSetupResult, AgentFailure> {
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let snapshot = self
-            .expert_registry()
-            .await?
-            .ok_or(AgentFailure::NotFound)?;
-        let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
-        let setup =
-            registry.refresh_builtin_expert_sources(self.person_id, expected_revision, sources)?;
-        if registry.revision() != expected_revision {
-            self.save_expert_registry_change_checked(
-                expected_revision,
-                &registry.snapshot(),
-                None,
-                Some(setup.setup_id),
-                None,
-                None,
-                || {
-                    if cancellation.is_cancelled() {
-                        Err(AgentFailure::Cancelled)
-                    } else {
-                        Ok(())
-                    }
-                },
-            )
-            .await?;
-        }
-        self.check_access()?;
         Ok(floe_experts::BuiltinExpertSetupResult {
             setup,
             registry: registry.overview(self.person_id),
@@ -1089,7 +1029,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected_registry_revision: u64,
         staged: &RegistrySnapshot,
         assignment_id: uuid::Uuid,
-        view_handle: uuid::Uuid,
+        evidence_id: uuid::Uuid,
         after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
     ) -> Result<RegistrySnapshot, AgentFailure> {
         self.commit_expert_session_inner(
@@ -1097,7 +1037,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             previous_revision,
             expected_registry_revision,
             staged,
-            Some((assignment_id, view_handle)),
+            Some((assignment_id, evidence_id)),
             None,
             after_registry_write,
         )
@@ -1111,7 +1051,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected_registry_revision: u64,
         staged: &RegistrySnapshot,
         assignment_id: uuid::Uuid,
-        view_handle: uuid::Uuid,
+        evidence_id: uuid::Uuid,
         turn_id: Uuid,
         coverage: DependencyCoverage,
         after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
@@ -1124,7 +1064,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             previous_revision,
             expected_registry_revision,
             staged,
-            Some((assignment_id, view_handle)),
+            Some((assignment_id, evidence_id)),
             Some((turn_id, coverage)),
             after_registry_write,
         )
@@ -1177,8 +1117,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         || !session.data_classes.contains(&receipt.data_class) {
                         return Err(AgentFailure::Conflict);
                     }
-                    if let Some((assignment_id, view_handle)) = scope
-                        && (assignment_id != receipt.assignment_id || view_handle != receipt.view_handle)
+                    if let Some((assignment_id, evidence_id)) = scope
+                        && (assignment_id != receipt.assignment_id || evidence_id != receipt.evidence_id)
                     {
                         return Err(AgentFailure::Conflict);
                     }

@@ -1,15 +1,12 @@
-//! The Person's encrypted Expert registry, as a builtin setup refresh writes it.
+//! The Person's encrypted Expert registry, as a builtin setup ensure writes it.
 //!
-//! Experts decides whether to install, refresh or leave the setup alone. This
+//! Experts decides whether to install or leave the setup alone. This
 //! holds the packaging the builtin Experts declare for themselves and the
 //! cancellation the run is under, and performs what it is told.
 
 use floe_agent_contract::AgentFailure;
 use floe_execution::Cancellation;
-use floe_experts::{
-    BoxFuture, BuiltinExpertSetup, BuiltinExpertSetupResult, BuiltinExpertStore,
-    BuiltinSourceBinding, ExpertSetupSpec,
-};
+use floe_experts::{BoxFuture, BuiltinExpertSetup, BuiltinExpertSetupResult, BuiltinExpertStore, ExpertSetupSpec};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 
@@ -55,22 +52,6 @@ impl<Keys: VaultKeyProvider> BuiltinExpertStore for VaultBuiltinExperts<'_, Keys
         Box::pin(async move {
             self.vault
                 .install_builtin_experts_enabled(setup, &self.specs, self.cancellation.clone())
-                .await
-        })
-    }
-
-    fn refresh<'a>(
-        &'a self,
-        expected_revision: u64,
-        sources: Vec<BuiltinSourceBinding>,
-    ) -> BoxFuture<'a, Result<BuiltinExpertSetupResult, AgentFailure>> {
-        Box::pin(async move {
-            self.vault
-                .refresh_builtin_expert_sources(
-                    expected_revision,
-                    sources,
-                    self.cancellation.clone(),
-                )
                 .await
         })
     }

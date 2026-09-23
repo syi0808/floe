@@ -224,7 +224,7 @@ async fn inspection_fails_closed_for_mismatched_or_oversized_action_records() {
         match mode {
             0 => forged.agent_origin = None,
             1 => forged.agent_origin.as_mut().unwrap().session_id = Uuid::new_v4(),
-            2 => forged.agent_origin.as_mut().unwrap().view_handle = Uuid::new_v4(),
+            2 => forged.agent_origin.as_mut().unwrap().evidence_id = Uuid::new_v4(),
             3 => forged.schedule.starts_at += chrono::Duration::minutes(1),
             4 => forged.expires_at += chrono::Duration::hours(1),
             5 => forged.title = "unrelated action".into(),

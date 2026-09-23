@@ -179,28 +179,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             drop(receipts);
             let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+            // Registry validates Expert identity/private-state settlement only.
+            // Source evidence is validated against the recorded ContextDependency.
+            if evidence.evidence_id.is_nil()
+                || evidence.action_proposals.iter().any(|proposal| {
+                    proposal.evidence_id != evidence.evidence_id
+                })
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
             match usage {
                 ProposalUse::Publish => {
-                    let calendar_source = if evidence.source_handle.starts_with("calendar.timeline:") {
-                        true
-                    } else if let Some(observation_id) = evidence.source_handle.strip_prefix("calendar.lease:") {
-                        Uuid::parse_str(observation_id).map_err(|_| AgentFailure::InvalidInput)?;
-                        true
-                    } else {
-                        false
-                    };
-                    if calendar_source
-                        && registry.calendar_view(evidence.person_id, evidence.view_handle)?.data_class()
-                            != evidence.data_class
-                    {
-                        return Err(AgentFailure::PolicyDenied);
-                    }
                     registry.validate_recorded_result(&evidence)?;
                 }
                 ProposalUse::Inspect => registry.validate_historical_result(&evidence)?,
             }
             if evidence.source_handle.starts_with("calendar.observe:") {
-                self.expert_proposal_dependency(reference, &evidence).await?;
+                let dependency = self.expert_proposal_dependency(reference, &evidence).await?;
+                if dependency.observation_id() != evidence.evidence_id {
+                    return Err(AgentFailure::Conflict);
+                }
             }
             self.check_access()?;
             let value = operation(evidence).await?;

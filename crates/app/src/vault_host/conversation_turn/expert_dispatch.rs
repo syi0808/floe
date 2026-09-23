@@ -224,13 +224,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             };
             let policy = expert_policy();
             let cards = self.vault.enabled_builtin_expert_cards().await?;
-            let grants = floe_experts::SourceGrants::new(Some(
-                self.vault
-                    .builtin_expert_overview()
-                    .await?
-                    .ok_or(AgentFailure::VaultUnavailable)?
-                    .setup,
-            ));
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
             };
@@ -252,7 +245,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 context_reader: Some(&context_reader),
                 task_views: &[],
                 cards,
-                grants,
                 stateful_settlement: &stateful_settlement,
                 task_runners: &[],
             };
@@ -334,8 +326,6 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) context_reader: Option<&'model dyn ConversationContextReaderApi>,
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
-    /// What each Expert may read, as the registry decided it.
-    pub(super) grants: floe_experts::SourceGrants,
     pub(super) stateful_settlement: &'model dyn StatefulExpertSettlement,
     /// Experts that answer on the Task path, by the agent id they are registered
     /// under.
@@ -389,15 +379,6 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
 
     fn policy(&self) -> &InferencePolicyDecision {
         self.experts.policy
-    }
-
-    /// The grant the registry recorded for this Expert and source.
-    fn source_grant(
-        &self,
-        agent_id: &str,
-        source: BuiltinContextSource,
-    ) -> floe_context_contract::SourceGrant {
-        self.experts.grants.grant(agent_id, source.source_id())
     }
 
     fn read_source_view<'a>(

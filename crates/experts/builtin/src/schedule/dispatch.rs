@@ -185,13 +185,13 @@ mod tests {
         AttentionView, AuthorizedRead, CalendarContextItem, ConfirmedInteractionView,
         ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope,
         MemoryContextSnapshot, NativeContextView, PeopleView, SourceAccessRequirement,
-        SourceAccessRequirementKind, SourceGrant, WellbeingView, WorkContextView,
+        SourceAccessRequirementKind, WellbeingView, WorkContextView,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
 
     use super::*;
-    use crate::{Acquiring, BuiltinContextSource};
+    use crate::Acquiring;
 
     struct UnusedRead;
 
@@ -271,10 +271,6 @@ mod tests {
 
         fn policy(&self) -> &floe_agent_contract::InferencePolicyDecision {
             &self.policy
-        }
-
-        fn source_grant(&self, _: &str, _: BuiltinContextSource) -> SourceGrant {
-            panic!("Schedule must not use setup grants")
         }
 
         fn read_source_view<'a>(
