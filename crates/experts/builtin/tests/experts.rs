@@ -28,14 +28,14 @@ use floe_experts::{
 use floe_experts_builtin::BuiltinExpertKind;
 use floe_experts_builtin::schedule::{
     ExpertHost, ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
-    MAX_TIMELINE_VIEW_ITEMS, ScheduleExecutionIntent, ScheduleReasoning, TimelineViewItem,
+    MAX_TIMELINE_VIEW_ITEMS, ScheduleExecutionIntent, TimelineViewItem,
     TimelineViewRead,
 };
 
 /// The intent the synthetic views run under: nothing is acquired remotely,
 /// so the turn reasons on the conversation route.
 fn synthetic_intent() -> ScheduleExecutionIntent {
-    ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute)
+    ScheduleExecutionIntent::new(floe_agent_contract::ExpertModelRequirement::Any)
 }
 use uuid::Uuid;
 

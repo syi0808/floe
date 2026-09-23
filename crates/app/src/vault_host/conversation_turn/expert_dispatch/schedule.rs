@@ -98,16 +98,24 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             )?;
             // The Manager delegation message is the Expert assignment, never
             // the root user prompt.
-            let plan = schedule::plan_run(
+            let plan = schedule::plan_request(
                 &invocation.request.message,
-                selected.binding.provider,
-                selected.binding.calendar_ids.len(),
-                source_client.is_some(),
                 chrono::Local::now(),
                 chrono::Utc::now(),
             )?;
-            // The Expert decided where it may reason; the host only states it.
-            let intent = schedule::ScheduleExecutionIntent::from_reasoning(plan.reasoning);
+            if plan.propose_focus && selected.binding.calendar_ids.len() != 1 {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+            let acquire_remotely = source_client.is_some()
+                && matches!(
+                    selected.binding.provider,
+                    CalendarProvider::Google | CalendarProvider::Microsoft
+                );
+            let intent = schedule::ScheduleExecutionIntent::new(if acquire_remotely {
+                floe_agent_contract::ExpertModelRequirement::DeviceOnly
+            } else {
+                floe_agent_contract::ExpertModelRequirement::Any
+            });
             let provider =
                 floe_provider_adapters::models::RootModelProvider::from_current_connection_scoped(
                     &self.connections,
@@ -150,7 +158,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
             };
             let service = floe_inference::InferenceService::new(provider, resolver, authority);
             let remote_backend = match source_client.as_ref() {
-                Some(client) if plan.acquire_remotely => Some(VaultRemoteCalendarBackend::new(
+                Some(client) if acquire_remotely => Some(VaultRemoteCalendarBackend::new(
                     &self.vault,
                     &self.core,
                     client,
@@ -220,7 +228,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> 
                             day: plan.range,
                             starts_at: plan.starts_at,
                             ends_at: plan.ends_at,
-                            expires_at: plan.expires_at,
+                            expires_at: chrono::Utc::now() + chrono::Duration::minutes(2),
                         },
                         assignment_id: selected.setup.expert_assignment_id,
                         invocation_id: invocation.request.invocation_key.as_uuid(),
@@ -273,6 +281,9 @@ async fn select_active_setup<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     device_id: &str,
 ) -> Result<SelectedSetup, AgentFailure> {
+    if device_id.trim().is_empty() {
+        return Err(AgentFailure::InvalidInput);
+    }
     let overview = vault.calendar_expert_overview().await?;
     let enabled = |ids: [Uuid; 2], installations: bool| {
         ids.iter().all(|id| {
@@ -302,27 +313,28 @@ async fn select_active_setup<Keys: VaultKeyProvider>(
             Some((setup.clone(), binding.clone()))
         })
         .collect();
-    let candidates: Vec<_> = pairs
-        .iter()
-        .map(|(setup, binding)| schedule::ScheduleSetupCandidate {
-            device_id: binding.device_id.clone(),
-            active: binding.enabled
-                && enabled(
-                    [setup.tool_installation_id, setup.expert_installation_id],
-                    true,
-                )
-                && enabled(
-                    [setup.tool_assignment_id, setup.expert_assignment_id],
-                    false,
-                ),
+    let active: Vec<_> = pairs
+        .into_iter()
+        .filter(|(setup, binding)| {
+            binding.enabled
+                && enabled([setup.tool_installation_id, setup.expert_installation_id], true)
+                && enabled([setup.tool_assignment_id, setup.expert_assignment_id], false)
         })
         .collect();
-    let selection = schedule::select_active_setup(&candidates, device_id)?;
-    let (setup, binding) = pairs[selection.index].clone();
+    let bound: Vec<_> = active
+        .iter()
+        .filter(|(_, binding)| binding.device_id == device_id)
+        .collect();
+    let (setup, binding) = bound
+        .first()
+        .copied()
+        .or_else(|| active.first())
+        .cloned()
+        .ok_or(AgentFailure::CapabilityDenied)?;
     Ok(SelectedSetup {
         setup,
         binding,
-        ambiguous: selection.ambiguous,
+        ambiguous: bound.len() != 1,
     })
 }
 

@@ -1,16 +1,9 @@
-//! What the Schedule Expert decides before it is given anything to read.
-//!
-//! Which of the Person's calendar setups this device may use, how far the day
-//! it is about to look, whether the request is the focus shortcut, and whether
-//! the calendar has to be acquired from the paired server rather than mirrored
-//! locally — these are the Expert's own judgments. The composition root reads
-//! the records and builds the readers; it does not decide any of this.
+//! Request-only planning for the Schedule Expert.
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 
 use floe_agent_contract::InferencePolicyDecision;
-use floe_agent_contract::{AgentFailure, DataClass, ExpertModelRequirement, ModelPlacement};
-use floe_context_contract::CalendarProvider;
+use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement};
 use floe_day::CalendarRange;
 
 /// The explicit user shortcut that asks for a protected focus window today.
@@ -19,128 +12,36 @@ pub const FOCUS_REQUEST: &str = "/focus";
 /// The shortest focus window the Expert will propose from now.
 const FOCUS_LEAD: Duration = Duration::minutes(1);
 
-/// How long the calendar grant this run reads under stays valid.
-const GRANT_LIFETIME: Duration = Duration::minutes(2);
 
-/// One calendar setup this Person has, as the registry recorded it.
+/// The requested window and intent, independent of available sources.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScheduleSetupCandidate {
-    pub device_id: String,
-    /// Whether the view binding, both installations and both assignments are
-    /// all enabled. A setup that is only partly enabled is not a candidate.
-    pub active: bool,
-}
-
-/// Which setup this run uses, and whether the choice was unambiguous.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScheduleSetupSelection {
-    pub index: usize,
-    /// More than one setup — or none — is bound to the calling device, so the
-    /// Person has to say which one before this Expert acts on it.
-    pub ambiguous: bool,
-}
-
-/// Choose the setup this device should read under.
-///
-/// A setup bound to the calling device wins. Falling back to another device's
-/// setup is possible but never unambiguous, so the caller can offer a reviewable
-/// answer instead of silently reading the wrong calendar.
-pub fn select_active_setup(
-    candidates: &[ScheduleSetupCandidate],
-    request_device_id: &str,
-) -> Result<ScheduleSetupSelection, AgentFailure> {
-    if request_device_id.trim().is_empty() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let active: Vec<usize> = candidates
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| candidate.active)
-        .map(|(index, _)| index)
-        .collect();
-    let bound: Vec<usize> = active
-        .iter()
-        .copied()
-        .filter(|index| candidates[*index].device_id == request_device_id)
-        .collect();
-    let index = bound
-        .first()
-        .or(active.first())
-        .copied()
-        .ok_or(AgentFailure::CapabilityDenied)?;
-    Ok(ScheduleSetupSelection {
-        index,
-        ambiguous: bound.len() != 1,
-    })
-}
-
-/// Where this run's own reasoning happens.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScheduleReasoning {
-    /// The calendar is being pulled from the paired server for this very turn,
-    /// so reasoning over what comes back stays on this device's own model. The
-    /// Expert will not hand a freshly acquired remote calendar to a second
-    /// remote recipient.
-    OnDevice,
-    /// Nothing is acquired remotely, so the turn reasons wherever the
-    /// conversation's own route already put it.
-    ConversationRoute,
-}
-
-/// The window, the intent, the acquisition and the reasoning this run needs.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScheduleRunPlan {
+pub struct ScheduleRequestPlan {
     pub range: CalendarRange,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    /// The turn asked for a protected focus window rather than a review.
     pub propose_focus: bool,
-    /// The calendar must be read through the paired server for this provider.
-    pub acquire_remotely: bool,
-    /// Which model this run may reason on, given that acquisition.
-    pub reasoning: ScheduleReasoning,
 }
 
-/// Decide what this run looks at, and how.
-///
-/// A focus request needs a window that has not already passed and exactly one
-/// calendar to place it in; anything else is refused rather than answered
-/// against the wrong day.
-pub fn plan_run(
+/// Decide which bounded interval this request needs before reading a source.
+pub fn plan_request(
     assignment: &str,
-    provider: CalendarProvider,
-    calendar_count: usize,
-    remote_source_available: bool,
     local_now: DateTime<chrono::Local>,
     now: DateTime<Utc>,
-) -> Result<ScheduleRunPlan, AgentFailure> {
+) -> Result<ScheduleRequestPlan, AgentFailure> {
     let range = requested_range(assignment, local_now)?;
     let (mut starts_at, ends_at) = day_bounds(&range)?;
     let propose_focus = assignment.trim() == FOCUS_REQUEST;
     if propose_focus {
         starts_at = starts_at.max(now + FOCUS_LEAD);
-        if starts_at >= ends_at || calendar_count != 1 {
+        if starts_at >= ends_at {
             return Err(AgentFailure::CapabilityUnavailable);
         }
     }
-    let acquire_remotely = remote_source_available
-        && matches!(
-            provider,
-            CalendarProvider::Google | CalendarProvider::Microsoft
-        );
-    Ok(ScheduleRunPlan {
+    Ok(ScheduleRequestPlan {
         range,
         starts_at,
         ends_at,
-        expires_at: now + GRANT_LIFETIME,
         propose_focus,
-        acquire_remotely,
-        reasoning: if acquire_remotely {
-            ScheduleReasoning::OnDevice
-        } else {
-            ScheduleReasoning::ConversationRoute
-        },
     })
 }
 
@@ -211,31 +112,17 @@ pub fn run_policy(data_class: DataClass) -> InferencePolicyDecision {
     }
 }
 
-/// What execution class this Schedule run requires.
-///
-/// The single Schedule-owned statement of where its reasoning may happen.
-/// The Expert states the class; Inference selects the profile. This is the
-/// only mapping from `ScheduleReasoning` to execution: no caller consults a
-/// model, placement, or route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScheduleExecutionIntent {
-    requirement: ExpertModelRequirement,
+    requirement: floe_agent_contract::ExpertModelRequirement,
 }
 
 impl ScheduleExecutionIntent {
-    /// Map the run's reasoning to its execution class: a freshly acquired
-    /// remote calendar stays on this device's own model, while anything else
-    /// reasons wherever the conversation's own route already put it.
-    pub fn from_reasoning(reasoning: ScheduleReasoning) -> Self {
-        Self {
-            requirement: match reasoning {
-                ScheduleReasoning::OnDevice => ExpertModelRequirement::DeviceOnly,
-                ScheduleReasoning::ConversationRoute => ExpertModelRequirement::Any,
-            },
-        }
+    pub fn new(requirement: floe_agent_contract::ExpertModelRequirement) -> Self {
+        Self { requirement }
     }
 
-    pub fn requirement(self) -> ExpertModelRequirement {
+    pub fn requirement(self) -> floe_agent_contract::ExpertModelRequirement {
         self.requirement
     }
 }
@@ -318,136 +205,16 @@ mod tests {
         );
     }
 
-    fn candidate(device_id: &str, active: bool) -> ScheduleSetupCandidate {
-        ScheduleSetupCandidate {
-            device_id: device_id.into(),
-            active,
-        }
-    }
-
     #[test]
-    fn the_calling_device_wins_and_another_device_is_never_unambiguous() {
-        let candidates = [
-            candidate("other", true),
-            candidate("this", true),
-            candidate("this", false),
-        ];
-        assert_eq!(
-            select_active_setup(&candidates, "this").unwrap(),
-            ScheduleSetupSelection {
-                index: 1,
-                ambiguous: false
-            }
-        );
-        assert_eq!(
-            select_active_setup(&candidates, "absent").unwrap(),
-            ScheduleSetupSelection {
-                index: 0,
-                ambiguous: true
-            }
-        );
-        assert_eq!(
-            select_active_setup(&[candidate("this", false)], "this"),
-            Err(AgentFailure::CapabilityDenied)
-        );
-        assert_eq!(
-            select_active_setup(&candidates, "  "),
-            Err(AgentFailure::InvalidInput)
-        );
-    }
-
-    #[test]
-    fn two_setups_on_the_same_device_stay_ambiguous() {
-        let candidates = [candidate("this", true), candidate("this", true)];
-        assert!(select_active_setup(&candidates, "this").unwrap().ambiguous);
-    }
-
-    #[test]
-    fn a_focus_request_needs_one_calendar_and_a_window_that_has_not_passed() {
+    fn a_focus_request_needs_a_window_that_has_not_passed() {
         let local = chrono::Local::now();
         let now = Utc::now();
-        let plan = plan_run("/focus", CalendarProvider::Fixture, 1, false, local, now).unwrap();
+        let plan = plan_request("/focus", local, now).unwrap();
         assert!(plan.propose_focus);
         assert!(plan.starts_at >= now);
-        assert!(!plan.acquire_remotely);
-        assert_eq!(
-            plan_run("/focus", CalendarProvider::Fixture, 2, false, local, now),
-            Err(AgentFailure::CapabilityUnavailable)
-        );
-        assert!(
-            !plan_run(
-                "what is today like?",
-                CalendarProvider::Fixture,
-                2,
-                false,
-                local,
-                now
-            )
+        assert!(!plan_request("what is today like?", local, now)
             .unwrap()
-            .propose_focus
-        );
-    }
-
-    #[test]
-    fn a_remotely_acquired_calendar_is_reasoned_over_on_this_device() {
-        let local = chrono::Local::now();
-        let now = Utc::now();
-        assert_eq!(
-            plan_run("review", CalendarProvider::Google, 1, true, local, now)
-                .unwrap()
-                .reasoning,
-            ScheduleReasoning::OnDevice
-        );
-        for (provider, remote_source) in [
-            (CalendarProvider::Google, false),
-            (CalendarProvider::EventKit, true),
-            (CalendarProvider::Fixture, true),
-        ] {
-            assert_eq!(
-                plan_run("review", provider, 1, remote_source, local, now)
-                    .unwrap()
-                    .reasoning,
-                ScheduleReasoning::ConversationRoute
-            );
-        }
-    }
-
-    #[test]
-    fn execution_intent_maps_reasoning_to_requirement() {
-        use floe_agent_contract::ExpertModelRequirement;
-
-        assert_eq!(
-            ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::OnDevice).requirement(),
-            ExpertModelRequirement::DeviceOnly
-        );
-        assert_eq!(
-            ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute)
-                .requirement(),
-            ExpertModelRequirement::Any
-        );
-    }
-
-    #[test]
-    fn only_a_connector_calendar_is_acquired_through_the_paired_server() {
-        let local = chrono::Local::now();
-        let now = Utc::now();
-        for (provider, remote) in [
-            (CalendarProvider::Google, true),
-            (CalendarProvider::Microsoft, true),
-            (CalendarProvider::EventKit, false),
-            (CalendarProvider::Fixture, false),
-        ] {
-            assert_eq!(
-                plan_run("review", provider, 1, true, local, now)
-                    .unwrap()
-                    .acquire_remotely,
-                remote
-            );
-            assert!(
-                !plan_run("review", provider, 1, false, local, now)
-                    .unwrap()
-                    .acquire_remotely
-            );
-        }
+            .propose_focus);
+        assert!(plan_request("/focus", local, now + Duration::days(2)).is_err());
     }
 }

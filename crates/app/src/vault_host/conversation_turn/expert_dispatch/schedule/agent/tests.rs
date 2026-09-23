@@ -38,7 +38,6 @@ use floe_experts::{
     ExpertMetadata, ExpertTaskCompletion as CalendarExpertTaskCompletion, PackageImplementation,
     RegistryConfiguration, RegistryConfigurationTarget, RegistrySnapshot,
 };
-use floe_experts_builtin::schedule::ScheduleReasoning;
 use floe_inference::{InferenceExecutionConstraint, InferenceExecutor};
 use floe_vault::{VaultKey, VaultTaskRecord};
 
@@ -2072,7 +2071,7 @@ impl Fixture {
     fn endpoint_request(&self, invocation_id: Uuid) -> CalendarExpertEndpointRequest {
         CalendarExpertEndpointRequest {
             person_id: self.session.person_id,
-            intent: ScheduleExecutionIntent::from_reasoning(ScheduleReasoning::ConversationRoute),
+            intent: ScheduleExecutionIntent::new(floe_agent_contract::ExpertModelRequirement::Any),
             context: AgentContext {
                 projection_version: 1,
                 persona: None,

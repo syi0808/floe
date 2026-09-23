@@ -10,7 +10,6 @@ pub use calendar_history::CalendarHistoryBoundary;
 pub use definition::{SCHEDULE_DEFINITION_REVISION, schedule_definition};
 pub use host::*;
 pub use plan::{
-    FOCUS_REQUEST, ScheduleExecutionIntent, ScheduleReasoning, ScheduleRunPlan,
-    ScheduleSetupCandidate, ScheduleSetupSelection, day_bounds, plan_run, run_policy,
-    select_active_setup,
+    FOCUS_REQUEST, ScheduleExecutionIntent, ScheduleRequestPlan, day_bounds, plan_request,
+    requested_range, run_policy,
 };
