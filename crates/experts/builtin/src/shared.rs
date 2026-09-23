@@ -107,7 +107,7 @@ fn admissible(
 /// authority is the Access dispatch fence inside canonical Inference, never
 /// this call.
 #[allow(clippy::too_many_arguments)]
-async fn run_expert_model<Model: ExpertModel>(
+pub(crate) async fn run_expert_model<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     requirement: ExpertModelRequirement,

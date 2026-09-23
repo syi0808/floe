@@ -10,7 +10,8 @@ use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::PersonId;
 use floe_agent_contract::{AgentContext, Artifact, EndpointSettlement, InferencePolicyDecision};
-use floe_agent_contract::{AgentFailure, ExpertModel};
+use floe_agent_contract::{AgentFailure, ExpertInsight, ExpertModel};
+use floe_agent_contract::DataClass;
 use floe_context_contract::SourceReadOutcome;
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView,
@@ -119,6 +120,24 @@ pub struct BuiltinExpertOutput {
     pub data: String,
     pub artifacts: Vec<Artifact>,
     pub settlement: Option<EndpointSettlement>,
+}
+
+#[derive(serde::Serialize)]
+pub struct StatefulFocusProposal {
+    pub starts_at_unix_ms: u64,
+    pub ends_at_unix_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct StatefulExpertDraft {
+    pub source_handle: String,
+    pub data_class: DataClass,
+    pub expires_at_unix_ms: u64,
+    pub insights: Vec<ExpertInsight>,
+    pub action_proposals: Vec<StatefulFocusProposal>,
+    pub summary: String,
+    pub model_calls: u32,
+    pub view_calls: u32,
 }
 
 impl BuiltinExpertOutput {

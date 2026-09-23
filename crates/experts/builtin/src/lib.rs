@@ -24,7 +24,7 @@ pub use catalog::{
     builtin_setup_declarations,
 };
 pub use host::{
-    Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context,
-    require_mandatory_source,
+    Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft,
+    StatefulFocusProposal, granted_context, require_mandatory_source,
 };
 pub use shared::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};

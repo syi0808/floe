@@ -3,6 +3,8 @@
 
 mod calendar_history;
 pub mod definition;
+pub mod dispatch;
+mod expert;
 mod host;
 mod plan;
 
