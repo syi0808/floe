@@ -203,14 +203,6 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         let conversation_repository =
             Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
         let directory = Directory::default();
-        let schedule_endpoint = Arc::new(
-            conversation_turn::expert_dispatch::schedule::ScheduleEndpoint::new(
-                Arc::clone(&core),
-                Arc::clone(&vault),
-                Arc::clone(&local_context),
-                connections.clone(),
-            ),
-        );
         let builtin_expert_endpoint = Arc::new(
             conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
                 core,
@@ -219,17 +211,6 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 connections.clone(),
             ),
         );
-        let definition = conversation_turn::expert_dispatch::schedule::schedule_definition();
-        directory.register(
-            DirectoryEntry {
-                definition,
-                reviewed: true,
-                enabled: true,
-                admitted_principals: vec![vault.person_id().to_string()],
-                purposes: vec!["everyday-assistance".into()],
-            },
-            schedule_endpoint.clone(),
-        )?;
         let repository = Arc::new(VaultTaskRepository::new(Arc::clone(&vault)));
         let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
             directory.clone(),
@@ -252,14 +233,14 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
     }
 
     async fn sync_expert_directory(&self) -> Result<(), AgentFailure> {
-        for kind in BuiltinExpertKind::BUILTIN_SETUP {
+        for kind in BuiltinExpertKind::ALL {
             match self.directory.unregister(kind.package_id()) {
                 Ok(_) | Err(AgentFailure::NotFound) => {}
                 Err(failure) => return Err(failure),
             }
         }
         for card in self.vault.enabled_expert_cards().await? {
-            if !BuiltinExpertKind::BUILTIN_SETUP
+            if !BuiltinExpertKind::ALL
                 .iter()
                 .any(|kind| card.id == kind.package_id())
             {
@@ -1575,7 +1556,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let store = calendar_access::VaultCalendarSetups {
                 vault: vault.vault.as_ref(),
-                packaging: schedule_packaging(),
+                packaging: builtin_expert_packaging(BuiltinExpertKind::Schedule),
                 cancellation: job.cancellation.clone(),
             };
             let overview = match setup {
@@ -1644,7 +1625,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let store = calendar_access::VaultCalendarSetups {
                 vault: vault.vault.as_ref(),
-                packaging: schedule_packaging(),
+                packaging: builtin_expert_packaging(BuiltinExpertKind::Schedule),
                 cancellation: job.cancellation.clone(),
             };
             let admission = calendar_access::DeviceCalendarAdmission::new(
@@ -2446,7 +2427,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
             cancellation,
         },
         builtin_source_bindings(core, person_id, paired_server).await,
-        BuiltinExpertKind::BUILTIN_SETUP.len(),
+        BuiltinExpertKind::ALL.len(),
         when,
     )
     .await
@@ -2565,8 +2546,8 @@ fn expert_packaging(
 }
 
 /// How the Schedule Expert is packaged when its calendar setup is installed.
-fn schedule_packaging() -> floe_experts::ExpertPackaging {
-    let declaration = floe_experts_builtin::BuiltinExpertKind::Schedule.declaration();
+fn builtin_expert_packaging(kind: BuiltinExpertKind) -> floe_experts::ExpertPackaging {
+    let declaration = kind.declaration();
     let expert = floe_experts::AgentId::try_new(declaration.expert_id)
         .expect("builtin expert ids are valid");
     expert_packaging(&declaration, expert)

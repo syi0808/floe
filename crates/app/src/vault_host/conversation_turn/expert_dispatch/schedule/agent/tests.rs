@@ -280,7 +280,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                 .vault
                 .install_calendar_expert_with_connection(
                     request.clone(),
-                    &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
                     connection_id.clone(),
                     Cancellation::default(),
                 )
@@ -291,7 +291,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                 .vault
                 .install_calendar_expert(
                     request.clone(),
-                    &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
                     Cancellation::default(),
                 )
                 .await
@@ -417,7 +417,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                 .vault
                 .install_calendar_expert_with_connection(
                     request,
-                    &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
                     fixture
                         .core
                         .calendar_connection(fixture.session.person_id)
@@ -434,7 +434,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                 .vault
                 .install_calendar_expert(
                     request,
-                    &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
                     Cancellation::default(),
                 )
                 .await
@@ -2013,7 +2013,7 @@ impl Fixture {
             let installed = vault
                 .install_calendar_expert_with_connection(
                     request.clone(),
-                    &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
                     connection.connection_id.clone(),
                     Cancellation::default(),
                 )

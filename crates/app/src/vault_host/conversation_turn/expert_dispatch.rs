@@ -45,7 +45,10 @@ pub(super) fn registered_experts<'turn, 'host, 'msg>() -> floe_experts::ExpertDi
             BuiltinExpertRequest,
             BuiltinExpertOutput,
         >,
-    ); 7] = [
+    ); 8] = [
+        (BuiltinExpertKind::Schedule, |host, request| {
+            Box::pin(floe_experts_builtin::schedule::dispatch::dispatch(host, request))
+        }),
         (BuiltinExpertKind::Commitments, |host, request| {
             Box::pin(floe_experts_builtin::commitments::dispatch(host, request))
         }),
@@ -649,5 +652,22 @@ impl InProcessAgent for ConversationExperts<'_> {
             "expert_invocation_completed"
         );
         Ok(task)
+    }
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_table_matches_every_builtin_kind() {
+        let mut actual: Vec<_> = registered_experts().registered_ids().map(str::to_owned).collect();
+        let mut expected: Vec<_> = BuiltinExpertKind::ALL
+            .into_iter()
+            .map(|kind| kind.package_id().to_owned())
+            .collect();
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 }
