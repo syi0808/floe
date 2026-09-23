@@ -84,6 +84,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::PolicyDenied);
         }
+        if dependency
+            .source()
+            .connector()
+            .as_str()
+            .starts_with("calendar.")
+        {
+            let policy = self
+                .calendar_grant_policy(dependency.grant_id())
+                .await
+                .map_err(|error| match error {
+                    AgentFailure::AccessReviewRequired => AgentFailure::PolicyDenied,
+                    other => other,
+                })?;
+            if policy.consumer_policy != dependency.consumer_policy() {
+                return Err(AgentFailure::PolicyDenied);
+            }
+        }
         Ok(dependency)
     }
 

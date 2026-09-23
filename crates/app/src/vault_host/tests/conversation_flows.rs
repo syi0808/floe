@@ -2351,6 +2351,11 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         "mac-local",
         "Review today",
     );
+    let before = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
     let report = fixture
         .runtime
         .block_on(floe_agent_contract::AgentEndpoint::execute(
@@ -2370,6 +2375,15 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         floe_agent_contract::ArtifactPart::Data { media_type, .. }
             if media_type == floe_experts_builtin::schedule::dispatch::SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE
     )));
+    let after = fixture
+        .runtime
+        .block_on(fixture.vault.expert_registry())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.revision, before.revision);
+    assert!(after.builtin_setups.iter().any(|setup| setup.person_id == person
+        && setup.assignments.iter().any(|assignment| assignment.expert.as_str()
+            == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id())));
 }
 
 #[test]

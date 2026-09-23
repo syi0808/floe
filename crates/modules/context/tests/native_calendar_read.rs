@@ -141,6 +141,7 @@ impl NativeCalendarGrantReader for Grants {
             consumer
         })
         .unwrap();
+        let consumers = vec![consumer.clone()];
         let source = GrantSourceBinding::try_new(
             person_id,
             ConnectionId::try_new(&connection.connection_id).unwrap(),
@@ -162,7 +163,7 @@ impl NativeCalendarGrantReader for Grants {
             vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
             vec![GrantOperation::Read],
             vec![GrantPurpose::Assistant],
-            vec![consumer.clone()],
+            consumers,
             ProcessingRestriction::LocalOnly,
         )
         .unwrap();
@@ -256,6 +257,42 @@ async fn native_admission_checks_subject_grant_and_current_connection() {
     assert_eq!(connections.reads.load(Ordering::SeqCst), 2);
     assert_eq!(device.checks.load(Ordering::SeqCst), 1);
     assert_eq!(grants.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
+    let (connections, device, grants, person_id) = fixture();
+    let schedule = admit_current_native_calendar_read(
+        &connections,
+        &device,
+        &grants,
+        person_id,
+        "device",
+        "floe.builtin.schedule",
+        &window(),
+    )
+    .await
+    .unwrap();
+    let focus = admit_current_native_calendar_read(
+        &connections,
+        &device,
+        &grants,
+        person_id,
+        "device",
+        "floe.builtin.focus-attention",
+        &window(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(schedule.admission.grant_id(), focus.admission.grant_id());
+    for (admission, consumer) in [
+        (&schedule.admission, "floe.builtin.schedule"),
+        (&focus.admission, "floe.builtin.focus-attention"),
+    ] {
+        let consumers = admission.scope().consumers();
+        assert_eq!(consumers.len(), 1, "admission is per-consumer scoped");
+        assert_eq!(consumers[0].identifier(), consumer);
+    }
 }
 
 #[tokio::test]

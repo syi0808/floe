@@ -352,20 +352,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         session_id: Uuid,
         turn_id: Uuid,
     ) -> Result<DependencyCoverage, AgentFailure> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
-            .await
-            .map_err(storage)?;
-        let result = context_dependencies::read_context_dependency_coverage(
-            &transaction,
+        // One snapshot SELECT, deliberately without a write transaction: the
+        // proposal gate resolves dependencies while holding its own Immediate
+        // transaction, and a nested writer Busy-fails.
+        let connection = self.connection()?;
+        let coverage = context_dependencies::read_context_dependency_coverage(
+            &connection,
             self.person_id,
             session_id,
             turn_id,
         )
-        .await;
-        self.finish_access_grant_transaction(transaction, result)
-            .await
+        .await?;
+        self.check_access()?;
+        Ok(coverage)
     }
 
     pub async fn resume_session(&self) -> Result<AgentSession, AgentFailure> {

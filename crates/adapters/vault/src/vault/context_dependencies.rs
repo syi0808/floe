@@ -132,13 +132,13 @@ pub(super) async fn validate_context_dependency_store(
 }
 
 pub(super) async fn read_context_dependency_coverage(
-    transaction: &Transaction<'_>,
+    connection: &turso::Connection,
     person_id: PersonId,
     session_id: Uuid,
     turn_id: Uuid,
 ) -> Result<DependencyCoverage, AgentFailure> {
     validate_key(person_id, session_id, turn_id)?;
-    let mut rows = transaction
+    let mut rows = connection
         .query(
             "SELECT version, payload FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
             (person_id.to_string(), session_id.to_string(), turn_id.to_string()),

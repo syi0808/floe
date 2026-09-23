@@ -644,6 +644,29 @@ Required tests:
 - stale policy authority fails;
 - Act authority remains separate.
 
+E4 investigation findings (recorded before fixing, per the stop-condition
+rule). No governed (`calendar.observe`/`lease`/`timeline`) proposal path had
+test coverage: `expert_proposal_dependency` reauthorized the DataAccessGrant
+but never the CalendarGrantPolicy, so a subject-fingerprint re-review (which
+advances consumer policy while leaving GrantAuthority untouched) stayed
+publishable. The bounded E4 cleanup adds the `calendar.*` policy recheck to
+`expert_proposal_dependency`, matching the execution-path dispatch
+(`validate_current_authority_in_transaction`).
+
+Writing those regressions exposed a second structural gap: the proposal gate
+(`with_proposal_evidence`) holds an Immediate vault transaction while the
+governed observe check — and, for inspection, the operation closure — resolve
+the proposal dependency through `read_turn_coverage`, which opens a second
+Immediate transaction on a new connection. Turso reports
+`Busy("database is locked")`, so every governed proposal inspection failed
+with StorageUnavailable before any reauthorization logic ran. (Publication
+itself runs outside the gate after the evidence fetch, so only the gate-side
+reads nest.) The bounded E4 cleanup performs that single coverage SELECT
+without opening a write transaction — a WAL snapshot read with identical
+results — so gate-nested reauthorization is pure reads. No gate, trait, or
+isolation redesign: writers still serialize through Immediate transactions,
+and the same checks run in the same order.
+
 ### Remote sibling resources
 
 Run the complete Context path, not only Vault lookup:

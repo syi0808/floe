@@ -17,6 +17,7 @@ use floe_vault::*;
 use super::expert_evidence::delegation_message;
 use super::*;
 
+use floe_access::DependencyCoverage;
 use floe_actions::ActionAuthorityMode;
 use floe_actions::ActionFailure;
 use floe_actions::CalendarAction;
@@ -26,6 +27,7 @@ use floe_actions::CalendarActionState;
 use floe_actions::CalendarCreateReceipt;
 use floe_actions::CalendarPreflight;
 use floe_actions::ExpertCalendarDestination;
+use floe_actions::ExpertCalendarInspection;
 use floe_actions::ExpertCalendarRequest;
 use floe_actions::ExpertProposalReference;
 use floe_agent_contract::AgentFailure;
@@ -40,14 +42,18 @@ use floe_context_contract::PersonId;
 use floe_context_contract::ProcessingRestriction;
 use floe_context_contract::SourceAuthority;
 use floe_conversation::AgentMessage;
+use floe_conversation::AgentSession;
+use floe_day::CalendarSelection;
 use floe_day::Event;
 use floe_experts::A2APart;
 use floe_experts::AgentRegistry;
+use floe_experts::BuiltinExpertSetup;
 use floe_experts::ExpertFocusProposal;
 use floe_experts::ExpertInput;
 use floe_experts::ExpertInsight;
 use floe_experts::ExpertResult;
 use floe_experts::PackageImplementation;
+use floe_experts::PackageRef;
 use uuid::Uuid;
 
 mod inspection;
@@ -1148,5 +1154,418 @@ async fn dropped_publish_scope_releases_registry_authority_without_a_state_chang
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+struct GovernedFocus {
+    vault: EncryptedAgentVault<Keys>,
+    core: FloeCore,
+    person: PersonId,
+    session: AgentSession,
+    turn_id: Uuid,
+    assignment_id: Uuid,
+    package: PackageRef,
+    next_state_revision: u64,
+    admission: CalendarGrantAdmission,
+    consumer: GrantConsumer,
+    fingerprint: String,
+    root: tempfile::TempDir,
+}
+
+impl GovernedFocus {
+    async fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person = PersonId::new();
+        let keys = Keys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
+            .await
+            .unwrap();
+        vault
+            .install_builtin_experts_enabled(
+                BuiltinExpertSetup {
+                    instance_id: vault.registry_instance_id(),
+                    expected_revision: 0,
+                    setup_id: Uuid::new_v4(),
+                },
+                &crate::vault_host::builtin_setup_specs(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
+        core.set_calendar_scope(
+            person,
+            "eventkit-connection".into(),
+            1,
+            "test-device".into(),
+            CalendarProvider::EventKit,
+            vec![
+                CalendarSelection {
+                    calendar_id: "home".into(),
+                    calendar_name: "Home".into(),
+                },
+                CalendarSelection {
+                    calendar_id: "away".into(),
+                    calendar_name: "Away".into(),
+                },
+            ],
+            floe_context_contract::CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+        let connection = core.calendar_connection(person).await.unwrap().unwrap();
+        let fingerprint = "a".repeat(64);
+        vault
+            .review_native_calendar_grant(
+                "eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                connection.source_authority,
+                &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+                &fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+        let consumer = GrantConsumer::builtin(
+            floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+        )
+        .unwrap();
+        let admission = vault
+            .authorize_current_native_calendar_grant(
+                "eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                connection.source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                consumer.clone(),
+                ProcessingRestriction::LocalOnly,
+                Some(fingerprint.as_str()),
+            )
+            .await
+            .unwrap();
+        let snapshot = vault.expert_registry().await.unwrap().unwrap();
+        let schedule = floe_experts_builtin::BuiltinExpertKind::Schedule.package_id();
+        let assignment_id = snapshot
+            .builtin_setups
+            .iter()
+            .find(|setup| setup.person_id == person)
+            .unwrap()
+            .assignments
+            .iter()
+            .find(|assignment| assignment.expert.as_str() == schedule)
+            .unwrap()
+            .expert_assignment_id;
+        let package = snapshot
+            .packages
+            .iter()
+            .find(|entry| {
+                entry.reference.kind == floe_experts::PackageKind::Expert
+                    && entry.reference.id == schedule
+            })
+            .unwrap()
+            .reference
+            .clone();
+        let mut session = vault.create_session().await.unwrap();
+        session.data_classes = vec![DataClass::Personal];
+        // The marker message keeps its own turn: session CAS merges Unknown
+        // coverage for a new message turn, and Unknown poisons the later
+        // Dependent merge for the delegation turn.
+        let turn_id = Uuid::new_v4();
+        session.active_turn = Some(turn_id);
+        session.revision = 1;
+        session.messages.push(AgentMessage::User {
+            turn_id: Uuid::new_v4(),
+            text: "governed focus proposal".into(),
+        });
+        vault.compare_and_swap(&session, 0).await.unwrap();
+        Self {
+            vault,
+            core,
+            person,
+            session,
+            turn_id,
+            assignment_id,
+            package,
+            next_state_revision: 1,
+            admission,
+            consumer,
+            fingerprint,
+            root,
+        }
+    }
+
+    async fn commit_evidence(&mut self) -> (ExpertResult, ExpertProposalReference) {
+        let observation_id = Uuid::new_v4();
+        let invocation_id = Uuid::new_v4();
+        let observed_at = now();
+        let dependency = ContextDependency::try_new(
+            self.person,
+            self.admission.grant_id,
+            self.admission.authority,
+            self.admission.source.clone(),
+            self.admission.scope.resources().to_vec(),
+            self.admission.scope.categories().to_vec(),
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            self.consumer.clone(),
+            ProcessingRestriction::LocalOnly,
+            self.admission.consumer_policy,
+            observation_id,
+            vec![1],
+            Uuid::new_v4(),
+            self.core.lease_registry.process_incarnation(),
+            observed_at,
+            observed_at + chrono::Duration::minutes(59),
+        )
+        .unwrap();
+        self.core
+            .lease_registry
+            .retain_observation(
+                dependency.clone(),
+                self.fingerprint.clone(),
+                Instant::now() + Duration::from_secs(3600),
+            )
+            .unwrap();
+        let start = u64::try_from(now().timestamp_millis()).unwrap() + 3_600_000;
+        let evidence = ExpertResult {
+            schema_version: 1,
+            invocation_id,
+            instance_id: self.vault.registry_instance_id(),
+            person_id: self.person,
+            assignment_id: self.assignment_id,
+            package: self.package.clone(),
+            evidence_id: observation_id,
+            source_handle: format!("calendar.observe:{observation_id}"),
+            data_class: DataClass::Personal,
+            expires_at_unix_ms: start - 3_000_000,
+            insights: vec![ExpertInsight::FocusWindow {
+                starts_at_unix_ms: start + 1_800_000,
+                ends_at_unix_ms: start + 5_400_000,
+            }],
+            action_proposals: vec![ExpertFocusProposal {
+                starts_at_unix_ms: start + 1_800_000,
+                ends_at_unix_ms: start + 5_400_000,
+                evidence_id: observation_id,
+            }],
+            summary: None,
+            model_calls: 0,
+            state_revision: self.next_state_revision,
+            view_calls: 1,
+        };
+        self.session
+            .messages
+            .push(delegation_message(self.turn_id, &evidence));
+        self.session.revision += 1;
+        let previous_revision = self.session.revision - 1;
+        let staged = self.vault.expert_registry().await.unwrap().unwrap();
+        self.vault
+            .commit_expert_session_scoped_with_coverage_hook(
+                &self.session,
+                previous_revision,
+                staged.revision,
+                &staged,
+                self.assignment_id,
+                observation_id,
+                self.turn_id,
+                DependencyCoverage::dependent(dependency).unwrap(),
+                async { Ok::<(), AgentFailure>(()) },
+            )
+            .await
+            .unwrap();
+        self.next_state_revision += 1;
+        let reference = ExpertProposalReference {
+            person_id: self.person,
+            session_id: self.session.id,
+            invocation_id,
+        };
+        (evidence, reference)
+    }
+
+    fn request(
+        &self,
+        reference: &ExpertProposalReference,
+        calendar_id: &str,
+    ) -> ExpertCalendarRequest {
+        ExpertCalendarRequest {
+            reference: reference.clone(),
+            destination: ExpertCalendarDestination {
+                provider: CalendarProvider::EventKit,
+                calendar_id: calendar_id.into(),
+                connection_revision: 1,
+                timezone: "Asia/Seoul".into(),
+            },
+            cancellation: Cancellation::default(),
+            deadline: Instant::now() + Duration::from_secs(5),
+        }
+    }
+
+    async fn prepare(
+        &self,
+        reference: &ExpertProposalReference,
+        calendar_id: &str,
+    ) -> Result<CalendarAction, AgentFailure> {
+        let request = self.request(reference, calendar_id);
+        self.core
+            .prepare_expert_calendar_action(&self.vault, request, now)
+            .await
+    }
+
+    async fn inspect(
+        &self,
+        reference: &ExpertProposalReference,
+    ) -> Result<Option<CalendarAction>, AgentFailure> {
+        self.core
+            .inspect_expert_calendar_action(
+                &self.vault,
+                ExpertCalendarInspection {
+                    reference: reference.clone(),
+                    cancellation: Cancellation::default(),
+                    deadline: Instant::now() + Duration::from_secs(5),
+                },
+            )
+            .await
+    }
+}
+
+#[tokio::test]
+async fn governed_focus_proposal_publishes_under_current_grant_and_policy_with_separate_act() {
+    let mut fixture = GovernedFocus::new().await;
+    let (_, reference) = fixture.commit_evidence().await;
+    assert_eq!(fixture.inspect(&reference).await.unwrap(), None);
+    let action = fixture.prepare(&reference, "home").await.unwrap();
+    assert_eq!(action.state, CalendarActionState::Pending);
+    let admission = floe_actions::ExpertActionStore::agent_action_admission(
+        &fixture.vault,
+        action.execution_id,
+    )
+    .await
+    .unwrap();
+    assert!(!admission.envelope.write_approval);
+    let approved = fixture
+        .core
+        .decide_expert_calendar_action(
+            &fixture.vault,
+            fixture.person,
+            action.execution_id,
+            true,
+            now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.state, CalendarActionState::Approved);
+}
+
+#[tokio::test]
+async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
+    let mut fixture = GovernedFocus::new().await;
+    let (_, reference) = fixture.commit_evidence().await;
+    assert_eq!(fixture.inspect(&reference).await.unwrap(), None);
+    let authority = fixture.admission.authority;
+    let rereviewed = fixture
+        .vault
+        .review_native_calendar_grant(
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            &["home".into()],
+            fixture.admission.source.source_authority(),
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+            &"b".repeat(64),
+            Some((fixture.admission.grant_id, authority)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rereviewed.authority(), authority);
+    let fresh = fixture
+        .vault
+        .authorize_current_native_calendar_grant(
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            &["home".into()],
+            fixture.admission.source.source_authority(),
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            fixture.consumer.clone(),
+            ProcessingRestriction::LocalOnly,
+            Some("b".repeat(64).as_str()),
+        )
+        .await
+        .unwrap();
+    assert_ne!(fresh.consumer_policy, fixture.admission.consumer_policy);
+    assert_eq!(
+        fixture.inspect(&reference).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    assert_eq!(
+        fixture.prepare(&reference, "home").await,
+        Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[tokio::test]
+async fn governed_focus_proposal_rejects_a_paused_grant() {
+    let mut fixture = GovernedFocus::new().await;
+    let (_, reference) = fixture.commit_evidence().await;
+    assert_eq!(fixture.inspect(&reference).await.unwrap(), None);
+    let paused = fixture
+        .vault
+        .pause_native_calendar_grant(
+            fixture.admission.grant_id,
+            fixture.admission.authority,
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            fixture.admission.source.source_authority(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(paused.authority(), fixture.admission.authority);
+    assert_eq!(
+        fixture.inspect(&reference).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    assert_eq!(
+        fixture.prepare(&reference, "home").await,
+        Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[tokio::test]
+async fn governed_focus_proposal_rejects_source_and_resource_drift() {
+    let mut fixture = GovernedFocus::new().await;
+    let (_, reference) = fixture.commit_evidence().await;
+    assert_eq!(fixture.inspect(&reference).await.unwrap(), None);
+    assert_eq!(
+        fixture.prepare(&reference, "away").await,
+        Err(AgentFailure::StaleContext)
+    );
+    let action = fixture.prepare(&reference, "home").await.unwrap();
+    assert_eq!(action.state, CalendarActionState::Pending);
+    fixture
+        .core
+        .set_calendar_scope(
+            fixture.person,
+            "eventkit-connection-2".into(),
+            2,
+            "test-device".into(),
+            CalendarProvider::EventKit,
+            vec![CalendarSelection {
+                calendar_id: "home".into(),
+                calendar_name: "Home".into(),
+            }],
+            floe_context_contract::CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+    let (_, drifted) = fixture.commit_evidence().await;
+    assert_eq!(
+        fixture.prepare(&drifted, "home").await,
+        Err(AgentFailure::StaleContext)
     );
 }

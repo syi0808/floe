@@ -410,11 +410,22 @@ mod calendar_tests {
         view: CalendarContextView,
         policy: ConsumerPolicyAuthority,
         reads: AtomicUsize,
+        read_resources: std::sync::Mutex<Vec<String>>,
         source_changes_after_read: bool,
+        sibling: Option<(DataAccessGrant, ConsumerPolicyAuthority, CalendarContextView)>,
     }
 
     impl CalendarFixture {
         fn new(person_id: PersonId, connection_id: &str, query: &CalendarViewQuery) -> Self {
+            Self::new_with_consumers(person_id, connection_id, query, &["floe.builtin.schedule"])
+        }
+
+        fn new_with_consumers(
+            person_id: PersonId,
+            connection_id: &str,
+            query: &CalendarViewQuery,
+            consumers: &[&str],
+        ) -> Self {
             let source_authority = SourceAuthority::new();
             let source = GrantSourceBinding::try_new(
                 person_id,
@@ -426,7 +437,10 @@ mod calendar_tests {
             .unwrap();
             let scope = floe_access::remote_calendar_scope(
                 "primary",
-                &[GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
+                &consumers
+                    .iter()
+                    .map(|consumer| GrantConsumer::builtin(*consumer).unwrap())
+                    .collect::<Vec<_>>(),
             )
             .unwrap();
             let mut grant = DataAccessGrant::new(
@@ -476,8 +490,64 @@ mod calendar_tests {
                 },
                 policy: ConsumerPolicyAuthority::new(),
                 reads: AtomicUsize::new(0),
+                read_resources: std::sync::Mutex::new(Vec::new()),
                 source_changes_after_read: false,
+                sibling: None,
             }
+        }
+
+        fn with_sibling(mut self, resource: &str, consumers: &[&str]) -> Self {
+            let source = GrantSourceBinding::try_new(
+                self.grant.source().person_id(),
+                ConnectionId::try_new(self.grant.source().connection_id().as_str()).unwrap(),
+                ConnectorId::try_new(self.grant.source().connector().as_str()).unwrap(),
+                ExecutionOwnerId::try_new(
+                    self.grant.source().execution_owner().as_str(),
+                )
+                .unwrap(),
+                self.grant.source().source_authority(),
+            )
+            .unwrap();
+            let scope = floe_access::remote_calendar_scope(
+                resource,
+                &consumers
+                    .iter()
+                    .map(|consumer| GrantConsumer::builtin(*consumer).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            let mut grant = DataAccessGrant::new(
+                GrantId::new(),
+                Uuid::new_v4(),
+                source.clone(),
+                scope.clone(),
+            )
+            .unwrap();
+            grant
+                .activate_review(grant.authority(), source, scope)
+                .unwrap();
+            let mut view = self.view.clone();
+            view.source_handle = format!("calendar:{resource}");
+            view.items = vec![CalendarContextItem {
+                evidence_handle: format!("event:{resource}"),
+                untrusted_title: format!("Review {resource}"),
+                starts_at_unix_ms: view.items[0].starts_at_unix_ms,
+                ends_at_unix_ms: view.items[0].ends_at_unix_ms,
+                all_day: false,
+            }];
+            self.sibling = Some((grant, ConsumerPolicyAuthority::new(), view));
+            self
+        }
+
+        fn resources(&self) -> Vec<String> {
+            let mut resources = vec!["primary".to_owned()];
+            if let Some((grant, _, _)) = &self.sibling {
+                let resource = grant.scope().resources()[0].as_str().to_owned();
+                if resource != "primary" {
+                    resources.push(resource);
+                }
+            }
+            resources
         }
     }
 
@@ -494,9 +564,10 @@ mod calendar_tests {
             query: RemoteSourceQuery<'a>,
             _: &'a RemoteCallWindow,
         ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>> {
+            let resources = self.resources();
             Box::pin(async move {
                 assert_eq!(query.view_id, CALENDAR_CONTEXT_VIEW_ID);
-                assert_eq!(query.resource, "primary");
+                assert!(resources.iter().any(|resource| resource == query.resource));
                 Ok(SignedSourcePreview {
                     descriptor_b64url: "signed".into(),
                     producer_signature: "signature".into(),
@@ -529,13 +600,29 @@ mod calendar_tests {
             read: AdmittedRemoteRead<'a>,
             _: &'a RemoteCallWindow,
         ) -> BoxFuture<'a, Result<Value, AgentFailure>> {
+            let resources = self.resources();
             Box::pin(async move {
                 self.reads.fetch_add(1, Ordering::SeqCst);
+                self.read_resources
+                    .lock()
+                    .unwrap()
+                    .push(read.resource.to_owned());
                 assert_eq!(read.view_id, CALENDAR_CONTEXT_VIEW_ID);
-                assert_eq!(read.consumer, "floe.builtin.schedule");
-                assert_eq!(read.resource, "primary");
+                assert!(matches!(
+                    read.consumer,
+                    "floe.builtin.schedule" | "floe.builtin.focus-attention"
+                ));
+                assert!(resources.iter().any(|resource| resource == read.resource));
                 assert_eq!(read.connection_revision, 7);
-                serde_json::to_value(&self.view).map_err(|_| AgentFailure::InvalidInput)
+                let view = match &self.sibling {
+                    Some((grant, _, sibling_view))
+                        if grant.scope().resources()[0].as_str() == read.resource =>
+                    {
+                        sibling_view
+                    }
+                    _ => &self.view,
+                };
+                serde_json::to_value(view).map_err(|_| AgentFailure::InvalidInput)
             })
         }
     }
@@ -566,7 +653,11 @@ mod calendar_tests {
             &'a self,
             _: usize,
         ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
-            Box::pin(async move { Ok(vec![self.grant.clone()]) })
+            let mut grants = vec![self.grant.clone()];
+            if let Some((sibling, _, _)) = &self.sibling {
+                grants.push(sibling.clone());
+            }
+            Box::pin(async move { Ok(grants) })
         }
 
         fn find_view_grant<'a>(
@@ -652,16 +743,35 @@ mod calendar_tests {
 
         fn calendar_grant_binding<'a>(
             &'a self,
-            _: &'a str,
-            _: &'a str,
-            _: SourceAuthority,
-            _: &'a str,
+            connector: &'a str,
+            connection_id: &'a str,
+            source_authority: SourceAuthority,
+            resource: &'a str,
         ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
+            let mut candidates = vec![(self.grant.clone(), self.policy)];
+            if let Some((sibling, policy, _)) = &self.sibling {
+                candidates.push((sibling.clone(), *policy));
+            }
             Box::pin(async move {
-                Ok(RemoteGrantBinding {
-                    grant: self.grant.clone(),
-                    consumer_policy: self.policy,
-                })
+                let mut found = None;
+                for (grant, policy) in &candidates {
+                    let source = grant.source();
+                    if source.connector().as_str() == connector
+                        && source.connection_id().as_str() == connection_id
+                        && source.source_authority() == source_authority
+                        && grant.scope().resources().len() == 1
+                        && grant.scope().resources()[0].as_str() == resource
+                    {
+                        if found.is_some() {
+                            return Err(AgentFailure::Conflict);
+                        }
+                        found = Some(RemoteGrantBinding {
+                            grant: grant.clone(),
+                            consumer_policy: *policy,
+                        });
+                    }
+                }
+                found.ok_or(AgentFailure::AccessReviewRequired)
             })
         }
     }
@@ -767,6 +877,175 @@ mod calendar_tests {
             Err(AgentFailure::PolicyDenied)
         ));
         assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn sibling_resources_complete_independent_reads_and_rechecks() {
+        let person_id = PersonId::new();
+        let connection_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp_millis();
+        let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 1).unwrap();
+        let fixture = CalendarFixture::new(person_id, &connection_id, &query)
+            .with_sibling("secondary", &["floe.builtin.schedule"]);
+        let window = RemoteCallWindow {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let person_text = person_id.to_string();
+        let pairing = RemotePairingIdentity {
+            person_id: &person_text,
+            client_id: "client",
+            device_id: "device",
+        };
+        let read = |resource| RemoteCalendarViewRead {
+            person_id,
+            pairing,
+            connector_id: "calendar.google",
+            connection_id: &connection_id,
+            connection_revision: 7,
+            resource,
+            consumer_name: "floe.builtin.schedule",
+            query: &query,
+            window: &window,
+            process_incarnation_id: Uuid::new_v4(),
+        };
+        let (primary_view, primary_dependency, _) =
+            read_remote_calendar_view(&fixture, &fixture, read("primary"))
+                .await
+                .unwrap();
+        let (secondary_view, secondary_dependency, _) =
+            read_remote_calendar_view(&fixture, &fixture, read("secondary"))
+                .await
+                .unwrap();
+        assert_eq!(primary_view.items[0].evidence_handle, "event:one");
+        assert_eq!(
+            secondary_view.items[0].evidence_handle,
+            "event:secondary"
+        );
+        assert_eq!(primary_dependency.resources()[0].as_str(), "primary");
+        assert_eq!(secondary_dependency.resources()[0].as_str(), "secondary");
+        assert_ne!(primary_dependency.grant_id(), secondary_dependency.grant_id());
+        assert_ne!(
+            primary_dependency.consumer_policy(),
+            secondary_dependency.consumer_policy()
+        );
+        assert_eq!(
+            fixture.read_resources.lock().unwrap().as_slice(),
+            &["primary".to_owned(), "secondary".to_owned()]
+        );
+        for dependency in [&primary_dependency, &secondary_dependency] {
+            authorize_remote_dependency(
+                &fixture,
+                &fixture,
+                person_id,
+                pairing,
+                dependency,
+                &DependencyAuthorization {
+                    deadline: window.deadline,
+                    cancellation: window.cancellation.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_exact_resource_grants_conflict_before_provider_io() {
+        let person_id = PersonId::new();
+        let connection_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp_millis();
+        let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 1).unwrap();
+        let fixture = CalendarFixture::new(person_id, &connection_id, &query)
+            .with_sibling("primary", &["floe.builtin.schedule"]);
+        let window = RemoteCallWindow {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let person_text = person_id.to_string();
+        let result = read_remote_calendar_view(
+            &fixture,
+            &fixture,
+            RemoteCalendarViewRead {
+                person_id,
+                pairing: RemotePairingIdentity {
+                    person_id: &person_text,
+                    client_id: "client",
+                    device_id: "device",
+                },
+                connector_id: "calendar.google",
+                connection_id: &connection_id,
+                connection_revision: 7,
+                resource: "primary",
+                consumer_name: "floe.builtin.schedule",
+                query: &query,
+                window: &window,
+                process_incarnation_id: Uuid::new_v4(),
+            },
+        )
+        .await;
+        assert_eq!(result, Err(AgentFailure::Conflict));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn two_canonical_consumers_read_under_one_remote_grant() {
+        let person_id = PersonId::new();
+        let connection_id = Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp_millis();
+        let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 1).unwrap();
+        let fixture = CalendarFixture::new_with_consumers(
+            person_id,
+            &connection_id,
+            &query,
+            &["floe.builtin.schedule", "floe.builtin.focus-attention"],
+        );
+        let window = RemoteCallWindow {
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let person_text = person_id.to_string();
+        let pairing = RemotePairingIdentity {
+            person_id: &person_text,
+            client_id: "client",
+            device_id: "device",
+        };
+        let read = |consumer_name| RemoteCalendarViewRead {
+            person_id,
+            pairing,
+            connector_id: "calendar.google",
+            connection_id: &connection_id,
+            connection_revision: 7,
+            resource: "primary",
+            consumer_name,
+            query: &query,
+            window: &window,
+            process_incarnation_id: Uuid::new_v4(),
+        };
+        let (_, schedule_dependency, _) =
+            read_remote_calendar_view(&fixture, &fixture, read("floe.builtin.schedule"))
+                .await
+                .unwrap();
+        let (_, focus_dependency, _) = read_remote_calendar_view(
+            &fixture,
+            &fixture,
+            read("floe.builtin.focus-attention"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            schedule_dependency.consumer().identifier(),
+            "floe.builtin.schedule"
+        );
+        assert_eq!(
+            focus_dependency.consumer().identifier(),
+            "floe.builtin.focus-attention"
+        );
+        assert_eq!(
+            schedule_dependency.grant_id(),
+            focus_dependency.grant_id()
+        );
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

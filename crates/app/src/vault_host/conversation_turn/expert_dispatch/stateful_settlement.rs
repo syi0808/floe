@@ -184,3 +184,190 @@ impl StatefulExpertSettlement for RejectStatefulSettlement {
         Box::pin(async { Err(AgentFailure::CapabilityDenied) })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        collections::HashMap,
+        os::unix::fs::PermissionsExt,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use floe_agent_contract::{AgentContext, DataClass, ExpertInsight};
+    use floe_context_contract::{
+        CalendarProvider, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction,
+        SourceAuthority,
+    };
+    use floe_execution::Cancellation;
+    use floe_experts::BuiltinExpertSetup;
+    use floe_kernel::PersonId;
+    use floe_vault::VaultKey;
+
+    #[derive(Clone, Default)]
+    struct SettlementKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+
+    impl VaultKeyProvider for SettlementKeys {
+        fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: Uuid,
+            key: &VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, SettlementKeys::default())
+                .await
+                .unwrap();
+        vault
+            .install_builtin_experts_enabled(
+                BuiltinExpertSetup {
+                    instance_id: vault.registry_instance_id(),
+                    expected_revision: 0,
+                    setup_id: Uuid::new_v4(),
+                },
+                &crate::vault_host::builtin_setup_specs(),
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let source_authority = SourceAuthority::new();
+        let grant = vault
+            .review_native_calendar_grant(
+                "eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                source_authority,
+                &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+                &"a".repeat(64),
+                None,
+            )
+            .await
+            .unwrap();
+        let consumer =
+            GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id()).unwrap();
+        let admission = vault
+            .authorize_current_native_calendar_grant(
+                "eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                consumer.clone(),
+                ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(admission.grant_id, grant.id());
+        assert_eq!(admission.authority, grant.authority());
+        let observation_id = Uuid::new_v4();
+        let observed_at = chrono::Utc::now();
+        let dependency = ContextDependency::try_new(
+            person_id,
+            admission.grant_id,
+            admission.authority,
+            admission.source.clone(),
+            admission.scope.resources().to_vec(),
+            admission.scope.categories().to_vec(),
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            consumer,
+            ProcessingRestriction::LocalOnly,
+            admission.consumer_policy,
+            observation_id,
+            vec![1],
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            observed_at,
+            observed_at + chrono::Duration::minutes(59),
+        )
+        .unwrap();
+        assert_eq!(dependency.grant_id(), grant.id());
+        assert_eq!(dependency.grant_authority(), grant.authority());
+        assert_eq!(dependency.source(), grant.source());
+        assert_eq!(dependency.consumer_policy(), admission.consumer_policy);
+        assert_eq!(
+            dependency.consumer().identifier(),
+            BuiltinExpertKind::Schedule.package_id()
+        );
+        let request = BuiltinExpertRequest {
+            agent_id: BuiltinExpertKind::Schedule.package_id().into(),
+            person_id,
+            task_id: Uuid::new_v4(),
+            invocation_id: Uuid::new_v4(),
+            assignment: "Review today".into(),
+            current_time_unix_ms: chrono::Utc::now().timestamp_millis(),
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                optional_context_issues: vec![],
+                memories: vec![],
+                evidence: vec![],
+            },
+            max_output_bytes: 16_384,
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        let window_start = 1_800_000_000_000u64;
+        let draft = floe_experts_builtin::StatefulExpertDraft {
+            source_handle: format!("calendar.observe:{observation_id}"),
+            data_class: DataClass::Personal,
+            expires_at_unix_ms: u64::try_from(
+                (observed_at + chrono::Duration::minutes(59)).timestamp_millis(),
+            )
+            .unwrap(),
+            insights: vec![ExpertInsight::FocusWindow {
+                starts_at_unix_ms: window_start,
+                ends_at_unix_ms: window_start + 1_800_000,
+            }],
+            action_proposals: vec![floe_experts_builtin::StatefulFocusProposal {
+                starts_at_unix_ms: window_start,
+                ends_at_unix_ms: window_start + 1_800_000,
+            }],
+            summary: "One focus window".into(),
+            model_calls: 1,
+            view_calls: 1,
+        };
+        let settlement = VaultStatefulExpertSettlement { vault: &vault };
+        let output = StatefulExpertSettlement::settle(&settlement, &request, draft, vec![
+            dependency,
+        ])
+        .await
+        .unwrap();
+        let result: ExpertResult = serde_json::from_str(&output.data).unwrap();
+        assert_eq!(result.evidence_id, observation_id);
+        assert_eq!(
+            result.package.id,
+            BuiltinExpertKind::Schedule.package_id()
+        );
+        assert_eq!(result.action_proposals.len(), 1);
+        assert_eq!(result.action_proposals[0].evidence_id, observation_id);
+    }
+}
