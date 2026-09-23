@@ -24,10 +24,9 @@ pub use grants::{
     AccessGrantMutation, GrantPolicyError, apply_grant_mutation, authorize_grant, create_grant,
 };
 pub use native_calendar::{
-    CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview,
-    admit_native_calendar_setup, admit_native_calendar_subject, is_native_calendar,
-    native_calendar_connector,
-    native_calendar_connection_unchanged, native_calendar_source_current, reviewed_native_subject,
+    NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
+    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
+    native_calendar_connector, native_calendar_source_current, reviewed_native_subject,
 };
 pub use personal_grants::{
     ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,

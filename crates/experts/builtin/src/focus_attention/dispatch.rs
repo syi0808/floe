@@ -20,7 +20,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     crate::require_mandatory_source(host, request)?;
     let (attention, dependency) = host.attention_view(request).await?;
-    host.record_dependency(request.invocation_id, request.invocation_id, dependency)?;
+    host.record_dependency(request.task_id, request.task_id, dependency)?;
     let mut context = granted_context(host, request);
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
         crate::shared::optional_calendar_views(

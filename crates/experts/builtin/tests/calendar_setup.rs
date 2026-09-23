@@ -1,9 +1,9 @@
 use floe_agent_contract::PersonId;
 use floe_agent_contract::{AgentFailure, DataClass};
-use floe_context_contract::{CalendarProvider, CalendarScope};
+use floe_context_contract::CalendarProvider;
 use floe_experts::{
     AgentId, AgentRegistry, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup,
-    ExpertPackaging, ExpertPrivateState, PackageImplementation, PackageKind, PackageRef,
+    ExpertPackaging, ExpertPrivateState,
 };
 use floe_experts_builtin::BuiltinExpertKind;
 use uuid::Uuid;

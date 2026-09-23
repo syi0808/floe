@@ -3,11 +3,8 @@ use floe_context::AgentContext;
 use floe_experts::{
     A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
     AgentId, AgentPackage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertBudget, ExpertInput,
-    ExpertInvocation, ExpertMetadata, InProcessAgent, PackageImplementation, PackageKind,
-    PackageRef, RegistrySnapshot,
-};
-use floe_experts_builtin::schedule::{
-    ExpertHost, ExpertTimelineView, ExpertViews, TimelineViewItem, TimelineViewRead,
+    ExpertInsight, ExpertInvocation, ExpertMetadata, ExpertResult, InProcessAgent,
+    PackageImplementation, PackageKind, PackageRef, RegistrySnapshot,
 };
 use floe_kernel::PersonId;
 use std::sync::Mutex;
@@ -18,7 +15,7 @@ pub(crate) struct TestScheduleHost {
     instance_id: Uuid,
     assignment_id: Uuid,
     registry: Mutex<AgentRegistry>,
-    view: ExpertTimelineView,
+    view_handle: Uuid,
 }
 
 impl TestScheduleHost {
@@ -148,24 +145,7 @@ impl TestScheduleHost {
             instance_id,
             assignment_id,
             registry: Mutex::new(registry),
-            view: ExpertTimelineView {
-                schema_version: 1,
-                handle,
-                person_id,
-                data_class: DataClass::Synthetic,
-                source_handle: "fixture.synthetic.timeline".into(),
-                range_start_unix_ms: 36_000_000,
-                range_end_unix_ms: 43_200_000,
-                expires_at_unix_ms: u64::MAX,
-                coverage_complete: true,
-                next_cursor: None,
-                items: vec![TimelineViewItem {
-                    evidence_handle: Uuid::from_u128(handle.as_u128() ^ 1),
-                    untrusted_title: "Design review".into(),
-                    starts_at_unix_ms: 36_000_000,
-                    ends_at_unix_ms: 39_600_000,
-                }],
-            },
+            view_handle: handle,
         })
     }
 
@@ -209,7 +189,7 @@ impl InProcessAgent for TestScheduleHost {
                         person_id,
                         self.assignment_id,
                         registry.revision(),
-                        self.view.handle,
+                        self.view_handle,
                     )
                     .ok()
             })
@@ -234,12 +214,7 @@ impl InProcessAgent for TestScheduleHost {
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .revision();
-        let assignments = floe_experts::RegistryAssignments::new(&self.registry);
-        let result = ExpertHost {
-            assignments: &assignments,
-            views: self,
-        }
-        .invoke(ExpertInvocation {
+        let invocation = ExpertInvocation {
             capabilities: std::sync::Arc::new(NoCapabilityJournal),
             context: AgentContext {
                 projection_version: 1,
@@ -254,12 +229,12 @@ impl InProcessAgent for TestScheduleHost {
             person_id: request.person_id,
             assignment_id: self.assignment_id,
             expected_registry_revision,
-            granted_view_handles: vec![self.view.handle],
+            granted_view_handles: vec![self.view_handle],
             allowed_data_classes: vec![DataClass::Synthetic],
-            current_time_unix_ms: self.view.range_start_unix_ms,
+            current_time_unix_ms: 36_000_000,
             timezone_offset_seconds: 0,
-            suggested_range_start_unix_ms: Some(self.view.range_start_unix_ms),
-            suggested_range_end_unix_ms: Some(self.view.range_end_unix_ms),
+            suggested_range_start_unix_ms: Some(36_000_000),
+            suggested_range_end_unix_ms: Some(43_200_000),
             input: ExpertInput::Analyze {
                 request: assignment,
                 focus_minutes: Some(60),
@@ -270,8 +245,39 @@ impl InProcessAgent for TestScheduleHost {
             },
             deadline: request.deadline,
             cancellation: request.cancellation,
-        })
-        .await?;
+        };
+        let assignments = floe_experts::RegistryAssignments::new(&self.registry);
+        let admitted =
+            floe_agent_contract::ExpertAssignments::admit(&assignments, &invocation, Some(60))?;
+        let mut result = ExpertResult {
+            schema_version: 1,
+            invocation_id: task_id,
+            instance_id: self.instance_id,
+            person_id: self.person_id,
+            assignment_id: self.assignment_id,
+            package: admitted.package.clone(),
+            view_handle: self.view_handle,
+            source_handle: "fixture.synthetic.timeline".into(),
+            data_class: admitted.data_class,
+            expires_at_unix_ms: u64::MAX,
+            insights: vec![ExpertInsight::Commitment {
+                evidence_handle: Uuid::new_v4(),
+                untrusted_title: "Design review".into(),
+                starts_at_unix_ms: 36_000_000,
+                ends_at_unix_ms: 39_600_000,
+            }],
+            action_proposals: vec![],
+            summary: None,
+            model_calls: 0,
+            state_revision: 0,
+            view_calls: 1,
+        };
+        result.state_revision = floe_agent_contract::ExpertAssignments::settle(
+            &assignments,
+            &invocation,
+            &admitted,
+            &result,
+        )?;
         let data = serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?;
         Ok(A2ATask {
             id: task_id,
@@ -296,26 +302,6 @@ impl InProcessAgent for TestScheduleHost {
             failure: None,
             settlement: None,
         })
-    }
-}
-
-impl ExpertViews for TestScheduleHost {
-    async fn timeline(
-        &self,
-        request: TimelineViewRead,
-    ) -> Result<ExpertTimelineView, AgentFailure> {
-        if request.person_id != self.person_id || request.handle != self.view.handle {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        if self.view.items.len() > request.max_items
-            || serde_json::to_vec(&self.view)
-                .map_err(|_| AgentFailure::InvalidInput)?
-                .len()
-                > request.max_bytes
-        {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        Ok(self.view.clone())
     }
 }
 

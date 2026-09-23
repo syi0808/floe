@@ -248,7 +248,7 @@ fn atomic_enabled_install_only_advertises_executable_experts() {
             .iter()
             .map(|card| card.id.as_str())
             .collect::<Vec<_>>(),
-        ["floe.builtin.focus-attention"]
+        ["floe.builtin.schedule", "floe.builtin.focus-attention",]
     );
 
     let focus = registry.snapshot().builtin_setups[0]

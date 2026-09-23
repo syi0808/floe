@@ -33,9 +33,6 @@ pub struct NativeCalendarReview<'a> {
     pub connection_id: Option<&'a str>,
 }
 
-/// Who reads a calendar on this device on the Person's behalf.
-pub const CALENDAR_EXPERT_CONSUMER: &str = "calendar.expert";
-
 /// That the connection this device records still serves the native calendar a
 /// reviewed read is bound to.
 ///

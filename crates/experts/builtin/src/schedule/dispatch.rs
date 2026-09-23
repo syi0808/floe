@@ -1,13 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use chrono::{Local, TimeZone, Utc};
-use floe_agent_contract::{
-    AgentFailure, Artifact, ArtifactPart, DependencyCoverage,
-};
+use floe_agent_contract::{AgentFailure, Artifact, ArtifactPart, DependencyCoverage};
 use floe_context_contract::{
-    CalendarContextView, CalendarViewQuery, SourceReadOutcome, SourceUnavailable,
-    validate_calendar_context_view_for_query, MAX_CALENDAR_CONTEXT_ITEMS,
-    MAX_CONTEXT_EVIDENCE_BYTES,
+    CalendarContextView, CalendarViewQuery, MAX_CALENDAR_CONTEXT_ITEMS, MAX_CONTEXT_EVIDENCE_BYTES,
+    SourceReadOutcome, SourceUnavailable, validate_calendar_context_view_for_query,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -62,7 +59,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 return blocked(BlockedResult::Unavailable { reason }, vec![]);
             }
             SourceReadOutcome::NeedsUserAction(requirement) => {
-                requirement.validate().map_err(|_| AgentFailure::StaleContext)?;
+                requirement
+                    .validate()
+                    .map_err(|_| AgentFailure::StaleContext)?;
                 let artifact = Artifact {
                     artifact_id: Uuid::new_v4(),
                     name: "Calendar access requirement".into(),
@@ -95,7 +94,10 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 return Err(AgentFailure::BudgetExceeded);
             }
             if let Some(page_cursor) = &view.next_cursor {
-                if next_cursor.as_ref().is_some_and(|existing| existing != page_cursor) {
+                if next_cursor
+                    .as_ref()
+                    .is_some_and(|existing| existing != page_cursor)
+                {
                     return Err(AgentFailure::StaleContext);
                 }
                 next_cursor = Some(page_cursor.clone());
@@ -143,8 +145,14 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             return Err(AgentFailure::StaleContext);
         }
         let views: Vec<_> = pages.into_values().collect();
-        let draft = expert::judge(host, request, &views, (page_index + 1) as u32, plan.propose_focus)
-            .await?;
+        let draft = expert::judge(
+            host,
+            request,
+            &views,
+            (page_index + 1) as u32,
+            plan.propose_focus,
+        )
+        .await?;
         return host.settle_stateful_result(request, draft).await;
     }
     Err(AgentFailure::BudgetExceeded)
@@ -361,7 +369,10 @@ mod tests {
             })
         }
 
-        fn work_context_views<'a>(&'a self, _: &'a BuiltinExpertRequest) -> Acquiring<'a, Vec<WorkContextView>> {
+        fn work_context_views<'a>(
+            &'a self,
+            _: &'a BuiltinExpertRequest,
+        ) -> Acquiring<'a, Vec<WorkContextView>> {
             panic!("unused")
         }
 
@@ -377,7 +388,10 @@ mod tests {
             panic!("unused")
         }
 
-        fn wellbeing_view<'a>(&'a self, _: &'a BuiltinExpertRequest) -> Acquiring<'a, WellbeingView> {
+        fn wellbeing_view<'a>(
+            &'a self,
+            _: &'a BuiltinExpertRequest,
+        ) -> Acquiring<'a, WellbeingView> {
             panic!("unused")
         }
 
@@ -409,6 +423,7 @@ mod tests {
         BuiltinExpertRequest {
             agent_id: BuiltinExpertKind::Schedule.package_id().into(),
             person_id: PersonId(Uuid::new_v4()),
+            task_id: Uuid::new_v4(),
             invocation_id: Uuid::new_v4(),
             assignment: "today".into(),
             current_time_unix_ms: Utc::now().timestamp_millis(),

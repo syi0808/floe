@@ -413,6 +413,7 @@ final class RemoteCalendarGrantOverview {
     required this.connectorId,
     this.connectionId,
     required this.resource,
+    required this.consumers,
     required this.recipient,
   });
 
@@ -422,6 +423,7 @@ final class RemoteCalendarGrantOverview {
   final String connectorId;
   final String? connectionId;
   final String resource;
+  final List<String> consumers;
   final String recipient;
 
   factory RemoteCalendarGrantOverview.fromJson(Object? raw) {
@@ -436,6 +438,7 @@ final class RemoteCalendarGrantOverview {
         value['connector_id'] is! String ||
         (value['connection_id'] != null && value['connection_id'] is! String) ||
         value['resource'] is! String ||
+        value['consumers'] is! List ||
         value['recipient'] is! String) {
       throw const FormatException('Invalid calendar grant overview');
     }
@@ -448,6 +451,7 @@ final class RemoteCalendarGrantOverview {
       connectorId: value['connector_id'] as String,
       connectionId: value['connection_id'] as String?,
       resource: value['resource'] as String,
+      consumers: List<String>.from(value['consumers'] as List),
       recipient: value['recipient'] as String,
     );
   }

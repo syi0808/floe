@@ -8,10 +8,10 @@
 
 use std::{future::Future, pin::Pin};
 
+use floe_agent_contract::DataClass;
 use floe_agent_contract::PersonId;
 use floe_agent_contract::{AgentContext, Artifact, EndpointSettlement, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, ExpertInsight, ExpertModel};
-use floe_agent_contract::DataClass;
 use floe_context_contract::SourceReadOutcome;
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView,
@@ -39,6 +39,9 @@ pub type Acquiring<'a, Value> =
 pub struct BuiltinExpertRequest {
     pub agent_id: String,
     pub person_id: PersonId,
+    /// The delegated Task result whose source coverage this run records.
+    pub task_id: Uuid,
+    /// The exact invocation key settled by stateful Experts.
     pub invocation_id: Uuid,
     pub assignment: String,
     pub current_time_unix_ms: i64,

@@ -2,6 +2,10 @@ mod application;
 mod data_access_grant;
 mod ports;
 
+pub use application::model_dispatch::{
+    ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
+    revalidate_model_dispatch,
+};
 pub use application::personal_grants::{
     apply as apply_personal_access, apply_contacts,
     validate_request as validate_personal_access_request,
@@ -35,10 +39,9 @@ pub use application::{
     validate_read_authority, validate_read_continuity,
 };
 pub use application::{
-    CALENDAR_EXPERT_CONSUMER, NativeCalendarConnection, NativeCalendarReview,
-    admit_native_calendar_setup, admit_native_calendar_subject, is_native_calendar,
-    native_calendar_connector,
-    native_calendar_connection_unchanged, native_calendar_source_current, reviewed_native_subject,
+    NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
+    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
+    native_calendar_connector, native_calendar_source_current, reviewed_native_subject,
 };
 pub use application::{
     REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection, RemoteCalendarGrantPreview,
@@ -68,10 +71,6 @@ pub use ports::dependency_authorization::{
 };
 pub use ports::model_dispatch::{
     ModelDispatchRecipientAuthority, ModelDispatchRequest, ModelDispatchTarget,
-};
-pub use application::model_dispatch::{
-    ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
-    revalidate_model_dispatch,
 };
 pub use ports::personal_grants::{
     PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,

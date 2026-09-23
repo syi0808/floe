@@ -234,7 +234,7 @@ pub struct RemoteCalendarGrantOverviewDto {
     pub execution_owner: String,
     pub state: String,
     pub review_required: bool,
-    pub consumer: String,
+    pub consumers: Vec<String>,
     pub purpose: String,
     pub recipient: String,
 }

@@ -89,7 +89,8 @@ impl<Host, Request, Output> ExpertDispatchTable<Host, Request, Output> {
 /// Admit one A2A message before any Expert sees it.
 ///
 /// Eligibility is decided from the cards this host published, never from the
-/// meaning of the request, and the Task identity must already be present.
+/// meaning of the request. The Task and message identities must already be
+/// present; the message identity is the invocation settled by the Expert.
 pub fn admit_expert_message(
     request: &A2ASendMessageRequest,
     cards: &[AgentCard],
@@ -100,10 +101,10 @@ pub fn admit_expert_message(
     {
         return Err(AgentFailure::CapabilityDenied);
     }
-    request
-        .message
-        .task_id
-        .ok_or(AgentFailure::CapabilityDenied)
+    if request.message.task_id.is_none() || request.message.message_id.is_nil() {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    Ok(request.message.message_id)
 }
 
 /// Assemble the completed Task that carries one Expert's result.
@@ -389,8 +390,8 @@ mod tests {
     use super::*;
     use floe_agent_contract::{
         AgentContext, DataClass, DelegationExecutionContext, DelegationRequest, InvocationKey,
-        PackageKind, PackageRef, TaskId, TaskReceipt, TaskSnapshot, TaskState,
-        UserInteractionKind, UserInteractionStatus,
+        PackageKind, PackageRef, TaskId, TaskReceipt, TaskSnapshot, TaskState, UserInteractionKind,
+        UserInteractionStatus,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
@@ -598,6 +599,9 @@ mod tests {
         };
         let task = task_receipt_to_a2a(request, "Schedule", receipt).unwrap();
         assert_eq!(task.artifacts.len(), 2);
-        assert_eq!(auxiliary_artifact_from_a2a(&task.artifacts[1]).unwrap(), artifact);
+        assert_eq!(
+            auxiliary_artifact_from_a2a(&task.artifacts[1]).unwrap(),
+            artifact
+        );
     }
 }

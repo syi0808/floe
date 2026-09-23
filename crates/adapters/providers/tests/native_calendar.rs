@@ -238,7 +238,7 @@ async fn native_action_source_validation_rejects_wrong_subject() {
         SourceAuthority::new(),
     )
     .unwrap();
-    let consumer = GrantConsumer::builtin("calendar.expert").unwrap();
+    let consumer = GrantConsumer::builtin("floe.builtin.schedule").unwrap();
     let scope = GrantScope::try_new(
         vec![ResourceHandle::try_new("target").unwrap()],
         vec![GrantDataCategory::Metadata],

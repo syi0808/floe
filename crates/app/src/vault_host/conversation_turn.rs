@@ -11,30 +11,9 @@ use floe_experts::{
 use floe_experts::{A2ATaskState, BuiltinExpertSetupReceipt, EXPERT_RESULT_MEDIA_TYPE};
 use floe_experts_builtin::BuiltinContextSource;
 #[cfg(test)]
-use floe_experts_builtin::commitments::{
-    CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
-};
-#[cfg(test)]
-use floe_experts_builtin::communication::{CommunicationExpertResult, run_communication_expert};
-#[cfg(test)]
-use floe_experts_builtin::focus_attention::{
-    FocusContextViews, FocusExpertResult, run_focus_expert_with_views,
-};
-#[cfg(test)]
-use floe_experts_builtin::life_logistics::{LifeLogisticsExpertResult, run_life_logistics_expert};
-#[cfg(test)]
-use floe_experts_builtin::relationships::{
-    RelationshipsContextViews, RelationshipsExpertResult, run_relationships_expert_with_views,
-};
-#[cfg(test)]
-use floe_experts_builtin::wellbeing::{
-    WellbeingContextViews, WellbeingExpertResult, run_wellbeing_expert_with_views,
-};
-#[cfg(test)]
-use floe_experts_builtin::work_context::{WorkContextExpertResult, run_work_context_expert};
-#[cfg(test)]
 use floe_experts_builtin::{
-    BuiltinExpertKind, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
+    BuiltinExpertKind, commitments::CommitmentsExpertResult,
+    life_logistics::LifeLogisticsExpertResult, work_context::WorkContextExpertResult,
 };
 use floe_kernel::AGENT_VERSION;
 use floe_kernel::PersonId;
@@ -100,7 +79,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
             text: &request.text,
             device_id: &request.device_id,
             continuation: request.continuation,
-            boundary: &floe_experts_builtin::schedule::CalendarHistoryBoundary,
+            boundary: &floe_conversation::ConservativeSourceHistoryBoundary,
         },
     )
     .await?;
@@ -1245,7 +1224,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let person_id = PersonId::new();
         let runner = FixtureScheduleRunner {
             calls: AtomicUsize::new(0),
@@ -1258,7 +1236,6 @@ mod tests {
             calendar_reader: None,
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             wellbeing_reader: None,
@@ -1661,7 +1638,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let person_id = PersonId::new();
         let experts = ConversationExperts {
             executor: &executor,
@@ -1671,7 +1647,6 @@ mod tests {
             calendar_reader: None,
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             wellbeing_reader: None,
@@ -1717,7 +1692,6 @@ mod tests {
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
         let policy = expert_policy();
-        let local_context = LocalContextHost::default();
         // Canonical Manager tools come from Context, identically for the
         // device and server model choices: availability never depends on
         // model route or host consent.
@@ -1765,7 +1739,6 @@ mod tests {
             calendar_reader: None,
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: None,
@@ -1802,7 +1775,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -1811,7 +1783,6 @@ mod tests {
             calendar_reader: None,
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: None,
@@ -2314,7 +2285,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
             executor: &executor,
@@ -2324,7 +2294,6 @@ mod tests {
             calendar_reader: Some(&remote_reader),
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: Some(&recorder),
@@ -2536,7 +2505,6 @@ mod tests {
             }],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let recorder = FixtureResultRecorder;
         let task_handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
         let tasks = [NativeContextView {
@@ -2565,7 +2533,6 @@ mod tests {
             calendar_reader: Some(&remote_reader),
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: Some(&recorder),
@@ -2741,7 +2708,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
             executor: &executor,
@@ -2751,7 +2717,6 @@ mod tests {
             calendar_reader: Some(&remote_reader),
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: Some(&recorder),
@@ -3024,7 +2989,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -3033,7 +2997,6 @@ mod tests {
             calendar_reader: None,
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: None,
@@ -3092,7 +3055,6 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let local_context = LocalContextHost::default();
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -3101,7 +3063,6 @@ mod tests {
             calendar_reader: None,
             policy: &policy,
             context: &context,
-            local_context: &local_context,
             attention: None,
             people_reader: None,
             recorder: None,

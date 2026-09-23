@@ -2617,7 +2617,6 @@ mod tests {
     mod vault_registry;
 
     use super::conversation_turn::expert_dispatch::BuiltinExpertEndpoint;
-    use super::conversation_turn::expert_dispatch::schedule::ScheduleEndpoint;
     use floe_provider_adapters::control::CurrentSavedConnectionStore;
 
     impl Worker {

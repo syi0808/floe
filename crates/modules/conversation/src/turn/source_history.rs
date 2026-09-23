@@ -11,6 +11,18 @@ use uuid::Uuid;
 
 use crate::turn::AgentMessage;
 
+pub struct ConservativeSourceHistoryBoundary;
+
+impl SourceHistoryBoundary for ConservativeSourceHistoryBoundary {
+    fn capability_carries_source(&self, _: &str) -> bool {
+        true
+    }
+
+    fn delegation_carries_source(&self, _: &str, completed: bool, has_artifacts: bool) -> bool {
+        completed || has_artifacts
+    }
+}
+
 fn crosses_boundary(message: &AgentMessage, boundary: &dyn SourceHistoryBoundary) -> bool {
     match message {
         // A compaction summary has no provenance, so it cannot be shown to be
@@ -106,21 +118,13 @@ mod tests {
 
     use super::*;
 
-    struct CalendarBoundary;
-
-    impl SourceHistoryBoundary for CalendarBoundary {
-        fn capability_carries_source(&self, capability_id: &str) -> bool {
-            capability_id.starts_with("calendar.") || capability_id.starts_with("schedule.")
-        }
-
-        fn delegation_carries_source(
-            &self,
-            agent_id: &str,
-            completed: bool,
-            has_artifacts: bool,
-        ) -> bool {
-            agent_id == "schedule" && (completed || has_artifacts)
-        }
+    #[test]
+    fn conservative_boundary_does_not_classify_by_source_or_expert_id() {
+        let boundary = ConservativeSourceHistoryBoundary;
+        assert!(boundary.capability_carries_source("any.successful.tool"));
+        assert!(boundary.delegation_carries_source("any.expert", true, false));
+        assert!(boundary.delegation_carries_source("another.expert", false, true));
+        assert!(!boundary.delegation_carries_source("any.expert", false, false));
     }
 
     #[test]
@@ -158,13 +162,23 @@ mod tests {
             },
         ];
         let saved = messages.clone();
-        assert!(project_messages(&mut messages, current, &CalendarBoundary));
+        assert!(project_messages(
+            &mut messages,
+            current,
+            &ConservativeSourceHistoryBoundary
+        ));
         assert_eq!(
             messages,
             vec![saved[0].clone(), saved[3].clone(), saved[5].clone()]
         );
-        assert!(carries_source_history(&saved, &CalendarBoundary));
-        assert!(!carries_source_history(&messages, &CalendarBoundary));
+        assert!(carries_source_history(
+            &saved,
+            &ConservativeSourceHistoryBoundary
+        ));
+        assert!(!carries_source_history(
+            &messages,
+            &ConservativeSourceHistoryBoundary
+        ));
     }
 
     #[test]
@@ -184,7 +198,11 @@ mod tests {
             },
         ];
         let original = messages.clone();
-        assert!(!project_messages(&mut messages, current, &CalendarBoundary));
+        assert!(!project_messages(
+            &mut messages,
+            current,
+            &ConservativeSourceHistoryBoundary
+        ));
         assert_eq!(messages, original);
     }
 
@@ -204,7 +222,7 @@ mod tests {
         assert!(project_messages(
             &mut messages,
             Uuid::new_v4(),
-            &CalendarBoundary
+            &ConservativeSourceHistoryBoundary
         ));
         assert!(messages.is_empty());
     }
@@ -231,7 +249,12 @@ mod tests {
         ];
         let suffix_bytes = serde_json::to_vec(&messages[1..]).unwrap().len();
         assert_eq!(
-            bounded_source_history_start(&messages, current, suffix_bytes, &CalendarBoundary),
+            bounded_source_history_start(
+                &messages,
+                current,
+                suffix_bytes,
+                &ConservativeSourceHistoryBoundary,
+            ),
             Ok(2)
         );
     }
@@ -252,15 +275,30 @@ mod tests {
         let all_bytes = serde_json::to_vec(&messages).unwrap().len();
         let current_bytes = serde_json::to_vec(&messages[1..]).unwrap().len();
         assert_eq!(
-            bounded_source_history_start(&messages, current, all_bytes, &CalendarBoundary),
+            bounded_source_history_start(
+                &messages,
+                current,
+                all_bytes,
+                &ConservativeSourceHistoryBoundary,
+            ),
             Ok(0)
         );
         assert_eq!(
-            bounded_source_history_start(&messages, current, current_bytes, &CalendarBoundary),
+            bounded_source_history_start(
+                &messages,
+                current,
+                current_bytes,
+                &ConservativeSourceHistoryBoundary,
+            ),
             Ok(1)
         );
         assert_eq!(
-            bounded_source_history_start(&messages, current, current_bytes - 1, &CalendarBoundary),
+            bounded_source_history_start(
+                &messages,
+                current,
+                current_bytes - 1,
+                &ConservativeSourceHistoryBoundary,
+            ),
             Err(AgentFailure::BudgetExceeded)
         );
     }

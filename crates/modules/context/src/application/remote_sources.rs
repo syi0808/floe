@@ -532,7 +532,7 @@ mod calendar_tests {
             Box::pin(async move {
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 assert_eq!(read.view_id, CALENDAR_CONTEXT_VIEW_ID);
-                assert_eq!(read.consumer, "calendar.expert");
+                assert_eq!(read.consumer, "floe.builtin.schedule");
                 assert_eq!(read.resource, "primary");
                 assert_eq!(read.connection_revision, 7);
                 serde_json::to_value(&self.view).map_err(|_| AgentFailure::InvalidInput)
@@ -678,7 +678,7 @@ mod calendar_tests {
                 connection_id: &connection_id,
                 connection_revision: 7,
                 resource: "primary",
-                consumer_name: "calendar.expert",
+                consumer_name: "floe.builtin.schedule",
                 query: &query,
                 window: &window,
                 process_incarnation_id,
@@ -687,6 +687,7 @@ mod calendar_tests {
         .await
         .unwrap();
         assert_eq!(view.next_cursor.as_deref(), Some("page-two"));
+        assert_eq!(dependency.consumer().identifier(), "floe.builtin.schedule");
         assert_eq!(dependency.resources()[0].as_str(), "primary");
         assert_eq!(dependency.process_incarnation_id(), process_incarnation_id);
         assert_eq!(scope.processing(), &ProcessingRestriction::LocalOnly);
@@ -739,10 +740,14 @@ mod calendar_tests {
             read_remote_calendar_view(&fixture, &fixture, read("assistant")).await,
             Err(AgentFailure::AccessReviewRequired)
         ));
+        assert!(matches!(
+            read_remote_calendar_view(&fixture, &fixture, read("calendar.expert")).await,
+            Err(AgentFailure::AccessReviewRequired)
+        ));
         assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
         fixture.reference.connection_revision = 8;
         assert!(matches!(
-            read_remote_calendar_view(&fixture, &fixture, read("calendar.expert")).await,
+            read_remote_calendar_view(&fixture, &fixture, read("floe.builtin.schedule")).await,
             Err(AgentFailure::PolicyDenied)
         ));
         assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
@@ -775,7 +780,7 @@ mod calendar_tests {
                 connection_id: &connection_id,
                 connection_revision: 7,
                 resource: "primary",
-                consumer_name: "calendar.expert",
+                consumer_name: "floe.builtin.schedule",
                 query: &query,
                 window: &window,
                 process_incarnation_id: Uuid::new_v4(),

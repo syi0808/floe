@@ -78,7 +78,7 @@ mod tests {
             SourceAuthority::new(),
         )
         .unwrap();
-        let consumer = GrantConsumer::builtin("calendar.expert").unwrap();
+        let consumer = GrantConsumer::builtin("floe.builtin.schedule").unwrap();
         let scope = GrantScope::try_new(
             vec![ResourceHandle::try_new("calendar/main").unwrap()],
             vec![GrantDataCategory::Metadata],

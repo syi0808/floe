@@ -22,11 +22,10 @@ use floe_experts_builtin::{
     StatefulExpertDraft,
 };
 
-pub(in crate::vault_host) mod schedule;
 mod stateful_settlement;
-use stateful_settlement::{StatefulExpertSettlement, VaultStatefulExpertSettlement};
 #[cfg(test)]
 pub(super) use stateful_settlement::RejectStatefulSettlement;
+use stateful_settlement::{StatefulExpertSettlement, VaultStatefulExpertSettlement};
 
 /// The Experts this host serves, and the judgment registered behind each id.
 ///
@@ -47,7 +46,9 @@ pub(super) fn registered_experts<'turn, 'host, 'msg>() -> floe_experts::ExpertDi
         >,
     ); 8] = [
         (BuiltinExpertKind::Schedule, |host, request| {
-            Box::pin(floe_experts_builtin::schedule::dispatch::dispatch(host, request))
+            Box::pin(floe_experts_builtin::schedule::dispatch::dispatch(
+                host, request,
+            ))
         }),
         (BuiltinExpertKind::Commitments, |host, request| {
             Box::pin(floe_experts_builtin::commitments::dispatch(host, request))
@@ -222,7 +223,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 person_id: self.vault.person_id(),
             };
             let policy = expert_policy();
-            let cards = self.vault.enabled_expert_cards().await?;
+            let cards = self.vault.enabled_builtin_expert_cards().await?;
             let grants = floe_experts::SourceGrants::new(Some(
                 self.vault
                     .builtin_expert_overview()
@@ -241,7 +242,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 calendar_reader: Some(&calendar_reader as &dyn CalendarContextReaderApi),
                 policy: &policy,
                 context: &context.agent_context,
-                local_context: &self.local_context,
                 attention: Some(&attention_reader),
                 people_reader: Some(&people_reader),
                 wellbeing_reader: Some(&wellbeing_reader),
@@ -326,7 +326,6 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) calendar_reader: Option<&'model dyn CalendarContextReaderApi>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
-    pub(super) local_context: &'model LocalContextHost,
     pub(super) attention: Option<&'model dyn PersonalAttentionReaderApi>,
     pub(super) people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
     pub(super) wellbeing_reader: Option<&'model dyn PersonalWellbeingReaderApi>,
@@ -373,8 +372,8 @@ impl<'turn, 'model, 'msg> DelegatedMessageExperts<'turn, 'model, 'msg> {
             wellbeing_reader: self.experts.wellbeing_reader,
             remote_reader: self.experts.remote_reader,
             recorder: Some(&self.recorder),
-            dependency_turn_id: request.invocation_id,
-            dependency_result_id: request.invocation_id,
+            dependency_turn_id: request.task_id,
+            dependency_result_id: request.task_id,
             consumer_name,
         }
     }
@@ -531,8 +530,8 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
                 .read(
                     request.person_id,
                     floe_access::ATTENTION_EXPERT_CONSUMER,
-                    request.invocation_id,
-                    request.invocation_id,
+                    request.task_id,
+                    request.task_id,
                     request.deadline,
                     &request.cancellation,
                 )
@@ -609,6 +608,10 @@ impl InProcessAgent for ConversationExperts<'_> {
         let expert_request = BuiltinExpertRequest {
             agent_id: request.agent_id.clone(),
             person_id: request.person_id,
+            task_id: request
+                .message
+                .task_id
+                .ok_or(AgentFailure::CapabilityDenied)?,
             invocation_id,
             assignment: request.message.text()?.to_owned(),
             current_time_unix_ms: i64::try_from(now.as_millis())
@@ -661,7 +664,10 @@ mod registration_tests {
 
     #[test]
     fn dispatch_table_matches_every_builtin_kind() {
-        let mut actual: Vec<_> = registered_experts().registered_ids().map(str::to_owned).collect();
+        let mut actual: Vec<_> = registered_experts()
+            .registered_ids()
+            .map(str::to_owned)
+            .collect();
         let mut expected: Vec<_> = BuiltinExpertKind::ALL
             .into_iter()
             .map(|kind| kind.package_id().to_owned())

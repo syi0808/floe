@@ -39,6 +39,7 @@ pub use ports::{ConversationRepository, SessionArchiveRepository, SessionReposit
 
 pub use turn::{
     AgentBudget, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage, AgentOutcome,
-    AgentSession, AgentSessionScope, AgentUsage, DelegationExecution, DelegationExecutionState,
-    SessionRecoveryPointer, SessionStore, bounded_source_history_start, carries_source_history,
+    AgentSession, AgentSessionScope, AgentUsage, ConservativeSourceHistoryBoundary,
+    DelegationExecution, DelegationExecutionState, SessionRecoveryPointer, SessionStore,
+    bounded_source_history_start, carries_source_history,
 };

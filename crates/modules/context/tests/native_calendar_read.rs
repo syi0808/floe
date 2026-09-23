@@ -243,7 +243,7 @@ async fn native_admission_checks_subject_grant_and_current_connection() {
         &grants,
         person_id,
         "device",
-        "calendar.expert",
+        "floe.builtin.schedule",
         &window(),
     )
     .await
@@ -269,7 +269,7 @@ async fn native_admission_rejects_missing_or_changed_authority() {
             &grants,
             person_id,
             "device",
-            "calendar.expert",
+            "floe.builtin.schedule",
             &window(),
         )
         .await,
@@ -286,7 +286,7 @@ async fn native_admission_rejects_missing_or_changed_authority() {
             &grants,
             person_id,
             "device",
-            "calendar.expert",
+            "floe.builtin.schedule",
             &window(),
         )
         .await,
@@ -306,7 +306,7 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             &grants,
             person_id,
             "device",
-            "calendar.expert",
+            "floe.builtin.schedule",
             &window(),
         )
         .await,
@@ -323,7 +323,7 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             &grants,
             person_id,
             "device",
-            "calendar.expert",
+            "floe.builtin.schedule",
             &window(),
         )
         .await,
@@ -339,7 +339,7 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             &grants,
             person_id,
             "device",
-            "calendar.expert",
+            "floe.builtin.schedule",
             &window(),
         )
         .await,
@@ -361,7 +361,7 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
         NativeCalendarViewRead {
             person_id,
             device_id: "device",
-            consumer: "calendar.expert",
+            consumer: "floe.builtin.schedule",
             query: &query,
             window: &window(),
         },
@@ -373,6 +373,7 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
     assert_eq!(view.range_start_unix_ms, query.range_start_unix_ms());
     assert_eq!(view.range_end_unix_ms, query.range_end_unix_ms());
     assert_eq!(dependency.person_id(), person_id);
+    assert_eq!(dependency.consumer().identifier(), "floe.builtin.schedule");
     assert_eq!(
         dependency.source().source_authority(),
         view_source_authority(&connections)
@@ -408,7 +409,7 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
             NativeCalendarViewRead {
                 person_id,
                 device_id: "device",
-                consumer: "calendar.expert",
+                consumer: "floe.builtin.schedule",
                 query: &query,
                 window: &window(),
             },
@@ -428,7 +429,7 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
             NativeCalendarViewRead {
                 person_id,
                 device_id: "device",
-                consumer: "calendar.expert",
+                consumer: "floe.builtin.schedule",
                 query: &query,
                 window: &window(),
             },
@@ -498,7 +499,7 @@ async fn native_view_preserves_all_day_calendar_evidence() {
         NativeCalendarViewRead {
             person_id,
             device_id: "device",
-            consumer: "calendar.expert",
+            consumer: "floe.builtin.schedule",
             query: &query,
             window: &window(),
         },
@@ -526,7 +527,7 @@ async fn native_dependency_rechecks_the_current_grant_source() {
         NativeCalendarViewRead {
             person_id,
             device_id: "device",
-            consumer: "calendar.expert",
+            consumer: "floe.builtin.schedule",
             query: &query,
             window: &window(),
         },
@@ -579,7 +580,7 @@ async fn native_view_rejects_connection_change_after_observation() {
             NativeCalendarViewRead {
                 person_id,
                 device_id: "device",
-                consumer: "calendar.expert",
+                consumer: "floe.builtin.schedule",
                 query: &query,
                 window: &window(),
             },

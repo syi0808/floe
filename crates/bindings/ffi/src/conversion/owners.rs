@@ -24,14 +24,12 @@ pub(crate) fn remote_calendar_grant_overview(
         .ok_or(AgentFailure::VaultUnavailable)?
         .as_str()
         .to_owned();
-    let consumer = grant
+    let consumers = grant
         .scope()
         .consumers()
         .iter()
-        .find(|candidate| candidate.identifier() == "calendar.expert")
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .identifier()
-        .to_owned();
+        .map(|consumer| consumer.identifier().to_owned())
+        .collect();
     let recipient = match grant.scope().processing() {
         ProcessingRestriction::ApprovedRecipient { recipient, .. } => recipient.clone(),
         ProcessingRestriction::LocalOnly => "local_only".into(),
@@ -53,7 +51,7 @@ pub(crate) fn remote_calendar_grant_overview(
         }
         .into(),
         review_required: grant.review_required(),
-        consumer,
+        consumers,
         purpose: "everyday_assistance".into(),
         recipient,
     })

@@ -764,7 +764,6 @@ impl AgentRegistry {
             || (result.insights.is_empty() && result.summary.is_none())
             || result.insights.len() > 8
             || result.action_proposals.len() > 1
-            || result.model_calls == 1
             || result.model_calls > 10
             || result
                 .summary
@@ -1336,10 +1335,7 @@ mod tests {
         );
         assert_eq!(settlement.assignment_id, assignment_id);
         assert_eq!(settlement.invocation_id, invocation_id);
-        assert_eq!(
-            settlement.expected_registry_revision,
-            registry.revision()
-        );
+        assert_eq!(settlement.expected_registry_revision, registry.revision());
         assert_eq!(settlement.staged_registry, registry.snapshot());
         assert_eq!(settlement.task_result, "task result");
         assert!(settlement.dependencies.is_empty());

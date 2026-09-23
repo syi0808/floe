@@ -66,8 +66,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await?;
     host.record_dependency(
-        request.invocation_id,
-        request.invocation_id,
+        request.task_id,
+        request.task_id,
         source_view.dependency().clone(),
     )?;
     let view: CommunicationView = serde_json::from_value(source_view.payload().clone())
