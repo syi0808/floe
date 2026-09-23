@@ -266,7 +266,7 @@ Requirements:
 
 If direct Manager/assistant Calendar reading becomes a real current path, add that consumer through the same product policy with a focused runtime test. Do not pre-authorize hypothetical consumers.
 
-## 7. App/Worker API removal## 7. App/Worker API removal
+## 7. App/Worker API removal
 
 At crates/app/src/vault_host.rs baseline lines 1576 and 1645 remove WorkerAction paths that exist only for Calendar Expert management:
 
