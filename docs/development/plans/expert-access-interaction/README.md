@@ -2,7 +2,7 @@
 
 - **Status:** execution plan
 - **Baseline:** `main` at `0615b343bb752da85487a1a728927f0e3affdf5b`
-- **Current execution snapshot:** `main` at `605250d0b8f3bec476299673a8975fa82a073c52`. Checkpoints 01 and 02 are complete. Schedule now uses the same built-in runtime as the other Experts, canonical Calendar grants authorize actual first-party consumer identities, and the old Schedule endpoint/history boundary are deleted. Checkpoint 03 is next.
+- **Current execution snapshot:** code baseline `main` at `bbce2fa2ae2da4bffb05185f39d8d50aa3e6b82a`. Checkpoints 01 and 02 are complete. Checkpoint 03 is active and removes the remaining Registry source authority, Calendar-Expert setup/persistence vertical, and its App/protocol/Flutter management surface.
 - **Scope:** built-in Expert runtime, Calendar source acquisition, Expert Registry, Access/DataAccessGrant authority, connector permission product model, conversation interaction escalation, Flutter chat/connection surfaces, protocol/persistence cleanup
 - **Compatibility posture:** pre-stable internal APIs and local development data may be replaced directly. Do not add compatibility paths or migrate disposable local state merely to preserve the current Calendar vertical.
 - **Primary product target:** Apple ecosystem. Android code may be adjusted only where shared contracts require compilation; do not expand Android parity work as part of this plan.
@@ -255,16 +255,20 @@ Read and execute these files in order.
 
 1. [01 — contracts and recoverable source interaction foundation](01-contracts-and-interaction-foundation.md) — **complete**
 2. [02 — Schedule common-runtime convergence + Calendar consumer-policy prerequisite](02-calendar-source-and-schedule-convergence.md) — **complete**
-3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md) — **next**
+3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md) — **active**
+   - [03-A — Registry source-authority removal](03-a-registry-source-authority.md)
+   - [03-B — Calendar Access persistence convergence](03-b-calendar-access-persistence.md)
+   - [03-C — App, protocol and Flutter ownership cutover](03-c-app-protocol-flutter-cutover.md)
+   - [03-D — deletion, verification and documentation convergence](03-d-deletion-verification.md)
 4. [04 — connector permission product model](04-connector-permission-product-model.md)
 5. [05 — Conversation and Flutter interaction/resume](05-conversation-and-flutter-interaction.md)
 6. [06 — obsolete-path deletion, verification and documentation convergence](06-deletion-verification-and-doc-convergence.md)
 
 Do not skip directly to Flutter. A chat permission button is unsafe until its target and decision path are owned by the canonical Access/Connections path.
 
-Checkpoint 02 moved the narrow Calendar first-party consumer-policy prerequisite forward and is now complete. CalendarExpertSetup, Registry source grants and `calendar_grant_mappings` intentionally remain as Checkpoint 03 work; none is part of the Schedule runtime path anymore.
+Checkpoint 02 moved the narrow Calendar first-party consumer-policy prerequisite forward and is complete. Checkpoint 03 now removes the remaining duplicated authority in four ordered slices: source-independent Registry, source-owned Calendar grant/policy persistence, App/wire/Flutter owner cutover, then residual verification.
 
-Do not make connection-time Observe implicit before checkpoint 3 has removed the competing Expert Registry permission authority.
+Do not make connection-time Observe implicit before Checkpoint 03 has removed the competing Expert Registry permission authority. Do not start Checkpoint 04's final connection ceremony or Checkpoint 05's durable chat interactions from a Checkpoint 03 patch.
 
 ## 5. Global implementation invariants
 

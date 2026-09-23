@@ -1,439 +1,385 @@
 # Checkpoint 03 — Expert Registry and Access authority convergence
 
-- **Status:** next
-- **Start baseline:** `main` at `605250d0b8f3bec476299673a8975fa82a073c52`
-- **Precondition:** Checkpoint 02 is complete; Schedule no longer depends on CalendarExpertSetup, Registry Calendar view selection, or a Schedule-specific endpoint.
+- **Status:** active execution plan
+- **Execution baseline:** main at bbce2fa2ae2da4bffb05185f39d8d50aa3e6b82a
+- **Precondition:** Checkpoint 02 is complete. Schedule already runs only through BuiltinExpertEndpoint and Context/Access.
+- **Scope:** remove source-access authority from Expert Registry, remove the Calendar-Expert setup vertical, replace Calendar setup/mapping persistence with source-owned Access records, and remove the old App/wire/Flutter Calendar-Expert management path.
+- **Compatibility posture:** pre-stable. Do not preserve old Registry/Calendar setup wire or migrate disposable local authorization state.
 
-## Goal
+This file is the authoritative index for Checkpoint 03. Execute the child plans in order:
 
-Remove the second source-permission authority from Expert Registry and remove the Calendar-Expert-specific grant binding/persistence model.
+1. [03-A — Registry source-authority removal](03-a-registry-source-authority.md)
+2. [03-B — Calendar Access persistence convergence](03-b-calendar-access-persistence.md)
+3. [03-C — App, protocol and Flutter ownership cutover](03-c-app-protocol-flutter-cutover.md)
+4. [03-D — deletion, verification and documentation convergence](03-d-deletion-verification.md)
 
-After this checkpoint:
+Do not start 03-B until 03-A has a source-independent built-in Registry. Do not remove the Flutter Calendar-Expert surface before 03-B exposes an Access-owned replacement. Do not start Checkpoint 04 product permission redesign or Checkpoint 05 conversation interactions in this checkpoint.
 
-- Expert Registry answers only Expert/package installation and enablement questions;
-- Access/DataAccessGrant is the sole authority for whether a consumer may Observe source data;
-- an enabled Expert remains discoverable even when its mandatory source is disabled, unconfigured or awaiting review;
-- Calendar grants are bound to connection/source/resource/consumer policy, not to Schedule installation/assignment/view identities;
-- CalendarExpertSetup, CalendarExpertOverview and CalendarAccessConfiguration no longer exist as product/runtime concepts;
-- stale local development Calendar-Expert persistence is reset/rejected rather than migrated into new authority.
+---
 
-Checkpoint 02 is complete. R4.5 already establishes the canonical first-party Calendar consumer policy required by the common runtime. Checkpoint 03 reuses that policy while removing obsolete Registry/setup/mapping authority; it must not introduce a second consumer list.
+## 1. Why this checkpoint exists
 
-## Baseline anchors
-
-- crates/modules/experts/src/registry/expert_setup.rs:22 — ExpertSetupSpec
-- crates/modules/experts/src/registry/expert_setup.rs:49 — install_builtin_experts_enabled
-- crates/modules/experts/src/registry/expert_setup.rs:236 — enabled_expert_cards
-- crates/modules/experts/src/registry/expert_setup.rs:294 — assignment_has_mandatory_source
-- crates/modules/experts/src/registry/expert_setup.rs:313 — assignment_source_grant
-- crates/modules/experts/src/registry/expert_setup.rs:448 — SourceGrants
-- crates/modules/experts/src/registry/calendar_setup.rs:72 — CalendarExpertSetup
-- crates/modules/experts/src/registry/calendar_setup.rs:125 — CalendarExpertOverview
-- crates/modules/experts/src/registry/calendar_setup.rs:231 — install_calendar_expert
-- crates/modules/experts/src/registry/calendar_setup.rs:414 — validate_calendar_setups
-- crates/modules/experts/src/calendar_access.rs:74 — install_calendar_expert
-- crates/modules/experts/src/calendar_access.rs:93 — apply_calendar_access
-- crates/adapters/vault/src/vault/calendar_grants.rs:50 — initialize_calendar_grant_store
-- crates/adapters/vault/src/vault/calendar_grants.rs:188 — authorize_calendar_grant
-- crates/adapters/vault/src/vault/calendar_grants.rs:331 — calendar_grant_connection_id
-- crates/adapters/vault/src/vault/calendar_grants.rs:1150 — install_calendar_expert_with_connection
-- crates/app/src/vault_host.rs:1576 — WorkerAction::CalendarExperts
-- crates/app/src/vault_host.rs:1645 — WorkerAction::CalendarAccess
-- crates/app/src/vault_host.rs:2462 — builtin_source_bindings
-- crates/app/src/vault_host.rs:2521 — builtin_setup_specs
-
-## 1. Define the final Registry meaning
-
-### 1.1 Built-in Expert setup is source-independent
-
-The Registry stores:
-
-- built-in Expert package identity/version/metadata;
-- installation identity and enabled state;
-- assignment identity and enabled state;
-- private Expert state / settlement revision where needed.
-
-It no longer stores the current answer to “is Calendar/Mail/etc readable?”
-
-The declaration may still contain static metadata:
+Checkpoint 02 removed Schedule-specific execution, but two source-access authorities still coexist:
 
 ~~~text
-required_sources
-mandatory_source
+Expert Registry
+  builtin source bindings
+  granted_view_handles
+  mandatory-source card gating
+  CalendarViewBinding / CalendarExpertSetup
+
+Access
+  DataAccessGrant
+  source authority
+  resource scope
+  consumer set
+  processing restriction
 ~~~
 
-That metadata is owned by the Expert package and is useful to dispatch/runtime. It is not a grant.
+That duplication still creates states where Registry says a source is granted while Access denies it, or where a source/connection change rewrites Registry state even though the Expert package itself has not changed.
 
-### 1.2 Remove source snapshots from BuiltinExpertSetup
+Checkpoint 03 makes the ownership unambiguous:
 
-Refactor BuiltinExpertSetup so its durable identity does not include current source bindings.
+~~~text
+Experts / Registry
+  package identity
+  installation enabled
+  assignment enabled
+  private Expert state
 
-Current source-dependent fields to remove from the built-in setup path:
+Connections
+  connection identity
+  selected source resources
+  connection/source health
 
-- BuiltinSourceBinding list;
-- BuiltinSourceState as a Registry access decision;
-- granted view handles derived from source availability;
-- source refresh that rewrites assignment view grants when a connector appears/disappears.
+Access
+  DataAccessGrant
+  source binding
+  exact resources
+  consumers
+  purpose / processing
+  grant authority
+  consumer-policy authority
+  reviewed native subject continuity
 
-The resulting setup should be stable across connector changes.
+Context
+  actual source acquisition
+  exact ContextDependency
+~~~
 
-A conceptual target is:
+An Expert declaration may still say that Calendar or Mail is required. That declaration is static product metadata in floe-experts-builtin. It is not persisted as a runtime permission decision in Registry.
+
+---
+
+## 2. Current baseline defects
+
+At bbce2fa the following production surfaces still exist.
+
+### Registry duplication
+
+- crates/modules/experts/src/registry/expert_setup.rs: BuiltinExpertSetup.sources, refresh_builtin_expert_sources, mandatory-source filtering, assignment_source_grant, SourceGrants.
+- crates/modules/experts/src/builtin_setup.rs: BuiltinSourceEvidence and source-refresh orchestration.
+- crates/modules/experts/src/registry.rs: BuiltinSourceBinding, BuiltinSourceState, granted_view_handles, calendar_views, calendar_setups and revoked_calendar_setups.
+- crates/app/src/vault_host.rs: ensure_builtin_experts still computes builtin_source_bindings from connection/server availability.
+- crates/app/src/vault_host/conversation_turn/expert_dispatch.rs: common host still receives SourceGrants.
+- crates/experts/builtin/src/host.rs: source_grant, source_granted and require_mandatory_source still preflight Registry state.
+
+### Calendar-Expert vertical
+
+- crates/modules/experts/src/registry/calendar_setup.rs
+- crates/modules/experts/src/calendar_access.rs
+- crates/app/src/vault_host/calendar_access.rs::VaultCalendarSetups
+- WorkerAction::CalendarExperts and the ExpertCommand::InstallCalendar / ExpertInspection::Calendar path.
+- RegistryConfigurationTarget::CalendarView.
+
+### Calendar persistence duplication
+
+- native calendar_grant_mappings stores setup/view/install/assignment ids plus source/grant/policy state.
+- remote_calendar_grant_mappings separately copies source/scope/policy state.
+- data_access_grants already stores the canonical grant source/scope/state.
+- Context dependency reauthorization consults the Calendar mapping tables for consumer-policy authority.
+
+### Product/wire duplication
+
+- experts.calendar.install
+- experts.calendar.inspect
+- access.calendar.configure still carries Registry instance/revision/setup ids.
+- LocalAccessResult / ExpertOperationResult still return calendar_experts.
+- Flutter AgentCalendarExpertController, AgentCalendarExperts and AgentCalendarSettings remain wired into AgentController and ConnectorScreen.
+
+---
+
+## 3. Final state after Checkpoint 03
+
+### 3.1 Registry
+
+RegistrySnapshot contains no Calendar source binding or Calendar setup collections.
+
+Built-in setup is source-independent:
 
 ~~~text
 BuiltinExpertSetup
   instance_id
   expected_revision
   setup_id
+
+BuiltinExpertSetupReceipt
+  setup_id
+  person_id
+  expected_revision
+  assignments
+
+BuiltinExpertAssignmentReceipt
+  expert
+  tool_installation_id
+  expert_installation_id
+  tool_assignment_id
+  expert_assignment_id
 ~~~
 
-with assignments derived entirely from the static ExpertSetupSpec declarations.
+No source state, mandatory-source runtime state or granted view handle is stored in those receipts.
 
-If setup_id can be deterministically owned by Vault/Registry and need not cross a public boundary, narrow it rather than carrying extra caller authority.
+An enabled built-in Expert card depends only on package/installation/assignment integrity and execution availability. Missing source access does not hide the card.
 
-### 1.3 Simplify ensure_builtin_experts
+### 3.2 Evidence identity
 
-crates/modules/experts/src/builtin_setup.rs currently treats current source evidence as input and refreshes Registry source state.
+Built-in Expert results must not use a Registry-granted Calendar view handle as evidence authority.
 
-Change it to “ensure the built-in packages/assignments exist and are enabled according to Expert settings”.
-
-Delete concepts whose only purpose was source availability:
+Replace the remaining fake view identity with source evidence identity:
 
 ~~~text
-BuiltinSourceEvidence
-BuiltinExpertRefresh source refresh semantics
-refresh_builtin_expert_sources
+ExpertResult.view_handle       -> evidence_id
+ExpertFocusProposal.view_handle -> evidence_id
+AgentActionOrigin.view_handle   -> evidence_id
 ~~~
 
-If BuiltinExpertRefresh still has a real lifecycle meaning, e.g. install-at-session-start vs inspect-only, keep only that lifecycle meaning. Do not keep source refresh naming.
+For the stateful Schedule result, evidence_id is the exact ContextDependency observation identity that backs the result/proposal. Registry validates Expert identity/private-state settlement; Access/Context validates source evidence.
 
-App’s ensure_builtin_experts() in crates/app/src/vault_host.rs must stop calling calendar_connector_snapshot() or paired-server presence merely to decide Registry source state.
+Do not keep a random or synthetic Registry view UUID merely to satisfy the old result schema.
 
-Connection/source health belongs to Connections/Context at use time.
+### 3.3 Calendar Access persistence
 
-## 2. Change enabled_expert_cards()
+DataAccessGrant is the canonical Calendar Observe record. Calendar-specific persistence may store only authority metadata not already represented by the grant.
 
-At crates/modules/experts/src/registry/expert_setup.rs:236:
-
-remove these eligibility conditions for built-in Experts:
-
-- granted_view_handles must be non-empty;
-- assignment_has_mandatory_source();
-- dynamic source state must be Available.
-
-An Expert card is eligible when the Expert/package/assignment itself is enabled and structurally valid.
-
-The runtime then discovers source absence through its declared source reads.
-
-This is required for chat-native permission recovery. If the card disappears when a source is paused, Manager cannot delegate to the Expert that knows which evidence it needs.
-
-### 2.1 Keep package integrity checks
-
-Do not relax:
-
-- person/assignment ownership;
-- installation enabled;
-- assignment enabled;
-- required tool assignment linkage;
-- package kind/revision;
-- Expert metadata validity.
-
-Only remove source-access authority from Registry.
-
-### 2.2 Third-party future semantics
-
-Do not interpret this change as “all third-party Experts can read all sources”.
-
-Third-party authorization remains Access-owned and explicit. If generic Registry fields such as granted_view_handles are still needed as package configuration or declaration references, keep them only with that non-authoritative meaning and document it.
-
-If the field is unused after built-in migration and has no real third-party consumer yet, delete it instead of preserving speculative state.
-
-## 3. Delete SourceGrants as runtime authority
-
-At expert_setup.rs baseline line 448, SourceGrants copies setup/source state into the App Expert host.
-
-Delete SourceGrants and BuiltinExpertHost::source_grant()/source_granted() as permission decisions.
-
-Replace Expert-side behavior with actual source acquisition outcomes from Context:
+Target adapter record:
 
 ~~~text
-Expert asks for Calendar
-  -> Context/Access returns Ready / Unavailable / NeedsUserAction
+CalendarGrantPolicy
+  grant_id
+  person_id
+  consumer_policy_authority
+  reviewed_native_subject_fingerprint?   # native only
 ~~~
 
-Static “optional vs mandatory” remains Expert-domain knowledge:
+The policy row does not duplicate setup id, Registry revision, installation ids, assignment ids, source binding or grant scope.
 
-- mandatory source unavailable/user-action => blocked/no-conclusion Expert output;
-- optional source unavailable => continue without that evidence when domain rules allow it.
+Native and remote Calendar use the same policy record. Source/scope are read from DataAccessGrant.
 
-The Expert must not preflight a Registry boolean before performing the source request.
+### 3.4 Source lookup
 
-This also removes the current mismatch where Registry says Granted while DataAccessGrant denies.
-
-## 4. Delete the Calendar Expert Registry vertical
-
-Delete production concepts in crates/modules/experts/src/registry/calendar_setup.rs:
+Calendar lookup is source-owned:
 
 ~~~text
-CalendarExpertSetup
-CalendarExpertSetupResult
-CalendarExpertOverview
-CalendarAccessConfiguration
-CalendarAccessChange
-CalendarViewBinding as Schedule-specific setup authority
-calendar_setups
-revoked_calendar_setups
+current connection/source
+  -> bounded DataAccessGrant query by exact source identity
+  -> exact resource / consumer / purpose / processing admission
+  -> CalendarGrantPolicy by grant_id
 ~~~
 
-Before deleting CalendarViewBinding, inspect whether another non-Expert domain legitimately uses it. If it is only the old Schedule setup representation, delete it. If a provider-neutral Calendar resource selection type is needed, move that meaning to Connections/Context contracts rather than renaming the old Registry type.
+Native may have one current grant covering its selected resource set. Remote may have multiple grants for one source, one per resource. Lookup must be bounded and must reject ambiguity.
 
-Delete crates/modules/experts/src/calendar_access.rs once all callers use Access/Connections directly.
+### 3.5 App / protocol / Flutter
 
-Update crates/modules/experts/src/lib.rs exports accordingly.
+Experts APIs manage Registry only.
 
-Do not leave deprecated aliases.
+Calendar Observe management is Access-owned and connection/source keyed. No public command contains setup_id or expected Registry revision.
 
-## 5. Replace Calendar grant mapping with source-owned grant lookup
+The old Calendar-Expert Flutter feature is deleted. The connection screen may temporarily retain equivalent review/enable/scope/remove controls through an Access-owned connection surface; Checkpoint 04 later simplifies that surface to the final Use with Floe product model.
 
-### 5.1 Current defect
+---
 
-calendar_grant_mappings currently binds Access state to Schedule setup/Registry identities.
+## 4. Important scope decisions
 
-That creates invalid states such as:
+### 4.1 Consumer policy from Checkpoint 02 is frozen
 
-~~~text
-Registry Schedule enabled
-calendar_grant_mapping missing
-DataAccessGrant missing
+Reuse calendar_first_party_consumers from product composition. Access/Vault must not duplicate the built-in catalogue or revive calendar.expert.
+
+### 4.2 Checkpoint 04 is not pulled forward
+
+Do not make Connect automatically create Observe grants yet. Do not introduce the final Use with Floe switch in this checkpoint. Preserve current explicit review/pause semantics while moving them to the correct owner.
+
+### 4.3 Checkpoint 05 is not pulled forward
+
+Do not add durable ConversationInteraction or inline chat permission cards here.
+
+### 4.4 Remote non-Calendar view grants are out of scope
+
+remote_view_grant_mappings belongs to generic remote views, not the removed Calendar-Expert vertical. Do not refactor it unless a Calendar-specific compilation dependency forces a small mechanical change.
+
+### 4.5 No authorization migration
+
+Never convert Registry enabled/source bits or old CalendarExpertSetup records into an active DataAccessGrant.
+
+Old development profiles containing the obsolete Calendar setup/mapping schema are incompatible authorization state. Fail explicitly and use a fresh/reset Floe-owned development profile. Never silently broaden or resurrect access.
+
+---
+
+## 5. Checkpoint sequencing
+
+### 03-A — Registry source-authority removal
+
+Make built-in Registry state independent of sources before removing Calendar-specific persistence.
+
+Exit gate:
+
+- no BuiltinSourceBinding / BuiltinSourceState / SourceGrants;
+- no Registry mandatory-source card gating;
+- built-in setup never refreshes when a connector changes;
+- common built-in host has no source_grant/source_granted preflight;
+- built-in assignments carry no source view authority;
+- evidence identity is no longer a Registry Calendar view handle.
+
+### 03-B — Calendar Access persistence convergence
+
+Replace native and remote Calendar mapping stores with DataAccessGrant + CalendarGrantPolicy.
+
+Exit gate:
+
+- no calendar_grant_mappings;
+- no remote_calendar_grant_mappings;
+- no setup/assignment/install ids in Calendar access persistence;
+- current native/remote read and dependency reauthorization work from source-owned records only;
+- old profiles are rejected/reset, not migrated into grants.
+
+### 03-C — App/protocol/Flutter ownership cutover
+
+Delete the Calendar-Expert management API and replace the local Calendar controls with Access-owned source/grant APIs.
+
+Exit gate:
+
+- no experts.calendar.install / experts.calendar.inspect;
+- no CalendarExpertSetup/Overview/AccessConfiguration product contract;
+- no WorkerAction::CalendarExperts;
+- no CalendarView Registry configuration target;
+- no AgentCalendarExpertController / AgentCalendarSettings;
+- connector detail still has an owner-correct way to review/pause/update/remove Calendar access without Checkpoint 04 UX redesign.
+
+### 03-D — deletion and verification
+
+Delete remaining old files/types/tests, update current docs, perform residual searches and full Rust/FFI/Flutter/macOS gates.
+
+---
+
+## 6. Global invariants during implementation
+
+- Registry enablement and Access admission are separate questions.
+- an enabled Expert remains in the Manager catalogue when its source is unavailable or paused.
+- Access never imports floe-experts-builtin.
+- Experts never imports provider/native adapters.
+- App composition may derive first-party consumer policy because it knows product declarations and Access contracts.
+- no Registry state authorizes a source read.
+- no Flutter/FFI payload chooses grant authority, source authority or native subject beyond an explicitly reviewed expected value; backend reloads current state before mutation.
+- source/grant changes use CAS and fresh source validation.
+- ConsumerPolicyAuthority changes when the approved consumer policy changes and remains stable on semantic no-op review.
+- a ContextDependency is reauthorized against current DataAccessGrant and current CalendarGrantPolicy.
+- Observe changes never mutate ActionAuthority.
+- no global transaction is held during provider/native/model I/O.
+
+---
+
+## 7. Stop conditions
+
+Stop and update the plan instead of adding a workaround if implementation appears to require:
+
+1. keeping SourceGrants only for Schedule/Calendar compatibility;
+2. hiding source availability inside enabled_expert_cards;
+3. making Access import the built-in catalogue;
+4. retaining CalendarExpertSetup as an opaque wrapper around DataAccessGrant;
+5. renaming calendar_grant_mappings while keeping setup/assignment/install ids;
+6. treating a Registry view handle as source authorization after 03-A;
+7. silently upgrading an old Calendar setup into a new grant;
+8. preserving experts.calendar.* as deprecated aliases;
+9. implementing Checkpoint 04 Use with Floe behavior early;
+10. implementing Checkpoint 05 durable user interactions early.
+
+---
+
+## 8. Required verification per child plan
+
+Each child plan must run its targeted tests and report residual searches. Do not wait until 03-D to discover an old authority still has callers.
+
+Broad checkpoint gate at 03-D:
+
+~~~sh
+cargo check --workspace --lib
+cargo test --workspace --no-fail-fast
+cargo build -p floe-ffi
+python3 tools/architecture/check_boundaries.py
+git diff --check
 ~~~
 
-and makes pause/remove depend on a mapping that may not exist.
+Flutter/client gate after 03-C:
 
-### 5.2 Target grant identity
-
-A Calendar Observe grant is identified by Access semantics:
-
-- Person;
-- connector;
-- stable connection;
-- execution owner/source authority;
-- selected resource handles;
-- operation Read;
-- purpose Assistant or the applicable product purpose;
-- approved first-party consumers;
-- processing restriction;
-- grant authority/revision.
-
-No Expert installation id, assignment id, setup id or Registry view handle belongs in that identity.
-
-### 5.3 Vault changes
-
-In crates/adapters/vault/src/vault/calendar_grants.rs:
-
-- remove calendar_grant_mappings table/schema if it only exists for CalendarExpertSetup lookup;
-- remove calendar_grant_connection_id(setup_id);
-- remove install_calendar_expert_with_connection();
-- remove mapping verification against Registry installation/assignment/view ids;
-- retain or extract the actual DataAccessGrant persistence and native subject review data under generic Access ownership;
-- add indexed source/connection lookup if needed to efficiently find the current grant.
-
-Prefer one generic DataAccessGrant store/query path over a Calendar-specific parallel store.
-
-If Calendar requires extra reviewed native subject evidence, keep that evidence keyed by grant/source authority, not Expert setup id.
-
-### 5.4 Authorization
-
-authorize_calendar_grant() may remain as a Calendar-shaped Access convenience if it performs a real Calendar-specific scope/fingerprint check, but it must:
-
-- resolve the grant from Access source/connection state;
-- validate consumer explicitly;
-- never consult Expert Registry enabled bits;
-- never consult Schedule setup ids.
-
-If the generic DataAccessGrant admission service can fully express the same checks, delete authorize_calendar_grant() and use the generic admission path.
-
-## 6. Consumer-policy follow-through
-
-Checkpoint 02 R4.5 already establishes Calendar consumer identity: product composition derives the explicit first-party consumer set from built-in declarations and passes that set into Access grant creation. Grants contain real consumer ids; `calendar.expert` is not a group alias.
-
-Checkpoint 03 preserves that rule while ownership moves from CalendarExpertSetup/mappings to connection/source-owned Access state.
-
-Requirements:
-
-- Access remains independent of the built-in Expert catalogue;
-- do not duplicate the Calendar consumer list in Vault, protocol, Flutter or connection UI;
-- new connection-owned Calendar grant creation reuses the same product-composition policy;
-- ContextDependency continues to record the actual admitted consumer;
-- extension/third-party consumers remain excluded unless separately granted;
-- adding a new built-in Calendar consumer is covered by declaration/policy tests, not an Access special case;
-- do not revive `calendar.expert` as compatibility authority after the old vertical is removed;
-- do not silently broaden legacy grants during schema cleanup.
-
-If direct Manager/assistant Calendar reading becomes a real current path, add that consumer through the same product policy with a focused runtime test. Do not pre-authorize hypothetical consumers.
-
-## 7. App/Worker API removal
-
-At crates/app/src/vault_host.rs baseline lines 1576 and 1645 remove WorkerAction paths that exist only for Calendar Expert management:
-
-~~~text
-CalendarExperts
-CalendarAccess
+~~~sh
+cd apps/client
+flutter analyze
+flutter test
+flutter build macos
 ~~~
 
-Retain a source/access command only if it is the canonical connector/access command used by connection detail and conversation interaction.
+If server code changes, also run from server/:
 
-Delete or refactor:
-
-- crates/app/src/vault_host/calendar_access.rs;
-- crates/app/src/expert_services.rs CalendarExpertInstall / InstallCalendar / ExpertInspection::Calendar;
-- related LocalOperationIntent variants;
-- result fields named calendar_experts.
-
-After checkpoint exit, Experts service should expose generic Registry operations only. Source permission operations belong to Access/Connections.
-
-## 8. FFI/protocol deletion
-
-Delete the old Calendar Expert wire surface:
-
-~~~text
-experts.calendar.install
-experts.calendar.inspect
-CalendarExpertInstallDto
-CalendarExpertOverviewDto
-CalendarGrantConfigurationDto fields that carry setup_id / Registry revision
+~~~sh
+go test -race ./...
+go vet ./...
 ~~~
 
-The canonical source permission API must be connection/access-oriented.
+Use a fresh isolated development profile for persistence/macOS acceptance because old authorization state is intentionally not migrated.
 
-It is acceptable to introduce a replacement command in the same checkpoint because internal wire compatibility is not required. Do not keep both command families.
+---
 
-Update:
+## 9. Final Checkpoint 03 definition of done
 
-- crates/bindings/protocol/src/dto/commands.rs;
-- crates/bindings/protocol/src/dto/queries.rs;
-- crates/bindings/protocol/src/dto/experts.rs;
-- crates/bindings/protocol/src/dto/access.rs;
-- protocol exports;
-- FFI app_wire conversion;
-- C ABI tests/fixtures where the app-wire command set is enumerated;
-- Flutter local_owner_gateways.dart.
+- [ ] Registry snapshot contains no Calendar setup/view/revocation collections.
+- [ ] BuiltinExpertSetup/Receipt contains no source bindings or runtime source state.
+- [ ] BuiltinExpertAssignmentReceipt contains no required-source permission snapshot or granted view handles.
+- [ ] SourceGrants, assignment_source_grant and assignment_has_mandatory_source are deleted.
+- [ ] builtin source refresh orchestration and builtin_source_bindings are deleted.
+- [ ] built-in Expert cards are source-independent.
+- [ ] common built-in host has no Registry source preflight.
+- [ ] source availability is discovered only by Context/Access reads.
+- [ ] Registry CalendarView configuration target is deleted.
+- [ ] CalendarExpertSetup/Receipt/Overview/AccessConfiguration/AccessChange are deleted.
+- [ ] crates/modules/experts/src/registry/calendar_setup.rs is deleted.
+- [ ] crates/modules/experts/src/calendar_access.rs is deleted.
+- [ ] Calendar grant persistence contains no Registry setup/install/assignment identity.
+- [ ] native and remote Calendar reads select DataAccessGrant by current source/resource and exact consumer.
+- [ ] Calendar consumer-policy/native-review metadata is keyed by grant/source authority, not Expert setup.
+- [ ] calendar_grant_mappings and remote_calendar_grant_mappings are deleted.
+- [ ] old Calendar grant/setup authorization state is not migrated.
+- [ ] Expert result/proposal evidence no longer depends on Registry Calendar view authority.
+- [ ] experts.calendar.install and experts.calendar.inspect are deleted.
+- [ ] access.calendar commands contain no Registry instance/revision/setup id.
+- [ ] WorkerResult / App result no longer expose calendar_experts.
+- [ ] AgentCalendarExpertController, AgentCalendarExperts and AgentCalendarSettings are deleted.
+- [ ] connector detail uses only Access/Connections ownership for Calendar access management.
+- [ ] Schedule success, missing-access and /focus proposal flows still pass.
+- [ ] canonical first-party Calendar consumers remain exact real package identities.
+- [ ] full Rust/architecture/FFI/Flutter/macOS gates pass.
 
-Use owner-language naming. A permission command should not mention Expert installation.
+---
 
-## 9. Local development persistence policy
+## 10. Required agent report
 
-Do not write a migration that converts old Calendar setup/Registry enabled bits into active DataAccessGrant.
+Report Checkpoint 03 only after 03-A through 03-D are complete:
 
-That would reinterpret an old implementation flag as user authorization.
+1. **Authority result** — final Registry, Access, Context, Connections ownership.
+2. **03-A Registry cleanup** — deleted source fields/APIs and evidence identity changes.
+3. **03-B persistence** — final Calendar grant/policy tables and current-source lookup.
+4. **03-C surface cutover** — App, worker, protocol, FFI and Flutter removals/replacements.
+5. **Residual audit** — exact searches and justified remaining matches.
+6. **Persistence policy** — how old profiles fail/reset and proof no authorization migration exists.
+7. **Verification** — exact commands and results.
+8. **Blocker** — any unmet item means the checkpoint remains open.
 
-Because this repository is pre-stable/local-development-only:
-
-- replace the schema;
-- reject/reset the obsolete Floe-owned local grant/setup state where necessary;
-- document the exact development profile reset requirement;
-- preserve unrelated credentials and uncertain external action records.
-
-Add a regression asserting that an old/orphan Calendar Expert mapping is not auto-promoted to a new grant.
-
-## 10. Tests
-
-### Registry
-
-- all eight built-in Experts install independently of current source availability;
-- enabled_expert_cards includes enabled Schedule even with no Calendar connection;
-- disabling the Expert itself removes its card;
-- adding/removing/pausing a connection does not mutate Registry revision merely to express source health;
-- source state is absent from Registry snapshot serialization.
-
-### Access
-
-- active Calendar grant continues to authorize each canonical first-party consumer established in Checkpoint 02 R4.5;
-- paused/review-required grant returns NeedsUserAction;
-- foreign consumer denied;
-- third-party Expert denied without explicit grant;
-- resource scope cannot exceed selected connection resources;
-- source authority/fingerprint drift requires review;
-- grant lookup does not use setup/installation/assignment ids.
-
-### Persistence/reopen
-
-- grant survives Vault reopen with the same source/authority;
-- pause survives reopen;
-- revoke survives reopen;
-- stale authority fails closed;
-- no calendar_grant_mappings/Calendar setup schema is required;
-- old disposable profile is rejected/reset according to the documented development policy, never silently migrated.
-
-### Conversation availability
-
-With Schedule enabled and Calendar unavailable:
-- Schedule card remains in Manager catalog;
-- delegation occurs when Manager chooses it;
-- Calendar read returns NeedsUserAction;
-- root Run can still complete with Manager limitation response.
-
-## 11. Residual audit
-
-Search:
-
-~~~text
-CalendarExpertSetup
-CalendarExpertOverview
-CalendarAccessConfiguration
-CalendarAccessChange
-CalendarViewBinding
-calendar_setups
-revoked_calendar_setups
-install_calendar_expert
-apply_calendar_access
-calendar_grant_mappings
-calendar_grant_connection_id
-install_calendar_expert_with_connection
-SourceGrants
-assignment_source_grant
-assignment_has_mandatory_source
-BuiltinSourceBinding
-BuiltinSourceState
-BuiltinSourceEvidence
-experts.calendar.install
-experts.calendar.inspect
-calendar_experts
-~~~
-
-Every production match must be removed unless the same word now refers to a genuinely different non-Registry source concept. Do not keep comments/tests describing the removed architecture as current.
-
-## 12. Verification
-
-Targeted:
-- floe-experts Registry tests;
-- floe-access DataAccessGrant/admission tests;
-- floe-vault grant/reopen tests;
-- floe-app local product/wire tests;
-- protocol tests;
-- Schedule missing-source conversation integration test.
-
-Broad:
-- cargo check --workspace --lib
-- cargo test --workspace --no-fail-fast
-- cargo build -p floe-ffi
-- python3 tools/architecture/check_boundaries.py
-- git diff --check
-
-If persistence schema changed, use a fresh isolated development profile for manual/macOS smoke verification. Do not overwrite the developer’s normal profile automatically.
-
-## 13. Checkpoint exit criteria
-
-Checkpoint 03 is complete when:
-
-- Expert Registry has no current source-permission authority;
-- all eight built-in Experts remain installed/eligible based on Expert state, not source state;
-- SourceGrants runtime gating is gone;
-- DataAccessGrant is the only Observe consumer authority;
-- Calendar grant identity contains no Schedule/Registry setup identity;
-- connection-owned grant creation reuses the single canonical first-party consumer policy and contains no `calendar.expert` compatibility authority;
-- CalendarExpertSetup/Overview/AccessConfiguration production APIs and wire commands are gone;
-- obsolete local Calendar Expert grant state is not migrated into authorization;
-- source absence is observed only at Context/Access read time;
-- residual search is clean;
-- targeted and broad Rust/FFI/protocol gates pass.
-
-Checkpoint 04 can now simplify the product ceremony because there is one real Observe authority to control.
+Do not report Checkpoint 03 complete while any production Calendar source access depends on Registry setup/view state.
