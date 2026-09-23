@@ -57,8 +57,6 @@ pub struct BuiltinExpertAssignmentReceipt {
     pub expert_assignment_id: Uuid,
 }
 
-pub use floe_agent_contract::SourceGrant;
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExpertRule {
@@ -318,10 +316,6 @@ impl AgentRegistry {
 
     pub fn instance_id(&self) -> Uuid {
         self.snapshot.instance_id
-    }
-
-    pub(crate) fn snapshot_ref(&self) -> &RegistrySnapshot {
-        &self.snapshot
     }
 
     pub fn snapshot(&self) -> RegistrySnapshot {

@@ -1,7 +1,9 @@
 # Checkpoint 03 — Expert Registry and Access authority convergence
 
-- **Status:** active execution plan
-- **Execution baseline:** main at bbce2fa2ae2da4bffb05185f39d8d50aa3e6b82a
+- **Status:** complete
+- **Execution baseline:** main at dd4652997b9bd88668bcd59e98a2f3d1a1300368 (plan commit; code baseline bbce2fa2ae2da4bffb05185f39d8d50aa3e6b82a)
+- **Completion commits:** 03-A `3ca515af`, 03-B `7cda37e8`, 03-C `a725739c`, 03-D this commit
+- **Next:** Checkpoint 04
 - **Precondition:** Checkpoint 02 is complete. Schedule already runs only through BuiltinExpertEndpoint and Context/Access.
 - **Scope:** remove source-access authority from Expert Registry, remove the Calendar-Expert setup vertical, replace Calendar setup/mapping persistence with source-owned Access records, and remove the old App/wire/Flutter Calendar-Expert management path.
 - **Compatibility posture:** pre-stable. Do not preserve old Registry/Calendar setup wire or migrate disposable local authorization state.
@@ -340,32 +342,32 @@ Use a fresh isolated development profile for persistence/macOS acceptance becaus
 
 ## 9. Final Checkpoint 03 definition of done
 
-- [ ] Registry snapshot contains no Calendar setup/view/revocation collections.
-- [ ] BuiltinExpertSetup/Receipt contains no source bindings or runtime source state.
-- [ ] BuiltinExpertAssignmentReceipt contains no required-source permission snapshot or granted view handles.
-- [ ] SourceGrants, assignment_source_grant and assignment_has_mandatory_source are deleted.
-- [ ] builtin source refresh orchestration and builtin_source_bindings are deleted.
-- [ ] built-in Expert cards are source-independent.
-- [ ] common built-in host has no Registry source preflight.
-- [ ] source availability is discovered only by Context/Access reads.
-- [ ] Registry CalendarView configuration target is deleted.
-- [ ] CalendarExpertSetup/Receipt/Overview/AccessConfiguration/AccessChange are deleted.
-- [ ] crates/modules/experts/src/registry/calendar_setup.rs is deleted.
-- [ ] crates/modules/experts/src/calendar_access.rs is deleted.
-- [ ] Calendar grant persistence contains no Registry setup/install/assignment identity.
-- [ ] native and remote Calendar reads select DataAccessGrant by current source/resource and exact consumer.
-- [ ] Calendar consumer-policy/native-review metadata is keyed by grant/source authority, not Expert setup.
-- [ ] calendar_grant_mappings and remote_calendar_grant_mappings are deleted.
-- [ ] old Calendar grant/setup authorization state is not migrated.
-- [ ] Expert result/proposal evidence no longer depends on Registry Calendar view authority.
-- [ ] experts.calendar.install and experts.calendar.inspect are deleted.
-- [ ] access.calendar commands contain no Registry instance/revision/setup id.
-- [ ] WorkerResult / App result no longer expose calendar_experts.
-- [ ] AgentCalendarExpertController, AgentCalendarExperts and AgentCalendarSettings are deleted.
-- [ ] connector detail uses only Access/Connections ownership for Calendar access management.
-- [ ] Schedule success, missing-access and /focus proposal flows still pass.
-- [ ] canonical first-party Calendar consumers remain exact real package identities.
-- [ ] full Rust/architecture/FFI/Flutter/macOS gates pass.
+- [x] Registry snapshot contains no Calendar setup/view/revocation collections.
+- [x] BuiltinExpertSetup/Receipt contains no source bindings or runtime source state.
+- [x] BuiltinExpertAssignmentReceipt contains no required-source permission snapshot or granted view handles.
+- [x] SourceGrants, assignment_source_grant and assignment_has_mandatory_source are deleted.
+- [x] builtin source refresh orchestration and builtin_source_bindings are deleted.
+- [x] built-in Expert cards are source-independent.
+- [x] common built-in host has no Registry source preflight.
+- [x] source availability is discovered only by Context/Access reads.
+- [x] Registry CalendarView configuration target is deleted.
+- [x] CalendarExpertSetup/Receipt/Overview/AccessConfiguration/AccessChange are deleted.
+- [x] crates/modules/experts/src/registry/calendar_setup.rs is deleted.
+- [x] crates/modules/experts/src/calendar_access.rs is deleted.
+- [x] Calendar grant persistence contains no Registry setup/install/assignment identity.
+- [x] native and remote Calendar reads select DataAccessGrant by current source/resource and exact consumer.
+- [x] Calendar consumer-policy/native-review metadata is keyed by grant/source authority, not Expert setup.
+- [x] calendar_grant_mappings and remote_calendar_grant_mappings are deleted.
+- [x] old Calendar grant/setup authorization state is not migrated.
+- [x] Expert result/proposal evidence no longer depends on Registry Calendar view authority.
+- [x] experts.calendar.install and experts.calendar.inspect are deleted.
+- [x] access.calendar commands contain no Registry instance/revision/setup id.
+- [x] WorkerResult / App result no longer expose calendar_experts.
+- [x] AgentCalendarExpertController, AgentCalendarExperts and AgentCalendarSettings are deleted.
+- [x] connector detail uses only Access/Connections ownership for Calendar access management.
+- [x] Schedule success, missing-access and /focus proposal flows still pass.
+- [x] canonical first-party Calendar consumers remain exact real package identities.
+- [x] full Rust/architecture/FFI/Flutter/macOS gates pass.
 
 ---
 

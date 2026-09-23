@@ -172,9 +172,7 @@
       "allowed_internal_dependencies": [
         "agent_contract",
         "execution",
-        "context",
-        "inference",
-        "access"
+        "inference"
       ]
     },
     {

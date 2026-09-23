@@ -1,70 +1,10 @@
 use floe_conversation::AgentMessage;
 use floe_conversation::ProfileSelection;
-use floe_experts::{
-    RegistryConfiguration,
-    RegistryConfigurationTarget,
-};
 
 use crate::{ConversationSessionOperation, ConversationTurnRequest};
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
-
-#[cfg(target_os = "macos")]
-fn run_native_schedule_fixture_child(test_name: &str) -> bool {
-    use std::process::Command;
-
-    if std::env::var_os("FLOE_NATIVE_FIXTURE_CHILD").is_some() {
-        return false;
-    }
-    let directory = tempfile::tempdir().unwrap();
-    let executable = directory.path().join("Contents/MacOS/test-host");
-    let frameworks = directory.path().join("Contents/Frameworks");
-    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(&frameworks).unwrap();
-    std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
-    for (source, library) in [
-        (
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../adapters/providers/tests/fixtures/NativeCalendarFixture.swift"
-            ),
-            "libfloe_eventkit.dylib",
-        ),
-        (
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/LocalModelFixture.swift"
-            ),
-            "libfloe_local_model.dylib",
-        ),
-    ] {
-        assert!(
-            Command::new("xcrun")
-                .args([
-                    "swiftc",
-                    "-emit-library",
-                    "-warnings-as-errors",
-                    source,
-                    "-o"
-                ])
-                .arg(frameworks.join(library))
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-    assert!(
-        Command::new(executable)
-            .args(["--exact", test_name, "--nocapture"])
-            .env("FLOE_NATIVE_FIXTURE_CHILD", "1")
-            .env("FLOE_NATIVE_READ_FIXTURE", "valid")
-            .status()
-            .unwrap()
-            .success()
-    );
-    true
-}
 
 #[test]
 fn production_conversation_replays_the_same_request_without_model_redispatch() {
@@ -1706,6 +1646,7 @@ fn observing_server(
                 }
                 Err(error) => panic!("accept: {error}"),
             };
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

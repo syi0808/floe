@@ -407,8 +407,6 @@ fn calendar_scope(
 mod tests {
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, sync::Mutex};
 
-    use floe_access::ConnectionId;
-
     use super::*;
 
     #[derive(Clone, Default)]
@@ -834,6 +832,55 @@ mod tests {
         assert!(matches!(
             EncryptedAgentVault::open(root.path(), person_id, keys).await,
             Err(AgentFailure::VaultUnavailable)
+        ));
+    }
+
+    #[tokio::test]
+    async fn legacy_grant_mapping_tables_are_rejected_not_migrated_on_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = floe_kernel::PersonId::new();
+        let keys = TestKeys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+            .await
+            .unwrap();
+        vault
+            .review_native_calendar_grant(
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".to_owned()],
+                SourceAuthority::new(),
+                &calendar_consumers(),
+                &"a".repeat(64),
+            )
+            .await
+            .unwrap();
+        // A setup-bound row from the deleted mapping schema.
+        let raw = vault.database.connect().unwrap();
+        raw.execute(
+            "CREATE TABLE calendar_grant_mappings (setup_id TEXT PRIMARY KEY, payload TEXT NOT NULL)",
+            (),
+        )
+        .await
+        .unwrap();
+        raw.execute(
+            "INSERT INTO calendar_grant_mappings (setup_id, payload) VALUES ('old-setup', '{}')",
+            (),
+        )
+        .await
+        .unwrap();
+        drop(raw);
+        drop(vault);
+        // Reopen refuses the profile instead of migrating the old rows, and
+        // retrying does not silently convert them either.
+        assert!(matches!(
+            EncryptedAgentVault::open(root.path(), person_id, keys.clone()).await,
+            Err(AgentFailure::UnsupportedVersion)
+        ));
+        assert!(matches!(
+            EncryptedAgentVault::open(root.path(), person_id, keys).await,
+            Err(AgentFailure::UnsupportedVersion)
         ));
     }
 }

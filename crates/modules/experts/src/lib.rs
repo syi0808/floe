@@ -38,7 +38,7 @@ pub use registry::{
     ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec, NoSetupValidator,
     PackageAssignment, PackageImplementation, PackageInstallation, RegistryConfiguration,
     RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, ResolvedExpert,
-    SetupValidator, SourceGrant, eligible_cards_for_availability,
+    SetupValidator, eligible_cards_for_availability,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

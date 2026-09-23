@@ -11,7 +11,7 @@ use std::{future::Future, pin::Pin, time::Duration};
 use floe_access::RemoteCallWindow;
 use floe_agent_contract::AgentFailure;
 use floe_context::{
-    CalendarConnectionReader, NativeCalendarGrantReader, NativeCalendarSourceRequest,
+    CalendarConnectionReader, NativeCalendarGrantReader,
     NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest,
 };
 use floe_execution::Cancellation;

@@ -333,45 +333,6 @@ impl Fixture {
         (previous, next, capabilities.snapshot().unwrap())
     }
 
-    /// How many expert invocations are durably on record.
-    ///
-    /// The receipt row is the vault's idempotency key for one invocation, and
-    /// it has no reader of its own; this counts it from the same database the
-    /// vault writes. A Vault-side reader would be the better home for it.
-    /// How many rows the vault's own database holds in `table`.
-    async fn rows(&self, table: &str) -> i64 {
-        let key = self.keys.only_key();
-        let hexkey = key
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let path = self
-            .root
-            .path()
-            .join(self.person.to_string())
-            .join("sessions.db");
-        turso::Builder::new_local(path.to_str().unwrap())
-            .experimental_encryption(true)
-            .with_encryption(turso::EncryptionOpts {
-                cipher: "aes256gcm".into(),
-                hexkey,
-            })
-            .build()
-            .await
-            .unwrap()
-            .connect()
-            .unwrap()
-            .query(&format!("SELECT count(*) FROM {table}"), ())
-            .await
-            .unwrap()
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .get::<i64>(0)
-            .unwrap()
-    }
-
     /// Run `sql` against the vault's own database, to put it in a state the
     /// vault itself would never write.
     async fn corrupt(&self, sql: &str) {

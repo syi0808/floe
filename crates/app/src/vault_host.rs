@@ -1390,7 +1390,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         floe_experts::ExpertRefreshOutcome::Ready => {}
         floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
             failure = ?failure,
-            stage = "refresh_builtin_experts",
+            stage = "ensure_builtin_experts",
             "conversation_turn_degraded"
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
@@ -2390,14 +2390,6 @@ fn expert_packaging(
     }
 }
 
-/// How the Schedule Expert is packaged when its calendar setup is installed.
-fn builtin_expert_packaging(kind: BuiltinExpertKind) -> floe_experts::ExpertPackaging {
-    let declaration = kind.declaration();
-    let expert = floe_experts::AgentId::try_new(declaration.expert_id)
-        .expect("builtin expert ids are valid");
-    expert_packaging(&declaration, expert)
-}
-
 /// Whether the client must reload the session before continuing.
 ///
 /// Recoveries that keep the current session usable do not force a reload.
@@ -2427,7 +2419,7 @@ mod tests {
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
 
-    mod calendar_experts;
+    mod conversation_flows;
     mod expert_actions;
     pub(in crate::vault_host) mod expert_evidence;
     mod learner_worker;

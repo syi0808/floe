@@ -991,65 +991,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(Some(snapshot))
     }
 
-    pub(super) async fn write_registry_snapshot_in_transaction(
-        &self,
-        transaction: &turso::transaction::Transaction<'_>,
-        expected_revision: Option<u64>,
-        snapshot: &RegistrySnapshot,
-    ) -> Result<(), AgentFailure> {
-        let payload = self.registry_payload(snapshot)?;
-        match expected_revision {
-            Some(expected_revision) => {
-                let previous = self
-                    .registry_on(transaction)
-                    .await?
-                    .ok_or(AgentFailure::NotFound)?;
-                if previous.revision != expected_revision {
-                    return Err(AgentFailure::Conflict);
-                }
-                self.update_registry(transaction, expected_revision, snapshot.revision, payload)
-                    .await
-            }
-            None => {
-                if self.registry_on(transaction).await?.is_some() {
-                    return Err(AgentFailure::Conflict);
-                }
-                transaction
-                    .execute(
-                        "CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)",
-                        (),
-                    )
-                    .await
-                    .map_err(storage)?;
-                transaction
-                    .execute(
-                        "CREATE TABLE agent_expert_receipts (invocation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, registry_revision INTEGER NOT NULL)",
-                        (),
-                    )
-                    .await
-                    .map_err(storage)?;
-                transaction
-                    .execute(
-                        "INSERT INTO agent_expert_registry VALUES (1, ?, ?)",
-                        (integer(snapshot.revision)?, payload),
-                    )
-                    .await
-                    .map_err(storage)?;
-                let changed = transaction
-                    .execute(
-                        "UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1",
-                        (),
-                    )
-                    .await
-                    .map_err(storage)?;
-                if changed != 1 {
-                    return Err(AgentFailure::Conflict);
-                }
-                Ok(())
-            }
-        }
-    }
-
     pub(super) async fn session_on(
         &self,
         connection: &turso::Connection,

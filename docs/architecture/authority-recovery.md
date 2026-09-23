@@ -12,6 +12,7 @@ These are durable architectural safety properties, not a progress checklist.
 - Root, built-in Expert and Schedule composition share one host-scoped current-connection store. Provider adapters bind loaded credentials to the verified person/device; exact-recipient authority reloads current state at admission, handoff and post-response revalidation. A prepared transport or availability observation never substitutes for those checks.
 - Pairing setup accepts only a bounded loopback endpoint and pairing evidence. Person/device come from AppHost's verified `CallerContext`, never a product route bundle; Connections/key-holder validation binds the exact pending pairing ID, signed challenge and owner issuer. Remote authority and Calendar/View grant services prepare transports from the same current store through provider-owned exact person/device admission. Access still validates producer/source/revision/provider/recipient/grant evidence; model consent and source catalogs are not pairing/grant request fields.
 - Revocation prevents later admission or release. It cannot retroactively recall data already transmitted or a provider effect already accepted.
+- Source revocation, pause and drift affect Access authority and later dependency admission only. They never mutate Expert Registry state; a Registry revision change is never required to block, and never sufficient to admit, a source read.
 
 ## Provenance and coverage travel with evidence
 

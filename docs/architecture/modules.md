@@ -37,6 +37,7 @@ A stateful concept has one semantic owner. Storage location, call-site convenien
 - **Vault** may physically store multiple owners' records. Shared storage does not grant cross-module table or policy ownership.
 - **Inference and Connections** are separate domains. Model routing does not infer source authorization, and a Connection does not authorize model processing.
 - **Context and Access** are complementary: Context establishes evidence/projection semantics; Access decides whether data may be acquired, dispatched or released for the exact authority.
+- **Registry is not source permission.** Expert assignment/eligibility records package topology only. Source admission is owned by **Access** (Observe authority over exact source identity), with **Connections** owning source/resource lifecycle and **Context** owning the actual read and provenance. No Registry setup, view or assignment state authorizes a source read.
 - **Experts** own Task/A2A semantics; the generic Agent Runtime does not know built-in Expert packages.
 - **Actions** own consequential external-effect lifecycle, including uncertain outcomes. Intelligence may propose but does not directly mutate providers.
 

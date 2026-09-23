@@ -1,6 +1,6 @@
 # Checkpoint 03-D — deletion, verification and documentation convergence
 
-- **Execution baseline:** Checkpoint 03-C completion on top of main bbce2fa2ae2da4bffb05185f39d8d50aa3e6b82a
+- **Execution baseline:** Checkpoint 03-C completion (`a725739c`) on the Checkpoint 03 chain over main dd4652997b9bd88668bcd59e98a2f3d1a1300368
 - **Depends on:** 03-A, 03-B and 03-C complete
 - **Goal:** prove one source authority, delete transition-only surfaces, update current architecture docs and run the full applicable verification gates.
 
