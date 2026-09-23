@@ -6,7 +6,7 @@
 //! locally — these are the Expert's own judgments. The composition root reads
 //! the records and builds the readers; it does not decide any of this.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 
 use floe_agent_contract::InferencePolicyDecision;
 use floe_agent_contract::{AgentFailure, DataClass, ExpertModelRequirement, ModelPlacement};
@@ -115,12 +115,7 @@ pub fn plan_run(
     local_now: DateTime<chrono::Local>,
     now: DateTime<Utc>,
 ) -> Result<ScheduleRunPlan, AgentFailure> {
-    let range = CalendarRange {
-        start_date: local_now.date_naive(),
-        end_date_exclusive: local_now.date_naive() + Duration::days(1),
-        timezone_offset_seconds: local_now.offset().local_minus_utc(),
-        end_timezone_offset_seconds: None,
-    };
+    let range = requested_range(assignment, local_now)?;
     let (mut starts_at, ends_at) = day_bounds(&range)?;
     let propose_focus = assignment.trim() == FOCUS_REQUEST;
     if propose_focus {
@@ -147,6 +142,55 @@ pub fn plan_run(
             ScheduleReasoning::ConversationRoute
         },
     })
+}
+
+/// Resolve the bounded calendar interval named by an assignment. An explicit
+/// date pair is inclusive to the Person and exclusive at the source boundary.
+pub fn requested_range(
+    assignment: &str,
+    local_now: DateTime<chrono::Local>,
+) -> Result<CalendarRange, AgentFailure> {
+    let today = local_now.date_naive();
+    let dates = assignment
+        .split_whitespace()
+        .filter_map(|token| {
+            let token = token
+                .trim_matches(|character: char| !character.is_ascii_digit() && character != '-');
+            (token.len() == 10
+                && token.as_bytes().get(4) == Some(&b'-')
+                && token.as_bytes().get(7) == Some(&b'-'))
+            .then(|| NaiveDate::parse_from_str(token, "%Y-%m-%d"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    let (start_date, end_date_exclusive) = match dates.as_slice() {
+        [] if assignment.to_ascii_lowercase().contains("this week") => {
+            let monday = today - Duration::days(today.weekday().num_days_from_monday().into());
+            (monday, monday + Duration::days(7))
+        }
+        [] => (today, today + Duration::days(1)),
+        [date] => (
+            *date,
+            date.checked_add_signed(Duration::days(1))
+                .ok_or(AgentFailure::InvalidInput)?,
+        ),
+        [start, end] => (
+            *start,
+            end.checked_add_signed(Duration::days(1))
+                .ok_or(AgentFailure::InvalidInput)?,
+        ),
+        _ => return Err(AgentFailure::InvalidInput),
+    };
+    let range = CalendarRange {
+        start_date,
+        end_date_exclusive,
+        timezone_offset_seconds: local_now.offset().local_minus_utc(),
+        end_timezone_offset_seconds: None,
+    };
+    if !range.is_valid() || (end_date_exclusive - start_date).num_days() > 31 {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(range)
 }
 
 /// The Context/source policy this run's model call carries.
@@ -223,6 +267,56 @@ pub fn day_bounds(range: &CalendarRange) -> Result<(DateTime<Utc>, DateTime<Utc>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn requested_intervals_are_not_reduced_to_today() {
+        let local = Utc
+            .with_ymd_and_hms(2026, 9, 23, 12, 0, 0)
+            .unwrap()
+            .with_timezone(&chrono::Local);
+        let today = local.date_naive();
+        let week_start = today - Duration::days(today.weekday().num_days_from_monday().into());
+        let today_range = requested_range("today", local).unwrap();
+        assert_eq!(today_range.start_date, today);
+        assert_eq!(today_range.end_date_exclusive, today + Duration::days(1));
+
+        let week_range = requested_range("What is this week like?", local).unwrap();
+        assert_eq!(week_range.start_date, week_start);
+        assert_eq!(
+            week_range.end_date_exclusive,
+            week_start + Duration::days(7)
+        );
+
+        let historical = requested_range("Review 2026-08-03 to 2026-08-09", local).unwrap();
+        assert_eq!(historical.start_date.to_string(), "2026-08-03");
+        assert_eq!(historical.end_date_exclusive.to_string(), "2026-08-10");
+
+        let future = requested_range("Look at 2026-10-12", local).unwrap();
+        assert_eq!(future.start_date.to_string(), "2026-10-12");
+        assert_eq!(future.end_date_exclusive.to_string(), "2026-10-13");
+    }
+
+    #[test]
+    fn invalid_explicit_intervals_are_rejected() {
+        let local = chrono::Local::now();
+        assert_eq!(
+            requested_range("2026-09-10 to 2026-09-01", local),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            requested_range("2026-01-01 to 2026-02-02", local),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            requested_range("2026-01-01 2026-01-02 2026-01-03", local),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            requested_range("Review 2026-02-30", local),
+            Err(AgentFailure::InvalidInput)
+        );
+    }
 
     fn candidate(device_id: &str, active: bool) -> ScheduleSetupCandidate {
         ScheduleSetupCandidate {
