@@ -15,10 +15,27 @@ use floe_agent_contract::{
 };
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
-    CalendarContextView, CommunicationView, ContextEvidence, MAX_COMMUNICATION_BYTES,
-    MAX_COMMUNICATION_ITEMS, calendar_context_evidence, communication_context_evidence,
-    validate_calendar_context_view, validate_communication_view,
+    CalendarContextView, CommunicationView, ContextEvidence, ContextIssueReason, ContextSource,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, SourceReadOutcome, calendar_context_evidence,
+    communication_context_evidence, validate_calendar_context_view, validate_communication_view,
 };
+
+pub(crate) fn optional_calendar_views(
+    context: &mut AgentContext,
+    outcome: SourceReadOutcome<Vec<CalendarContextView>>,
+) -> Vec<CalendarContextView> {
+    let (views, issue) = match outcome {
+        SourceReadOutcome::Ready(views) => (views, None),
+        SourceReadOutcome::Unavailable(_) => (vec![], Some(ContextIssueReason::Unavailable)),
+        SourceReadOutcome::NeedsUserAction(_) => (vec![], Some(ContextIssueReason::Denied)),
+    };
+    floe_context_contract::record_source_issue(
+        &mut context.optional_context_issues,
+        ContextSource::Calendar,
+        issue,
+    );
+    views
+}
 
 /// How many findings one communication-backed Expert may report.
 pub(crate) const MAX_MAIL_EXPERT_FINDINGS: usize = 16;
@@ -353,5 +370,70 @@ pub(crate) fn validate_judgment(
         Err(AgentFailure::InvalidModelOutput)
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod calendar_outcome_tests {
+    use super::*;
+    use floe_context_contract::{
+        GrantConsumer, GrantOperation, GrantPurpose, SourceAccessRequirement,
+        SourceAccessRequirementKind, SourceUnavailable,
+    };
+
+    fn context() -> AgentContext {
+        AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        }
+    }
+
+    #[test]
+    fn optional_calendar_absence_is_recorded_instead_of_looking_empty() {
+        let mut context = context();
+        let views = optional_calendar_views(
+            &mut context,
+            SourceReadOutcome::Unavailable(SourceUnavailable::TemporarilyUnavailable),
+        );
+        assert!(views.is_empty());
+        assert_eq!(context.optional_context_issues.len(), 1);
+        assert_eq!(
+            context.optional_context_issues[0].source,
+            ContextSource::Calendar
+        );
+        assert_eq!(
+            context.optional_context_issues[0].reason,
+            ContextIssueReason::Unavailable
+        );
+
+        let requirement = SourceAccessRequirement::try_new(
+            "calendar",
+            None,
+            None,
+            GrantOperation::Read,
+            GrantConsumer::builtin("floe.builtin.commitments").unwrap(),
+            GrantPurpose::Assistant,
+            vec![],
+            None,
+            SourceAccessRequirementKind::ReviewChangedSource,
+            None,
+            true,
+        )
+        .unwrap();
+        optional_calendar_views(
+            &mut context,
+            SourceReadOutcome::NeedsUserAction(requirement),
+        );
+        assert_eq!(context.optional_context_issues.len(), 1);
+        assert_eq!(
+            context.optional_context_issues[0].reason,
+            ContextIssueReason::Denied
+        );
+
+        optional_calendar_views(&mut context, SourceReadOutcome::Ready(vec![]));
+        assert!(context.optional_context_issues.is_empty());
     }
 }

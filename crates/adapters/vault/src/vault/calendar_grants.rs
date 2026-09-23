@@ -358,6 +358,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let requested_scope =
             calendar_scope(calendar_ids.to_vec(), consumer.clone(), purpose, processing)?;
+        if !grant.scope().consumers().contains(&consumer) {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         if requested_scope
             .resources()
             .iter()
@@ -365,11 +368,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || requested_scope.categories() != grant.scope().categories()
             || requested_scope.operations() != grant.scope().operations()
             || requested_scope.purposes() != grant.scope().purposes()
-            || requested_scope.consumers() != grant.scope().consumers()
             || requested_scope.processing() != grant.scope().processing()
             || !grant.scope().operations().contains(&operation)
             || !grant.scope().purposes().contains(&purpose)
-            || !grant.scope().consumers().contains(&consumer)
         {
             return Err(AgentFailure::CapabilityDenied);
         }
@@ -1275,6 +1276,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(current, admission);
+        assert_eq!(
+            vault
+                .authorize_current_native_calendar_grant(
+                    "opaque-eventkit-connection",
+                    CalendarProvider::EventKit,
+                    "test-device",
+                    &["home".into()],
+                    source_authority,
+                    GrantOperation::Read,
+                    GrantPurpose::Assistant,
+                    GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
+                    ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
+                )
+                .await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
         assert_eq!(
             vault
                 .authorize_current_native_calendar_grant(

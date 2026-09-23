@@ -565,6 +565,7 @@ pub enum ContextSource {
     Memory,
     Tasks,
     Notes,
+    Calendar,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

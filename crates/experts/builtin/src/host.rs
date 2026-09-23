@@ -11,9 +11,10 @@ use std::{future::Future, pin::Pin};
 use floe_agent_contract::PersonId;
 use floe_agent_contract::{AgentContext, Artifact, EndpointSettlement, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, ExpertModel};
+use floe_context_contract::SourceReadOutcome;
 use floe_context_contract::{
-    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView, PeopleView,
-    WellbeingView, WorkContextView,
+    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView,
+    PeopleView, WellbeingView, WorkContextView,
 };
 use floe_context_contract::{ContextDependency, MemoryContextSnapshot, SourceGrant};
 use floe_execution::Cancellation;
@@ -194,7 +195,7 @@ pub trait BuiltinExpertHost: Sync {
         &'a self,
         request: &'a BuiltinExpertRequest,
         query: CalendarViewQuery,
-    ) -> Acquiring<'a, Vec<CalendarContextView>>;
+    ) -> Acquiring<'a, SourceReadOutcome<Vec<CalendarContextView>>>;
 
     fn work_context_views<'a>(
         &'a self,

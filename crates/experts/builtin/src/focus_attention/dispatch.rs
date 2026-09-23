@@ -21,8 +21,13 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     crate::require_mandatory_source(host, request)?;
     let (attention, dependency) = host.attention_view(request).await?;
     host.record_dependency(request.invocation_id, request.invocation_id, dependency)?;
+    let mut context = granted_context(host, request);
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        host.calendar_views(request, request.nearby_calendar_query()?).await?
+        crate::shared::optional_calendar_views(
+            &mut context,
+            host.calendar_views(request, request.nearby_calendar_query()?)
+                .await?,
+        )
     } else {
         vec![]
     };
@@ -34,7 +39,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     let result: FocusExpertResult = run_focus_expert_with_views(
         host.model(),
         host.policy(),
-        request.personal_invocation(granted_context(host, request)),
+        request.personal_invocation(context),
         FocusContextViews {
             attention,
             calendars,

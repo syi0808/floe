@@ -423,6 +423,9 @@ enum ReadCallFailure {
 fn native_read_failure(failure: ReadCallFailure) -> AgentFailure {
     match failure {
         ReadCallFailure::BudgetExceeded => AgentFailure::BudgetExceeded,
+        ReadCallFailure::Action(ActionFailure::PermissionDenied) => {
+            AgentFailure::AccessReviewRequired
+        }
         ReadCallFailure::Action(ActionFailure::UncertainResult) => {
             AgentFailure::CapabilityUnavailable
         }
@@ -634,6 +637,18 @@ fn invoke_with_limit(
 #[cfg(test)]
 mod conversion_tests {
     use super::*;
+
+    #[test]
+    fn native_read_permission_denial_is_reviewable_without_changing_write_denial() {
+        assert_eq!(
+            native_read_failure(ReadCallFailure::Action(ActionFailure::PermissionDenied)),
+            AgentFailure::AccessReviewRequired
+        );
+        assert_eq!(
+            native_failure(ActionFailure::PermissionDenied),
+            AgentFailure::CapabilityDenied
+        );
+    }
 
     #[test]
     fn native_schedule_conversion_preserves_domain_interval_validation() {

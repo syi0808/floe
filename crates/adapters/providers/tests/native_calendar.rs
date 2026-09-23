@@ -294,7 +294,7 @@ async fn native_read_rejects_subject_change_before_events_query() {
     );
     request.expected_native_subject_fingerprint = Some("a".repeat(64));
     let result = read_access().observe(request).await;
-    assert!(matches!(result, Err(AgentFailure::CapabilityDenied)));
+    assert!(matches!(result, Err(AgentFailure::AccessReviewRequired)));
 }
 
 #[tokio::test]

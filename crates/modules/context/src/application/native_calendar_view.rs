@@ -227,7 +227,7 @@ fn project_native_items(
     for batch in batches {
         if let Some(failure) = batch.failure {
             return Err(match failure {
-                CalendarFailure::PermissionDenied => AgentFailure::CapabilityDenied,
+                CalendarFailure::PermissionDenied => AgentFailure::AccessReviewRequired,
                 CalendarFailure::CalendarUnavailable | CalendarFailure::ProviderUnavailable => {
                     AgentFailure::CapabilityUnavailable
                 }

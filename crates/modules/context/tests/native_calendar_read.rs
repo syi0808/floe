@@ -25,8 +25,8 @@ use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, CalendarViewQuery, SourceAuthority,
 };
 use floe_day::{
-    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarRecord, CalendarSelection,
-    EventSchedule,
+    AllDaySchedule, CalendarBatch, CalendarConnection, CalendarFailure, CalendarRecord,
+    CalendarSelection, EventSchedule,
 };
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
@@ -51,6 +51,7 @@ struct Device {
     checks: AtomicUsize,
     observations: AtomicUsize,
     partial_batch: AtomicBool,
+    failure: Mutex<Option<CalendarFailure>>,
     records: Mutex<Vec<CalendarRecord>>,
 }
 
@@ -97,7 +98,7 @@ impl CalendarSource for Device {
                 vec![CalendarBatch {
                     calendar_id: "primary".into(),
                     records: std::mem::take(&mut *self.records.lock().unwrap()),
-                    failure: None,
+                    failure: self.failure.lock().unwrap().take(),
                 }]
             },
         }))
@@ -208,6 +209,7 @@ fn fixture() -> (Connections, Device, Grants, PersonId) {
             checks: AtomicUsize::new(0),
             observations: AtomicUsize::new(0),
             partial_batch: AtomicBool::new(false),
+            failure: Mutex::new(None),
             records: Mutex::new(vec![]),
         },
         Grants {
@@ -435,6 +437,33 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
         Err(AgentFailure::CapabilityUnavailable)
     ));
     assert_eq!(device.checks.load(Ordering::SeqCst), prior_checks);
+}
+
+#[tokio::test]
+async fn native_permission_denial_requires_review_without_issuing_a_view() {
+    let (connections, device, grants, person_id) = fixture();
+    *device.failure.lock().unwrap() = Some(CalendarFailure::PermissionDenied);
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    let leases = SourceLeaseRegistry::new();
+    assert!(matches!(
+        read_native_calendar_view(
+            &connections,
+            &device,
+            &grants,
+            &leases,
+            NativeCalendarViewRead {
+                person_id,
+                device_id: "device",
+                consumer: "floe.builtin.schedule",
+                query: &query,
+                window: &window(),
+            },
+        )
+        .await,
+        Err(AgentFailure::AccessReviewRequired)
+    ));
+    assert_eq!(grants.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

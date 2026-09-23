@@ -60,6 +60,7 @@ mod tests {
             ContextSource::Memory,
             ContextSource::Tasks,
             ContextSource::Notes,
+            ContextSource::Calendar,
         ] {
             for (failure, reason) in [
                 (

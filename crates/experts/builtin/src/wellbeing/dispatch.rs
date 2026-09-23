@@ -16,15 +16,20 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     crate::require_mandatory_source(host, request)?;
     let wellbeing = host.wellbeing_view(request).await?;
+    let mut context = granted_context(host, request);
     let calendars = if host.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
-        host.calendar_views(request, request.nearby_calendar_query()?).await?
+        crate::shared::optional_calendar_views(
+            &mut context,
+            host.calendar_views(request, request.nearby_calendar_query()?)
+                .await?,
+        )
     } else {
         vec![]
     };
     let result: WellbeingExpertResult = run_wellbeing_expert_with_views(
         host.model(),
         host.policy(),
-        request.personal_invocation(granted_context(host, request)),
+        request.personal_invocation(context),
         WellbeingContextViews {
             wellbeing,
             calendars,
