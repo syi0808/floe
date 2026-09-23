@@ -64,10 +64,6 @@ impl<Host, Request, Output> ExpertDispatchTable<Host, Request, Output> {
         self.entries.iter().any(|entry| entry.agent_id == agent_id)
     }
 
-    pub fn registered_ids(&self) -> impl Iterator<Item = &str> {
-        self.entries.iter().map(|entry| entry.agent_id.as_str())
-    }
-
     /// Hand the invocation to the Expert registered for this agent id.
     ///
     /// An unregistered id is denied here rather than interpreted.

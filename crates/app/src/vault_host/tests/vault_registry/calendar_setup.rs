@@ -34,7 +34,7 @@ async fn install_calendar(
         .vault
         .install_calendar_expert_with_connection(
             request,
-            &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
+            &crate::vault_host::schedule_packaging(),
             connection_id,
             cancellation,
         )
@@ -454,7 +454,7 @@ async fn staged_setup_cancellation_rolls_back_initial_tables_and_existing_regist
             .install_calendar_expert(
                 fixture.person,
                 &setup_request(&fixture, revision),
-                &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
+                &crate::vault_host::schedule_packaging(),
             )
             .unwrap();
         let checks = std::sync::atomic::AtomicUsize::new(0);
@@ -516,7 +516,7 @@ async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_an
                     .install_calendar_expert(
                         fixture.person,
                         &setup_request(&fixture, before.revision),
-                        &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
+                        &crate::vault_host::schedule_packaging(),
                     )
                     .unwrap();
                 changed = registry.snapshot();

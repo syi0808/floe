@@ -39,7 +39,7 @@ pub struct BuiltinExpertDeclaration {
 
 /// Every Expert the builtin setup installs together.
 pub fn builtin_setup_declarations() -> Vec<BuiltinExpertDeclaration> {
-    BuiltinExpertKind::ALL
+    BuiltinExpertKind::BUILTIN_SETUP
         .into_iter()
         .map(BuiltinExpertKind::declaration)
         .collect()
@@ -61,6 +61,16 @@ pub enum BuiltinExpertKind {
 impl BuiltinExpertKind {
     pub const ALL: [Self; 8] = [
         Self::Schedule,
+        Self::Commitments,
+        Self::Communication,
+        Self::Relationships,
+        Self::FocusAttention,
+        Self::Wellbeing,
+        Self::WorkContext,
+        Self::LifeLogistics,
+    ];
+
+    pub const BUILTIN_SETUP: [Self; 7] = [
         Self::Commitments,
         Self::Communication,
         Self::Relationships,
