@@ -2,7 +2,7 @@
 
 - **Status:** execution plan
 - **Baseline:** `main` at `0615b343bb752da85487a1a728927f0e3affdf5b`
-- **Current execution snapshot:** `main` at `98e9d8ce3b4b4ebfeacfe6589601adf7f1d64f42`. Checkpoint 01 is complete. Checkpoint 02 R1–R4 are landed; its first R5 cutover was reverted because legacy Calendar grants authorize `calendar.expert` while the common runtime correctly reads as the actual Expert identity such as `floe.builtin.schedule`.
+- **Current execution snapshot:** `main` at `605250d0b8f3bec476299673a8975fa82a073c52`. Checkpoints 01 and 02 are complete. Schedule now uses the same built-in runtime as the other Experts, canonical Calendar grants authorize actual first-party consumer identities, and the old Schedule endpoint/history boundary are deleted. Checkpoint 03 is next.
 - **Scope:** built-in Expert runtime, Calendar source acquisition, Expert Registry, Access/DataAccessGrant authority, connector permission product model, conversation interaction escalation, Flutter chat/connection surfaces, protocol/persistence cleanup
 - **Compatibility posture:** pre-stable internal APIs and local development data may be replaced directly. Do not add compatibility paths or migrate disposable local state merely to preserve the current Calendar vertical.
 - **Primary product target:** Apple ecosystem. Android code may be adjusted only where shared contracts require compilation; do not expand Android parity work as part of this plan.
@@ -15,9 +15,9 @@ This plan is not durable architecture documentation. When implementation complet
 
 ## 1. Problem statement
 
-The current repository contains two conflicting models.
+This plan began with two conflicting models. Checkpoint 02 has now removed the Schedule runtime split; the diagrams below describe the historical defect that motivated the work. The remaining checkpoints converge Registry/Access authority, connector permission UX, Conversation interactions and final obsolete surfaces.
 
-The newer generic model is:
+The generic model was:
 
 ~~~text
 Manager
@@ -29,9 +29,7 @@ Manager
   -> provider/native adapters
 ~~~
 
-Seven built-in Experts use that model.
-
-Schedule still uses the older Calendar vertical:
+Seven built-in Experts originally used that model while Schedule used the older Calendar vertical:
 
 ~~~text
 Manager
@@ -255,18 +253,16 @@ Line numbers below refer to the baseline commit and are planning anchors; symbol
 
 Read and execute these files in order.
 
-1. [01 — contracts and recoverable source interaction foundation](01-contracts-and-interaction-foundation.md)
-2. [02 — Schedule common-runtime convergence + Calendar consumer-policy prerequisite](02-calendar-source-and-schedule-convergence.md)
-3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md)
+1. [01 — contracts and recoverable source interaction foundation](01-contracts-and-interaction-foundation.md) — **complete**
+2. [02 — Schedule common-runtime convergence + Calendar consumer-policy prerequisite](02-calendar-source-and-schedule-convergence.md) — **complete**
+3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md) — **next**
 4. [04 — connector permission product model](04-connector-permission-product-model.md)
 5. [05 — Conversation and Flutter interaction/resume](05-conversation-and-flutter-interaction.md)
 6. [06 — obsolete-path deletion, verification and documentation convergence](06-deletion-verification-and-doc-convergence.md)
 
 Do not skip directly to Flutter. A chat permission button is unsafe until its target and decision path are owned by the canonical Access/Connections path.
 
-Checkpoint 02 owns one deliberately narrow Access/product-composition prerequisite: establish the canonical first-party Calendar consumer set so the common Schedule path can read under `floe.builtin.schedule`. This slice moved forward from the old Checkpoint 03 consumer-model section because R5 cannot succeed safely while grants authorize only `calendar.expert`.
-
-Do not expand that prerequisite into the rest of Checkpoint 03: CalendarExpertSetup, Registry source grants and `calendar_grant_mappings` remain until Checkpoint 03. Do not delete the Schedule endpoint until a fresh grant created under the canonical consumer policy proves the common Schedule success path.
+Checkpoint 02 moved the narrow Calendar first-party consumer-policy prerequisite forward and is now complete. CalendarExpertSetup, Registry source grants and `calendar_grant_mappings` intentionally remain as Checkpoint 03 work; none is part of the Schedule runtime path anymore.
 
 Do not make connection-time Observe implicit before checkpoint 3 has removed the competing Expert Registry permission authority.
 

@@ -1,5 +1,9 @@
 # Checkpoint 03 — Expert Registry and Access authority convergence
 
+- **Status:** next
+- **Start baseline:** `main` at `605250d0b8f3bec476299673a8975fa82a073c52`
+- **Precondition:** Checkpoint 02 is complete; Schedule no longer depends on CalendarExpertSetup, Registry Calendar view selection, or a Schedule-specific endpoint.
+
 ## Goal
 
 Remove the second source-permission authority from Expert Registry and remove the Calendar-Expert-specific grant binding/persistence model.
@@ -13,7 +17,7 @@ After this checkpoint:
 - CalendarExpertSetup, CalendarExpertOverview and CalendarAccessConfiguration no longer exist as product/runtime concepts;
 - stale local development Calendar-Expert persistence is reset/rejected rather than migrated into new authority.
 
-Checkpoint 02 must be complete first. Checkpoint 02 R4.5 already establishes the canonical first-party Calendar consumer policy required for Schedule cutover. Checkpoint 03 must reuse that policy while removing obsolete Registry/setup/mapping authority; it must not introduce a second consumer list.
+Checkpoint 02 is complete. R4.5 already establishes the canonical first-party Calendar consumer policy required by the common runtime. Checkpoint 03 reuses that policy while removing obsolete Registry/setup/mapping authority; it must not introduce a second consumer list.
 
 ## Baseline anchors
 

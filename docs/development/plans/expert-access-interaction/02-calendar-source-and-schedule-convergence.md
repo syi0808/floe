@@ -1,15 +1,11 @@
 # Checkpoint 02 — Schedule common-runtime cutover from current main
 
-- **Status:** active execution plan
-- **Current baseline:** `main` at `98e9d8ce3b4b4ebfeacfe6589601adf7f1d64f42`
-- **Scope:** finish Checkpoint 02 only
-- **Current progress:** R1–R4 are landed. Commit `076cdf3a` attempted R5 and was reverted by `98e9d8ce` after the common Schedule path exposed a Calendar grant consumer-identity mismatch.
-- **Do not enter:** Checkpoint 03 Registry/grant-mapping authority deletion, Checkpoint 04 permission UX redesign, Checkpoint 05 durable Conversation interaction. The sole exception is R4.5 below: the first-party Calendar consumer-policy prerequisite moved forward from Checkpoint 03 because R5 cannot safely complete without it.
-- **Primary rule:** stop improving the already-extracted Calendar reader unless a Schedule common-path test proves a concrete missing semantic
+- **Status:** complete
+- **Completion baseline:** `main` at `605250d0b8f3bec476299673a8975fa82a073c52`
+- **Scope closed:** R1–R7 plus the R4.5 Calendar first-party consumer-policy prerequisite are complete.
+- **Next checkpoint:** `03-expert-registry-and-access-authority.md`
 
-This file supersedes the previous broad Checkpoint 02 sequencing. The Calendar extraction half is already implemented. The remaining work is a runtime cutover.
-
-Checkpoint 02 is complete only when Schedule is the eighth ordinary built-in Expert and the old Schedule production endpoint no longer exists.
+This file records the completed Checkpoint 02 cutover. Schedule is now the eighth ordinary built-in Expert, common Calendar reads use actual consumer identities, and the old Schedule production endpoint/history boundary are gone.
 
 ---
 
@@ -48,17 +44,20 @@ be22dc59b0  Bind Expert Task settlement to selected package identity
 f8ab18c0d2  Settle stateful Schedule results on common Expert path
 076cdf3ad9  Cut Schedule over to the common Directory endpoint (reverted)
 98e9d8ce3b  Revert Schedule cutover pending Calendar grant identity
+f1e5010b8f  Authorize Calendar reads for canonical first-party consumers
+ccb72e691b  Cut Schedule over to the common Directory endpoint
+605250d0b8  Delete old Schedule endpoint and history boundary
 ~~~
 
-### Current progress at this baseline
+### Completion evidence
 
-- **R1 complete:** Schedule planning is request-only; setup/provider selection is removed from the new path.
-- **R2 complete:** `schedule::dispatch` reads through `BuiltinExpertHost::calendar_views` and preserves `SourceAccessRequirement` as a typed artifact.
-- **R3 complete:** common Schedule judgment lives in `schedule/expert.rs`; the old host remains only because the old production endpoint is still registered.
-- **R4 complete:** common stateful settlement and ContextDependency-based `/focus` proposal evidence are implemented.
-- **R5 blocked/reverted:** the common reader calls Access as `floe.builtin.schedule`, but legacy Calendar grant creation still scopes the grant to `calendar.expert`. Exact admission correctly rejects that substitution.
-
-Do not redo R1–R4 unless a regression test proves they are broken. The next implementation step is R4.5.
+- **R1–R4:** request-only planning, `schedule::dispatch`, common judgment, stateful settlement and ContextDependency-bound `/focus` evidence remain on the common path.
+- **R4.5:** native and remote fresh Calendar grants use the catalogue-derived canonical first-party consumer set; successful Schedule dependencies record `floe.builtin.schedule`, while legacy `calendar.expert` scope is rejection-only fixture state.
+- **R5:** `BuiltinExpertKind::ALL`, common setup and `registered_experts()` include Schedule; Directory routes Schedule through `BuiltinExpertEndpoint`.
+- **R6:** `ScheduleEndpoint`, `run_calendar_expert_endpoint`, direct registration, `schedule_definition` and their dedicated tests/helpers are deleted.
+- **R7:** Conversation owns `ConservativeSourceHistoryBoundary`; `CalendarHistoryBoundary` and the Schedule-specific history module are deleted.
+- **Final package:** `schedule/{mod.rs,dispatch.rs,expert.rs,plan.rs}` only.
+- **Verification reported at completion:** workspace check/tests, architecture boundary check, FFI build, `git diff --check`, Flutter analyze/tests/macOS build, and focused Context/Access/provider/Vault residual tests all passed.
 
 Current production split:
 
@@ -930,31 +929,31 @@ Do not return to Calendar-reader refinement without a failing common-path test.
 
 # 18. Completion checklist
 
-- [ ] Schedule planning no longer requires provider/setup selection.
-- [ ] schedule::dispatch uses the common BuiltinExpertHost signature.
-- [ ] Schedule Calendar reads only through BuiltinExpertHost::calendar_views.
-- [ ] Schedule domain reasoning owns no source/provider host.
-- [ ] NeedsUserAction produces a valid blocked Schedule Task result.
-- [ ] exact SourceAccessRequirement survives in a typed artifact.
-- [ ] /focus proposal works through common path.
-- [ ] generic host/endpoint creates Schedule settlement.
-- [ ] canonical Calendar first-party consumer policy is derived from built-in declarations in product composition.
-- [ ] fresh native and remote grants admit `floe.builtin.schedule` under its exact consumer identity.
-- [ ] legacy `calendar.expert` scope is never treated as implicit approval for Schedule.
-- [ ] successful Schedule ContextDependency.consumer is `floe.builtin.schedule`.
-- [ ] builtin_setup_declarations includes Schedule.
-- [ ] registered_experts includes Schedule.
-- [ ] Schedule uses common BuiltinExpertEndpoint.
-- [ ] OpenVault no longer directly registers Schedule.
-- [ ] ScheduleEndpoint files deleted.
-- [ ] run_calendar_expert_endpoint deleted.
-- [ ] schedule_definition deleted.
-- [ ] CalendarHistoryBoundary deleted.
-- [ ] Conversation no longer imports Schedule for history classification.
-- [ ] Checkpoint 03-only state is not on Schedule execution.
-- [ ] successful common Schedule E2E passes.
-- [ ] NeedsUserAction common Schedule E2E passes and Manager root Run can complete.
-- [ ] Rust workspace, architecture and FFI gates pass.
+- [x] Schedule planning no longer requires provider/setup selection.
+- [x] schedule::dispatch uses the common BuiltinExpertHost signature.
+- [x] Schedule Calendar reads only through BuiltinExpertHost::calendar_views.
+- [x] Schedule domain reasoning owns no source/provider host.
+- [x] NeedsUserAction produces a valid blocked Schedule Task result.
+- [x] exact SourceAccessRequirement survives in a typed artifact.
+- [x] /focus proposal works through common path.
+- [x] generic host/endpoint creates Schedule settlement.
+- [x] canonical Calendar first-party consumer policy is derived from built-in declarations in product composition.
+- [x] fresh native and remote grants admit `floe.builtin.schedule` under its exact consumer identity.
+- [x] legacy `calendar.expert` scope is never treated as implicit approval for Schedule.
+- [x] successful Schedule ContextDependency.consumer is `floe.builtin.schedule`.
+- [x] builtin_setup_declarations includes Schedule.
+- [x] registered_experts includes Schedule.
+- [x] Schedule uses common BuiltinExpertEndpoint.
+- [x] OpenVault no longer directly registers Schedule.
+- [x] ScheduleEndpoint files deleted.
+- [x] run_calendar_expert_endpoint deleted.
+- [x] schedule_definition deleted.
+- [x] CalendarHistoryBoundary deleted.
+- [x] Conversation no longer imports Schedule for history classification.
+- [x] Checkpoint 03-only state is not on Schedule execution.
+- [x] successful common Schedule E2E passes.
+- [x] NeedsUserAction common Schedule E2E passes and Manager root Run can complete.
+- [x] Rust workspace, architecture and FFI gates pass.
 
 The checkpoint is complete only after the **Schedule runtime cutover**, not because the generic Calendar reader is feature-complete.
 
