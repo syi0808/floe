@@ -40,7 +40,7 @@ async fn seed(
                 source_authority: None,
                 reviewed_native_subject_fingerprint: None,
             },
-            &crate::vault_host::schedule_packaging(),
+            &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
             &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             Cancellation::default(),
         )

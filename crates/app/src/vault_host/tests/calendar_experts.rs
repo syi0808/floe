@@ -1683,6 +1683,46 @@ fn install_builtin_mail_setup(
     assert_eq!(perform(worker, person, WorkerAction::Unlock).failure, None);
 }
 
+fn install_builtin_calendar_setup(
+    worker: &Worker,
+    root: &std::path::Path,
+    person: PersonId,
+    keys: &Keys,
+) {
+    assert_eq!(perform(worker, person, WorkerAction::Lock).failure, None);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let vault = runtime
+        .block_on(EncryptedAgentVault::open(root, person, keys.clone()))
+        .unwrap();
+    runtime
+        .block_on(vault.install_builtin_experts_enabled(
+            floe_experts::BuiltinExpertSetup {
+                instance_id: vault.registry_instance_id(),
+                expected_revision: 0,
+                setup_id: Uuid::new_v4(),
+                sources: vec![floe_experts::BuiltinSourceBinding {
+                    source: floe_experts::AgentId::try_new(
+                        floe_experts_builtin::BuiltinContextSource::Calendar.source_id(),
+                    )
+                    .unwrap(),
+                    view_handle: Uuid::new_v4(),
+                    state: floe_experts::BuiltinSourceState::Available,
+                }],
+            },
+            &crate::vault_host::builtin_setup_specs(),
+            floe_execution::Cancellation::default(),
+        ))
+        .unwrap();
+    assert!(runtime.block_on(vault.enabled_expert_cards()).unwrap().iter().any(|card| {
+        card.id == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
+    }));
+    drop(vault);
+    assert_eq!(perform(worker, person, WorkerAction::Unlock).failure, None);
+}
+
 #[test]
 fn production_builtin_setup_installs_through_vault_and_grants_sources() {
     let directory = tempfile::tempdir().unwrap();
@@ -3002,10 +3042,13 @@ struct DirectEndpointFixture {
 }
 
 fn direct_endpoint_fixture() -> DirectEndpointFixture {
+    direct_endpoint_fixture_for(PersonId::new())
+}
+
+fn direct_endpoint_fixture_for(person: PersonId) -> DirectEndpointFixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-    let person = PersonId::new();
     let keys = Keys::default();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -3025,6 +3068,217 @@ fn direct_endpoint_fixture() -> DirectEndpointFixture {
         local_context: Arc::new(LocalContextHost::default()),
         person,
     }
+}
+
+#[test]
+fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
+    use std::io::{Read, Write};
+    use floe_context_contract::{CalendarProvider, CalendarScope};
+    use floe_day::CalendarSelection;
+
+    let person = PersonId::new();
+    let fixture = direct_endpoint_fixture_for(person);
+    fixture.runtime.block_on(async {
+        fixture
+            .core
+            .set_calendar_scope(
+                person,
+                Uuid::new_v4().to_string(),
+                1,
+                "mac-local".into(),
+                CalendarProvider::Google,
+                vec![CalendarSelection {
+                    calendar_id: "home".into(),
+                    calendar_name: "Home".into(),
+                }],
+                CalendarScope::Selected,
+            )
+            .await
+            .unwrap();
+        fixture
+            .vault
+            .install_builtin_experts_enabled(
+                floe_experts::BuiltinExpertSetup {
+                    instance_id: fixture.vault.registry_instance_id(),
+                    expected_revision: 0,
+                    setup_id: Uuid::new_v4(),
+                    sources: vec![floe_experts::BuiltinSourceBinding {
+                        source: floe_experts::AgentId::try_new(
+                            floe_experts_builtin::BuiltinContextSource::Calendar.source_id(),
+                        )
+                        .unwrap(),
+                        view_handle: Uuid::new_v4(),
+                        state: floe_experts::BuiltinSourceState::Available,
+                    }],
+                },
+                &crate::vault_host::builtin_setup_specs(),
+                floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+    });
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let inventory_server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = [0; 4096];
+        let size = socket.read(&mut request).unwrap();
+        assert!(String::from_utf8_lossy(&request[..size]).starts_with("GET /v1/inference-purposes"));
+        let inventory = canonical_inventory_body();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{inventory}",
+                    inventory.len(),
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+    });
+    let mut connection = fixture_saved_connection(person, "mac-local");
+    connection.base_url = base_url;
+    let endpoint = BuiltinExpertEndpoint::new(
+        Arc::clone(&fixture.core),
+        Arc::clone(&fixture.vault),
+        Arc::clone(&fixture.local_context),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
+    );
+    let (invocation, scope) = direct_invocation(
+        &person.to_string(),
+        Uuid::new_v4(),
+        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+        "mac-local",
+        "Review today",
+    );
+    let report = fixture.runtime.block_on(floe_agent_contract::AgentEndpoint::execute(
+        &endpoint,
+        invocation,
+        &scope,
+    ));
+    inventory_server.join().unwrap();
+    let report = report.unwrap();
+    assert!(report.result.contains("needs_user_action"), "{}", report.result);
+    assert!(report.settlement.is_none());
+    assert_eq!(report.artifacts.len(), 1);
+    assert!(report.artifacts[0].parts.iter().any(|part| matches!(
+        part,
+        floe_agent_contract::ArtifactPart::Data { media_type, .. }
+            if media_type == floe_experts_builtin::schedule::dispatch::SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE
+    )));
+}
+
+#[test]
+fn common_schedule_review_requirement_completes_root_run() {
+    use floe_context_contract::{CalendarProvider, CalendarScope};
+    use floe_day::CalendarSelection;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let core = Arc::new(
+        runtime
+            .block_on(FloeCore::open(directory.path().join("core.db")))
+            .unwrap(),
+    );
+    let device_id = format!("local-{}", std::env::consts::OS);
+    runtime
+        .block_on(core.set_calendar_scope(
+            person,
+            Uuid::new_v4().to_string(),
+            1,
+            device_id.clone(),
+            CalendarProvider::Google,
+            vec![CalendarSelection {
+                calendar_id: "home".into(),
+                calendar_name: "Home".into(),
+            }],
+            CalendarScope::Selected,
+        ))
+        .unwrap();
+    let local = chrono::Local::now();
+    runtime
+        .block_on(core.import_calendar(
+            person,
+            1,
+            floe_day::CalendarRange {
+                start_date: local.date_naive(),
+                end_date_exclusive: local.date_naive() + chrono::Duration::days(1),
+                timezone_offset_seconds: local.offset().local_minus_utc(),
+                end_timezone_offset_seconds: None,
+            },
+            vec![],
+            chrono::Utc::now(),
+        ))
+        .unwrap();
+    let (mock, server) = answer_server(vec![
+        floe_inference::ModelStep::Delegate {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
+                .package_id()
+                .into(),
+            message: "Review today".into(),
+            context_refs: vec![],
+        },
+        floe_inference::ModelStep::Answer {
+            text: "Calendar access needs review before I can answer.".into(),
+        },
+    ]);
+    let worker = Worker::with_core_and_connection_store(
+        root.clone(),
+        keys.clone(),
+        core,
+        Arc::new(LocalContextHost::default()),
+        Arc::new(crate::events::AppEventBuffer::default()),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            saved_server_connection(&mock, person, &device_id),
+        )),
+    )
+    .unwrap();
+    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
+    install_builtin_calendar_setup(&worker, &root, person, &keys);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let result = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationTurn {
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "What is on my calendar?".into(),
+                device_id,
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            )),
+        },
+    );
+    assert_eq!(result.failure, None, "result: {result:?}");
+    let session = result.session.unwrap();
+    assert_eq!(session.last_outcome, Some(floe_conversation::AgentOutcome::Completed), "session: {session:?}");
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Delegation { task, .. }
+            if task.agent_id == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
+                && task.state == floe_experts::A2ATaskState::Completed
+                && task.artifacts.iter().any(|artifact| artifact.parts.iter().any(|part| matches!(
+                    part,
+                    floe_experts::A2APart::Data { media_type, .. }
+                        if media_type == floe_experts_builtin::schedule::dispatch::SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE
+                )))
+    )));
+    assert_eq!(server.join().unwrap().len(), 2);
 }
 
 fn direct_invocation(
@@ -3267,7 +3521,7 @@ fn schedule_endpoint_requires_review_for_foreign_device() {
                 source_authority: None,
                 reviewed_native_subject_fingerprint: None,
             },
-            &crate::vault_host::schedule_packaging(),
+            &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
             &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             floe_execution::Cancellation::default(),
         ))

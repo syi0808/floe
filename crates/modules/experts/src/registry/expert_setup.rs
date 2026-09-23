@@ -238,51 +238,72 @@ impl AgentRegistry {
             .assignments
             .iter()
             .filter(|assignment| assignment.person_id == person_id && assignment.enabled)
-            .filter_map(|assignment| {
-                let installation = self.installation(assignment.installation_id).ok()?;
-                if !installation.enabled {
-                    return None;
-                }
-                let package = self.package(&installation.package).ok()?;
-                if package.reference.kind != PackageKind::Expert
-                    || assignment.granted_view_handles.is_empty()
-                    || self.validate_grants(assignment).is_err()
-                {
-                    return None;
-                }
-                if matches!(
-                    package.implementation,
-                    PackageImplementation::Builtin { .. }
-                ) && !self.assignment_has_mandatory_source(assignment.id)
-                {
-                    return None;
-                }
-                let tool_assignment = self
-                    .assignment(person_id, *assignment.granted_tool_assignments.first()?)
-                    .ok()?;
-                if !tool_assignment.enabled
-                    || !self
-                        .installation(tool_assignment.installation_id)
-                        .ok()?
-                        .enabled
-                {
-                    return None;
-                }
-                let metadata = package.expert_metadata.as_ref()?;
-                let card = crate::AgentCard {
-                    schema_version: AGENT_VERSION,
-                    protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
-                    id: package.reference.id.clone(),
-                    version: package.reference.version.clone(),
-                    name: metadata.name.clone(),
-                    description: metadata.description.clone(),
-                    domain_tags: metadata.domain_tags.clone(),
-                    skills: metadata.skills.clone(),
-                    supported_placements: metadata.supported_placements.clone(),
-                };
-                card.validate().ok().map(|_| card)
-            })
+            .filter_map(|assignment| self.enabled_expert_card(person_id, assignment))
             .collect()
+    }
+
+    pub fn enabled_builtin_expert_cards(&self, person_id: PersonId) -> Vec<crate::AgentCard> {
+        self.snapshot
+            .builtin_setups
+            .iter()
+            .filter(|setup| setup.person_id == person_id)
+            .flat_map(|setup| setup.assignments.iter())
+            .filter_map(|receipt| {
+                self.assignment(person_id, receipt.expert_assignment_id)
+                    .ok()
+            })
+            .filter(|assignment| assignment.enabled)
+            .filter_map(|assignment| self.enabled_expert_card(person_id, assignment))
+            .collect()
+    }
+
+    fn enabled_expert_card(
+        &self,
+        person_id: PersonId,
+        assignment: &PackageAssignment,
+    ) -> Option<crate::AgentCard> {
+        let installation = self.installation(assignment.installation_id).ok()?;
+        if !installation.enabled {
+            return None;
+        }
+        let package = self.package(&installation.package).ok()?;
+        if package.reference.kind != PackageKind::Expert
+            || assignment.granted_view_handles.is_empty()
+            || self.validate_grants(assignment).is_err()
+        {
+            return None;
+        }
+        if matches!(
+            package.implementation,
+            PackageImplementation::Builtin { .. }
+        ) && !self.assignment_has_mandatory_source(assignment.id)
+        {
+            return None;
+        }
+        let tool_assignment = self
+            .assignment(person_id, *assignment.granted_tool_assignments.first()?)
+            .ok()?;
+        if !tool_assignment.enabled
+            || !self
+                .installation(tool_assignment.installation_id)
+                .ok()?
+                .enabled
+        {
+            return None;
+        }
+        let metadata = package.expert_metadata.as_ref()?;
+        let card = crate::AgentCard {
+            schema_version: AGENT_VERSION,
+            protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
+            id: package.reference.id.clone(),
+            version: package.reference.version.clone(),
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            domain_tags: metadata.domain_tags.clone(),
+            skills: metadata.skills.clone(),
+            supported_placements: metadata.supported_placements.clone(),
+        };
+        card.validate().ok().map(|_| card)
     }
 
     /// Whether this assignment still holds the source its Expert declared it

@@ -516,7 +516,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
         .vault
         .install_calendar_expert_with_connection(
             setup.clone(),
-            &crate::vault_host::schedule_packaging(),
+            &crate::vault_host::builtin_expert_packaging(BuiltinExpertKind::Schedule),
             "eventkit-connection".into(),
             &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             Cancellation::default(),

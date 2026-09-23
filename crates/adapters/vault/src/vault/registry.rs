@@ -245,6 +245,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(cards)
     }
 
+    pub async fn enabled_builtin_expert_cards(
+        &self,
+    ) -> Result<Vec<floe_experts::AgentCard>, AgentFailure> {
+        let cards = match self.expert_registry().await? {
+            Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?
+                .enabled_builtin_expert_cards(self.person_id),
+            None => vec![],
+        };
+        self.check_access()?;
+        Ok(cards)
+    }
+
     pub async fn calendar_expert_overview(
         &self,
     ) -> Result<floe_experts::CalendarExpertOverview, AgentFailure> {
