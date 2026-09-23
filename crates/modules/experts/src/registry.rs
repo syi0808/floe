@@ -760,8 +760,8 @@ impl AgentRegistry {
     ) -> Result<(), AgentFailure> {
         if result.package != resolved.package.reference
             || result.data_class != resolved.data_class
-            || result.view_calls != 1
-            || result.insights.is_empty()
+            || !(1..=8).contains(&result.view_calls)
+            || (result.insights.is_empty() && result.summary.is_none())
             || result.insights.len() > 8
             || result.action_proposals.len() > 1
             || result.model_calls == 1
@@ -770,7 +770,7 @@ impl AgentRegistry {
                 .summary
                 .as_ref()
                 .is_some_and(|summary| summary.trim().is_empty() || summary.len() > 2048)
-            || (result.summary.is_some() != (2..=10).contains(&result.model_calls))
+            || (result.summary.is_some() != (result.model_calls > 0))
             || (matches!(
                 resolved.package.implementation,
                 PackageImplementation::Declarative { .. }

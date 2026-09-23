@@ -145,11 +145,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         let views: Vec<_> = pages.into_values().collect();
         let draft = expert::judge(host, request, &views, (page_index + 1) as u32, plan.propose_focus)
             .await?;
-        return BuiltinExpertOutput::from_result(
-            BuiltinExpertKind::Schedule.result_artifact_name(),
-            draft.summary.clone(),
-            &draft,
-        );
+        return host.settle_stateful_result(request, draft).await;
     }
     Err(AgentFailure::BudgetExceeded)
 }
@@ -348,6 +344,20 @@ mod tests {
                         }]))
                     }
                 }
+            })
+        }
+
+        fn settle_stateful_result<'a>(
+            &'a self,
+            _: &'a BuiltinExpertRequest,
+            draft: crate::StatefulExpertDraft,
+        ) -> Acquiring<'a, BuiltinExpertOutput> {
+            Box::pin(async move {
+                BuiltinExpertOutput::from_result(
+                    BuiltinExpertKind::Schedule.result_artifact_name(),
+                    draft.summary.clone(),
+                    &draft,
+                )
             })
         }
 

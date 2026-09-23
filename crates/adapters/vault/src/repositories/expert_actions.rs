@@ -23,8 +23,9 @@ impl<Keys: VaultKeyProvider> ExpertActionStore for EncryptedAgentVault<Keys> {
     async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
+        evidence: &ExpertResult,
     ) -> Result<ContextDependency, AgentFailure> {
-        EncryptedAgentVault::expert_proposal_dependency(self, reference).await
+        EncryptedAgentVault::expert_proposal_dependency(self, reference, evidence).await
     }
 
     async fn store_agent_action_envelope(

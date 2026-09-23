@@ -121,6 +121,7 @@ pub trait ExpertActionStore {
     async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
+        evidence: &floe_agent_contract::ExpertResult,
     ) -> Result<ContextDependency, AgentFailure>;
     /// Record the durable pre-dispatch intent for one action.
     ///

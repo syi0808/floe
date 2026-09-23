@@ -72,6 +72,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             .deadline
             .min(Instant::now() + std::time::Duration::from_secs(30));
         let session_id = request.reference.session_id;
+        let reference = request.reference.clone();
         let result = tokio::select! {
             biased;
             _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
@@ -94,6 +95,19 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
                     evidence.view_handle,
                     action.connection_revision,
                 )?;
+                if evidence.source_handle.starts_with("calendar.observe:") {
+                    let dependency = store
+                        .expert_proposal_dependency(&reference, &evidence)
+                        .await?;
+                    self.fence.observation(&dependency)?;
+                    let connection = self
+                        .repository
+                        .calendar_connection(evidence.person_id)
+                        .await
+                        .map_err(agent_error)?
+                        .ok_or(AgentFailure::StaleContext)?;
+                    validate_context_calendar_source(&dependency, &connection, &action.calendar_id)?;
+                }
                 let proposal = &evidence.action_proposals[0];
                 if !origin.valid_for(&action)
                     || origin.instance_id != evidence.instance_id
@@ -414,14 +428,15 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             session_id: request.reference.session_id,
             invocation_id: evidence.invocation_id,
             assignment_id: evidence.assignment_id,
-            package: evidence.package,
+            package: evidence.package.clone(),
             view_handle: evidence.view_handle,
             state_revision: evidence.state_revision,
             data_class: evidence.data_class,
             automatic: false,
         };
         let governed_source = evidence.source_handle.starts_with("calendar.timeline:")
-            || evidence.source_handle.starts_with("calendar.lease:");
+            || evidence.source_handle.starts_with("calendar.lease:")
+            || evidence.source_handle.starts_with("calendar.observe:");
         if governed_source {
             match store.agent_calendar_action(evidence.invocation_id).await {
                 Ok(existing) => {
@@ -483,9 +498,24 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         {
             return Err(AgentFailure::StaleContext);
         }
+        let context_dependency = if evidence.source_handle.starts_with("calendar.observe:") {
+            let dependency = store
+                .expert_proposal_dependency(&request.reference, &evidence)
+                .await?;
+            self.fence.observation(&dependency)?;
+            validate_context_calendar_source(
+                &dependency,
+                &connection,
+                &destination.calendar_id,
+            )?;
+            Some(dependency)
+        } else {
+            None
+        };
         action.connection_revision = destination.connection_revision;
         let authority = if evidence.source_handle.starts_with("calendar.timeline:")
             || evidence.source_handle.starts_with("calendar.lease:")
+            || evidence.source_handle.starts_with("calendar.observe:")
         {
             store.agent_action_policy().await?
         } else {
@@ -514,8 +544,14 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         };
         if evidence.source_handle.starts_with("calendar.timeline:")
             || evidence.source_handle.starts_with("calendar.lease:")
+            || evidence.source_handle.starts_with("calendar.observe:")
         {
-            let dependency = store.expert_proposal_dependency(&request.reference).await?;
+            let dependency = match context_dependency {
+                Some(dependency) => dependency,
+                None => store
+                    .expert_proposal_dependency(&request.reference, &evidence)
+                    .await?,
+            };
             store
                 .store_agent_action_envelope(AgentActionEnvelope {
                     action: action.clone(),
@@ -563,6 +599,36 @@ pub fn validate_calendar_source_handle(
         }
     } else if let Some(observation_id) = source_handle.strip_prefix("calendar.lease:") {
         Uuid::parse_str(observation_id).map_err(|_| AgentFailure::StaleContext)?;
+    } else if let Some(observation_id) = source_handle.strip_prefix("calendar.observe:") {
+        if Uuid::parse_str(observation_id)
+            .map_err(|_| AgentFailure::StaleContext)?
+            .is_nil()
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+    }
+    Ok(())
+}
+
+fn validate_context_calendar_source(
+    dependency: &ContextDependency,
+    connection: &floe_day::CalendarConnection,
+    calendar_id: &str,
+) -> Result<(), AgentFailure> {
+    if dependency.source().connection_id().as_str() != connection.connection_id
+        || dependency.source().execution_owner().as_str() != connection.device_id
+        || dependency.source().source_authority() != connection.source_authority
+        || connection.disconnected
+        || !dependency
+            .resources()
+            .iter()
+            .any(|resource| resource.as_str() == calendar_id)
+        || !connection
+            .calendars
+            .iter()
+            .any(|calendar| calendar.calendar_id == calendar_id)
+    {
+        return Err(AgentFailure::StaleContext);
     }
     Ok(())
 }
@@ -604,4 +670,27 @@ fn timestamp(milliseconds: u64) -> Result<DateTime<Utc>, AgentFailure> {
 
 fn agent_error(error: ActionError) -> AgentFailure {
     AgentFailure::from(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_calendar_handle_requires_a_real_observation_identity() {
+        let view = Uuid::new_v4();
+        let observation = Uuid::new_v4();
+        assert!(validate_calendar_source_handle(
+            &format!("calendar.observe:{observation}"),
+            view,
+            1,
+        )
+        .is_ok());
+        for handle in ["calendar.observe:invalid", "calendar.observe:00000000-0000-0000-0000-000000000000"] {
+            assert_eq!(
+                validate_calendar_source_handle(handle, view, 1),
+                Err(AgentFailure::StaleContext)
+            );
+        }
+    }
 }

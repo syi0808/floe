@@ -18,8 +18,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(crate) async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
+        evidence: &ExpertResult,
     ) -> Result<floe_access::ContextDependency, AgentFailure> {
-        if reference.person_id != self.person_id {
+        if reference.person_id != self.person_id
+            || evidence.person_id != self.person_id
+            || evidence.invocation_id != reference.invocation_id
+        {
             return Err(AgentFailure::NotFound);
         }
         let session = self.load(self.person_id, reference.session_id).await?;
@@ -39,10 +43,48 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let DependencyCoverage::Dependent { dependencies } = coverage else {
             return Err(AgentFailure::PolicyDenied);
         };
-        let [dependency] = dependencies.as_slice() else {
-            return Err(AgentFailure::PolicyDenied);
+        let dependency = if let Some(observation_id) = evidence
+            .source_handle
+            .strip_prefix("calendar.observe:")
+        {
+            let observation_id = Uuid::parse_str(observation_id)
+                .map_err(|_| AgentFailure::StaleContext)?;
+            let matches: Vec<_> = dependencies
+                .iter()
+                .filter(|dependency| dependency.observation_id() == observation_id)
+                .collect();
+            let [dependency] = matches.as_slice() else {
+                return Err(AgentFailure::PolicyDenied);
+            };
+            (*dependency).clone()
+        } else {
+            let [dependency] = dependencies.as_slice() else {
+                return Err(AgentFailure::PolicyDenied);
+            };
+            dependency.clone()
         };
-        Ok(dependency.clone())
+        if dependency.person_id() != self.person_id
+            || dependency.source().person_id() != self.person_id
+            || dependency.consumer().identifier() != evidence.package.id
+            || dependency.operation() != floe_access::GrantOperation::Read
+            || dependency.expires_at() <= chrono::Utc::now()
+            || dependency.resources().is_empty()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let grant = self.get_data_access_grant(dependency.grant_id()).await?;
+        if grant.authority() != dependency.grant_authority()
+            || grant.source() != dependency.source()
+            || grant.state() != floe_access::GrantState::Active
+            || grant.review_required()
+            || dependency
+                .resources()
+                .iter()
+                .any(|resource| !grant.scope().resources().contains(resource))
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(dependency)
     }
 
     pub(crate) async fn with_expert_proposal<ResultValue, Publish>(
@@ -156,6 +198,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     registry.validate_recorded_result(&evidence)?;
                 }
                 ProposalUse::Inspect => registry.validate_historical_result(&evidence)?,
+            }
+            if evidence.source_handle.starts_with("calendar.observe:") {
+                self.expert_proposal_dependency(reference, &evidence).await?;
             }
             self.check_access()?;
             let value = operation(evidence).await?;

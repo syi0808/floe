@@ -437,7 +437,7 @@ mod tests {
     use crate::LocalContextCommand;
     // Canonical Expert host under test: the shared-Inference executor, policy
     // and source host the delegated endpoints prepare.
-    use super::expert_dispatch::ConversationExperts;
+    use super::expert_dispatch::{ConversationExperts, RejectStatefulSettlement};
     use super::expert_host::{
         CalendarContextReaderApi, PersonalAttentionReader, PersonalAttentionReaderApi,
         ResultRecorder, StoreResultRecorder, expert_policy,
@@ -1278,6 +1278,7 @@ mod tests {
                 supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
             }],
             grants: Default::default(),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[(
                 floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
                 &runner,
@@ -1683,6 +1684,7 @@ mod tests {
                 person_id,
                 &[BuiltinContextSource::Mail],
             ))),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let result = experts
@@ -1773,6 +1775,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             grants: Default::default(),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let cards = experts.agent_cards(PersonId::new());
@@ -1818,6 +1821,7 @@ mod tests {
             task_views: &[],
             cards: vec![],
             grants: Default::default(),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let result = experts
@@ -2333,6 +2337,7 @@ mod tests {
                 person_id,
                 &[BuiltinContextSource::Mail, BuiltinContextSource::Calendar],
             ))),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let task_id = uuid::Uuid::new_v4();
@@ -2579,6 +2584,7 @@ mod tests {
                     BuiltinContextSource::ConfirmedMemory,
                 ],
             ))),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let task = experts
@@ -2761,6 +2767,7 @@ mod tests {
                     BuiltinContextSource::Logistics,
                 ],
             ))),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let mut results = Vec::new();
@@ -3039,6 +3046,7 @@ mod tests {
                 PersonId::new(),
                 &[BuiltinContextSource::Contacts],
             ))),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
@@ -3106,6 +3114,7 @@ mod tests {
                 PersonId::new(),
                 &[BuiltinContextSource::Attention],
             ))),
+            stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
         };
         let result = experts

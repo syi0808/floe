@@ -216,6 +216,12 @@ pub trait BuiltinExpertHost: Sync {
         query: CalendarViewQuery,
     ) -> Acquiring<'a, SourceReadOutcome<Vec<CalendarContextView>>>;
 
+    fn settle_stateful_result<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+        draft: StatefulExpertDraft,
+    ) -> Acquiring<'a, BuiltinExpertOutput>;
+
     fn work_context_views<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,

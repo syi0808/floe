@@ -19,9 +19,14 @@ use std::sync::{Arc, Mutex};
 use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
 use floe_experts_builtin::{
     BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest,
+    StatefulExpertDraft,
 };
 
 pub(in crate::vault_host) mod schedule;
+mod stateful_settlement;
+use stateful_settlement::{StatefulExpertSettlement, VaultStatefulExpertSettlement};
+#[cfg(test)]
+pub(super) use stateful_settlement::RejectStatefulSettlement;
 
 /// The Experts this host serves, and the judgment registered behind each id.
 ///
@@ -222,6 +227,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                     .ok_or(AgentFailure::VaultUnavailable)?
                     .setup,
             ));
+            let stateful_settlement = VaultStatefulExpertSettlement {
+                vault: self.vault.as_ref(),
+            };
             let experts = ConversationExperts {
                 executor: &service,
                 scope,
@@ -242,6 +250,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 task_views: &[],
                 cards,
                 grants,
+                stateful_settlement: &stateful_settlement,
                 task_runners: &[],
             };
             let task_id = invocation.request.task_id.as_uuid();
@@ -325,6 +334,7 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) cards: Vec<AgentCard>,
     /// What each Expert may read, as the registry decided it.
     pub(super) grants: floe_experts::SourceGrants,
+    pub(super) stateful_settlement: &'model dyn StatefulExpertSettlement,
     /// Experts that answer on the Task path, by the agent id they are registered
     /// under.
     pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
@@ -433,6 +443,25 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         Box::pin(async move {
             self.personal_views(request, &request.agent_id)
                 .calendar_views(&query, request.deadline, &request.cancellation)
+                .await
+        })
+    }
+
+    fn settle_stateful_result<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+        draft: StatefulExpertDraft,
+    ) -> floe_experts_builtin::Acquiring<'a, BuiltinExpertOutput> {
+        let dependencies = self
+            .recorder
+            .captured
+            .lock()
+            .map(|captured| captured.clone())
+            .map_err(|_| AgentFailure::StorageUnavailable);
+        Box::pin(async move {
+            self.experts
+                .stateful_settlement
+                .settle(request, draft, dependencies?)
                 .await
         })
     }
