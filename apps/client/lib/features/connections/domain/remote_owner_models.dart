@@ -361,6 +361,9 @@ final class RemoteCalendarGrantPreview {
     required this.producer,
     required this.consumers,
     required this.recipient,
+    this.grantId,
+    this.grantAuthority,
+    this.consumerPolicy,
   });
 
   final String connectorId;
@@ -372,6 +375,9 @@ final class RemoteCalendarGrantPreview {
   final RemoteProducerIdentity producer;
   final List<String> consumers;
   final String recipient;
+  final String? grantId;
+  final Map<String, Object?>? grantAuthority;
+  final Map<String, Object?>? consumerPolicy;
 
   factory RemoteCalendarGrantPreview.fromJson(Object? raw) {
     if (raw is! Map) {
@@ -389,6 +395,21 @@ final class RemoteCalendarGrantPreview {
         value['source_authority'] is! Map) {
       throw const FormatException('Invalid calendar grant preview');
     }
+    final grantId = value['grant_id'];
+    final grantAuthority = value['grant_authority'];
+    final consumerPolicy = value['consumer_policy'];
+    if ((grantId != null && grantId is! String) ||
+        (grantAuthority != null && grantAuthority is! Map) ||
+        (consumerPolicy != null && consumerPolicy is! Map)) {
+      throw const FormatException('Invalid calendar grant preview');
+    }
+    final present =
+        (grantId != null ? 1 : 0) +
+        (grantAuthority != null ? 1 : 0) +
+        (consumerPolicy != null ? 1 : 0);
+    if (present != 0 && present != 3) {
+      throw const FormatException('Invalid calendar grant preview');
+    }
     return RemoteCalendarGrantPreview(
       connectorId: value['connector_id'] as String,
       connectionId: value['connection_id'] as String,
@@ -401,6 +422,13 @@ final class RemoteCalendarGrantPreview {
       producer: RemoteProducerIdentity.fromJson(value['producer']),
       consumers: List<String>.from(value['consumers'] as List),
       recipient: value['recipient'] as String,
+      grantId: grantId as String?,
+      grantAuthority: grantAuthority == null
+          ? null
+          : Map<String, Object?>.from(grantAuthority as Map),
+      consumerPolicy: consumerPolicy == null
+          ? null
+          : Map<String, Object?>.from(consumerPolicy as Map),
     );
   }
 }

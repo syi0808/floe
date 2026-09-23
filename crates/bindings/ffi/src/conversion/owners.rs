@@ -701,6 +701,9 @@ pub(crate) fn remote_calendar_preview_dto(
         consumers: preview.consumers,
         purpose: "everyday_assistance".into(),
         recipient: preview.recipient,
+        grant_id: preview.grant_id,
+        grant_authority: preview.grant_authority,
+        consumer_policy: preview.consumer_policy,
     }
 }
 

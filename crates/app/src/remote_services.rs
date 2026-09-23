@@ -149,6 +149,10 @@ pub enum RemoteAccessCommand {
         connection_id: String,
         resource: String,
         expected_producer_fingerprint: String,
+        expected_source_authority: floe_context_contract::SourceAuthority,
+        expected_grant_id: Option<floe_access::GrantId>,
+        expected_grant_authority: Option<floe_access::GrantAuthority>,
+        expected_consumer_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
     },
     CalendarGrantStatus {
         grant_id: floe_access::GrantId,

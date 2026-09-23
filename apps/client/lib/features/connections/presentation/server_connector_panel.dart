@@ -575,6 +575,10 @@ final class _ServerConnectionGrantsState
       connectionId: connectionId,
       resource: preview.resource,
       expectedProducerFingerprint: preview.producer.fingerprint,
+      expectedSourceAuthority: preview.sourceAuthority,
+      expectedGrantId: preview.grantId,
+      expectedGrantAuthority: preview.grantAuthority,
+      expectedConsumerPolicy: preview.consumerPolicy,
     );
     if (overview.connectionId != null && !_stable(overview.connectionId!)) {
       throw const FormatException('connection_changed');

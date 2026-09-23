@@ -148,7 +148,24 @@ pub trait RemoteGrantStore: Sync {
         expected: Option<GrantAuthority>,
         source: GrantSourceBinding,
         scope: GrantScope,
+        expected_policy: Option<ConsumerPolicyAuthority>,
     ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>>;
+
+    /// The single grant for one exact Calendar source identity and resource, if
+    /// any. A sibling resource is not a match; two grants for the same exact
+    /// resource are a conflict the Person must resolve.
+    fn find_calendar_grant<'a>(
+        &'a self,
+        source: &'a GrantSourceBinding,
+        resource: &'a str,
+    ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>>;
+
+    /// The consumer-policy authority the Person's review established for one
+    /// Calendar grant. A grant without its policy row is corrupt state.
+    fn calendar_grant_policy<'a>(
+        &'a self,
+        grant_id: GrantId,
+    ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>>;
 
     fn calendar_grant<'a>(
         &'a self,

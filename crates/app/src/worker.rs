@@ -141,6 +141,11 @@ pub struct RemoteCalendarGrantPreview {
     pub consumers: Vec<String>,
     /// Where the source's contents may be processed.
     pub recipient: String,
+    /// The exact current grant for this source and resource, if any. All
+    /// three are present or all three are absent; the review echoes them.
+    pub grant_id: Option<floe_access::GrantId>,
+    pub grant_authority: Option<floe_access::GrantAuthority>,
+    pub consumer_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
 }
 
 /// One command the worker runs against this Person's vault.

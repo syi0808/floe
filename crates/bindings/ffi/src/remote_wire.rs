@@ -195,11 +195,19 @@ fn access_with_host<Services: floe_app::HostServices + floe_app::RemoteAccessCom
             connection_id,
             resource,
             expected_producer_fingerprint,
+            expected_source_authority,
+            expected_grant_id,
+            expected_grant_authority,
+            expected_consumer_policy,
         } => floe_app::RemoteAccessCommand::CalendarGrantReview {
             connector_id,
             connection_id,
             resource,
             expected_producer_fingerprint,
+            expected_source_authority,
+            expected_grant_id,
+            expected_grant_authority,
+            expected_consumer_policy,
         },
         RemoteAccessOperationDto::CalendarGrantStatus { grant_id } => {
             floe_app::RemoteAccessCommand::CalendarGrantStatus { grant_id }

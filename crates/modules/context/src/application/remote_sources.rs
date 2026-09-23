@@ -605,7 +605,23 @@ mod calendar_tests {
             _: Option<GrantAuthority>,
             _: GrantSourceBinding,
             _: GrantScope,
+            _: Option<ConsumerPolicyAuthority>,
         ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn find_calendar_grant<'a>(
+            &'a self,
+            _: &'a GrantSourceBinding,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn calendar_grant_policy<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>> {
             Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
         }
 

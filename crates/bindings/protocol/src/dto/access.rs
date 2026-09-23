@@ -2,7 +2,9 @@ use super::AgentVaultFailureDto;
 use super::connections::{
     validate_envelope, validate_identifier, validate_producer, validate_text, validate_uuid,
 };
-use floe_context_contract::{GrantAuthority, GrantId, SourceAuthority};
+use floe_context_contract::{
+    ConsumerPolicyAuthority, GrantAuthority, GrantId, SourceAuthority,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -34,6 +36,10 @@ pub enum RemoteAccessOperationDto {
         connection_id: String,
         resource: String,
         expected_producer_fingerprint: String,
+        expected_source_authority: SourceAuthority,
+        expected_grant_id: Option<GrantId>,
+        expected_grant_authority: Option<GrantAuthority>,
+        expected_consumer_policy: Option<ConsumerPolicyAuthority>,
     },
     CalendarGrantStatus {
         grant_id: GrantId,
@@ -93,9 +99,28 @@ impl RemoteAccessRequestDto {
                 connection_id,
                 resource,
                 expected_producer_fingerprint,
+                expected_source_authority,
+                expected_grant_id,
+                expected_grant_authority,
+                expected_consumer_policy,
             } => {
                 validate_source(connector_id, connection_id, resource)?;
-                validate_text(expected_producer_fingerprint, 64)
+                validate_text(expected_producer_fingerprint, 64)?;
+                if !expected_source_authority.is_valid() {
+                    return Err("operation.expected_source_authority");
+                }
+                match (
+                    expected_grant_id,
+                    expected_grant_authority,
+                    expected_consumer_policy,
+                ) {
+                    (None, None, None) => Ok(()),
+                    (Some(id), Some(authority), Some(policy))
+                        if id.is_valid()
+                            && authority.is_valid()
+                            && policy.is_valid() => Ok(()),
+                    _ => Err("operation.expected_grant"),
+                }
             }
             RemoteAccessOperationDto::ViewGrantPreview {
                 view_id,
@@ -218,6 +243,9 @@ pub struct RemoteCalendarGrantPreviewDto {
     pub consumers: Vec<String>,
     pub purpose: String,
     pub recipient: String,
+    pub grant_id: Option<GrantId>,
+    pub grant_authority: Option<GrantAuthority>,
+    pub consumer_policy: Option<ConsumerPolicyAuthority>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

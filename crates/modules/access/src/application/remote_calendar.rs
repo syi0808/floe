@@ -8,12 +8,14 @@
 //! nowhere but here.
 
 use floe_context_contract::{
-    CalendarProvider, ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId,
-    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-    GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    CalendarProvider, ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency,
+    ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation,
+    GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+    SourceAuthority,
 };
 use floe_kernel::{AgentFailure, PersonId};
 
+use crate::application::grants::validate_grant_expectation;
 use crate::GrantState;
 use crate::application::remote_authority::admit_enrollment_pairing;
 use crate::application::remote_view::RemoteViewSourceReference;
@@ -72,6 +74,23 @@ pub struct RemoteCalendarGrantPreview {
     pub producer: RemoteProducerIdentity,
     pub consumers: Vec<String>,
     pub recipient: String,
+    /// The exact current grant for this source and resource, if any. All three
+    /// are present or all three are absent; the review echoes them back as the
+    /// reviewed expectation so a stale decision fails instead of forking the
+    /// grant.
+    pub grant_id: Option<GrantId>,
+    pub grant_authority: Option<GrantAuthority>,
+    pub consumer_policy: Option<ConsumerPolicyAuthority>,
+}
+
+/// What the Person says they already reviewed.
+#[derive(Clone, Copy)]
+pub struct RemoteCalendarGrantReviewExpectation<'a> {
+    pub producer_fingerprint: &'a str,
+    pub source_authority: SourceAuthority,
+    pub grant_id: Option<GrantId>,
+    pub grant_authority: Option<GrantAuthority>,
+    pub consumer_policy: Option<ConsumerPolicyAuthority>,
 }
 
 /// The connector a hosted calendar provider is reached through.
@@ -222,6 +241,21 @@ pub async fn preview_remote_calendar_grant(
         .verify_calendar_source_preview(&preview, request.pairing, query)
         .await?;
     source_matches_producer(&reference, &producer)?;
+    let source = remote_calendar_source(request.person_id, &reference)?;
+    let current = store
+        .find_calendar_grant(&source, request.resource)
+        .await?;
+    let (grant_id, grant_authority, consumer_policy) = match current {
+        None => (None, None, None),
+        Some(grant) => {
+            let policy = store.calendar_grant_policy(grant.id()).await?;
+            (
+                Some(grant.id()),
+                Some(grant.authority()),
+                Some(policy),
+            )
+        }
+    };
     Ok(RemoteCalendarGrantPreview {
         reference,
         producer,
@@ -230,6 +264,9 @@ pub async fn preview_remote_calendar_grant(
             .map(|consumer| consumer.identifier().to_owned())
             .collect(),
         recipient: REMOTE_CALENDAR_RECIPIENT.into(),
+        grant_id,
+        grant_authority,
+        consumer_policy,
     })
 }
 
@@ -237,27 +274,59 @@ pub async fn preview_remote_calendar_grant(
 ///
 /// The preview is taken again here rather than carried across the decision: a
 /// producer or authority that moved while the Person was deciding is not what
-/// they reviewed.
+/// they reviewed. A repeated review of the same source and resource updates the
+/// reviewed grant under CAS; it never forks an exact-resource duplicate.
 pub async fn review_and_activate_remote_calendar_grant(
     store: &impl RemoteGrantStore,
     transport: &impl RemoteGrantTransport,
     request: RemoteCalendarGrantRequest<'_>,
     connection: RemoteCalendarConnection<'_>,
     consumers: &[GrantConsumer],
-    expected_producer_fingerprint: &str,
+    expectation: RemoteCalendarGrantReviewExpectation<'_>,
     window: &RemoteCallWindow,
 ) -> Result<DataAccessGrant, AgentFailure> {
+    if !expectation.source_authority.is_valid() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let expected_grant =
+        validate_grant_expectation(expectation.grant_id, expectation.grant_authority)?;
+    match (&expected_grant, &expectation.consumer_policy) {
+        (None, None) => {}
+        (Some(_), Some(policy)) if policy.is_valid() => {}
+        _ => return Err(AgentFailure::InvalidInput),
+    }
     let preview =
         preview_remote_calendar_grant(store, transport, request, connection, consumers, window)
             .await?;
-    if preview.producer.fingerprint != expected_producer_fingerprint {
+    if preview.producer.fingerprint != expectation.producer_fingerprint
+        || preview.reference.source_authority != expectation.source_authority
+    {
         return Err(AgentFailure::PolicyDenied);
+    }
+    let current = validate_grant_expectation(preview.grant_id, preview.grant_authority)?;
+    if current != expected_grant || preview.consumer_policy != expectation.consumer_policy {
+        return Err(AgentFailure::Conflict);
     }
     let source = remote_calendar_source(request.person_id, &preview.reference)?;
     let scope = remote_calendar_scope(request.resource, consumers)?;
-    store
-        .activate_calendar_grant(GrantId::new(), None, source, scope)
-        .await
+    match expected_grant {
+        None => {
+            store
+                .activate_calendar_grant(GrantId::new(), None, source, scope, None)
+                .await
+        }
+        Some((grant_id, authority)) => {
+            store
+                .activate_calendar_grant(
+                    grant_id,
+                    Some(authority),
+                    source,
+                    scope,
+                    expectation.consumer_policy,
+                )
+                .await
+        }
+    }
 }
 
 /// What the Person's own record says about a remote calendar grant.
@@ -275,4 +344,538 @@ pub async fn pause_remote_calendar_grant(
     expected: GrantAuthority,
 ) -> Result<DataAccessGrant, AgentFailure> {
     store.pause_calendar_grant(grant_id, expected).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ExecutionOwnerId,
+    };
+    use floe_execution::Cancellation;
+
+    use super::*;
+    use crate::ports::remote_grants::{
+        BoxFuture, RemoteGrantBinding, RemoteSourceQuery, SignedCalendarPreview,
+        SignedSourcePreview,
+    };
+    use crate::application::remote_view::RemoteViewSourceReference;
+
+    struct Fixture {
+        person_id: PersonId,
+        producer: RemoteProducerIdentity,
+        reference: RemoteCalendarSourceReference,
+        calendars: Vec<String>,
+        current: Option<DataAccessGrant>,
+        policy: Option<ConsumerPolicyAuthority>,
+        activated: Mutex<Vec<(GrantId, Option<GrantAuthority>, Option<ConsumerPolicyAuthority>)>>,
+    }
+
+    impl Fixture {
+        fn new(current: Option<DataAccessGrant>, policy: Option<ConsumerPolicyAuthority>) -> Self {
+            let person_id = PersonId::new();
+            let authority = SourceAuthority::new();
+            let producer = RemoteProducerIdentity {
+                schema_version: 1,
+                instance_id: "instance".into(),
+                execution_owner: "server-owner".into(),
+                audience: "server-audience".into(),
+                key_id: "key".into(),
+                public_key: "public".into(),
+                fingerprint: "producer-fingerprint".into(),
+            };
+            Self {
+                person_id,
+                producer: producer.clone(),
+                calendars: vec!["primary".to_owned()],
+                reference: RemoteCalendarSourceReference {
+                    person_id: person_id.to_string(),
+                    client_id: "client".into(),
+                    device_id: "device".into(),
+                    audience: producer.audience.clone(),
+                    connector_id: "calendar.google".into(),
+                    connection_id: "connection".into(),
+                    execution_owner: producer.execution_owner.clone(),
+                    source_authority: authority,
+                    resource: "primary".into(),
+                    provider_identity: "account".into(),
+                },
+                current,
+                policy,
+                activated: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn grant(&self, resource: &str) -> DataAccessGrant {
+            let source = GrantSourceBinding::try_new(
+                self.person_id,
+                ConnectionId::try_new("connection").unwrap(),
+                ConnectorId::try_new("calendar.google").unwrap(),
+                ExecutionOwnerId::try_new("server-owner").unwrap(),
+                self.reference.source_authority,
+            )
+            .unwrap();
+            let scope = remote_calendar_scope(
+                resource,
+                std::slice::from_ref(&GrantConsumer::builtin("floe.builtin.schedule").unwrap()),
+            )
+            .unwrap();
+            let mut grant =
+                DataAccessGrant::new(GrantId::new(), uuid::Uuid::new_v4(), source, scope).unwrap();
+            let (source, scope) =
+                (grant.source().clone(), grant.scope().clone());
+            grant.activate_review(grant.authority(), source, scope).unwrap();
+            grant
+        }
+
+        fn request(&self) -> RemoteCalendarGrantRequest<'_> {
+            RemoteCalendarGrantRequest {
+                person_id: self.person_id,
+                pairing: RemotePairingIdentity {
+                    person_id: &self.reference.person_id,
+                    client_id: &self.reference.client_id,
+                    device_id: &self.reference.device_id,
+                },
+                connector_id: &self.reference.connector_id,
+                connection_id: &self.reference.connection_id,
+                resource: &self.reference.resource,
+            }
+        }
+
+        fn connection(&self) -> RemoteCalendarConnection<'_> {
+            RemoteCalendarConnection {
+                provider: CalendarProvider::Google,
+                connection_id: &self.reference.connection_id,
+                calendar_ids: &self.calendars,
+                disconnected: false,
+            }
+        }
+
+        fn window() -> RemoteCallWindow {
+            RemoteCallWindow {
+                deadline: tokio::time::Instant::now() + tokio::time::Duration::from_secs(5),
+                cancellation: Cancellation::default(),
+            }
+        }
+
+        fn consumers() -> Vec<GrantConsumer> {
+            vec![GrantConsumer::builtin("floe.builtin.schedule").unwrap()]
+        }
+
+        fn expectation(&self) -> RemoteCalendarGrantReviewExpectation<'_> {
+            RemoteCalendarGrantReviewExpectation {
+                producer_fingerprint: &self.producer.fingerprint,
+                source_authority: self.reference.source_authority,
+                grant_id: self.current.as_ref().map(|grant| grant.id()),
+                grant_authority: self.current.as_ref().map(|grant| grant.authority()),
+                consumer_policy: self.policy,
+            }
+        }
+    }
+
+    impl RemoteGrantTransport for Fixture {
+        fn producer_identity<'a>(
+            &'a self,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>> {
+            Box::pin(async move { Ok(self.producer.clone()) })
+        }
+
+        fn view_source_preview<'a>(
+            &'a self,
+            _: RemoteSourceQuery<'a>,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<SignedSourcePreview, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn calendar_source_preview<'a>(
+            &'a self,
+            _: RemoteCalendarQuery<'a>,
+            _: &'a RemoteCallWindow,
+        ) -> BoxFuture<'a, Result<SignedCalendarPreview, AgentFailure>> {
+            Box::pin(async move {
+                Ok(SignedCalendarPreview {
+                    descriptor_b64url: String::new(),
+                    producer_signature: String::new(),
+                    producer: self.producer.clone(),
+                })
+            })
+        }
+    }
+
+    impl RemoteGrantStore for Fixture {
+        fn pinned_producer<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Result<RemoteProducerIdentity, AgentFailure>> {
+            Box::pin(async move { Ok(self.producer.clone()) })
+        }
+
+        fn verify_view_source_preview<'a>(
+            &'a self,
+            _: &'a SignedSourcePreview,
+            _: RemotePairingIdentity<'a>,
+            _: RemoteSourceQuery<'a>,
+        ) -> BoxFuture<'a, Result<RemoteViewSourceReference, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn grants<'a>(
+            &'a self,
+            _: usize,
+        ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn find_view_grant<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a GrantSourceBinding,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn activate_view_grant<'a>(
+            &'a self,
+            _: &'a str,
+            _: GrantId,
+            _: Option<GrantAuthority>,
+            _: GrantSourceBinding,
+            _: GrantScope,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn verify_calendar_source_preview<'a>(
+            &'a self,
+            _: &'a SignedCalendarPreview,
+            _: RemotePairingIdentity<'a>,
+            _: RemoteCalendarQuery<'a>,
+        ) -> BoxFuture<'a, Result<RemoteCalendarSourceReference, AgentFailure>> {
+            Box::pin(async move { Ok(self.reference.clone()) })
+        }
+
+        fn activate_calendar_grant<'a>(
+            &'a self,
+            grant_id: GrantId,
+            expected: Option<GrantAuthority>,
+            _: GrantSourceBinding,
+            _: GrantScope,
+            expected_policy: Option<ConsumerPolicyAuthority>,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async move {
+                self.activated.lock().unwrap().push((grant_id, expected, expected_policy));
+                match (&self.current, expected) {
+                    (Some(current), Some(authority)) if current.authority() == authority => {
+                        Ok(current.clone())
+                    }
+                    (None, None) => Ok(self.grant("primary")),
+                    _ => Err(AgentFailure::Conflict),
+                }
+            })
+        }
+
+        fn find_calendar_grant<'a>(
+            &'a self,
+            _: &'a GrantSourceBinding,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
+            Box::pin(async move { Ok(self.current.clone()) })
+        }
+
+        fn calendar_grant_policy<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<ConsumerPolicyAuthority, AgentFailure>> {
+            Box::pin(async move { self.policy.ok_or(AgentFailure::VaultUnavailable) })
+        }
+
+        fn calendar_grant<'a>(
+            &'a self,
+            _: GrantId,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn pause_calendar_grant<'a>(
+            &'a self,
+            _: GrantId,
+            _: GrantAuthority,
+        ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn view_grant_binding<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+            _: SourceAuthority,
+        ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+
+        fn calendar_grant_binding<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: SourceAuthority,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+        }
+    }
+
+    fn unseeded() -> Fixture {
+        Fixture::new(None, None)
+    }
+
+    fn seeded() -> Fixture {
+        let bare = Fixture::new(None, None);
+        let grant = bare.grant("primary");
+        Fixture::new(Some(grant), Some(ConsumerPolicyAuthority::new()))
+    }
+
+    #[tokio::test]
+    async fn preview_reports_the_exact_current_grant_expectation() {
+        let fixture = seeded();
+        let preview = preview_remote_calendar_grant(
+            &fixture,
+            &fixture,
+            fixture.request(),
+            fixture.connection(),
+            &Fixture::consumers(),
+            &Fixture::window(),
+        )
+        .await
+        .unwrap();
+        let current = fixture.current.clone().unwrap();
+        assert_eq!(preview.grant_id, Some(current.id()));
+        assert_eq!(preview.grant_authority, Some(current.authority()));
+        assert_eq!(preview.consumer_policy, fixture.policy);
+
+        let empty = unseeded();
+        let preview = preview_remote_calendar_grant(
+            &empty,
+            &empty,
+            empty.request(),
+            empty.connection(),
+            &Fixture::consumers(),
+            &Fixture::window(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.grant_id, None);
+        assert_eq!(preview.grant_authority, None);
+        assert_eq!(preview.consumer_policy, None);
+    }
+
+    #[tokio::test]
+    async fn repeated_review_updates_the_reviewed_grant() {
+        let fixture = seeded();
+        let current = fixture.current.clone().unwrap();
+        let grant = review_and_activate_remote_calendar_grant(
+            &fixture,
+            &fixture,
+            fixture.request(),
+            fixture.connection(),
+            &Fixture::consumers(),
+            fixture.expectation(),
+            &Fixture::window(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(grant.id(), current.id());
+        let calls = fixture.activated.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, current.id());
+        assert_eq!(calls[0].1, Some(current.authority()));
+        assert_eq!(calls[0].2, fixture.policy);
+    }
+
+    #[tokio::test]
+    async fn fresh_review_creates_when_no_grant_exists() {
+        let fixture = unseeded();
+        review_and_activate_remote_calendar_grant(
+            &fixture,
+            &fixture,
+            fixture.request(),
+            fixture.connection(),
+            &Fixture::consumers(),
+            fixture.expectation(),
+            &Fixture::window(),
+        )
+        .await
+        .unwrap();
+        let calls = fixture.activated.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, None);
+        assert_eq!(calls[0].2, None);
+    }
+
+    #[tokio::test]
+    async fn review_rejects_appeared_disappeared_and_changed_grants() {
+        let fixture = seeded();
+        let consumers = Fixture::consumers();
+        let window = Fixture::window();
+        let appeared = RemoteCalendarGrantReviewExpectation {
+            grant_id: None,
+            grant_authority: None,
+            consumer_policy: None,
+            ..fixture.expectation()
+        };
+        assert_eq!(
+            review_and_activate_remote_calendar_grant(
+                &fixture,
+                &fixture,
+                fixture.request(),
+                fixture.connection(),
+                &consumers,
+                appeared,
+                &window,
+            )
+            .await,
+            Err(AgentFailure::Conflict)
+        );
+        let stale = RemoteCalendarGrantReviewExpectation {
+            grant_authority: Some(GrantAuthority::new()),
+            ..fixture.expectation()
+        };
+        assert_eq!(
+            review_and_activate_remote_calendar_grant(
+                &fixture,
+                &fixture,
+                fixture.request(),
+                fixture.connection(),
+                &consumers,
+                stale,
+                &window,
+            )
+            .await,
+            Err(AgentFailure::Conflict)
+        );
+        let rotated_policy = RemoteCalendarGrantReviewExpectation {
+            consumer_policy: Some(ConsumerPolicyAuthority::new()),
+            ..fixture.expectation()
+        };
+        assert_eq!(
+            review_and_activate_remote_calendar_grant(
+                &fixture,
+                &fixture,
+                fixture.request(),
+                fixture.connection(),
+                &consumers,
+                rotated_policy,
+                &window,
+            )
+            .await,
+            Err(AgentFailure::Conflict)
+        );
+
+        let empty = unseeded();
+        let consumers = Fixture::consumers();
+        let window = Fixture::window();
+        let vanished = RemoteCalendarGrantReviewExpectation {
+            producer_fingerprint: &empty.producer.fingerprint,
+            source_authority: empty.reference.source_authority,
+            grant_id: Some(GrantId::new()),
+            grant_authority: Some(GrantAuthority::new()),
+            consumer_policy: Some(ConsumerPolicyAuthority::new()),
+        };
+        assert_eq!(
+            review_and_activate_remote_calendar_grant(
+                &empty,
+                &empty,
+                empty.request(),
+                empty.connection(),
+                &consumers,
+                vanished,
+                &window,
+            )
+            .await,
+            Err(AgentFailure::Conflict)
+        );
+    }
+
+    #[tokio::test]
+    async fn review_rejects_mixed_expectation_halves() {
+        let fixture = seeded();
+        let consumers = Fixture::consumers();
+        let window = Fixture::window();
+        for expectation in [
+            RemoteCalendarGrantReviewExpectation {
+                grant_authority: None,
+                consumer_policy: None,
+                ..fixture.expectation()
+            },
+            RemoteCalendarGrantReviewExpectation {
+                grant_id: None,
+                consumer_policy: None,
+                ..fixture.expectation()
+            },
+            RemoteCalendarGrantReviewExpectation {
+                consumer_policy: None,
+                ..fixture.expectation()
+            },
+        ] {
+            assert_eq!(
+                review_and_activate_remote_calendar_grant(
+                    &fixture,
+                    &fixture,
+                    fixture.request(),
+                    fixture.connection(),
+                    &consumers,
+                    expectation,
+                    &window,
+                )
+                .await,
+                Err(AgentFailure::InvalidInput)
+            );
+        }
+        assert!(fixture.activated.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_rejects_producer_and_source_drift() {
+        let fixture = seeded();
+        let consumers = Fixture::consumers();
+        let window = Fixture::window();
+        let producer_moved = RemoteCalendarGrantReviewExpectation {
+            producer_fingerprint: "another-producer",
+            ..fixture.expectation()
+        };
+        assert_eq!(
+            review_and_activate_remote_calendar_grant(
+                &fixture,
+                &fixture,
+                fixture.request(),
+                fixture.connection(),
+                &consumers,
+                producer_moved,
+                &window,
+            )
+            .await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        let source_moved = RemoteCalendarGrantReviewExpectation {
+            source_authority: SourceAuthority::new(),
+            ..fixture.expectation()
+        };
+        assert_eq!(
+            review_and_activate_remote_calendar_grant(
+                &fixture,
+                &fixture,
+                fixture.request(),
+                fixture.connection(),
+                &consumers,
+                source_moved,
+                &window,
+            )
+            .await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        assert!(fixture.activated.lock().unwrap().is_empty());
+    }
 }

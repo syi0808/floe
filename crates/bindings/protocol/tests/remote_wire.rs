@@ -116,6 +116,13 @@ fn remote_access_rejects_all_transport_and_identity_fields() {
             command["expected_provider_identity"] = json!("provider");
             command["expected_recipient"] = json!("recipient");
         }
+        if kind == "calendar_grant_review" {
+            command["expected_source_authority"] =
+                json!({"incarnation": Uuid::new_v4(), "epoch": 1});
+            command["expected_grant_id"] = Value::Null;
+            command["expected_grant_authority"] = Value::Null;
+            command["expected_consumer_policy"] = Value::Null;
+        }
         commands.push(command);
     }
     for kind in [
@@ -204,6 +211,9 @@ fn remote_requests_reject_invalid_versions_ids_and_bounds() {
         json!({"kind": "enrollment_status", "enrollment_id": "invalid"}),
         json!({"kind": "calendar_grant_preview", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "x".repeat(2049)}),
         json!({"kind": "read_result", "operation_id": Uuid::nil(), "release": false}),
+        json!({"kind": "calendar_grant_review", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "primary", "expected_producer_fingerprint": "fingerprint", "expected_source_authority": {"incarnation": Uuid::nil(), "epoch": 1}, "expected_grant_id": Value::Null, "expected_grant_authority": Value::Null, "expected_consumer_policy": Value::Null}),
+        json!({"kind": "calendar_grant_review", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "primary", "expected_producer_fingerprint": "fingerprint", "expected_source_authority": {"incarnation": Uuid::new_v4(), "epoch": 1}, "expected_grant_id": Uuid::new_v4(), "expected_grant_authority": Value::Null, "expected_consumer_policy": Value::Null}),
+        json!({"kind": "calendar_grant_review", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "primary", "expected_producer_fingerprint": "fingerprint", "expected_source_authority": {"incarnation": Uuid::new_v4(), "epoch": 1}, "expected_grant_id": Uuid::new_v4(), "expected_grant_authority": {"incarnation": Uuid::new_v4(), "access_epoch": 1}, "expected_consumer_policy": Value::Null}),
     ] {
         assert!(
             serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation))

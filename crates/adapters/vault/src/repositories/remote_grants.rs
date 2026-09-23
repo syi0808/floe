@@ -102,11 +102,33 @@ impl<Keys: VaultKeyProvider> RemoteGrantStore for EncryptedAgentVault<Keys> {
         expected: Option<GrantAuthority>,
         source: GrantSourceBinding,
         scope: GrantScope,
+        expected_policy: Option<floe_access::ConsumerPolicyAuthority>,
     ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
         Box::pin(async move {
-            self.review_and_activate_remote_calendar_grant(grant_id, expected, source, scope, None)
-                .await
+            self.review_and_activate_remote_calendar_grant(
+                grant_id,
+                expected,
+                source,
+                scope,
+                expected_policy,
+            )
+            .await
         })
+    }
+
+    fn find_calendar_grant<'a>(
+        &'a self,
+        source: &'a GrantSourceBinding,
+        resource: &'a str,
+    ) -> BoxFuture<'a, Result<Option<DataAccessGrant>, AgentFailure>> {
+        Box::pin(async move { self.find_remote_calendar_grant(source, resource).await })
+    }
+
+    fn calendar_grant_policy<'a>(
+        &'a self,
+        grant_id: GrantId,
+    ) -> BoxFuture<'a, Result<floe_access::ConsumerPolicyAuthority, AgentFailure>> {
+        Box::pin(async move { self.remote_calendar_grant_policy(grant_id).await })
     }
 
     fn calendar_grant<'a>(

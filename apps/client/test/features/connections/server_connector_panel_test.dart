@@ -205,6 +205,12 @@ void main() {
                 'consumers': <String>['floe.builtin.schedule'],
                 'purpose': 'everyday_assistance',
                 'recipient': 'local_only',
+                'grant_id': '00000000-0000-4000-8000-000000000010',
+                'grant_authority': {
+                  'incarnation': 'fixture',
+                  'access_epoch': 1,
+                },
+                'consumer_policy': {'incarnation': 'policy', 'epoch': 1},
               },
             }
           : {
@@ -265,6 +271,19 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('connection-calendar-review')));
     await tester.pumpAndSettle();
     expect(actions[1]['connection_id'], first.connectionId);
+    expect(
+      actions[1]['expected_grant_id'],
+      '00000000-0000-4000-8000-000000000010',
+    );
+    expect(
+      actions[1]['expected_grant_authority'],
+      {'incarnation': 'fixture', 'access_epoch': 1},
+    );
+    expect(
+      actions[1]['expected_consumer_policy'],
+      {'incarnation': 'policy', 'epoch': 1},
+    );
+    expect(actions[1]['expected_source_authority'], <String, Object?>{});
 
     final second = _calendarConnector('00000000-0000-4000-8000-000000000012');
     await tester.pumpWidget(

@@ -124,6 +124,10 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
             connection_id: Uuid::new_v4().to_string(),
             resource: "calendar".into(),
             expected_producer_fingerprint: "fingerprint".into(),
+            expected_source_authority: floe_context_contract::SourceAuthority::new(),
+            expected_grant_id: None,
+            expected_grant_authority: None,
+            expected_consumer_policy: None,
         },
         RemoteAccessCommand::CalendarGrantStatus {
             grant_id: floe_access::GrantId::new(),

@@ -23,6 +23,10 @@ abstract interface class RemoteAccessGateway {
     required String connectionId,
     required String resource,
     required String expectedProducerFingerprint,
+    required Map<String, Object?> expectedSourceAuthority,
+    String? expectedGrantId,
+    Map<String, Object?>? expectedGrantAuthority,
+    Map<String, Object?>? expectedConsumerPolicy,
   });
 
   Future<RemoteCalendarGrantOverview> pauseRemoteCalendarGrant({
@@ -138,6 +142,10 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
     required String connectionId,
     required String resource,
     required String expectedProducerFingerprint,
+    required Map<String, Object?> expectedSourceAuthority,
+    String? expectedGrantId,
+    Map<String, Object?>? expectedGrantAuthority,
+    Map<String, Object?>? expectedConsumerPolicy,
   }) => _operations.perform(
     {
       'kind': 'calendar_grant_review',
@@ -145,6 +153,10 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
       'connection_id': connectionId,
       'resource': resource,
       'expected_producer_fingerprint': expectedProducerFingerprint,
+      'expected_source_authority': expectedSourceAuthority,
+      'expected_grant_id': expectedGrantId,
+      'expected_grant_authority': expectedGrantAuthority,
+      'expected_consumer_policy': expectedConsumerPolicy,
     },
     (result) {
       return RemoteCalendarGrantOverview.fromJson(result['calendar_grant']);

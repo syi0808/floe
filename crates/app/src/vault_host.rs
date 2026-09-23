@@ -2011,6 +2011,9 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             producer: preview.producer,
                             consumers: preview.consumers,
                             recipient: preview.recipient,
+                            grant_id: preview.grant_id,
+                            grant_authority: preview.grant_authority,
+                            consumer_policy: preview.consumer_policy,
                         }),
                         ..VaultExecutionResult::ready()
                     })
@@ -2020,6 +2023,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     connection_id,
                     resource,
                     expected_producer_fingerprint,
+                    expected_source_authority,
+                    expected_grant_id,
+                    expected_grant_authority,
+                    expected_consumer_policy,
                 } => {
                     let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
                     let vault = vault.vault.as_ref();
@@ -2047,7 +2054,13 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         },
                         evidence.as_access(),
                         &calendar_access::calendar_first_party_consumers()?,
-                        expected_producer_fingerprint,
+                        floe_access::RemoteCalendarGrantReviewExpectation {
+                            producer_fingerprint: expected_producer_fingerprint,
+                            source_authority: *expected_source_authority,
+                            grant_id: *expected_grant_id,
+                            grant_authority: *expected_grant_authority,
+                            consumer_policy: *expected_consumer_policy,
+                        },
                         &remote_authority::authority_window(job.cancellation.clone()),
                     ))
                     .await?;
