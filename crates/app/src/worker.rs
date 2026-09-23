@@ -138,7 +138,7 @@ pub struct RemoteCalendarGrantPreview {
     pub provider_identity: String,
     pub execution_owner: String,
     pub producer: floe_access::RemoteProducerIdentity,
-    pub consumer: String,
+    pub consumers: Vec<String>,
     /// Where the source's contents may be processed.
     pub recipient: String,
 }

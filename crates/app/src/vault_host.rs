@@ -1576,6 +1576,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let store = calendar_access::VaultCalendarSetups {
                 vault: vault.vault.as_ref(),
                 packaging: schedule_packaging(),
+                consumers: calendar_access::calendar_first_party_consumers()?,
                 cancellation: job.cancellation.clone(),
             };
             let overview = match setup {
@@ -1645,6 +1646,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let store = calendar_access::VaultCalendarSetups {
                 vault: vault.vault.as_ref(),
                 packaging: schedule_packaging(),
+                consumers: calendar_access::calendar_first_party_consumers()?,
                 cancellation: job.cancellation.clone(),
             };
             let admission = calendar_access::DeviceCalendarAdmission::new(
@@ -2094,6 +2096,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             resource,
                         },
                         evidence.as_access(),
+                        &calendar_access::calendar_first_party_consumers()?,
                         &remote_authority::authority_window(job.cancellation.clone()),
                     ))
                     .await?;
@@ -2107,7 +2110,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             provider_identity: preview.reference.provider_identity,
                             execution_owner: preview.reference.execution_owner,
                             producer: preview.producer,
-                            consumer: preview.consumer,
+                            consumers: preview.consumers,
                             recipient: preview.recipient,
                         }),
                         ..VaultExecutionResult::ready()
@@ -2144,6 +2147,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             resource,
                         },
                         evidence.as_access(),
+                        &calendar_access::calendar_first_party_consumers()?,
                         expected_producer_fingerprint,
                         &remote_authority::authority_window(job.cancellation.clone()),
                     ))

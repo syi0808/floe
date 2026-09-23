@@ -215,7 +215,7 @@ pub struct RemoteCalendarGrantPreviewDto {
     pub provider_identity: String,
     pub execution_owner: String,
     pub producer: RemoteProducerIdentityDto,
-    pub consumer: String,
+    pub consumers: Vec<String>,
     pub purpose: String,
     pub recipient: String,
 }

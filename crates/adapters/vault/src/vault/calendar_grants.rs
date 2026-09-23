@@ -426,6 +426,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         request: &CalendarExpertSetup,
         setup: &CalendarExpertSetupReceipt,
         connection_id: &str,
+        consumers: &[GrantConsumer],
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
         if !is_native_provider(request.provider) {
@@ -443,8 +444,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let source_authority = request
             .source_authority
             .ok_or(AgentFailure::AccessReviewRequired)?;
-        let (source, scope) =
-            calendar_binding(self.person_id, request, connection_id, source_authority)?;
+        let (source, scope) = calendar_binding(
+            self.person_id,
+            request,
+            connection_id,
+            source_authority,
+            consumers,
+        )?;
         let reviewed_native_subject_fingerprint = request
             .reviewed_native_subject_fingerprint
             .as_deref()
@@ -510,6 +516,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         previous: &RegistrySnapshot,
         snapshot: &RegistrySnapshot,
         connection_id: &str,
+        consumers: &[GrantConsumer],
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
         let setup = previous
@@ -595,8 +602,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                                 reviewed_native_subject_fingerprint.to_owned(),
                             ),
                         };
-                        let (source, scope) =
-                            calendar_binding(self.person_id, &request, connection_id, authority)?;
+                        let (source, scope) = calendar_binding(
+                            self.person_id,
+                            &request,
+                            connection_id,
+                            authority,
+                            consumers,
+                        )?;
                         let mutation = if current.state() == GrantState::Active
                             && mapping.reviewed_native_subject_fingerprint
                                 != reviewed_native_subject_fingerprint
@@ -988,6 +1000,7 @@ fn calendar_binding(
     request: &CalendarExpertSetup,
     connection_id: &str,
     source_authority: SourceAuthority,
+    consumers: &[GrantConsumer],
 ) -> Result<(GrantSourceBinding, GrantScope), AgentFailure> {
     let source = calendar_source(
         person_id,
@@ -1008,7 +1021,7 @@ fn calendar_binding(
         vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
         vec![GrantOperation::Read],
         vec![GrantPurpose::Assistant],
-        vec![GrantConsumer::builtin("calendar.expert").map_err(|_| AgentFailure::InvalidInput)?],
+        consumers.to_vec(),
         ProcessingRestriction::LocalOnly,
     )
     .map_err(|_| AgentFailure::InvalidInput)?;
@@ -1192,6 +1205,18 @@ mod tests {
         }
     }
 
+    fn calendar_consumers() -> Vec<GrantConsumer> {
+        [
+            "floe.builtin.schedule",
+            "floe.builtin.commitments",
+            "floe.builtin.focus-attention",
+            "floe.builtin.wellbeing",
+        ]
+        .into_iter()
+        .map(|consumer| GrantConsumer::builtin(consumer).unwrap())
+        .collect()
+    }
+
     #[tokio::test]
     async fn native_calendar_grant_requires_reviewed_activation_and_terminal_removal() {
         let root = tempfile::tempdir().unwrap();
@@ -1207,6 +1232,7 @@ mod tests {
                 request.clone(),
                 &test_packaging(),
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1222,7 +1248,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
@@ -1237,6 +1263,7 @@ mod tests {
                     change: CalendarAccessChange::SetEnabled { enabled: true },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1252,7 +1279,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
@@ -1269,13 +1296,34 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
             .await
             .unwrap();
         assert_eq!(current, admission);
+        for consumer in [
+            "floe.builtin.commitments",
+            "floe.builtin.focus-attention",
+            "floe.builtin.wellbeing",
+        ] {
+            vault
+                .authorize_current_native_calendar_grant(
+                    "opaque-eventkit-connection",
+                    CalendarProvider::EventKit,
+                    "test-device",
+                    &["home".into()],
+                    source_authority,
+                    GrantOperation::Read,
+                    GrantPurpose::Assistant,
+                    GrantConsumer::builtin(consumer).unwrap(),
+                    ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
+                )
+                .await
+                .unwrap();
+        }
         assert_eq!(
             vault
                 .authorize_current_native_calendar_grant(
@@ -1286,7 +1334,24 @@ mod tests {
                     source_authority,
                     GrantOperation::Read,
                     GrantPurpose::Assistant,
-                    GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
+                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
+                )
+                .await,
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        assert_eq!(
+            vault
+                .authorize_current_native_calendar_grant(
+                    "opaque-eventkit-connection",
+                    CalendarProvider::EventKit,
+                    "test-device",
+                    &["home".into()],
+                    source_authority,
+                    GrantOperation::Read,
+                    GrantPurpose::Assistant,
+                    GrantConsumer::extension("third-party.schedule").unwrap(),
                     ProcessingRestriction::LocalOnly,
                     Some("a".repeat(64).as_str()),
                 )
@@ -1303,7 +1368,7 @@ mod tests {
                     source_authority,
                     GrantOperation::Read,
                     GrantPurpose::Assistant,
-                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                     ProcessingRestriction::LocalOnly,
                     Some("a".repeat(64).as_str()),
                 )
@@ -1321,7 +1386,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("b".repeat(64).as_str()),
             )
@@ -1337,6 +1402,7 @@ mod tests {
                     change: CalendarAccessChange::SetEnabled { enabled: true },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1353,7 +1419,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
@@ -1399,7 +1465,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
@@ -1415,6 +1481,7 @@ mod tests {
                     change: CalendarAccessChange::SetEnabled { enabled: false },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1431,7 +1498,7 @@ mod tests {
                     source_authority,
                     GrantOperation::Read,
                     GrantPurpose::Assistant,
-                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                     ProcessingRestriction::LocalOnly,
                     Some("a".repeat(64).as_str()),
                 )
@@ -1447,6 +1514,7 @@ mod tests {
                     change: CalendarAccessChange::SetEnabled { enabled: true },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1462,7 +1530,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
@@ -1478,6 +1546,7 @@ mod tests {
                     change: CalendarAccessChange::Remove {},
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1494,7 +1563,7 @@ mod tests {
                     source_authority,
                     GrantOperation::Read,
                     GrantPurpose::Assistant,
-                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                     ProcessingRestriction::LocalOnly,
                     Some("a".repeat(64).as_str()),
                 )
@@ -1518,6 +1587,7 @@ mod tests {
                 request.clone(),
                 &test_packaging(),
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1531,6 +1601,7 @@ mod tests {
                     change: CalendarAccessChange::SetEnabled { enabled: true },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1546,7 +1617,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("a".repeat(64).as_str()),
             )
@@ -1569,6 +1640,7 @@ mod tests {
                     },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1584,7 +1656,7 @@ mod tests {
                 source_authority,
                 GrantOperation::Read,
                 GrantPurpose::Assistant,
-                GrantConsumer::builtin("calendar.expert").unwrap(),
+                GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                 ProcessingRestriction::LocalOnly,
                 Some("b".repeat(64).as_str()),
             )
@@ -1604,7 +1676,7 @@ mod tests {
                     source_authority,
                     GrantOperation::Read,
                     GrantPurpose::Assistant,
-                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
                     ProcessingRestriction::LocalOnly,
                     Some("a".repeat(64).as_str()),
                 )
@@ -1627,6 +1699,7 @@ mod tests {
                 request.clone(),
                 &test_packaging(),
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1640,6 +1713,7 @@ mod tests {
                     change: CalendarAccessChange::SetEnabled { enabled: true },
                 },
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -1657,7 +1731,7 @@ mod tests {
             vec![GrantDataCategory::Metadata],
             vec![GrantOperation::Read],
             vec![GrantPurpose::Assistant],
-            vec![GrantConsumer::builtin("calendar.expert").unwrap()],
+            vec![GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
             ProcessingRestriction::LocalOnly,
         )
         .unwrap();
@@ -1679,6 +1753,7 @@ mod tests {
                         change: CalendarAccessChange::SetEnabled { enabled: false },
                     },
                     "opaque-eventkit-connection".into(),
+                    &calendar_consumers(),
                     floe_execution::Cancellation::default(),
                 )
                 .await
@@ -1764,6 +1839,7 @@ mod tests {
                 request,
                 &test_packaging(),
                 "opaque-eventkit-connection".into(),
+                &calendar_consumers(),
                 floe_execution::Cancellation::default(),
             )
             .await

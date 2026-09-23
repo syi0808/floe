@@ -3268,6 +3268,7 @@ fn schedule_endpoint_requires_review_for_foreign_device() {
                 reviewed_native_subject_fingerprint: None,
             },
             &crate::vault_host::schedule_packaging(),
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             floe_execution::Cancellation::default(),
         ))
         .unwrap()

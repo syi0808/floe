@@ -359,6 +359,7 @@ final class RemoteCalendarGrantPreview {
     required this.providerIdentity,
     required this.executionOwner,
     required this.producer,
+    required this.consumers,
     required this.recipient,
   });
 
@@ -369,6 +370,7 @@ final class RemoteCalendarGrantPreview {
   final String providerIdentity;
   final String executionOwner;
   final RemoteProducerIdentity producer;
+  final List<String> consumers;
   final String recipient;
 
   factory RemoteCalendarGrantPreview.fromJson(Object? raw) {
@@ -382,6 +384,7 @@ final class RemoteCalendarGrantPreview {
         value['resource'] is! String ||
         value['provider_identity'] is! String ||
         value['execution_owner'] is! String ||
+        value['consumers'] is! List ||
         value['recipient'] is! String ||
         value['source_authority'] is! Map) {
       throw const FormatException('Invalid calendar grant preview');
@@ -396,6 +399,7 @@ final class RemoteCalendarGrantPreview {
       providerIdentity: value['provider_identity'] as String,
       executionOwner: value['execution_owner'] as String,
       producer: RemoteProducerIdentity.fromJson(value['producer']),
+      consumers: List<String>.from(value['consumers'] as List),
       recipient: value['recipient'] as String,
     );
   }

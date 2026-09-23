@@ -261,6 +261,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         request: floe_experts::CalendarExpertSetup,
         packaging: &floe_experts::ExpertPackaging,
+        consumers: &[floe_access::GrantConsumer],
         cancellation: floe_execution::Cancellation,
     ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
         if matches!(
@@ -275,6 +276,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             request,
             packaging,
             connection_id,
+            consumers,
             cancellation,
         )
         .await
@@ -285,6 +287,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         request: floe_experts::CalendarExpertSetup,
         packaging: &floe_experts::ExpertPackaging,
         connection_id: String,
+        consumers: &[floe_access::GrantConsumer],
         cancellation: floe_execution::Cancellation,
     ) -> Result<floe_experts::CalendarExpertSetupResult, AgentFailure> {
         let check = || {
@@ -312,6 +315,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &request,
                 &setup,
                 &connection_id,
+                consumers,
                 &check,
             )
             .await?;
@@ -327,6 +331,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn configure_calendar_access(
         &self,
         configuration: floe_experts::CalendarAccessConfiguration,
+        consumers: &[floe_access::GrantConsumer],
         cancellation: floe_execution::Cancellation,
     ) -> Result<floe_experts::CalendarExpertOverview, AgentFailure> {
         let native = self
@@ -357,14 +362,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::AccessReviewRequired);
         }
         let connection_id = configuration.setup_id.to_string();
-        self.configure_calendar_access_with_connection(configuration, connection_id, cancellation)
-            .await
+        self.configure_calendar_access_with_connection(
+            configuration,
+            connection_id,
+            consumers,
+            cancellation,
+        )
+        .await
     }
 
     pub async fn configure_calendar_access_with_connection(
         &self,
         configuration: floe_experts::CalendarAccessConfiguration,
         connection_id: String,
+        consumers: &[floe_access::GrantConsumer],
         cancellation: floe_execution::Cancellation,
     ) -> Result<floe_experts::CalendarExpertOverview, AgentFailure> {
         if cancellation.is_cancelled() {
@@ -411,6 +422,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &previous,
                 &registry.snapshot(),
                 &connection_id,
+                consumers,
                 &check,
             )
             .await?;

@@ -518,6 +518,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
             setup.clone(),
             &crate::vault_host::schedule_packaging(),
             "eventkit-connection".into(),
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             Cancellation::default(),
         )
         .await
@@ -532,6 +533,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
                 change: CalendarAccessChange::SetEnabled { enabled: true },
             },
             "eventkit-connection".into(),
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             Cancellation::default(),
         )
         .await

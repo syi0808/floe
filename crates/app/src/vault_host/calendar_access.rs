@@ -20,6 +20,7 @@ use floe_experts::{
     CalendarExpertOverview, CalendarExpertSetup, CalendarSetupStore, CalendarSourceAdmission,
     ExpertPackaging,
 };
+use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
@@ -28,6 +29,27 @@ use crate::local_context::LocalContextHost;
 
 /// How long the device is given to answer for its own calendar subject.
 const SUBJECT_DEADLINE: Duration = Duration::from_secs(30);
+
+pub(super) fn calendar_first_party_consumers(
+) -> Result<Vec<floe_access::GrantConsumer>, AgentFailure> {
+    let calendar_source = BuiltinContextSource::Calendar.source_id();
+    let mut consumers = BuiltinExpertKind::ALL
+        .into_iter()
+        .filter(|kind| {
+            kind.declaration()
+                .required_sources
+                .contains(&calendar_source)
+        })
+        .map(|kind| floe_access::GrantConsumer::builtin(kind.package_id()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    consumers.sort();
+    consumers.dedup();
+    if consumers.is_empty() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(consumers)
+}
 
 /// The window one device probe must finish inside.
 pub(super) fn subject_window(cancellation: Cancellation) -> RemoteCallWindow {
@@ -323,6 +345,7 @@ impl CalendarSourceAdmission for DeviceCalendarAdmission<'_> {
 pub(super) struct VaultCalendarSetups<'a, Keys> {
     pub vault: &'a EncryptedAgentVault<Keys>,
     pub packaging: ExpertPackaging,
+    pub consumers: Vec<floe_access::GrantConsumer>,
     pub cancellation: Cancellation,
 }
 
@@ -349,6 +372,7 @@ impl<Keys: VaultKeyProvider> CalendarSetupStore for VaultCalendarSetups<'_, Keys
                     request,
                     &self.packaging,
                     connection_id,
+                    &self.consumers,
                     self.cancellation.clone(),
                 )
                 .await?;
@@ -365,7 +389,11 @@ impl<Keys: VaultKeyProvider> CalendarSetupStore for VaultCalendarSetups<'_, Keys
             match source {
                 CalendarAccessSource::Registry => {
                     self.vault
-                        .configure_calendar_access(configuration, self.cancellation.clone())
+                        .configure_calendar_access(
+                            configuration,
+                            &self.consumers,
+                            self.cancellation.clone(),
+                        )
                         .await
                 }
                 CalendarAccessSource::Native { connection_id } => {
@@ -373,12 +401,142 @@ impl<Keys: VaultKeyProvider> CalendarSetupStore for VaultCalendarSetups<'_, Keys
                         .configure_calendar_access_with_connection(
                             configuration,
                             connection_id,
+                            &self.consumers,
                             self.cancellation.clone(),
                         )
                         .await
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calendar_consumers_are_derived_from_builtin_declarations() {
+        let consumers = calendar_first_party_consumers().unwrap();
+        let expected = BuiltinExpertKind::ALL
+            .into_iter()
+            .filter(|kind| {
+                kind.declaration()
+                    .required_sources
+                    .contains(&BuiltinContextSource::Calendar.source_id())
+            })
+            .map(|kind| kind.package_id())
+            .collect::<Vec<_>>();
+
+        for package_id in expected {
+            assert!(
+                consumers
+                    .iter()
+                    .any(|consumer| consumer.identifier() == package_id),
+                "missing {package_id}"
+            );
+        }
+        assert_eq!(consumers.len(), 4);
+        assert!(
+            !consumers
+                .iter()
+                .any(|consumer| consumer.identifier() == "floe.builtin.communication")
+        );
+        assert!(
+            consumers
+                .iter()
+                .all(|consumer| matches!(consumer, floe_access::GrantConsumer::Builtin(_)))
+        );
+    }
+
+    #[test]
+    fn remote_calendar_scope_uses_exact_canonical_consumers() {
+        use floe_access::{
+            ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantId,
+            GrantSourceBinding, SourceAuthority,
+        };
+
+        let person_id = PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("remote-calendar").unwrap(),
+            ConnectorId::try_new("calendar.google").unwrap(),
+            ExecutionOwnerId::try_new("server-owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let consumers = calendar_first_party_consumers().unwrap();
+        let scope = floe_access::remote_calendar_scope("primary", &consumers).unwrap();
+        let mut grant = DataAccessGrant::new(
+            GrantId::new(),
+            uuid::Uuid::new_v4(),
+            source.clone(),
+            scope.clone(),
+        )
+        .unwrap();
+        grant
+            .activate_review(grant.authority(), source, scope)
+            .unwrap();
+
+        for consumer in &consumers {
+            floe_access::admit_remote_calendar_read(&grant, consumer, "primary").unwrap();
+        }
+        assert!(
+            consumers.iter().any(|consumer| {
+                consumer.identifier() == BuiltinExpertKind::Schedule.package_id()
+            })
+        );
+        assert_eq!(
+            floe_access::admit_remote_calendar_read(
+                &grant,
+                &floe_access::GrantConsumer::extension("third-party.schedule").unwrap(),
+                "primary",
+            ),
+            Err(AgentFailure::PolicyDenied)
+        );
+    }
+
+    #[test]
+    fn legacy_calendar_expert_scope_does_not_admit_schedule() {
+        use floe_access::{
+            ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantId,
+            GrantSourceBinding, SourceAuthority,
+        };
+
+        let person_id = PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("legacy-calendar").unwrap(),
+            ConnectorId::try_new("calendar.google").unwrap(),
+            ExecutionOwnerId::try_new("server-owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let scope = floe_access::remote_calendar_scope(
+            "primary",
+            &[floe_access::GrantConsumer::builtin("calendar.expert").unwrap()],
+        )
+        .unwrap();
+        let mut grant = DataAccessGrant::new(
+            GrantId::new(),
+            uuid::Uuid::new_v4(),
+            source.clone(),
+            scope.clone(),
+        )
+        .unwrap();
+        grant
+            .activate_review(grant.authority(), source, scope)
+            .unwrap();
+
+        assert_eq!(
+            floe_access::admit_remote_calendar_read(
+                &grant,
+                &floe_access::GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id())
+                    .unwrap(),
+                "primary",
+            ),
+            Err(AgentFailure::PolicyDenied)
+        );
     }
 }
 

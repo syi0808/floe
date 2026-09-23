@@ -36,6 +36,7 @@ async fn install_calendar(
             request,
             &crate::vault_host::schedule_packaging(),
             connection_id,
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             cancellation,
         )
         .await
@@ -49,7 +50,12 @@ async fn configure_calendar(
     let connection_id = configuration.setup_id.to_string();
     fixture
         .vault
-        .configure_calendar_access_with_connection(configuration, connection_id, cancellation)
+        .configure_calendar_access_with_connection(
+            configuration,
+            connection_id,
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+            cancellation,
+        )
         .await
 }
 

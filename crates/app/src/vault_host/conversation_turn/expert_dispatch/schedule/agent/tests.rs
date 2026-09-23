@@ -282,6 +282,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                     request.clone(),
                     &crate::vault_host::schedule_packaging(),
                     connection_id.clone(),
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -292,6 +293,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                 .install_calendar_expert(
                     request.clone(),
                     &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -330,6 +332,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                         change: CalendarAccessChange::SetEnabled { enabled: true },
                     },
                     connection_id,
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -425,6 +428,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                         .unwrap()
                         .unwrap()
                         .connection_id,
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -435,6 +439,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_can
                 .install_calendar_expert(
                     request,
                     &crate::vault_host::schedule_packaging(),
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -995,6 +1000,8 @@ impl InferenceExecutor for ChangingExecutor<'_> {
                                 },
                             },
                             connection.connection_id,
+                            &crate::vault_host::calendar_access::calendar_first_party_consumers()
+                                .unwrap(),
                             Cancellation::default(),
                         )
                         .await?;
@@ -1790,6 +1797,8 @@ impl InferenceExecutor for PausingGrantExecutor<'_> {
                             change: CalendarAccessChange::SetEnabled { enabled: false },
                         },
                         connection_id,
+                        &crate::vault_host::calendar_access::calendar_first_party_consumers()
+                            .unwrap(),
                         Cancellation::default(),
                     )
                     .await?;
@@ -2015,6 +2024,7 @@ impl Fixture {
                     request.clone(),
                     &crate::vault_host::schedule_packaging(),
                     connection.connection_id.clone(),
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -2028,6 +2038,7 @@ impl Fixture {
                         change: CalendarAccessChange::SetEnabled { enabled: true },
                     },
                     connection.connection_id,
+                    &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
                     Cancellation::default(),
                 )
                 .await
@@ -2739,6 +2750,7 @@ async fn failed_native_read_does_not_pin_an_authority_before_a_later_success() {
                 change: CalendarAccessChange::SetEnabled { enabled: false },
             },
             connection_id.clone(),
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             Cancellation::default(),
         )
         .await
@@ -2753,6 +2765,7 @@ async fn failed_native_read_does_not_pin_an_authority_before_a_later_success() {
                 change: CalendarAccessChange::SetEnabled { enabled: true },
             },
             connection_id,
+            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
             Cancellation::default(),
         )
         .await

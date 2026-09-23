@@ -704,7 +704,7 @@ pub(crate) fn remote_calendar_preview_dto(
         provider_identity: preview.provider_identity,
         execution_owner: preview.execution_owner,
         producer: producer_identity_dto(&preview.producer),
-        consumer: preview.consumer,
+        consumers: preview.consumers,
         purpose: "everyday_assistance".into(),
         recipient: preview.recipient,
     }

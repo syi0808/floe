@@ -15,7 +15,6 @@ use floe_context_contract::{
 use floe_kernel::{AgentFailure, PersonId};
 
 use crate::GrantState;
-use crate::application::native_calendar::CALENDAR_EXPERT_CONSUMER as REMOTE_CALENDAR_CONSUMER;
 use crate::application::remote_authority::admit_enrollment_pairing;
 use crate::application::remote_view::RemoteViewSourceReference;
 use crate::application::remote_view::{RemoteProducerIdentity, producer_is_pinned};
@@ -71,7 +70,7 @@ pub struct RemoteCalendarGrantRequest<'a> {
 pub struct RemoteCalendarGrantPreview {
     pub reference: RemoteCalendarSourceReference,
     pub producer: RemoteProducerIdentity,
-    pub consumer: String,
+    pub consumers: Vec<String>,
     pub recipient: String,
 }
 
@@ -141,15 +140,16 @@ pub fn remote_calendar_source(
 }
 
 /// The scope one reviewed remote calendar grant carries.
-pub fn remote_calendar_scope(resource: &str) -> Result<GrantScope, AgentFailure> {
-    let consumer =
-        GrantConsumer::builtin(REMOTE_CALENDAR_CONSUMER).map_err(|_| AgentFailure::InvalidInput)?;
+pub fn remote_calendar_scope(
+    resource: &str,
+    consumers: &[GrantConsumer],
+) -> Result<GrantScope, AgentFailure> {
     GrantScope::try_new(
         vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
         vec![GrantDataCategory::Content],
         vec![GrantOperation::Read],
         vec![GrantPurpose::Assistant],
-        vec![consumer],
+        consumers.to_vec(),
         ProcessingRestriction::LocalOnly,
     )
     .map_err(|_| AgentFailure::InvalidInput)
@@ -204,8 +204,10 @@ pub async fn preview_remote_calendar_grant(
     transport: &impl RemoteGrantTransport,
     request: RemoteCalendarGrantRequest<'_>,
     connection: RemoteCalendarConnection<'_>,
+    consumers: &[GrantConsumer],
     window: &RemoteCallWindow,
 ) -> Result<RemoteCalendarGrantPreview, AgentFailure> {
+    remote_calendar_scope(request.resource, consumers)?;
     admit_enrollment_pairing(request.person_id, request.pairing)?;
     let producer = transport.producer_identity(window).await?;
     producer_is_pinned(&store.pinned_producer().await?, &producer)?;
@@ -223,7 +225,10 @@ pub async fn preview_remote_calendar_grant(
     Ok(RemoteCalendarGrantPreview {
         reference,
         producer,
-        consumer: REMOTE_CALENDAR_CONSUMER.into(),
+        consumers: consumers
+            .iter()
+            .map(|consumer| consumer.identifier().to_owned())
+            .collect(),
         recipient: REMOTE_CALENDAR_RECIPIENT.into(),
     })
 }
@@ -238,16 +243,18 @@ pub async fn review_and_activate_remote_calendar_grant(
     transport: &impl RemoteGrantTransport,
     request: RemoteCalendarGrantRequest<'_>,
     connection: RemoteCalendarConnection<'_>,
+    consumers: &[GrantConsumer],
     expected_producer_fingerprint: &str,
     window: &RemoteCallWindow,
 ) -> Result<DataAccessGrant, AgentFailure> {
     let preview =
-        preview_remote_calendar_grant(store, transport, request, connection, window).await?;
+        preview_remote_calendar_grant(store, transport, request, connection, consumers, window)
+            .await?;
     if preview.producer.fingerprint != expected_producer_fingerprint {
         return Err(AgentFailure::PolicyDenied);
     }
     let source = remote_calendar_source(request.person_id, &preview.reference)?;
-    let scope = remote_calendar_scope(request.resource)?;
+    let scope = remote_calendar_scope(request.resource, consumers)?;
     store
         .activate_calendar_grant(GrantId::new(), None, source, scope)
         .await

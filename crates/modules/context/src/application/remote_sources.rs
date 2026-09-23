@@ -424,7 +424,11 @@ mod calendar_tests {
                 source_authority,
             )
             .unwrap();
-            let scope = floe_access::remote_calendar_scope("primary").unwrap();
+            let scope = floe_access::remote_calendar_scope(
+                "primary",
+                &[GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
+            )
+            .unwrap();
             let mut grant = DataAccessGrant::new(
                 GrantId::new(),
                 Uuid::new_v4(),
