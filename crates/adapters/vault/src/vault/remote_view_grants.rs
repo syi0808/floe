@@ -238,8 +238,32 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         scope: GrantScope,
         expected_policy: Option<ConsumerPolicyAuthority>,
     ) -> Result<DataAccessGrant, AgentFailure> {
-        if !valid_view_id(view_id) || !grant_id.is_valid() || source.person_id() != self.person_id {
-            return Err(AgentFailure::InvalidInput);
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(super::storage)?;
+        let result = self
+            .activate_remote_view_grant_in_transaction(
+                &transaction,
+                view_id,
+                grant_id,
+                expected,
+                source,
+                scope,
+                expected_policy,
+            )
+            .await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await
+    }
+
+    pub async fn activate_remote_view_grants(
+        &self,
+        activations: Vec<floe_access::RemoteViewGrantActivation>,
+    ) -> Result<Vec<DataAccessGrant>, AgentFailure> {
+        if activations.is_empty() {
+            return Ok(Vec::new());
         }
         let mut connection = self.connection()?;
         let transaction = connection
@@ -247,8 +271,43 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(super::storage)?;
         let result = async {
-            self.ensure_remote_view_schema(&transaction).await?;
-            let existing = transaction
+            let mut grants = Vec::with_capacity(activations.len());
+            for activation in activations {
+                grants.push(
+                    self.activate_remote_view_grant_in_transaction(
+                        &transaction,
+                        &activation.view_id,
+                        activation.grant_id,
+                        activation.expected,
+                        activation.source,
+                        activation.scope,
+                        None,
+                    )
+                    .await?,
+                );
+            }
+            Ok(grants)
+        }
+        .await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await
+    }
+
+    async fn activate_remote_view_grant_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        view_id: &str,
+        grant_id: GrantId,
+        expected: Option<GrantAuthority>,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+        expected_policy: Option<ConsumerPolicyAuthority>,
+    ) -> Result<DataAccessGrant, AgentFailure> {
+        if !valid_view_id(view_id) || !grant_id.is_valid() || source.person_id() != self.person_id {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.ensure_remote_view_schema(transaction).await?;
+        let existing = transaction
                 .query(
                     "SELECT policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
                     (grant_id.as_uuid().to_string(), self.person_id.to_string()),
@@ -258,115 +317,108 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .next()
                 .await
                 .map_err(super::storage)?;
-            let policy = if let Some(row) = existing {
-                if expected.is_none() {
-                    return Err(AgentFailure::Conflict);
-                }
-                let encoded = row.get::<String>(2).map_err(super::storage)?;
-                let previous: RemoteViewGrantMapping =
-                    serde_json::from_str(&encoded).map_err(|_| AgentFailure::VaultUnavailable)?;
-                let current = ConsumerPolicyAuthority::from_parts(
-                    previous.policy_incarnation,
-                    std::num::NonZeroU64::new(previous.policy_epoch)
-                        .ok_or(AgentFailure::VaultUnavailable)?,
-                )
-                .ok_or(AgentFailure::VaultUnavailable)?;
-                if row.get::<String>(0).map_err(super::storage)?
-                    != current.incarnation().to_string()
-                    || row.get::<i64>(1).map_err(super::storage)?
-                        != current.epoch().get() as i64
-                    || previous.grant_id != grant_id
-                    || previous.view_id != view_id
-                    || previous.source.person_id() != self.person_id
-                    || expected_policy.is_some_and(|expected| expected != current)
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                if previous.scope == scope && previous.source == source {
-                    current
-                } else {
-                    current.advance().ok_or(AgentFailure::Conflict)?
-                }
-            } else if expected.is_some() {
-                return Err(AgentFailure::NotFound);
+        let policy = if let Some(row) = existing {
+            if expected.is_none() {
+                return Err(AgentFailure::Conflict);
+            }
+            let encoded = row.get::<String>(2).map_err(super::storage)?;
+            let previous: RemoteViewGrantMapping =
+                serde_json::from_str(&encoded).map_err(|_| AgentFailure::VaultUnavailable)?;
+            let current = ConsumerPolicyAuthority::from_parts(
+                previous.policy_incarnation,
+                std::num::NonZeroU64::new(previous.policy_epoch)
+                    .ok_or(AgentFailure::VaultUnavailable)?,
+            )
+            .ok_or(AgentFailure::VaultUnavailable)?;
+            if row.get::<String>(0).map_err(super::storage)? != current.incarnation().to_string()
+                || row.get::<i64>(1).map_err(super::storage)? != current.epoch().get() as i64
+                || previous.grant_id != grant_id
+                || previous.view_id != view_id
+                || previous.source.person_id() != self.person_id
+                || expected_policy.is_some_and(|expected| expected != current)
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            if previous.scope == scope && previous.source == source {
+                current
             } else {
-                if expected_policy.is_some() {
-                    return Err(AgentFailure::Conflict);
-                }
-                ConsumerPolicyAuthority::new()
-            };
-            let mapping = RemoteViewGrantMapping {
-                grant_id,
-                view_id: view_id.to_owned(),
-                source: source.clone(),
-                scope: scope.clone(),
-                policy_incarnation: policy.incarnation(),
-                policy_epoch: policy.epoch().get(),
-            };
-            let payload =
-                serde_json::to_string(&mapping).map_err(|_| AgentFailure::InvalidInput)?;
-            let grant = match expected {
-                Some(authority) => {
-                    self.mutate_data_access_grant_in_transaction(
-                        &transaction,
+                current.advance().ok_or(AgentFailure::Conflict)?
+            }
+        } else if expected.is_some() {
+            return Err(AgentFailure::NotFound);
+        } else {
+            if expected_policy.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            ConsumerPolicyAuthority::new()
+        };
+        let mapping = RemoteViewGrantMapping {
+            grant_id,
+            view_id: view_id.to_owned(),
+            source: source.clone(),
+            scope: scope.clone(),
+            policy_incarnation: policy.incarnation(),
+            policy_epoch: policy.epoch().get(),
+        };
+        let payload = serde_json::to_string(&mapping).map_err(|_| AgentFailure::InvalidInput)?;
+        let grant = match expected {
+            Some(authority) => {
+                self.mutate_data_access_grant_in_transaction(
+                    transaction,
+                    grant_id,
+                    authority,
+                    AccessGrantMutation::Activate { source, scope },
+                )
+                .await?
+            }
+            None => {
+                let created = self
+                    .create_data_access_grant_in_transaction(
+                        transaction,
                         grant_id,
-                        authority,
-                        AccessGrantMutation::Activate { source, scope },
+                        source.clone(),
+                        scope.clone(),
                     )
-                    .await?
-                }
-                None => {
-                    let created = self
-                        .create_data_access_grant_in_transaction(
-                            &transaction,
-                            grant_id,
-                            source.clone(),
-                            scope.clone(),
-                        )
-                        .await?;
-                    self.mutate_data_access_grant_in_transaction(
-                        &transaction,
-                        grant_id,
-                        created.authority(),
-                        AccessGrantMutation::Activate { source, scope },
-                    )
-                    .await?
-                }
-            };
-            let count = transaction
-                .query("SELECT COUNT(*) FROM remote_view_grant_mappings", ())
-                .await
-                .map_err(super::storage)?
-                .next()
-                .await
-                .map_err(super::storage)?
-                .ok_or(AgentFailure::VaultUnavailable)?
-                .get::<i64>(0)
-                .map_err(super::storage)?;
-            let updated = transaction
+                    .await?;
+                self.mutate_data_access_grant_in_transaction(
+                    transaction,
+                    grant_id,
+                    created.authority(),
+                    AccessGrantMutation::Activate { source, scope },
+                )
+                .await?
+            }
+        };
+        let count = transaction
+            .query("SELECT COUNT(*) FROM remote_view_grant_mappings", ())
+            .await
+            .map_err(super::storage)?
+            .next()
+            .await
+            .map_err(super::storage)?
+            .ok_or(AgentFailure::VaultUnavailable)?
+            .get::<i64>(0)
+            .map_err(super::storage)?;
+        let updated = transaction
                 .execute(
                     "UPDATE remote_view_grant_mappings SET view_id = ?, connector = ?, connection_id = ?, execution_owner = ?, source_incarnation = ?, source_epoch = ?, policy_incarnation = ?, policy_epoch = ?, payload = ? WHERE grant_id = ? AND person_id = ?",
                     (view_id, mapping.source.connector().as_str(), mapping.source.connection_id().as_str(), mapping.source.execution_owner().as_str(), mapping.source.source_authority().incarnation().to_string(), mapping.source.source_authority().epoch().get() as i64, mapping.policy_incarnation.to_string(), mapping.policy_epoch as i64, payload.clone(), grant_id.as_uuid().to_string(), self.person_id.to_string()),
                 )
                 .await
                 .map_err(super::storage)?;
-            if updated == 0 {
-                if usize::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)? >= MAX_MAPPINGS {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                transaction
+        if updated == 0 {
+            if usize::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)? >= MAX_MAPPINGS {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            transaction
                     .execute(
                         "INSERT INTO remote_view_grant_mappings (grant_id, person_id, view_id, connector, connection_id, execution_owner, source_incarnation, source_epoch, policy_incarnation, policy_epoch, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (grant_id.as_uuid().to_string(), self.person_id.to_string(), view_id, mapping.source.connector().as_str(), mapping.source.connection_id().as_str(), mapping.source.execution_owner().as_str(), mapping.source.source_authority().incarnation().to_string(), mapping.source.source_authority().epoch().get() as i64, mapping.policy_incarnation.to_string(), mapping.policy_epoch as i64, payload),
                     )
                     .await
                     .map_err(super::storage)?;
-            }
-            Ok(grant)
         }
-        .await;
-        self.finish_access_grant_transaction(transaction, result)
-            .await
+        Ok(grant)
     }
 
     pub(super) async fn initialize_remote_view_grant_store(
@@ -657,5 +709,35 @@ mod tests {
             changed_policy.epoch().get(),
             initial_policy.epoch().get() + 1
         );
+    }
+
+    #[tokio::test]
+    async fn multi_view_activation_rolls_back_as_one_local_set() {
+        let (_root, vault, person) = vault().await;
+        let source = source(person, SourceAuthority::new());
+        let first_id = GrantId::new();
+        let result = vault
+            .activate_remote_view_grants(vec![
+                floe_access::RemoteViewGrantActivation {
+                    view_id: "mail.communication".into(),
+                    grant_id: first_id,
+                    expected: None,
+                    source: source.clone(),
+                    scope: scope(),
+                },
+                floe_access::RemoteViewGrantActivation {
+                    view_id: "life.logistics".into(),
+                    grant_id: GrantId::new(),
+                    expected: Some(GrantAuthority::new()),
+                    source,
+                    scope: scope(),
+                },
+            ])
+            .await;
+        assert_eq!(result, Err(AgentFailure::NotFound));
+        assert!(matches!(
+            vault.get_data_access_grant(first_id).await,
+            Err(AgentFailure::NotFound)
+        ));
     }
 }

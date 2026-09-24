@@ -2087,6 +2087,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 deadline: tokio::time::Instant::now() + Duration::from_secs(30),
                                 cancellation: job.cancellation.clone(),
                             };
+                            let mut activations = Vec::with_capacity(policies.len());
                             for policy in &policies {
                                 let grant_resource = floe_context::remote_view_resource(
                                     policy.view_id,
@@ -2110,22 +2111,33 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                     vault, &transport, request, true, true, &window,
                                 )
                                 .await?;
-                                let grant = floe_access::review_and_activate_remote_view_grant(
-                                    vault,
-                                    &transport,
-                                    request,
-                                    floe_access::RemoteViewGrantExpectation {
-                                        producer_fingerprint: &preview.producer.fingerprint,
-                                        source_authority: preview.reference.source_authority,
-                                        connection_revision: preview.connection_revision,
-                                        provider_identity: &preview.reference.provider_identity,
-                                        recipient: &preview.producer.audience,
-                                    },
-                                    true,
-                                    true,
-                                    &window,
-                                )
-                                .await?;
+                                let preparation =
+                                    floe_access::prepare_remote_view_grant_activation(
+                                        vault,
+                                        &transport,
+                                        request,
+                                        floe_access::RemoteViewGrantExpectation {
+                                            producer_fingerprint: &preview.producer.fingerprint,
+                                            source_authority: preview.reference.source_authority,
+                                            connection_revision: preview.connection_revision,
+                                            provider_identity: &preview.reference.provider_identity,
+                                            recipient: &preview.producer.audience,
+                                        },
+                                        true,
+                                        true,
+                                        &window,
+                                    )
+                                    .await?;
+                                match preparation {
+                                    floe_access::RemoteViewGrantPreparation::Current(grant) => {
+                                        current_grants.push(grant.id());
+                                    }
+                                    floe_access::RemoteViewGrantPreparation::Activate(
+                                        activation,
+                                    ) => activations.push(activation),
+                                }
+                            }
+                            for grant in vault.activate_remote_view_grants(activations).await? {
                                 current_grants.push(grant.id());
                             }
                         }

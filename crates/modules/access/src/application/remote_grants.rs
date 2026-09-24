@@ -53,6 +53,21 @@ pub struct RemoteViewGrantExpectation<'a> {
     pub recipient: &'a str,
 }
 
+#[derive(Clone, Debug)]
+pub struct RemoteViewGrantActivation {
+    pub view_id: String,
+    pub grant_id: floe_context_contract::GrantId,
+    pub expected: Option<floe_context_contract::GrantAuthority>,
+    pub source: floe_context_contract::GrantSourceBinding,
+    pub scope: floe_context_contract::GrantScope,
+}
+
+#[derive(Clone, Debug)]
+pub enum RemoteViewGrantPreparation {
+    Current(DataAccessGrant),
+    Activate(RemoteViewGrantActivation),
+}
+
 fn admissible(request: &RemoteViewGrantRequest<'_>, resource_matches: bool) -> bool {
     request.pairing.person_id == request.person_id.to_string()
         && !request.pairing.client_id.is_empty()
@@ -121,6 +136,41 @@ pub async fn review_and_activate_remote_view_grant(
     is_remote_view: bool,
     window: &RemoteCallWindow,
 ) -> Result<DataAccessGrant, AgentFailure> {
+    let preparation = prepare_remote_view_grant_activation(
+        store,
+        transport,
+        request,
+        expectation,
+        resource_matches_view,
+        is_remote_view,
+        window,
+    )
+    .await?;
+    match preparation {
+        RemoteViewGrantPreparation::Current(grant) => Ok(grant),
+        RemoteViewGrantPreparation::Activate(activation) => {
+            store
+                .activate_view_grant(
+                    &activation.view_id,
+                    activation.grant_id,
+                    activation.expected,
+                    activation.source,
+                    activation.scope,
+                )
+                .await
+        }
+    }
+}
+
+pub async fn prepare_remote_view_grant_activation(
+    store: &impl RemoteGrantStore,
+    transport: &impl RemoteGrantTransport,
+    request: RemoteViewGrantRequest<'_>,
+    expectation: RemoteViewGrantExpectation<'_>,
+    resource_matches_view: bool,
+    is_remote_view: bool,
+    window: &RemoteCallWindow,
+) -> Result<RemoteViewGrantPreparation, AgentFailure> {
     let preview = preview_remote_view_grant(
         store,
         transport,
@@ -153,11 +203,17 @@ pub async fn review_and_activate_remote_view_grant(
         .find_view_grant(request.view_id, &source, request.consumers[0].identifier())
         .await?;
     match review_remote_view_grant(existing.as_ref(), &scope)? {
-        RemoteViewGrantReview::AlreadyGranted => existing.ok_or(AgentFailure::PolicyDenied),
-        RemoteViewGrantReview::Activate { grant_id, expected } => {
-            store
-                .activate_view_grant(request.view_id, grant_id, expected, source, scope)
-                .await
-        }
+        RemoteViewGrantReview::AlreadyGranted => Ok(RemoteViewGrantPreparation::Current(
+            existing.ok_or(AgentFailure::PolicyDenied)?,
+        )),
+        RemoteViewGrantReview::Activate { grant_id, expected } => Ok(
+            RemoteViewGrantPreparation::Activate(RemoteViewGrantActivation {
+                view_id: request.view_id.to_owned(),
+                grant_id,
+                expected,
+                source,
+                scope,
+            }),
+        ),
     }
 }

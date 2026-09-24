@@ -62,7 +62,8 @@ pub use remote_calendar::{
     remote_calendar_source, review_and_activate_remote_calendar_grant,
 };
 pub use remote_grants::{
-    RemoteViewGrantExpectation, RemoteViewGrantPreview, RemoteViewGrantRequest,
+    RemoteViewGrantActivation, RemoteViewGrantExpectation, RemoteViewGrantPreparation,
+    RemoteViewGrantPreview, RemoteViewGrantRequest, prepare_remote_view_grant_activation,
     preview_remote_view_grant, review_and_activate_remote_view_grant,
 };
 pub use remote_view::{
