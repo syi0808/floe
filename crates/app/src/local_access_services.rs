@@ -113,6 +113,7 @@ pub struct LocalAccessResult {
     pub state: Option<VaultState>,
     pub calendar_subject_preview: Option<CalendarSubjectPreview>,
     pub calendar_access: Option<CalendarAccessOverview>,
+    pub connection_observe: Option<crate::ConnectionObserveOverview>,
     pub personal_access: Option<PersonalAccessOverview>,
     pub failure: Option<AgentFailure>,
 }
@@ -199,6 +200,10 @@ impl AppComposition {
                 release,
             )
             .map_err(crate::composition::service_failure)?;
+        let connection_observe = result
+            .calendar_access
+            .clone()
+            .map(crate::ConnectionObserveOverview::from_calendar);
         Ok(LocalAccessResult {
             operation_id: result.request_id,
             stage: result.stage,
@@ -206,6 +211,7 @@ impl AppComposition {
             state: result.state,
             calendar_subject_preview: result.calendar_subject_preview,
             calendar_access: result.calendar_access,
+            connection_observe,
             personal_access: result.personal_access,
             failure: result.failure,
         })

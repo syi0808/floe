@@ -5,7 +5,7 @@ use std::sync::Arc;
 use floe_context::{NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest};
 use floe_execution::Cancellation;
 
-use super::super::calendar_access::apply_calendar_access;
+use super::super::calendar_access::{apply_calendar_access, set_calendar_observe};
 use super::*;
 use crate::{CalendarAccessChange, CalendarAccessOverview, CalendarAccessState, CalendarSelection};
 
@@ -127,6 +127,57 @@ impl Fixture {
             expected_grant_authority: overview.grant_authority,
         })
     }
+
+    fn set_observe(
+        &self,
+        reviewed: crate::ConnectionObserveOverview,
+        enabled: bool,
+    ) -> Result<crate::ConnectionObserveOverview, AgentFailure> {
+        self.runtime.block_on(set_calendar_observe(
+            &self.core,
+            &self.vault,
+            &self.subject,
+            self.person,
+            self.device_id.clone(),
+            reviewed,
+            enabled,
+            Cancellation::default(),
+        ))
+    }
+}
+
+#[test]
+fn connection_projection_inspection_never_creates_a_grant() {
+    let fixture = Fixture::new();
+    for _ in 0..2 {
+        let raw = fixture.apply(CalendarAccessChange::Inspect).unwrap();
+        let projected = crate::ConnectionObserveOverview::from_calendar(raw);
+        assert_eq!(projected.status, crate::ConnectionObserveStatus::NeedsReview);
+        assert!(projected.members.is_empty());
+    }
+    assert!(
+        fixture
+            .runtime
+            .block_on(fixture.vault.list_data_access_grants(16))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn connection_set_enabled_freshly_reviews_and_cas_pauses() {
+    let fixture = Fixture::new();
+    let inspected = crate::ConnectionObserveOverview::from_calendar(
+        fixture.apply(CalendarAccessChange::Inspect).unwrap(),
+    );
+    let active = fixture.set_observe(inspected.clone(), true).unwrap();
+    assert_eq!(active.status, crate::ConnectionObserveStatus::Active);
+    assert_eq!(
+        fixture.set_observe(inspected, false),
+        Err(AgentFailure::Conflict)
+    );
+    let paused = fixture.set_observe(active, false).unwrap();
+    assert_eq!(paused.status, crate::ConnectionObserveStatus::Paused);
 }
 
 #[test]

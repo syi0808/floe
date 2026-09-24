@@ -11,6 +11,7 @@ mod bootstrap;
 mod calendar_facade;
 #[cfg(unix)]
 mod composition;
+mod connection_observe;
 #[cfg(unix)]
 mod connection_services;
 #[cfg(unix)]
@@ -88,6 +89,9 @@ pub use connection_services::{ConnectionsQueries, ConnectionsResult};
 pub use context_services::{
     AttentionCompletion, CalendarCompletion, ContextCommand, ContextQuery, LocalContextCommands,
     LocalContextQueries, PersonalCompletion,
+};
+pub use connection_observe::{
+    ConnectionObserveMember, ConnectionObserveOverview, ConnectionObserveStatus,
 };
 pub use core::{Classification, FloeCore};
 #[cfg(unix)]
