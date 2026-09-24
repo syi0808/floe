@@ -2196,3 +2196,137 @@ async fn interaction_message_survives_archive_and_search_index() {
         format!("interaction {interaction_id} source_access")
     );
 }
+
+fn interaction_artifact(
+    interaction_id: Uuid,
+) -> floe_agent_contract::Artifact {
+    floe_agent_contract::Artifact {
+        artifact_id: Uuid::new_v4(),
+        name: "user_interaction".into(),
+        parts: vec![floe_agent_contract::ArtifactPart::Data {
+            media_type: floe_agent_contract::USER_INTERACTION_MEDIA_TYPE.into(),
+            data: serde_json::to_string(&floe_agent_contract::UserInteractionRef {
+                interaction_id,
+                kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+                status: floe_agent_contract::UserInteractionStatus::Pending,
+            })
+            .unwrap(),
+        }],
+        coverage: DependencyCoverage::Independent,
+    }
+}
+
+#[test]
+fn blocked_tool_and_delegation_steps_project_interaction_messages() {
+    let run_id = RunId::new();
+    let tool_call_id = Uuid::new_v4();
+    let tool_interaction = Uuid::new_v4();
+    let task_id = floe_agent_contract::TaskId::new();
+    let task_interaction = Uuid::new_v4();
+    let terminal = RunTerminal {
+        state: RunState::Completed,
+        output: Some("Mail access needs your review.".into()),
+        steps: vec![
+            EngineStep::Tool(ToolResult {
+                call_id: tool_call_id,
+                text: "Mail access needs your review before this read can complete.".into(),
+                artifacts: vec![interaction_artifact(tool_interaction)],
+                coverage: DependencyCoverage::Independent,
+                issue: Some(floe_agent_contract::OutcomeIssue {
+                    failure: AgentFailure::CapabilityUnavailable,
+                    retryable: false,
+                }),
+            }),
+            EngineStep::Delegation(Box::new(floe_agent_contract::TaskReceipt {
+                task_id,
+                snapshot: floe_agent_contract::TaskSnapshot {
+                    task_id,
+                    parent_run_id: Some(run_id.as_uuid()),
+                    principal: "person:test".into(),
+                    agent_id: "floe.builtin.schedule".into(),
+                    definition_revision: 1,
+                    state: floe_agent_contract::TaskState::Completed,
+                    result: Some("{}".into()),
+                    artifacts: vec![interaction_artifact(task_interaction)],
+                    coverage: DependencyCoverage::Independent,
+                    issue: None,
+                },
+                replay: None,
+            })),
+            EngineStep::Answer {
+                text: "Mail access needs your review.".into(),
+                artifacts: vec![],
+            },
+        ],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+    };
+    let messages = super::terminal_messages(run_id, &terminal).unwrap();
+    assert_eq!(messages.len(), 4);
+    assert_eq!(
+        messages[0],
+        floe_conversation::AgentMessage::Interaction {
+            turn_id: run_id.as_uuid(),
+            interaction_id: tool_interaction,
+            interaction_kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        }
+    );
+    assert!(matches!(
+        messages[1],
+        floe_conversation::AgentMessage::Delegation { .. }
+    ));
+    assert_eq!(
+        messages[2],
+        floe_conversation::AgentMessage::Interaction {
+            turn_id: run_id.as_uuid(),
+            interaction_id: task_interaction,
+            interaction_kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        }
+    );
+    assert!(matches!(
+        messages[3],
+        floe_conversation::AgentMessage::Assistant { .. }
+    ));
+}
+
+#[test]
+fn malformed_projection_refs_fail_closed_without_dangling_cards() {
+    let run_id = RunId::new();
+    let call_id = Uuid::new_v4();
+    for data in [
+        "not json".to_owned(),
+        serde_json::to_string(&floe_agent_contract::UserInteractionRef {
+            interaction_id: Uuid::nil(),
+            kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+            status: floe_agent_contract::UserInteractionStatus::Pending,
+        })
+        .unwrap(),
+    ] {
+        let terminal = RunTerminal {
+            state: RunState::Completed,
+            output: Some("done".into()),
+            steps: vec![EngineStep::Tool(ToolResult {
+                call_id,
+                text: "blocked".into(),
+                artifacts: vec![floe_agent_contract::Artifact {
+                    artifact_id: Uuid::new_v4(),
+                    name: "user_interaction".into(),
+                    parts: vec![floe_agent_contract::ArtifactPart::Data {
+                        media_type: floe_agent_contract::USER_INTERACTION_MEDIA_TYPE.into(),
+                        data: data.clone(),
+                    }],
+                    coverage: DependencyCoverage::Independent,
+                }],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            })],
+            coverage: DependencyCoverage::Independent,
+            issue: None,
+        };
+        assert_eq!(
+            super::terminal_messages(run_id, &terminal),
+            Err(AgentFailure::StorageUnavailable),
+            "malformed ref must fail closed: {data}"
+        );
+    }
+}

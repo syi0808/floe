@@ -10,7 +10,7 @@ use floe_knowledge::prompts::{
 use crate::MANAGER_OUTPUT_CONTRACT;
 
 const MANAGER_ROLE: &str = include_str!("../prompts/manager_role.txt");
-const MANAGER_ROLE_REVISION: u64 = 4;
+const MANAGER_ROLE_REVISION: u64 = 5;
 
 /// The Manager role as role-only instructions: no behavior kernel, persona, or
 /// capability protocol rendering. Canonical callers build their RoleSpec from

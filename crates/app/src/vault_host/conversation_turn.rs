@@ -29,6 +29,7 @@ use super::remote_views;
 pub(super) mod engine_ports;
 pub(super) mod expert_dispatch;
 pub(super) mod expert_host;
+pub(super) mod interaction_publication;
 
 const FINALIZATION_TOKENS: u64 = 1_024;
 const FINALIZATION_COST_MICROS: u64 = 10_000;
@@ -253,7 +254,8 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             active_experts,
         )?;
         // Canonical root tools: Context owns the descriptors and the reads;
-        // each successful result returns its dependency coverage directly.
+        // each successful result returns its dependency coverage directly, and
+        // each recoverable blocker publishes under the admitted Tool origin.
         let tool_service = floe_context::ContextToolService::new(
             person_id,
             request.device_id.clone(),
@@ -261,7 +263,15 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             personal_grants::native_driver(local_context),
             remote_reader.as_ref(),
         )?;
-        let tool_port = &tool_service;
+        let publishing_tools = interaction_publication::PublishingToolPort::new(
+            &tool_service,
+            inputs.conversation_repository.as_ref(),
+            inputs.conversation_repository.as_ref(),
+            person_id,
+            session_id,
+            request.device_id.clone(),
+        )?;
+        let tool_port = &publishing_tools;
         // Canonical root delegation: TaskCoordinator serves as the
         // DelegationPort directly. The Directory resolves the endpoint, and
         // the invocation carries the explicit execution context; App holds
@@ -420,10 +430,13 @@ mod tests {
         CalendarContextReaderApi, PersonalAttentionReader, PersonalAttentionReaderApi,
         ResultRecorder, StoreResultRecorder, expert_policy,
     };
+    use super::interaction_publication::PublishingToolPort;
     use floe_agent_contract::ModelPlacement;
     use floe_agent_contract::{ModelRequest, ModelResponse};
+    use floe_agent_contract::ExecutionJournal;
     use floe_context::AttentionView;
     use floe_conversation::AgentMessage;
+    use floe_conversation::{ConversationRepository, InteractionRepository};
     use floe_execution::Cancellation;
     use floe_provider_adapters::sources::native_acquisition::{
         AttentionAcquisitionMode, AttentionAcquisitionResult,
@@ -1816,19 +1829,19 @@ mod tests {
             None::<&remote_views::RemoteViewReader<AttentionTestKeys>>,
         )
         .unwrap();
-        let result = floe_agent_contract::ToolPort::invoke(
-            &tools,
-            floe_agent_contract::ToolCall {
-                call_id: uuid::Uuid::new_v4(),
-                invocation_key: floe_agent_contract::InvocationKey::new(),
-                tool_id: "mail.communication.read".into(),
-                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                input: r#"{"query":"reply","authority":"send"}"#.into(),
-            },
-            &tool_scope(),
-        )
-        .await;
-        assert_eq!(result, Err(AgentFailure::InvalidInput));
+        let result = tools
+            .invoke_outcome(
+                &floe_agent_contract::ToolCall {
+                    call_id: uuid::Uuid::new_v4(),
+                    invocation_key: floe_agent_contract::InvocationKey::new(),
+                    tool_id: "mail.communication.read".into(),
+                    definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                    input: r#"{"query":"reply","authority":"send"}"#.into(),
+                },
+                &tool_scope(),
+            )
+            .await;
+        assert_eq!(result.err(), Some(AgentFailure::InvalidInput));
     }
 
     #[tokio::test]
@@ -1911,6 +1924,171 @@ mod tests {
                 "{tool_id}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn composed_blocked_tool_publishes_a_durable_interaction() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault = std::sync::Arc::new(
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap(),
+        );
+        vault.activate_conversation_executor().await.unwrap();
+        let repository = std::sync::Arc::new(floe_vault::VaultConversationRepository::new(
+            std::sync::Arc::clone(&vault),
+        ));
+        let started = floe_conversation::start_session(
+            repository.as_ref(),
+            floe_conversation::SessionRequest {
+                principal: person_id.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let run_id = floe_kernel::RunId::new();
+        let command_id = floe_agent_contract::CommandId::new();
+        repository
+            .admit_turn(floe_conversation::TurnAdmissionRequest {
+                run_id,
+                command_id,
+                session_id: started.session_id,
+                expected_session_revision: 0,
+                principal: person_id.to_string(),
+                request_digest: [7; 32],
+                mode: floe_conversation::TurnMode::New,
+                retry_of: None,
+                profile: floe_conversation::ProfileSelection::Auto,
+                user_message: floe_agent_contract::AgentMessage {
+                    message_id: command_id.as_uuid(),
+                    role: floe_agent_contract::MessageRole::User,
+                    text: "summarize my day".into(),
+                    call_id: None,
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
+                },
+            })
+            .await
+            .unwrap();
+
+        let call = floe_agent_contract::ToolCall {
+            call_id: Uuid::new_v4(),
+            invocation_key: floe_agent_contract::InvocationKey::new(),
+            tool_id: "attention.coarse.read".into(),
+            definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+            input: "{}".into(),
+        };
+        repository
+            .journal(run_id)
+            .unwrap()
+            .record_intent(floe_agent_contract::JournalEvent::ToolIntent { call: call.clone() })
+            .await
+            .unwrap();
+
+        let local_context = LocalContextHost::default();
+        let tools = floe_context::ContextToolService::new(
+            person_id,
+            "test-device".to_owned(),
+            floe_vault::VaultGrantRecords::new(vault.as_ref()),
+            personal_grants::native_driver(&local_context),
+            None::<
+                &remote_views::RemoteViewReader<'_, AttentionTestKeys>,
+            >,
+        )
+        .unwrap();
+        let port = PublishingToolPort::new(
+            &tools,
+            repository.as_ref(),
+            repository.as_ref(),
+            person_id,
+            started.session_id,
+            "test-device".into(),
+        )
+        .unwrap();
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(Uuid::new_v4()).with_run_id(run_id),
+        );
+        // A fresh vault holds no grants: the real read blocks, the boundary
+        // publishes, and the settled result carries the durable ref.
+        let result = floe_agent_contract::ToolPort::invoke(&port, call.clone(), &scope)
+            .await
+            .unwrap();
+        assert_eq!(result.artifacts.len(), 1);
+        let data = match &result.artifacts[0].parts[0] {
+            floe_agent_contract::ArtifactPart::Data { data, .. } => data.clone(),
+            _ => panic!("blocked result must carry a ref part"),
+        };
+        let reference: floe_agent_contract::UserInteractionRef =
+            serde_json::from_str(&data).unwrap();
+        let stored = repository
+            .get_interaction(person_id, reference.interaction_id)
+            .await
+            .unwrap()
+            .expect("blocked call must publish a durable interaction");
+        assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
+        assert_eq!(
+            stored.origin,
+            floe_conversation::InteractionOrigin::Tool { call_id: call.call_id }
+        );
+        assert!(matches!(
+            stored.target,
+            floe_conversation::ReviewedTarget::InlineObserve(_)
+        ));
+
+        // Replaying the blocked call replays the same durable interaction.
+        let again = floe_agent_contract::ToolPort::invoke(&port, call.clone(), &scope)
+            .await
+            .unwrap();
+        let again_data = match &again.artifacts[0].parts[0] {
+            floe_agent_contract::ArtifactPart::Data { data, .. } => data.clone(),
+            _ => panic!("blocked result must carry a ref part"),
+        };
+        let again_ref: floe_agent_contract::UserInteractionRef =
+            serde_json::from_str(&again_data).unwrap();
+        assert_eq!(again_ref.interaction_id, reference.interaction_id);
+
+        // Finishing the run projects the durable ref as an Interaction
+        // message in a usable completed turn.
+        let finished = repository
+            .finish_run(
+                run_id,
+                1,
+                floe_conversation::RunTerminal {
+                    state: floe_conversation::RunState::Completed,
+                    output: Some("Attention access needs your review.".into()),
+                    steps: vec![
+                        floe_agent_contract::EngineStep::Tool(result),
+                        floe_agent_contract::EngineStep::Answer {
+                            text: "Attention access needs your review.".into(),
+                            artifacts: vec![],
+                        },
+                    ],
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
+                    issue: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(finished.state, floe_conversation::RunState::Completed);
+        let session = vault.load(person_id, started.session_id).await.unwrap();
+        assert!(
+            session.messages.iter().any(|message| matches!(
+                message,
+                AgentMessage::Interaction {
+                    interaction_id,
+                    ..
+                } if *interaction_id == reference.interaction_id
+            )),
+            "completed turn must carry the Interaction message"
+        );
     }
 
     struct StaticSourceReader {
@@ -2023,9 +2201,10 @@ mod tests {
                 definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
                 input: input.into(),
             };
-            let result = floe_agent_contract::ToolPort::invoke(&tools, call.clone(), &scope)
-                .await
-                .unwrap();
+            let outcome = tools.invoke_outcome(&call, &scope).await.unwrap();
+            let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
+                panic!("{tool_id} must stay ready");
+            };
             assert_eq!(result.call_id, call.call_id);
             assert!(result.text.contains("m1"), "{tool_id}: {}", result.text);
             assert!(result.artifacts.is_empty());
@@ -3347,9 +3526,10 @@ mod tests {
                 definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
                 input: "{}".into(),
             };
-            let result = floe_agent_contract::ToolPort::invoke(&tools, call.clone(), &tool_scope())
-                .await
-                .unwrap();
+            let outcome = tools.invoke_outcome(&call, &tool_scope()).await.unwrap();
+            let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
+                panic!("attention read must stay ready");
+            };
             assert!(
                 matches!(
                     result.coverage,

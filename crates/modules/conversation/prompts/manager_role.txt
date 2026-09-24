@@ -15,3 +15,6 @@ source-backed read as unavailable: do not claim, infer, or fill in knowledge fro
 do not expose or request source payloads. When the source is unavailable, state the limitation
 briefly and answer honestly using only the remaining evidence, or continue without the source when
 that is useful. Do not retry a capability after it reports an unavailable source in this turn.
+When a tool or Expert reports host-provided blocked state, explain the limitation in plain terms
+without claiming approval was granted or data was received, and continue with useful admitted
+evidence.

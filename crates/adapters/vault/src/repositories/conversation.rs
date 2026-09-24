@@ -794,22 +794,77 @@ fn legacy_recovery_pointer(pointer: &ArchivePointer) -> floe_conversation::Sessi
     }
 }
 
+/// The interaction refs one settled step carries, in step order.
+///
+/// Only trusted-port artifacts are projected: Tool results and Delegation
+/// receipts come from App-owned ports, never from model text. A malformed ref
+/// is corrupt durable state and fails closed rather than projecting a
+/// dangling card.
+fn step_interaction_refs(
+    artifacts: &[ContractArtifact],
+) -> Result<Vec<floe_agent_contract::UserInteractionRef>, AgentFailure> {
+    let mut refs = Vec::new();
+    for artifact in artifacts {
+        for part in &artifact.parts {
+            let ContractArtifactPart::Data { media_type, data } = part else {
+                continue;
+            };
+            if media_type != floe_agent_contract::USER_INTERACTION_MEDIA_TYPE {
+                continue;
+            }
+            let reference: floe_agent_contract::UserInteractionRef =
+                serde_json::from_str(data).map_err(|_| AgentFailure::StorageUnavailable)?;
+            reference
+                .validate()
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+            refs.push(reference);
+        }
+    }
+    Ok(refs)
+}
+
 fn terminal_messages(
     run_id: RunId,
     terminal: &RunTerminal,
 ) -> Result<Vec<AgentMessage>, AgentFailure> {
     let mut messages = Vec::new();
+    let mut projected: Vec<Uuid> = Vec::new();
+    let mut project_refs =
+        |messages: &mut Vec<AgentMessage>,
+         refs: Vec<floe_agent_contract::UserInteractionRef>|
+         -> Result<(), AgentFailure> {
+            for reference in refs {
+                if projected.contains(&reference.interaction_id) {
+                    continue;
+                }
+                if projected.len() >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                projected.push(reference.interaction_id);
+                messages.push(AgentMessage::Interaction {
+                    turn_id: run_id.as_uuid(),
+                    interaction_id: reference.interaction_id,
+                    interaction_kind: reference.kind,
+                });
+            }
+            Ok(())
+        };
     for step in &terminal.steps {
         match step {
             EngineStep::Answer { text, .. } => messages.push(AgentMessage::Assistant {
                 turn_id: run_id.as_uuid(),
                 text: text.clone(),
             }),
-            EngineStep::Delegation(receipt) => messages.push(AgentMessage::Delegation {
-                turn_id: run_id.as_uuid(),
-                task: legacy_task(run_id, receipt)?,
-            }),
-            EngineStep::Tool(_) => {}
+            EngineStep::Delegation(receipt) => {
+                messages.push(AgentMessage::Delegation {
+                    turn_id: run_id.as_uuid(),
+                    task: legacy_task(run_id, receipt)?,
+                });
+                project_refs(&mut messages, step_interaction_refs(&receipt.snapshot.artifacts)?)?;
+            }
+            EngineStep::Tool(result) => {
+                project_refs(&mut messages, step_interaction_refs(&result.artifacts)?)?;
+            }
         }
     }
     Ok(messages)

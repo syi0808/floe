@@ -9,8 +9,7 @@
 //! directly.
 
 use floe_agent_contract::{
-    AgentFailure, BoxFuture, DependencyCoverage, PersonId, ToolCall, ToolDescriptor, ToolPort,
-    ToolResult,
+    AgentFailure, DependencyCoverage, PersonId, ToolCall, ToolDescriptor, ToolResult,
 };
 use floe_context_contract::{
     GrantConsumer, GrantOperation, GrantPurpose, GrantSourceBinding, ObservedGrant,
@@ -845,30 +844,6 @@ impl PersonalBlock {
     }
 }
 
-impl<Records, Driver, Remote> ToolPort for ContextToolService<Records, Driver, Remote>
-where
-    Records: PersonalGrantRecords,
-    Driver: PersonalSourceDriver,
-    Remote: SourceReader,
-{
-    fn invoke<'a>(
-        &'a self,
-        call: ToolCall,
-        scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
-        Box::pin(async move {
-            // Interim: the product boundary moves to invoke_outcome with
-            // trusted publication next; this mapping keeps the port total
-            // without fabricating a result for a blocked read.
-            match self.invoke_outcome(&call, scope).await? {
-                SourceReadOutcome::Ready(result) => Ok(result),
-                SourceReadOutcome::Unavailable(_) => Err(AgentFailure::CapabilityUnavailable),
-                SourceReadOutcome::NeedsUserAction(_) => Err(AgentFailure::ConsentRequired),
-            }
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1329,6 +1304,18 @@ mod tests {
         }
     }
 
+    async fn ready(
+        service: &ContextToolService<FixtureRecords, FixtureDriver, StaticRemote>,
+        call: &ToolCall,
+        scope: &ExecutionScope,
+    ) -> ToolResult {
+        let outcome = service.invoke_outcome(call, scope).await.unwrap();
+        let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
+            panic!("admitted read must stay ready");
+        };
+        result
+    }
+
     #[test]
     fn catalog_contains_all_seven_tools_with_stable_canonical_shape() {
         let descriptors = manager_tool_descriptors();
@@ -1385,13 +1372,16 @@ mod tests {
         let service = service(person_id, None);
         let scope = scope();
         assert_eq!(
-            service.invoke(call("nope.read", "{}"), &scope).await.err(),
+            service
+                .invoke_outcome(&call("nope.read", "{}"), &scope)
+                .await
+                .err(),
             Some(AgentFailure::CapabilityDenied)
         );
         let mut stale = call(PEOPLE_IDENTITY_READ, "{}");
         stale.definition_revision = MANAGER_TOOL_DEFINITION_REVISION + 1;
         assert_eq!(
-            service.invoke(stale, &scope).await.err(),
+            service.invoke_outcome(&stale, &scope).await.err(),
             Some(AgentFailure::InvalidInput)
         );
     }
@@ -1416,7 +1406,7 @@ mod tests {
         ] {
             assert_eq!(
                 service
-                    .invoke(call(MAIL_COMMUNICATION_READ, input), &scope)
+                    .invoke_outcome(&call(MAIL_COMMUNICATION_READ, input), &scope)
                     .await
                     .err(),
                 Some(AgentFailure::InvalidInput),
@@ -1426,8 +1416,8 @@ mod tests {
         let long = "q".repeat(513);
         assert_eq!(
             service
-                .invoke(
-                    call(
+                .invoke_outcome(
+                    &call(
                         MAIL_COMMUNICATION_READ,
                         &format!(r#"{{"query": "{long}"}}"#)
                     ),
@@ -1447,7 +1437,7 @@ mod tests {
         ] {
             assert_eq!(
                 service
-                    .invoke(call(tool, r#"{"extra": true}"#), &scope)
+                    .invoke_outcome(&call(tool, r#"{"extra": true}"#), &scope)
                     .await
                     .err(),
                 Some(AgentFailure::InvalidInput),
@@ -1468,7 +1458,7 @@ mod tests {
             (WELLBEING_DERIVED_READ, "wellbeing.derived"),
         ] {
             let invocation = call(tool_id, "{}");
-            let result = service.invoke(invocation.clone(), &scope).await.unwrap();
+            let result = ready(&service, &invocation, &scope).await;
             assert_eq!(result.call_id, invocation.call_id);
             assert!(result.text.contains(marker), "{tool_id}: {}", result.text);
             assert!(result.artifacts.is_empty());
@@ -1490,16 +1480,15 @@ mod tests {
         ]);
         let service = service(person_id, Some(remote));
         let scope = scope();
-        let mail = service
-            .invoke(
-                call(
-                    MAIL_COMMUNICATION_READ,
-                    r#"{"query": "invoice", "limit": 5}"#,
-                ),
-                &scope,
-            )
-            .await
-            .unwrap();
+        let mail = ready(
+            &service,
+            &call(
+                MAIL_COMMUNICATION_READ,
+                r#"{"query": "invoice", "limit": 5}"#,
+            ),
+            &scope,
+        )
+        .await;
         assert!(mail.text.contains("m1"));
         let mail_dep = dependent_of(&mail);
         assert_eq!(mail_dep.person_id(), person_id);
@@ -1513,7 +1502,7 @@ mod tests {
             (LIFE_LOGISTICS_READ, "shipments"),
         ] {
             let invocation = call(tool_id, "{}");
-            let result = service.invoke(invocation.clone(), &scope).await.unwrap();
+            let result = ready(&service, &invocation, &scope).await;
             assert!(result.text.contains(marker));
             let dependency = dependent_of(&result);
             assert_eq!(dependency.person_id(), person_id);
@@ -1540,10 +1529,12 @@ mod tests {
         )
         .unwrap();
         let scope = scope();
-        service
-            .invoke(call(MAIL_COMMUNICATION_READ, "{}"), &scope)
-            .await
-            .unwrap();
+        ready(
+            &service,
+            &call(MAIL_COMMUNICATION_READ, "{}"),
+            &scope,
+        )
+        .await;
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0, "mail.communication");
@@ -1825,28 +1816,4 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn interim_tool_port_signals_blocked_reads_without_fabrication() {
-        let person_id = PersonId::new();
-        let mut records = FixtureRecords::new(person_id);
-        records.grants.clear();
-        let service = ContextToolService::new(
-            person_id,
-            DEVICE,
-            records,
-            FixtureDriver {
-                process: Uuid::new_v4(),
-            },
-            None::<StaticRemote>,
-        )
-        .unwrap();
-        let scope = scope();
-        assert_eq!(
-            service
-                .invoke(call(ATTENTION_COARSE_READ, "{}"), &scope)
-                .await
-                .err(),
-            Some(AgentFailure::ConsentRequired)
-        );
-    }
 }
