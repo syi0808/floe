@@ -1029,6 +1029,76 @@ mod tests {
             load_interaction(&interactions, &person().to_string(), Uuid::new_v4()).await,
             Err(AgentFailure::NotFound)
         );
+        assert_eq!(
+            load_interaction(&interactions, &person().to_string(), Uuid::nil()).await,
+            Err(AgentFailure::InvalidInput)
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_rejects_nil_origin_references() {
+        let runs = StubRuns::new();
+        let interactions = MemoryInteractions::new();
+        let person_id = person();
+        let session_id = Uuid::new_v4();
+        let run_id = RunId::new();
+        for origin in [
+            InteractionOrigin::Tool {
+                call_id: Uuid::nil(),
+            },
+            InteractionOrigin::Task {
+                task_id: Uuid::nil(),
+                capability_call_id: None,
+            },
+            InteractionOrigin::Task {
+                task_id: Uuid::new_v4(),
+                capability_call_id: Some(Uuid::nil()),
+            },
+            InteractionOrigin::Model {
+                attempt_id: Uuid::nil(),
+            },
+        ] {
+            let request = publish_request(person_id, session_id, run_id, origin);
+            assert_eq!(
+                publish_interaction(&runs, &interactions, request, NOW).await,
+                Err(AgentFailure::InvalidInput)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_accepts_task_and_model_origins() {
+        let runs = StubRuns::new();
+        let interactions = MemoryInteractions::new();
+        let person_id = person();
+        let session_id = Uuid::new_v4();
+        let run_id = RunId::new();
+        let origins = [
+            InteractionOrigin::Task {
+                task_id: Uuid::new_v4(),
+                capability_call_id: Some(Uuid::new_v4()),
+            },
+            InteractionOrigin::Model {
+                attempt_id: Uuid::new_v4(),
+            },
+        ];
+        for origin in origins {
+            working_run(&runs, person_id, session_id, run_id, &origin);
+            let request = publish_request(person_id, session_id, run_id, origin);
+            assert!(matches!(
+                publish_interaction(&runs, &interactions, request, NOW)
+                    .await
+                    .unwrap(),
+                PublishAdmission::Created(_)
+            ));
+        }
+        assert_eq!(
+            list_run_interactions(&interactions, &person_id.to_string(), run_id)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
