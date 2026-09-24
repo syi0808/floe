@@ -76,6 +76,100 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentConnectedSource => 'Calendar evidence';
 
   @override
+  String get agentInteractionSourceTitle => 'Source access';
+
+  @override
+  String get agentInteractionConsentTitle => 'Model request';
+
+  @override
+  String get agentInteractionStatePending => 'Waiting for review';
+
+  @override
+  String get agentInteractionStateResolving => 'Working…';
+
+  @override
+  String get agentInteractionStateResolved => 'Resolved';
+
+  @override
+  String get agentInteractionStateDenied => 'Denied';
+
+  @override
+  String get agentInteractionStateCancelled => 'Dismissed';
+
+  @override
+  String get agentInteractionStateSuperseded => 'Updated — see the newest card';
+
+  @override
+  String get agentInteractionStateExpired => 'Expired';
+
+  @override
+  String get agentInteractionAllow => 'Allow';
+
+  @override
+  String get agentInteractionDeny => 'Deny';
+
+  @override
+  String get agentInteractionDismiss => 'Not now';
+
+  @override
+  String get agentInteractionRefresh => 'Refresh';
+
+  @override
+  String get agentInteractionContinue => 'Continue';
+
+  @override
+  String get agentInteractionReviewSource => 'Review';
+
+  @override
+  String get agentInteractionOpenConnection => 'Open settings';
+
+  @override
+  String get agentInteractionRequestPermission => 'Request access';
+
+  @override
+  String get agentInteractionRecipient => 'Recipient';
+
+  @override
+  String get agentInteractionProfile => 'Profile';
+
+  @override
+  String get agentInteractionPurpose => 'Purpose';
+
+  @override
+  String get agentInteractionConsumer => 'Consumer';
+
+  @override
+  String get agentInteractionData => 'Data';
+
+  @override
+  String get agentInteractionScopes => 'Source scopes';
+
+  @override
+  String get agentInteractionConnection => 'Connection';
+
+  @override
+  String get agentInteractionSource => 'Source';
+
+  @override
+  String get agentInteractionMembers => 'Items';
+
+  @override
+  String get agentInteractionNextStep => 'Next step';
+
+  @override
+  String get agentInteractionStale => 'Changed — review and tap again';
+
+  @override
+  String get agentInteractionWrongDevice =>
+      'This was decided on another device';
+
+  @override
+  String get agentInteractionExpired => 'Expired — send your message again';
+
+  @override
+  String get agentInteractionUnavailable => 'Couldn\'t load this card';
+
+  @override
   String get agentConnectedSourceDetails => 'View Calendar source';
 
   @override

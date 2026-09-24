@@ -22,6 +22,14 @@ abstract interface class ConversationRuntimeGateway {
     required void Function(AppRunSnapshot run) onRun,
   });
 
+  /// Observe an already-admitted Run (for example a linked resume child)
+  /// to its terminal snapshot with the normal event/read-model machinery.
+  Future<ConversationTurnCompletion> observeConversationRun(
+    AppCommandReceipt receipt,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  });
+
   Future<void> cancelConversationTurn(AgentConversationTurnRequest request);
 }
 
@@ -120,62 +128,91 @@ final class NativeConversationRuntimeGateway
       active.receiptReady.complete();
       if (active.cancelRequested) await _cancel(active);
 
-      var lastNotifiedRevision = 0;
-      while (true) {
-        final result = await _client.readEvents(
-          after: readModel.conversation.cursor,
-        );
-        switch (result) {
-          case AppEventsResyncRequired():
-            await _bootstrapAt(result, request.session, receipt: receipt);
-          case AppEventsPage():
-            if (!readModel.applyEvents(result)) {
-              throw const FormatException(
-                'Conversation event resync required.',
-              );
-            }
-        }
-        final durable = await _client.getRun(receipt.runId);
-        if (!readModel.applyRunSnapshot(durable)) {
-          final resync = await _client.readEvents();
-          if (resync is! AppEventsResyncRequired) {
-            throw const FormatException('Conversation Run resync required.');
-          }
-          await _bootstrapAt(resync, request.session, receipt: receipt);
-        }
-        final run = readModel.conversation.runs[receipt.runId]!;
-        if (run.sessionId != request.session.id) {
-          throw const FormatException('Conversation Run scope mismatch.');
-        }
-        if (run.revision > lastNotifiedRevision) {
-          lastNotifiedRevision = run.revision;
-          onRun(run);
-        }
-        if (run.state == AppRunState.finished) {
-          final session = await _loadSession(
-            request.session.personId,
-            request.session.id,
-          );
-          if (session.id != request.session.id ||
-              session.personId != request.session.personId ||
-              session.activeTurn != null ||
-              session.revision < receipt.sessionRevision) {
-            throw const FormatException(
-              'Conversation terminal snapshot mismatch.',
-            );
-          }
-          return ConversationTurnCompletion(run: run, session: session);
-        }
-        if (_observationInterval > Duration.zero) {
-          await Future<void>.delayed(_observationInterval);
-        }
-      }
+      return await _observeReceipt(receipt, request.session, onRun: onRun);
     } finally {
       if (!active.receiptReady.isCompleted) active.receiptReady.complete();
       if (active.commandId != null && active.receipt == null) {
         readModel.sealForResync();
       }
       if (identical(_active, active)) _active = null;
+    }
+  }
+
+  @override
+  Future<ConversationTurnCompletion> observeConversationRun(
+    AppCommandReceipt receipt,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
+    if (_active != null) {
+      throw StateError('A conversation turn is already active.');
+    }
+    final active = _ActiveConversationTurn(null);
+    _active = active;
+    try {
+      await synchronizeConversation(session);
+      if (!readModel.applyCommandReceipt(receipt)) {
+        final resync = await _client.readEvents();
+        if (resync is! AppEventsResyncRequired) {
+          throw const FormatException('Conversation receipt resync required.');
+        }
+        await _bootstrapAt(resync, session, receipt: receipt);
+      }
+      return await _observeReceipt(receipt, session, onRun: onRun);
+    } finally {
+      if (identical(_active, active)) _active = null;
+    }
+  }
+
+  Future<ConversationTurnCompletion> _observeReceipt(
+    AppCommandReceipt receipt,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
+    var lastNotifiedRevision = 0;
+    while (true) {
+      final result = await _client.readEvents(
+        after: readModel.conversation.cursor,
+      );
+      switch (result) {
+        case AppEventsResyncRequired():
+          await _bootstrapAt(result, session, receipt: receipt);
+        case AppEventsPage():
+          if (!readModel.applyEvents(result)) {
+            throw const FormatException('Conversation event resync required.');
+          }
+      }
+      final durable = await _client.getRun(receipt.runId);
+      if (!readModel.applyRunSnapshot(durable)) {
+        final resync = await _client.readEvents();
+        if (resync is! AppEventsResyncRequired) {
+          throw const FormatException('Conversation Run resync required.');
+        }
+        await _bootstrapAt(resync, session, receipt: receipt);
+      }
+      final run = readModel.conversation.runs[receipt.runId]!;
+      if (run.sessionId != session.id) {
+        throw const FormatException('Conversation Run scope mismatch.');
+      }
+      if (run.revision > lastNotifiedRevision) {
+        lastNotifiedRevision = run.revision;
+        onRun(run);
+      }
+      if (run.state == AppRunState.finished) {
+        final reloaded = await _loadSession(session.personId, session.id);
+        if (reloaded.id != session.id ||
+            reloaded.personId != session.personId ||
+            reloaded.activeTurn != null ||
+            reloaded.revision < receipt.sessionRevision) {
+          throw const FormatException(
+            'Conversation terminal snapshot mismatch.',
+          );
+        }
+        return ConversationTurnCompletion(run: run, session: reloaded);
+      }
+      if (_observationInterval > Duration.zero) {
+        await Future<void>.delayed(_observationInterval);
+      }
     }
   }
 
@@ -293,7 +330,7 @@ final class NativeConversationRuntimeGateway
 final class _ActiveConversationTurn {
   _ActiveConversationTurn(this.request);
 
-  final AgentConversationTurnRequest request;
+  final AgentConversationTurnRequest? request;
   final Completer<void> receiptReady = Completer<void>();
   String? commandId;
   Future<AppCommandReceipt>? receiptFuture;

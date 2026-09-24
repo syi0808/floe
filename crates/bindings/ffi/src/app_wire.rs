@@ -3,8 +3,12 @@ use std::collections::BTreeMap;
 use floe_app::{AgentFailure, EventPayload, EventRead, RunEventRecord, RunReceipt, RunState};
 use floe_protocol::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
-    AppCommandResultDto, AppCommandStatusDto, AppEventDto, AppEventKindDto, AppEventsRequestDto,
-    AppEventsResultDto, AppMessageDto, AppMessageRoleDto, AppProfileSelectionDto, AppQueryDto,
+    AppCommandResultDto, AppCommandStatusDto, AppConsentScopeDto, AppEventDto, AppEventKindDto,
+    AppEventsRequestDto, AppEventsResultDto, AppInteractionActionDto, AppInteractionDecisionDto,
+    AppInteractionKindDto, AppInteractionRefreshOutcomeDto, AppInteractionRefreshResultDto,
+    AppInteractionResolveOutcomeDto, AppInteractionResolveResultDto, AppInteractionSnapshotDto,
+    AppInteractionStateDto, AppInteractionTargetDto, AppMessageDto, AppMessageRoleDto,
+    AppNavigationDestinationDto, AppObservedMemberDto, AppProfileSelectionDto, AppQueryDto,
     AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto,
     AppTurnExecutionDto, AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
 };
@@ -291,6 +295,93 @@ where
                 runtime_epoch,
                 outcome: match receipt.outcome {
                     floe_app::CancelRunOutcome::Accepted => AppCancelRunOutcomeDto::Accepted,
+                },
+            })
+        }
+        AppCommandDto::ConversationInteractionResolve {
+            interaction_id,
+            session_id,
+            expected_revision,
+            decision,
+            target_digest,
+        } => {
+            let decision = match decision {
+                AppInteractionDecisionDto::Approve => floe_app::InteractionDecision::Approve,
+                AppInteractionDecisionDto::Deny => floe_app::InteractionDecision::Deny,
+                AppInteractionDecisionDto::Dismiss => floe_app::InteractionDecision::Dismiss,
+            };
+            let result = host_request
+                .services()
+                .resolve_interaction(
+                    host_request.caller(),
+                    floe_app::ResolveInteraction {
+                        command_id: request.command_id,
+                        interaction_id,
+                        session_id,
+                        expected_revision,
+                        decision,
+                        target_digest,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::InteractionOperation {
+                result: resolve_result(
+                    result,
+                    runtime_epoch,
+                    chrono::Utc::now().timestamp_millis(),
+                ),
+            })
+        }
+        AppCommandDto::ConversationInteractionRefresh {
+            interaction_id,
+            session_id,
+            expected_revision,
+        } => {
+            let result = host_request
+                .services()
+                .refresh_interaction(
+                    host_request.caller(),
+                    floe_app::RefreshInteraction {
+                        command_id: request.command_id,
+                        interaction_id,
+                        session_id,
+                        expected_revision,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::InteractionRefresh {
+                result: refresh_result(
+                    result,
+                    runtime_epoch,
+                    chrono::Utc::now().timestamp_millis(),
+                ),
+            })
+        }
+        AppCommandDto::ConversationInteractionResume {
+            session_id,
+            origin_run_id,
+            expected_revision,
+        } => {
+            let receipt = host_request
+                .services()
+                .resume_interaction(
+                    host_request.caller(),
+                    floe_app::ResumeInteraction {
+                        command_id: request.command_id,
+                        session_id,
+                        origin_run_id,
+                        expected_revision,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::CommandReceipt {
+                receipt: AppCommandReceiptDto {
+                    command_id: receipt.command_id,
+                    runtime_epoch,
+                    admission: AppCommandStatusDto::Accepted,
+                    run_id: Some(receipt.run_id),
+                    session_revision: Some(receipt.session_revision),
+                    issue: None,
                 },
             })
         }
@@ -600,6 +691,35 @@ fn query_with_host<
                     message_id,
                     role: AppMessageRoleDto::Assistant,
                     text,
+                },
+            })
+        }
+        AppQueryDto::ConversationInteractionGet { interaction_id } => {
+            let interaction = services
+                .read_interaction(caller, interaction_id)
+                .map_err(service_error)?;
+            Ok(match interaction {
+                Some(interaction) => AppQueryResultDto::Interaction {
+                    snapshot: interaction_snapshot(
+                        &interaction,
+                        chrono::Utc::now().timestamp_millis(),
+                    ),
+                },
+                None => AppQueryResultDto::UnknownInteraction { interaction_id },
+            })
+        }
+        AppQueryDto::ConversationInteractionList { session_id } => {
+            let interactions = services
+                .list_interactions(caller, session_id)
+                .map_err(service_error)?;
+            let now_unix_ms = chrono::Utc::now().timestamp_millis();
+            Ok(AppQueryResultDto::InteractionList {
+                list: floe_protocol::AppInteractionListDto {
+                    session_id,
+                    interactions: interactions
+                        .iter()
+                        .map(|interaction| interaction_snapshot(interaction, now_unix_ms))
+                        .collect(),
                 },
             })
         }
@@ -972,6 +1092,251 @@ fn run_event_snapshot(run: RunEventRecord, runtime_epoch: u64) -> AppRunSnapshot
     }
 }
 
+fn wire_enum_string<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(text)) => text,
+        Ok(other) => other.to_string(),
+        Err(_) => "unknown".into(),
+    }
+}
+
+fn grant_consumer_string(consumer: &floe_app::GrantConsumer) -> String {
+    match consumer {
+        floe_app::GrantConsumer::Builtin(name) => format!("builtin:{name}"),
+        floe_app::GrantConsumer::Extension(name) => format!("extension:{name}"),
+    }
+}
+
+fn interaction_target(target: &floe_app::ReviewedTarget) -> AppInteractionTargetDto {
+    match target {
+        floe_app::ReviewedTarget::InlineObserve(target) => AppInteractionTargetDto::InlineObserve {
+            connection_id: target.connection_id.clone(),
+            source_id: target.source_id.clone(),
+            consumer: target.consumer.clone(),
+            purpose: target.purpose.clone(),
+            members: target
+                .members
+                .iter()
+                .map(|member| AppObservedMemberDto {
+                    member_id: member.member_id.clone(),
+                    resource: member.resource.clone(),
+                })
+                .collect(),
+        },
+        floe_app::ReviewedTarget::NavigationOnly(target) => {
+            AppInteractionTargetDto::NavigationOnly {
+                destination: match target.destination {
+                    floe_app::NavigationDestination::ConnectionSettings => {
+                        AppNavigationDestinationDto::ConnectionSettings
+                    }
+                    floe_app::NavigationDestination::SystemPermission => {
+                        AppNavigationDestinationDto::SystemPermission
+                    }
+                    floe_app::NavigationDestination::ResourcePicker => {
+                        AppNavigationDestinationDto::ResourcePicker
+                    }
+                },
+                source_id: target.source_id.clone(),
+                consumer: target.consumer.clone(),
+                purpose: target.purpose.clone(),
+            }
+        }
+        floe_app::ReviewedTarget::RecipientConsent(target) => {
+            AppInteractionTargetDto::RecipientConsent {
+                recipient: target.recipient.clone(),
+                profile_id: target.profile_id.clone(),
+                purpose: target.purpose.clone(),
+                consumer: target.consumer.clone(),
+                input_data_classes: target
+                    .input_data_classes
+                    .iter()
+                    .map(wire_enum_string)
+                    .collect(),
+                source_scopes: target
+                    .source_scopes
+                    .iter()
+                    .map(|scope| AppConsentScopeDto {
+                        connection_id: scope.connection_id().as_str().into(),
+                        resources: scope
+                            .resources()
+                            .iter()
+                            .map(|resource| resource.as_str().into())
+                            .collect(),
+                        categories: scope.categories().iter().map(wire_enum_string).collect(),
+                        operation: wire_enum_string(&scope.operation()),
+                        purpose: wire_enum_string(&scope.purpose()),
+                        consumer: grant_consumer_string(scope.consumer()),
+                    })
+                    .collect(),
+            }
+        }
+    }
+}
+
+/// Project one interaction row to its wire snapshot.
+///
+/// Only user-facing review identity crosses: fingerprints, revisions,
+/// policy authorities, lineage, devices and projection audits stay
+/// behind. A lapsed non-terminal row projects Expired without writing;
+/// an explicit command persists it. Actions come only from this
+/// projection; Flutter never derives its own.
+fn interaction_snapshot(
+    interaction: &floe_app::ConversationInteraction,
+    now_unix_ms: i64,
+) -> AppInteractionSnapshotDto {
+    let expired = interaction.projects_expired_at(now_unix_ms);
+    let state = if expired {
+        AppInteractionStateDto::Expired
+    } else {
+        match interaction.state {
+            floe_app::InteractionState::Pending => AppInteractionStateDto::Pending,
+            floe_app::InteractionState::Resolving { .. } => AppInteractionStateDto::Resolving,
+            floe_app::InteractionState::Resolved { .. } => AppInteractionStateDto::Resolved,
+            floe_app::InteractionState::Denied { .. } => AppInteractionStateDto::Denied,
+            floe_app::InteractionState::Cancelled { .. } => AppInteractionStateDto::Cancelled,
+            floe_app::InteractionState::Superseded { .. } => AppInteractionStateDto::Superseded,
+            floe_app::InteractionState::Expired => AppInteractionStateDto::Expired,
+        }
+    };
+    let actions = match (state, &interaction.target) {
+        (AppInteractionStateDto::Pending, floe_app::ReviewedTarget::InlineObserve(_))
+        | (AppInteractionStateDto::Pending, floe_app::ReviewedTarget::RecipientConsent(_)) => {
+            vec![
+                AppInteractionActionDto::Allow,
+                AppInteractionActionDto::Deny,
+                AppInteractionActionDto::Dismiss,
+            ]
+        }
+        (AppInteractionStateDto::Pending, floe_app::ReviewedTarget::NavigationOnly(target)) => {
+            let navigate = match target.destination {
+                floe_app::NavigationDestination::ConnectionSettings => {
+                    AppInteractionActionDto::OpenConnection
+                }
+                floe_app::NavigationDestination::SystemPermission => {
+                    AppInteractionActionDto::RequestPermission
+                }
+                floe_app::NavigationDestination::ResourcePicker => {
+                    AppInteractionActionDto::ReviewSource
+                }
+            };
+            vec![navigate, AppInteractionActionDto::Dismiss]
+        }
+        (AppInteractionStateDto::Resolving, _) => vec![
+            AppInteractionActionDto::Refresh,
+            AppInteractionActionDto::Dismiss,
+        ],
+        (AppInteractionStateDto::Resolved, _) => vec![AppInteractionActionDto::ContinueRequest],
+        _ => Vec::new(),
+    };
+    AppInteractionSnapshotDto {
+        interaction_id: interaction.id,
+        session_id: interaction.session_id,
+        origin_run_id: interaction.origin_run_id.as_uuid(),
+        interaction_kind: match interaction.kind {
+            floe_app::UserInteractionKind::SourceAccess => AppInteractionKindDto::SourceAccess,
+            floe_app::UserInteractionKind::ProcessingRecipient => {
+                AppInteractionKindDto::ProcessingRecipient
+            }
+        },
+        state,
+        revision: interaction.revision,
+        target_digest: interaction.target_digest,
+        created_at_unix_ms: interaction.created_at_unix_ms,
+        expires_at_unix_ms: interaction.expires_at_unix_ms,
+        target: interaction_target(&interaction.target),
+        actions,
+    }
+}
+
+fn linked_receipt(receipt: &floe_app::CommandReceipt, runtime_epoch: u64) -> AppCommandReceiptDto {
+    AppCommandReceiptDto {
+        command_id: receipt.command_id,
+        runtime_epoch,
+        admission: AppCommandStatusDto::Accepted,
+        run_id: Some(receipt.run_id),
+        session_revision: Some(receipt.session_revision),
+        issue: None,
+    }
+}
+
+fn resolve_result(
+    result: floe_app::ResolveInteractionResult,
+    runtime_epoch: u64,
+    now_unix_ms: i64,
+) -> AppInteractionResolveResultDto {
+    AppInteractionResolveResultDto {
+        command_id: result.command_id,
+        outcome: match result.outcome {
+            floe_app::ResolveInteractionOutcome::Resolved => {
+                AppInteractionResolveOutcomeDto::Resolved
+            }
+            floe_app::ResolveInteractionOutcome::Resolving => {
+                AppInteractionResolveOutcomeDto::Resolving
+            }
+            floe_app::ResolveInteractionOutcome::Denied => AppInteractionResolveOutcomeDto::Denied,
+            floe_app::ResolveInteractionOutcome::Cancelled => {
+                AppInteractionResolveOutcomeDto::Cancelled
+            }
+            floe_app::ResolveInteractionOutcome::Superseded => {
+                AppInteractionResolveOutcomeDto::Superseded
+            }
+            floe_app::ResolveInteractionOutcome::Expired => {
+                AppInteractionResolveOutcomeDto::Expired
+            }
+            floe_app::ResolveInteractionOutcome::Stale => AppInteractionResolveOutcomeDto::Stale,
+            floe_app::ResolveInteractionOutcome::Terminal => {
+                AppInteractionResolveOutcomeDto::Terminal
+            }
+            floe_app::ResolveInteractionOutcome::WrongDevice => {
+                AppInteractionResolveOutcomeDto::WrongDevice
+            }
+        },
+        snapshot: interaction_snapshot(&result.interaction, now_unix_ms),
+        replacement_id: result.replacement_id,
+        linked_run: result
+            .linked_run
+            .as_ref()
+            .map(|receipt| linked_receipt(receipt, runtime_epoch)),
+    }
+}
+
+fn refresh_result(
+    result: floe_app::RefreshInteractionResult,
+    runtime_epoch: u64,
+    now_unix_ms: i64,
+) -> AppInteractionRefreshResultDto {
+    AppInteractionRefreshResultDto {
+        command_id: result.command_id,
+        outcome: match result.outcome {
+            floe_app::RefreshInteractionOutcome::Resolved => {
+                AppInteractionRefreshOutcomeDto::Resolved
+            }
+            floe_app::RefreshInteractionOutcome::StillPending => {
+                AppInteractionRefreshOutcomeDto::StillPending
+            }
+            floe_app::RefreshInteractionOutcome::Superseded => {
+                AppInteractionRefreshOutcomeDto::Superseded
+            }
+            floe_app::RefreshInteractionOutcome::Terminal => {
+                AppInteractionRefreshOutcomeDto::Terminal
+            }
+            floe_app::RefreshInteractionOutcome::Expired => {
+                AppInteractionRefreshOutcomeDto::Expired
+            }
+            floe_app::RefreshInteractionOutcome::Stale => AppInteractionRefreshOutcomeDto::Stale,
+            floe_app::RefreshInteractionOutcome::WrongDevice => {
+                AppInteractionRefreshOutcomeDto::WrongDevice
+            }
+        },
+        snapshot: interaction_snapshot(&result.interaction, now_unix_ms),
+        replacement_id: result.replacement_id,
+        linked_run: result
+            .linked_run
+            .as_ref()
+            .map(|receipt| linked_receipt(receipt, runtime_epoch)),
+    }
+}
+
 fn turn_report(receipt: &RunReceipt) -> AppTurnReportDto {
     let generated = receipt.output.is_some();
     AppTurnReportDto {
@@ -1157,6 +1522,11 @@ mod tests {
         failure: Arc<Mutex<Option<floe_app::ServiceError>>>,
         vault_calls: Arc<Mutex<Vec<(Uuid, String, Uuid)>>>,
         vault_result: Arc<Mutex<Option<floe_app::VaultLifecycleResult>>>,
+        resolved: Arc<Mutex<Option<floe_app::ResolveInteractionResult>>>,
+        refreshed: Arc<Mutex<Option<floe_app::RefreshInteractionResult>>>,
+        resumed: Arc<Mutex<Option<floe_app::CommandReceipt>>>,
+        interaction: Arc<Mutex<Option<floe_app::ConversationInteraction>>>,
+        interactions: Arc<Mutex<Vec<floe_app::ConversationInteraction>>>,
     }
 
     impl Services {
@@ -1490,6 +1860,34 @@ mod tests {
             }
             Ok(self.receipt.lock().unwrap().clone())
         }
+
+        fn read_interaction(
+            &self,
+            _caller: &floe_app::CallerContext,
+            interaction_id: Uuid,
+        ) -> Result<Option<floe_app::ConversationInteraction>, floe_app::ServiceError> {
+            if interaction_id.is_nil() {
+                return Err(floe_app::ServiceError::InvalidInput);
+            }
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            Ok(self.interaction.lock().unwrap().clone())
+        }
+
+        fn list_interactions(
+            &self,
+            _caller: &floe_app::CallerContext,
+            session_id: Uuid,
+        ) -> Result<Vec<floe_app::ConversationInteraction>, floe_app::ServiceError> {
+            if session_id.is_nil() {
+                return Err(floe_app::ServiceError::InvalidInput);
+            }
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            Ok(self.interactions.lock().unwrap().clone())
+        }
     }
 
     impl floe_app::ConversationEvents for Services {
@@ -1749,6 +2147,54 @@ mod tests {
                 outcome: floe_app::CancelRunOutcome::Accepted,
             })
         }
+
+        fn resolve_interaction(
+            &self,
+            _caller: &floe_app::CallerContext,
+            request: floe_app::ResolveInteraction,
+        ) -> Result<floe_app::ResolveInteractionResult, floe_app::ServiceError> {
+            request.validate()?;
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            self.resolved
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(floe_app::ServiceError::NotFound)
+        }
+
+        fn refresh_interaction(
+            &self,
+            _caller: &floe_app::CallerContext,
+            request: floe_app::RefreshInteraction,
+        ) -> Result<floe_app::RefreshInteractionResult, floe_app::ServiceError> {
+            request.validate()?;
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            self.refreshed
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(floe_app::ServiceError::NotFound)
+        }
+
+        fn resume_interaction(
+            &self,
+            _caller: &floe_app::CallerContext,
+            request: floe_app::ResumeInteraction,
+        ) -> Result<floe_app::CommandReceipt, floe_app::ServiceError> {
+            request.validate()?;
+            if let Some(failure) = *self.failure.lock().unwrap() {
+                return Err(failure);
+            }
+            self.resumed
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(floe_app::ServiceError::NotFound)
+        }
     }
 
     #[test]
@@ -1864,5 +2310,264 @@ mod tests {
                 .metadata
                 .contains_key("recovery_action")
         );
+    }
+
+    #[test]
+    fn interaction_list_bound_matches_app_owner() {
+        assert_eq!(
+            floe_protocol::MAX_INTERACTIONS_PER_LIST,
+            floe_app::MAX_SESSION_INTERACTIONS
+        );
+    }
+
+    fn consent_interaction(state: floe_app::InteractionState) -> floe_app::ConversationInteraction {
+        let session_id = Uuid::new_v4();
+        let origin_run_id = floe_app::RunId::new();
+        let scope: floe_app::ProcessingSourceScope = serde_json::from_value(serde_json::json!({
+            "connection_id": "calendar-connection",
+            "connector_id": "floe.connector.calendar",
+            "resources": ["personal"],
+            "categories": ["metadata"],
+            "operation": "read",
+            "purpose": "scheduling",
+            "consumer": {"builtin": "floe.builtin.schedule"},
+            "grant_id": Uuid::new_v4(),
+            "grant_authority": {
+                "incarnation": Uuid::new_v4(),
+                "access_epoch": 1
+            },
+            "source_authority": {
+                "incarnation": Uuid::new_v4(),
+                "epoch": 1
+            },
+            "policy_authority": {
+                "incarnation": Uuid::new_v4(),
+                "epoch": 1
+            }
+        }))
+        .unwrap();
+        floe_app::ConversationInteraction {
+            id: Uuid::new_v4(),
+            person_id: floe_app::PersonId::new(),
+            session_id,
+            origin_run_id,
+            origin_turn_id: origin_run_id.as_uuid(),
+            origin: floe_app::InteractionOrigin::Model {
+                attempt_id: Uuid::new_v4(),
+            },
+            kind: floe_app::UserInteractionKind::ProcessingRecipient,
+            requirement: floe_app::InteractionRequirement {
+                kind: floe_app::InteractionRequirementKind::ApproveProcessingRecipient,
+                source_id: "model.example".into(),
+                connection_id: None,
+                consumer: "conversation.root".into(),
+                purpose: "everyday_assistance".into(),
+                inline: true,
+            },
+            requirement_digest: [1; 32],
+            target: floe_app::ReviewedTarget::RecipientConsent(floe_app::RecipientConsentTarget {
+                recipient: "model.example".into(),
+                profile_id: "server-model".into(),
+                purpose: "everyday_assistance".into(),
+                consumer: "conversation.root".into(),
+                input_data_classes: vec![floe_app::DataClass::Personal],
+                source_scopes: vec![scope],
+                lineage: floe_app::RecipientLineage::try_new(session_id, origin_run_id.as_uuid())
+                    .unwrap(),
+                device_id: "mac-local".into(),
+                projection_ref: Uuid::new_v4(),
+                projection_revision: 1,
+            }),
+            target_digest: [2; 32],
+            state,
+            revision: 1,
+            created_at_unix_ms: 1_700_000_000_000,
+            expires_at_unix_ms: 1_700_000_000_000 + 3_600_000,
+        }
+    }
+
+    #[test]
+    fn interaction_snapshot_projects_safe_fields_and_backend_actions() {
+        let pending = consent_interaction(floe_app::InteractionState::Pending);
+        let snapshot = interaction_snapshot(&pending, 1_700_000_000_000);
+        assert_eq!(snapshot.interaction_id, pending.id);
+        assert_eq!(snapshot.session_id, pending.session_id);
+        assert_eq!(snapshot.origin_run_id, pending.origin_run_id.as_uuid());
+        assert_eq!(
+            snapshot.interaction_kind,
+            floe_protocol::AppInteractionKindDto::ProcessingRecipient
+        );
+        assert_eq!(
+            snapshot.state,
+            floe_protocol::AppInteractionStateDto::Pending
+        );
+        assert_eq!(snapshot.target_digest, [2; 32]);
+        let floe_protocol::AppInteractionTargetDto::RecipientConsent {
+            recipient,
+            profile_id,
+            input_data_classes,
+            source_scopes,
+            ..
+        } = &snapshot.target
+        else {
+            panic!("consent target projects");
+        };
+        assert_eq!(recipient, "model.example");
+        assert_eq!(profile_id, "server-model");
+        assert_eq!(input_data_classes.as_slice(), ["personal"]);
+        assert_eq!(source_scopes.len(), 1);
+        assert_eq!(source_scopes[0].connection_id, "calendar-connection");
+        assert_eq!(source_scopes[0].resources.as_slice(), ["personal"]);
+        assert_eq!(source_scopes[0].categories.as_slice(), ["metadata"]);
+        assert_eq!(source_scopes[0].operation, "read");
+        assert_eq!(source_scopes[0].purpose, "scheduling");
+        assert_eq!(source_scopes[0].consumer, "builtin:floe.builtin.schedule");
+        assert_eq!(
+            snapshot.actions,
+            [
+                floe_protocol::AppInteractionActionDto::Allow,
+                floe_protocol::AppInteractionActionDto::Deny,
+                floe_protocol::AppInteractionActionDto::Dismiss,
+            ]
+        );
+        // No fingerprint, lineage, device or projection crosses the wire.
+        let encoded = serde_json::to_value(&snapshot).unwrap().to_string();
+        for forbidden in [
+            "fingerprint",
+            "lineage",
+            "mac-local",
+            "projection",
+            "authority",
+            "grant_id",
+        ] {
+            assert!(!encoded.contains(forbidden), "{forbidden} must not cross");
+        }
+
+        // A lapsed row projects Expired with no actions, without writing.
+        let lapsed = interaction_snapshot(&pending, 1_700_000_000_000 + 3_600_000);
+        assert_eq!(lapsed.state, floe_protocol::AppInteractionStateDto::Expired);
+        assert!(lapsed.actions.is_empty());
+
+        // Resolved offers only the explicit Continue; terminal denials
+        // offer nothing.
+        let resolved = consent_interaction(floe_app::InteractionState::Resolved {
+            receipt: serde_json::from_value(serde_json::json!({
+                "decision_id": Uuid::new_v4(),
+                "owner_operation_id": Uuid::new_v4(),
+                "resolved_at_unix_ms": 1_700_000_000_001i64
+            }))
+            .unwrap(),
+        });
+        let snapshot = interaction_snapshot(&resolved, 1_700_000_000_000);
+        assert_eq!(
+            snapshot.state,
+            floe_protocol::AppInteractionStateDto::Resolved
+        );
+        assert_eq!(
+            snapshot.actions,
+            [floe_protocol::AppInteractionActionDto::ContinueRequest]
+        );
+        let denied = consent_interaction(floe_app::InteractionState::Denied {
+            decision_id: Uuid::new_v4(),
+        });
+        let snapshot = interaction_snapshot(&denied, 1_700_000_000_000);
+        assert!(snapshot.actions.is_empty());
+    }
+
+    #[test]
+    fn interaction_commands_carry_decision_and_linked_receipt() {
+        let person_id = Uuid::new_v4();
+        let services = Services::default();
+        let interaction = consent_interaction(floe_app::InteractionState::Pending);
+        let command_id = Uuid::new_v4();
+        *services.resolved.lock().unwrap() = Some(floe_app::ResolveInteractionResult {
+            command_id,
+            outcome: floe_app::ResolveInteractionOutcome::Resolved,
+            interaction: interaction.clone(),
+            replacement_id: None,
+            linked_run: Some(floe_app::CommandReceipt {
+                command_id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                session_revision: 4,
+            }),
+        });
+        *services.interaction.lock().unwrap() = Some(interaction.clone());
+        *services.interactions.lock().unwrap() = vec![interaction.clone()];
+        let host = floe_app::AppHost::bootstrap_claim(
+            services.clone(),
+            floe_app::LocalIdentityClaim {
+                person_id,
+                device_id: "mac-local".into(),
+            },
+        )
+        .unwrap();
+        let result = command_with_host(
+            &host,
+            AppCommandRequestDto {
+                schema_version: floe_protocol::APP_WIRE_VERSION,
+                request_id: Uuid::new_v4(),
+                command_id,
+                command: AppCommandDto::ConversationInteractionResolve {
+                    interaction_id: interaction.id,
+                    session_id: interaction.session_id,
+                    expected_revision: 1,
+                    decision: floe_protocol::AppInteractionDecisionDto::Approve,
+                    target_digest: [2; 32],
+                },
+            },
+        )
+        .unwrap();
+        let AppCommandResultDto::InteractionOperation { result } = result else {
+            panic!("expected interaction result");
+        };
+        assert_eq!(result.command_id, command_id);
+        assert_eq!(
+            result.outcome,
+            floe_protocol::AppInteractionResolveOutcomeDto::Resolved
+        );
+        assert_eq!(result.snapshot.interaction_id, interaction.id);
+        let linked = result.linked_run.expect("linked receipt");
+        assert_eq!(linked.session_revision, Some(4));
+
+        let query = |query| {
+            query_with_host(
+                &host,
+                AppQueryRequestDto {
+                    schema_version: floe_protocol::APP_WIRE_VERSION,
+                    request_id: Uuid::new_v4(),
+                    query,
+                },
+            )
+        };
+        let AppQueryResultDto::Interaction { snapshot } =
+            query(AppQueryDto::ConversationInteractionGet {
+                interaction_id: interaction.id,
+            })
+            .unwrap()
+        else {
+            panic!("expected interaction snapshot");
+        };
+        assert_eq!(snapshot.interaction_id, interaction.id);
+        let AppQueryResultDto::InteractionList { list } =
+            query(AppQueryDto::ConversationInteractionList {
+                session_id: interaction.session_id,
+            })
+            .unwrap()
+        else {
+            panic!("expected interaction list");
+        };
+        assert_eq!(list.session_id, interaction.session_id);
+        assert_eq!(list.interactions.len(), 1);
+
+        *services.interaction.lock().unwrap() = None;
+        let AppQueryResultDto::UnknownInteraction { interaction_id } =
+            query(AppQueryDto::ConversationInteractionGet {
+                interaction_id: interaction.id,
+            })
+            .unwrap()
+        else {
+            panic!("expected unknown interaction");
+        };
+        assert_eq!(interaction_id, interaction.id);
     }
 }

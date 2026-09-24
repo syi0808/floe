@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use tokio::runtime::{Builder, Runtime};
+use uuid::Uuid;
 
 use crate::{AppHost, FloeCore, HostError, HostServices, local_context, vault_host};
 
@@ -106,6 +107,123 @@ impl crate::ConversationCommands for AppComposition {
             outcome: crate::CancelRunOutcome::Accepted,
         })
     }
+
+    fn resolve_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ResolveInteraction,
+    ) -> Result<crate::ResolveInteractionResult, crate::ServiceError> {
+        request.validate()?;
+        let resolved = self
+            .agent_vault
+            .resolve_interaction(caller, request.clone())
+            .map_err(service_failure)?;
+        let (outcome, replacement_id) = match &resolved.outcome {
+            crate::vault_host::ResolveOutcome::Resolved { .. } => {
+                (crate::ResolveInteractionOutcome::Resolved, None)
+            }
+            crate::vault_host::ResolveOutcome::Resolving { .. } => {
+                (crate::ResolveInteractionOutcome::Resolving, None)
+            }
+            crate::vault_host::ResolveOutcome::Denied { .. } => {
+                (crate::ResolveInteractionOutcome::Denied, None)
+            }
+            crate::vault_host::ResolveOutcome::Cancelled { .. } => {
+                (crate::ResolveInteractionOutcome::Cancelled, None)
+            }
+            crate::vault_host::ResolveOutcome::Superseded { replacement_id, .. } => (
+                crate::ResolveInteractionOutcome::Superseded,
+                *replacement_id,
+            ),
+            crate::vault_host::ResolveOutcome::Expired { .. } => {
+                (crate::ResolveInteractionOutcome::Expired, None)
+            }
+            crate::vault_host::ResolveOutcome::Stale { .. } => {
+                (crate::ResolveInteractionOutcome::Stale, None)
+            }
+            crate::vault_host::ResolveOutcome::Terminal { .. } => {
+                (crate::ResolveInteractionOutcome::Terminal, None)
+            }
+            crate::vault_host::ResolveOutcome::WrongDevice { .. } => {
+                (crate::ResolveInteractionOutcome::WrongDevice, None)
+            }
+        };
+        Ok(crate::ResolveInteractionResult {
+            command_id: request.command_id,
+            outcome,
+            interaction: resolved.outcome.interaction().clone(),
+            replacement_id,
+            linked_run: resolved.linked_run.map(|receipt| crate::CommandReceipt {
+                command_id: receipt.command_id.as_uuid(),
+                run_id: receipt.run_id.as_uuid(),
+                session_revision: receipt.session_revision,
+            }),
+        })
+    }
+
+    fn refresh_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::RefreshInteraction,
+    ) -> Result<crate::RefreshInteractionResult, crate::ServiceError> {
+        request.validate()?;
+        let refreshed = self
+            .agent_vault
+            .refresh_interaction(caller, request.clone())
+            .map_err(service_failure)?;
+        let (outcome, replacement_id) = match &refreshed.outcome {
+            crate::vault_host::RefreshOutcome::Resolved { .. } => {
+                (crate::RefreshInteractionOutcome::Resolved, None)
+            }
+            crate::vault_host::RefreshOutcome::StillPending { .. } => {
+                (crate::RefreshInteractionOutcome::StillPending, None)
+            }
+            crate::vault_host::RefreshOutcome::Superseded { replacement_id, .. } => (
+                crate::RefreshInteractionOutcome::Superseded,
+                *replacement_id,
+            ),
+            crate::vault_host::RefreshOutcome::Terminal { .. } => {
+                (crate::RefreshInteractionOutcome::Terminal, None)
+            }
+            crate::vault_host::RefreshOutcome::Expired { .. } => {
+                (crate::RefreshInteractionOutcome::Expired, None)
+            }
+            crate::vault_host::RefreshOutcome::Stale { .. } => {
+                (crate::RefreshInteractionOutcome::Stale, None)
+            }
+            crate::vault_host::RefreshOutcome::WrongDevice { .. } => {
+                (crate::RefreshInteractionOutcome::WrongDevice, None)
+            }
+        };
+        Ok(crate::RefreshInteractionResult {
+            command_id: request.command_id,
+            outcome,
+            interaction: refreshed.outcome.interaction().clone(),
+            replacement_id,
+            linked_run: refreshed.linked_run.map(|receipt| crate::CommandReceipt {
+                command_id: receipt.command_id.as_uuid(),
+                run_id: receipt.run_id.as_uuid(),
+                session_revision: receipt.session_revision,
+            }),
+        })
+    }
+
+    fn resume_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ResumeInteraction,
+    ) -> Result<crate::CommandReceipt, crate::ServiceError> {
+        request.validate()?;
+        let receipt = self
+            .agent_vault
+            .resume_interaction(caller, request)
+            .map_err(service_failure)?;
+        Ok(crate::CommandReceipt {
+            command_id: receipt.command_id.as_uuid(),
+            run_id: receipt.run_id.as_uuid(),
+            session_revision: receipt.session_revision,
+        })
+    }
 }
 
 #[cfg(unix)]
@@ -132,6 +250,32 @@ impl crate::ConversationQueries for AppComposition {
         };
         self.agent_vault
             .conversation_query(floe_kernel::PersonId(caller.person_id()), query)
+            .map_err(service_failure)
+    }
+
+    fn read_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        interaction_id: Uuid,
+    ) -> Result<Option<floe_conversation::ConversationInteraction>, crate::ServiceError> {
+        if interaction_id.is_nil() {
+            return Err(crate::ServiceError::InvalidInput);
+        }
+        self.agent_vault
+            .get_interaction(floe_kernel::PersonId(caller.person_id()), interaction_id)
+            .map_err(service_failure)
+    }
+
+    fn list_interactions(
+        &self,
+        caller: &crate::CallerContext,
+        session_id: Uuid,
+    ) -> Result<Vec<floe_conversation::ConversationInteraction>, crate::ServiceError> {
+        if session_id.is_nil() {
+            return Err(crate::ServiceError::InvalidInput);
+        }
+        self.agent_vault
+            .list_interactions(floe_kernel::PersonId(caller.person_id()), session_id)
             .map_err(service_failure)
     }
 }
@@ -168,13 +312,6 @@ fn continuation_mode(
                     .ok_or(crate::ServiceError::InvalidInput)?,
                 executor_generation: reference.executor_generation,
                 level: reference.level,
-            })
-        }
-        crate::TurnMode::Resume(reference) => {
-            floe_conversation::TurnMode::Resume(floe_conversation::InteractionResumeRef {
-                origin_run_id: floe_kernel::RunId::from_uuid(reference.origin_run_id)
-                    .ok_or(crate::ServiceError::InvalidInput)?,
-                lineage: reference.lineage,
             })
         }
     })

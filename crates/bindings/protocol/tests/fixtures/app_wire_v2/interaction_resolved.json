@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000021",
+  "status": "ok",
+  "result": {
+    "kind": "interaction_operation",
+    "command_id": "00000000-0000-0000-0000-000000000022",
+    "outcome": "resolved",
+    "snapshot": {
+      "interaction_id": "00000000-0000-0000-0000-000000000023",
+      "session_id": "00000000-0000-0000-0000-000000000024",
+      "origin_run_id": "00000000-0000-0000-0000-000000000029",
+      "interaction_kind": "processing_recipient",
+      "state": "resolved",
+      "revision": 3,
+      "target_digest": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
+      "created_at_unix_ms": 1700000000000,
+      "expires_at_unix_ms": 1700003600000,
+      "target": {
+        "kind": "recipient_consent",
+        "recipient": "model.example",
+        "profile_id": "server-model",
+        "purpose": "everyday_assistance",
+        "consumer": "conversation.root",
+        "input_data_classes": ["personal"],
+        "source_scopes": []
+      },
+      "actions": ["continue_request"]
+    },
+    "linked_run": {
+      "command_id": "00000000-0000-0000-0000-00000000002c",
+      "runtime_epoch": 7,
+      "admission": "accepted",
+      "run_id": "00000000-0000-0000-0000-00000000002d",
+      "session_revision": 4
+    }
+  }
+}

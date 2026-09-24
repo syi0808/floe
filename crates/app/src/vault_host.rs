@@ -20,14 +20,15 @@ use crate::WorkerOperation;
 use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use crate::{
     CalendarActionOperation, CalendarProposalInspection, CalendarSubjectPreview,
-    ConversationSessionOperation, ConversationTurnRequest, VaultState, WorkerAction, WorkerResult,
+    ConversationResumeRequest, ConversationSessionOperation, ConversationTurnRequest, VaultState,
+    WorkerAction, WorkerResult,
 };
 use floe_actions::{ExpertCalendarInspection, ExpertProposalReference};
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::CalendarProvider;
 #[cfg(test)]
 use floe_conversation::AgentOutcome;
-use floe_conversation::{AgentEvent, AgentSession};
+use floe_conversation::{AgentEvent, AgentSession, SessionStore as _};
 use floe_execution::Cancellation;
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
 use floe_experts_builtin::BuiltinExpertKind;
@@ -56,6 +57,8 @@ mod remote_views;
 mod review_snapshot;
 
 use floe_vault::{VaultConversationRepository, VaultTaskRepository};
+
+pub(crate) use interaction_resolution::{RefreshOutcome, ResolveOutcome};
 
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
@@ -149,6 +152,46 @@ impl VaultBridge {
     ) -> Result<floe_conversation::CancelRunStatus, AgentFailure> {
         self.worker()?
             .cancel_conversation(person, command_id, run_id)
+    }
+
+    pub(crate) fn resolve_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ResolveInteraction,
+    ) -> Result<ResolvedInteraction, AgentFailure> {
+        self.worker()?.resolve_interaction(caller, request)
+    }
+
+    pub(crate) fn refresh_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::RefreshInteraction,
+    ) -> Result<RefreshedInteraction, AgentFailure> {
+        self.worker()?.refresh_interaction(caller, request)
+    }
+
+    pub(crate) fn resume_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ResumeInteraction,
+    ) -> Result<floe_conversation::RunReceipt, AgentFailure> {
+        self.worker()?.resume_interaction(caller, request)
+    }
+
+    pub(crate) fn get_interaction(
+        &self,
+        person: PersonId,
+        interaction_id: Uuid,
+    ) -> Result<Option<floe_conversation::ConversationInteraction>, AgentFailure> {
+        self.worker()?.get_interaction(person, interaction_id)
+    }
+
+    pub(crate) fn list_interactions(
+        &self,
+        person: PersonId,
+        session_id: Uuid,
+    ) -> Result<Vec<floe_conversation::ConversationInteraction>, AgentFailure> {
+        self.worker()?.list_interactions(person, session_id)
     }
 
     fn worker(&self) -> Result<RefMut<'_, Worker>, AgentFailure> {
@@ -310,6 +353,15 @@ enum CommandIdentity {
         profile: floe_conversation::ProfileSelection,
         retry_of: Option<floe_kernel::RunId>,
     },
+    /// A linked resume. The origin linkage names it; text and profile
+    /// resolve from the origin's durable admission, so they are not
+    /// caller identity.
+    TurnResume {
+        session_id: Uuid,
+        expected_revision: u64,
+        origin_run_id: floe_kernel::RunId,
+        lineage: u8,
+    },
 }
 
 /// Name one conversation turn command in Conversation's own terms.
@@ -346,6 +398,25 @@ fn conversation_command_identity(
     Some(CommandIdentity::TurnDigest(
         intent.digest(&person.to_string()).ok()?,
     ))
+}
+
+/// Name one linked resume command in Conversation's own terms.
+///
+/// The origin linkage plus the revision to admit at names it; the asking
+/// device is a runtime observation, never identity.
+fn resume_command_identity(request: &ConversationResumeRequest) -> Option<CommandIdentity> {
+    if !request.origin_run_id.is_valid()
+        || request.lineage == 0
+        || request.lineage > floe_conversation::MAX_RESUME_LINEAGE
+    {
+        return None;
+    }
+    Some(CommandIdentity::TurnResume {
+        session_id: request.session_id,
+        expected_revision: request.expected_revision,
+        origin_run_id: request.origin_run_id,
+        lineage: request.lineage,
+    })
 }
 
 impl Job {
@@ -392,6 +463,24 @@ enum WorkerMessage {
     ConversationQuery(ConversationQueryJob),
     ConversationPrecheck(ConversationPrecheckJob),
     ConversationCancel(ConversationCancelJob),
+    InteractionResolve(InteractionResolveJob),
+    InteractionRefresh(InteractionRefreshJob),
+    InteractionGet(InteractionGetJob),
+    InteractionList(InteractionListJob),
+}
+
+/// One decided interaction plus the automatic child it admitted, if the
+/// resolved group currently admits one.
+pub(crate) struct ResolvedInteraction {
+    pub outcome: interaction_resolution::ResolveOutcome,
+    pub linked_run: Option<floe_conversation::RunReceipt>,
+}
+
+/// One refreshed interaction plus the automatic child it admitted, if the
+/// refresh completed the group.
+pub(crate) struct RefreshedInteraction {
+    pub outcome: interaction_resolution::RefreshOutcome,
+    pub linked_run: Option<floe_conversation::RunReceipt>,
 }
 
 pub(crate) enum ConversationQuery {
@@ -417,6 +506,47 @@ struct ConversationCancelJob {
     command_id: floe_kernel::CommandId,
     run_id: floe_kernel::RunId,
     reply: mpsc::SyncSender<Result<floe_conversation::CancelRunStatus, AgentFailure>>,
+}
+
+struct InteractionResolveJob {
+    caller: crate::CallerContext,
+    request: crate::ResolveInteraction,
+    reply: mpsc::SyncSender<
+        Result<
+            (
+                interaction_resolution::ResolveOutcome,
+                Option<conversation_turn::AutoResumeClaim>,
+            ),
+            AgentFailure,
+        >,
+    >,
+}
+
+struct InteractionRefreshJob {
+    caller: crate::CallerContext,
+    request: crate::RefreshInteraction,
+    reply: mpsc::SyncSender<
+        Result<
+            (
+                interaction_resolution::RefreshOutcome,
+                Option<conversation_turn::AutoResumeClaim>,
+            ),
+            AgentFailure,
+        >,
+    >,
+}
+
+struct InteractionGetJob {
+    person: PersonId,
+    interaction_id: Uuid,
+    reply:
+        mpsc::SyncSender<Result<Option<floe_conversation::ConversationInteraction>, AgentFailure>>,
+}
+
+struct InteractionListJob {
+    person: PersonId,
+    session_id: Uuid,
+    reply: mpsc::SyncSender<Result<Vec<floe_conversation::ConversationInteraction>, AgentFailure>>,
 }
 
 /// How far one command has got, as the worker records it.
@@ -595,13 +725,117 @@ impl Worker {
                                     let _ = worker_learner_scheduling.foreground_finished();
                                     continue;
                                 }
+                                WorkerMessage::InteractionResolve(resolve) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person
+                                                == floe_kernel::PersonId(
+                                                    resolve.caller.person_id(),
+                                                ) =>
+                                        {
+                                            runtime.block_on(execute_interaction_resolve(
+                                                &core,
+                                                &local_context,
+                                                open_vault,
+                                                &resolve.caller,
+                                                &resolve.request,
+                                            ))
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = resolve.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
+                                WorkerMessage::InteractionRefresh(refresh) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person
+                                                == floe_kernel::PersonId(
+                                                    refresh.caller.person_id(),
+                                                ) =>
+                                        {
+                                            runtime.block_on(execute_interaction_refresh(
+                                                &core,
+                                                &local_context,
+                                                open_vault,
+                                                &refresh.caller,
+                                                &refresh.request,
+                                            ))
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = refresh.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
+                                WorkerMessage::InteractionGet(get) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person == get.person =>
+                                        {
+                                            runtime.block_on(async {
+                                                match floe_conversation::load_interaction(
+                                                    open_vault.conversation_repository.as_ref(),
+                                                    &get.person.to_string(),
+                                                    get.interaction_id,
+                                                )
+                                                .await
+                                                {
+                                                    // A missing row reads as absent.
+                                                    Ok(row) => Ok(Some(row)),
+                                                    Err(AgentFailure::NotFound) => Ok(None),
+                                                    Err(failure) => Err(failure),
+                                                }
+                                            })
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = get.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
+                                WorkerMessage::InteractionList(list) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person == list.person =>
+                                        {
+                                            runtime.block_on(list_session_interactions(
+                                                &open_vault.vault,
+                                                open_vault.conversation_repository.as_ref(),
+                                                list.person,
+                                                list.session_id,
+                                            ))
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = list.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
                             };
                             let operation = job.action.name();
                             let started = Instant::now();
                             let trace_context = diagnostics::trace_context(job.id);
                             let request_id = trace_context.request_id().to_string();
                             tracing::info!(request_id, operation, "agent_job_started");
-                            if matches!(*job.action, WorkerAction::ConversationTurn { .. }) {
+                            if matches!(
+                                *job.action,
+                                WorkerAction::ConversationTurn { .. }
+                                    | WorkerAction::ConversationResume { .. }
+                            ) {
                                 let failure = match (&conversation_runtime, vault.as_ref()) {
                                     (Ok(runtime), Some((person, open_vault)))
                                         if *person == job.person =>
@@ -616,19 +850,33 @@ impl Worker {
                                             let execution_job = Arc::clone(&task_job);
                                             let execution = tokio::spawn(diagnostics::instrument(
                                                 async move {
-                                                    let WorkerAction::ConversationTurn { request } =
-                                                        &*execution_job.action
-                                                    else {
-                                                        return Err(AgentFailure::InvalidInput);
-                                                    };
-                                                    execute_conversation_turn_action(
-                                                        &core,
-                                                        &open_vault,
-                                                        &local_context,
-                                                        &execution_job,
-                                                        request,
-                                                    )
-                                                    .await
+                                                    match &*execution_job.action {
+                                                        WorkerAction::ConversationTurn {
+                                                            request,
+                                                        } => {
+                                                            execute_conversation_turn_action(
+                                                                &core,
+                                                                &open_vault,
+                                                                &local_context,
+                                                                &execution_job,
+                                                                request,
+                                                            )
+                                                            .await
+                                                        }
+                                                        WorkerAction::ConversationResume {
+                                                            request,
+                                                        } => {
+                                                            execute_conversation_resume_action(
+                                                                &core,
+                                                                &open_vault,
+                                                                &local_context,
+                                                                &execution_job,
+                                                                request,
+                                                            )
+                                                            .await
+                                                        }
+                                                        _ => Err(AgentFailure::InvalidInput),
+                                                    }
                                                 },
                                                 trace_context,
                                                 "agent_job",
@@ -930,9 +1178,13 @@ impl Worker {
         }
         drop(jobs);
         if stop {
-            // A turn is cancelled through its Run, so a cancel that the
-            // conversation owner has never heard of still stops the job.
-            if matches!(*job.action, WorkerAction::ConversationTurn { .. }) {
+            // A turn or resume is cancelled through its Run, so a cancel
+            // that the conversation owner has never heard of still stops
+            // the job.
+            if matches!(
+                *job.action,
+                WorkerAction::ConversationTurn { .. } | WorkerAction::ConversationResume { .. }
+            ) {
                 let command_id = floe_agent_contract::CommandId::from_uuid(job.id)
                     .ok_or(AgentFailure::InvalidInput)?;
                 if matches!(
@@ -1073,6 +1325,15 @@ impl Worker {
             {
                 return Err(AgentFailure::Conflict);
             }
+            if let WorkerAction::ConversationResume { request } = &*action
+                && let (Some(stored), Some(candidate)) = (
+                    job.command_identity.as_ref(),
+                    resume_command_identity(request).as_ref(),
+                )
+                && stored != candidate
+            {
+                return Err(AgentFailure::Conflict);
+            }
             return Ok(Arc::clone(job));
         }
         let mut in_flight = 0_usize;
@@ -1090,8 +1351,10 @@ impl Worker {
             } else {
                 in_flight += 1;
                 exclusive_in_flight |= job.action.is_exclusive_host();
-                incompatible_in_flight |=
-                    !matches!(*job.action, WorkerAction::ConversationTurn { .. });
+                incompatible_in_flight |= !matches!(
+                    *job.action,
+                    WorkerAction::ConversationTurn { .. } | WorkerAction::ConversationResume { .. }
+                );
             }
         }
         if in_flight >= MAX_IN_FLIGHT_VAULT_JOBS
@@ -1116,6 +1379,7 @@ impl Worker {
             WorkerAction::ConversationTurn { request } => {
                 conversation_command_identity(id, person, request)
             }
+            WorkerAction::ConversationResume { request } => resume_command_identity(request),
             _ => None,
         };
         let job = Arc::new(Job {
@@ -1208,6 +1472,232 @@ impl Worker {
                 person,
                 command_id,
                 run_id,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        response
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))
+    }
+
+    fn resolve_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ResolveInteraction,
+    ) -> Result<ResolvedInteraction, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::InteractionResolve(InteractionResolveJob {
+                caller: caller.clone(),
+                request,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        // Owner re-verification carries its own probe deadline; the
+        // message budget covers it plus the resolution write.
+        let (outcome, claim) = response
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))?;
+        let linked_run = match claim {
+            Some(claim) => self.claim_auto_child(caller, outcome.interaction(), &claim),
+            None => None,
+        };
+        Ok(ResolvedInteraction {
+            outcome,
+            linked_run,
+        })
+    }
+
+    fn refresh_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::RefreshInteraction,
+    ) -> Result<RefreshedInteraction, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::InteractionRefresh(InteractionRefreshJob {
+                caller: caller.clone(),
+                request,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        let (outcome, claim) = response
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))?;
+        let linked_run = match claim {
+            Some(claim) => self.claim_auto_child(caller, outcome.interaction(), &claim),
+            None => None,
+        };
+        Ok(RefreshedInteraction {
+            outcome,
+            linked_run,
+        })
+    }
+
+    /// Claim the gate-approved automatic child, or rejoin it.
+    ///
+    /// The claim carries the stable per-origin command identity, so a
+    /// retried resolve/refresh rejoins the same child job instead of
+    /// admitting a sibling. A lost race between the gate read and the
+    /// claim surfaces no receipt: the decision still stands, and an
+    /// explicit Continue can still claim the slot.
+    fn claim_auto_child(
+        &self,
+        caller: &crate::CallerContext,
+        interaction: &floe_conversation::ConversationInteraction,
+        claim: &conversation_turn::AutoResumeClaim,
+    ) -> Option<floe_conversation::RunReceipt> {
+        let command_id = floe_conversation::resume_command_id(interaction.origin_run_id).ok()?;
+        let job = self
+            .submit_job(
+                floe_kernel::PersonId(caller.person_id()),
+                command_id.as_uuid(),
+                Box::new(WorkerAction::ConversationResume {
+                    request: Box::new(ConversationResumeRequest::new(
+                        interaction.session_id,
+                        claim.expected_revision,
+                        caller.device_id().to_owned(),
+                        interaction.origin_run_id,
+                        claim.link.lineage,
+                    )),
+                }),
+            )
+            .ok()?;
+        match job.wait_for_admission() {
+            Ok(receipt) => Some(receipt),
+            // A conflict is an ordinary lost race (a flipped group, a
+            // stale revision, a concurrent claim): the decision stands.
+            Err(AgentFailure::Conflict) => None,
+            Err(failure) => {
+                tracing::warn!(
+                    failure = ?failure,
+                    interaction = ?interaction.id,
+                    "auto_resume_claim_failed"
+                );
+                None
+            }
+        }
+    }
+
+    fn resume_interaction(
+        &self,
+        caller: &crate::CallerContext,
+        request: crate::ResumeInteraction,
+    ) -> Result<floe_conversation::RunReceipt, AgentFailure> {
+        let origin_run_id = floe_kernel::RunId::from_uuid(request.origin_run_id)
+            .ok_or(AgentFailure::InvalidInput)?;
+        // The explicit claim names its lineage from the origin's durable
+        // receipt at execution: run_resume derives the exact link.
+        let lineage = self.resume_lineage(
+            floe_kernel::PersonId(caller.person_id()),
+            request.session_id,
+            origin_run_id,
+        )?;
+        let job = self.submit_job(
+            floe_kernel::PersonId(caller.person_id()),
+            request.command_id,
+            Box::new(WorkerAction::ConversationResume {
+                request: Box::new(ConversationResumeRequest::new(
+                    request.session_id,
+                    request.expected_revision,
+                    caller.device_id().to_owned(),
+                    origin_run_id,
+                    lineage,
+                )),
+            }),
+        )?;
+        job.wait_for_admission()
+    }
+
+    /// The lineage an explicit Continue must claim, read from the origin.
+    ///
+    /// Only a Completed origin in this Session names a next link; anything
+    /// else conflicts before any job is submitted.
+    fn resume_lineage(
+        &self,
+        person: PersonId,
+        session_id: Uuid,
+        origin_run_id: floe_kernel::RunId,
+    ) -> Result<u8, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::ConversationQuery(ConversationQueryJob {
+                person,
+                query: ConversationQuery::Run(origin_run_id),
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        let receipt = response
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))?
+            .ok_or(AgentFailure::Conflict)?;
+        if receipt.session_id != session_id {
+            return Err(AgentFailure::Conflict);
+        }
+        receipt
+            .resume()
+            .map(|link| link.lineage)
+            .ok_or(AgentFailure::Conflict)
+    }
+
+    fn get_interaction(
+        &self,
+        person: PersonId,
+        interaction_id: Uuid,
+    ) -> Result<Option<floe_conversation::ConversationInteraction>, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::InteractionGet(InteractionGetJob {
+                person,
+                interaction_id,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        response
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))
+    }
+
+    fn list_interactions(
+        &self,
+        person: PersonId,
+        session_id: Uuid,
+    ) -> Result<Vec<floe_conversation::ConversationInteraction>, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::InteractionList(InteractionListJob {
+                person,
+                session_id,
                 reply,
             }))
             .is_err()
@@ -1371,6 +1861,173 @@ async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
     .await
 }
 
+fn decision_kind(
+    decision: crate::InteractionDecision,
+) -> floe_conversation::InteractionDecisionKind {
+    match decision {
+        crate::InteractionDecision::Approve => floe_conversation::InteractionDecisionKind::Approve,
+        crate::InteractionDecision::Deny => floe_conversation::InteractionDecisionKind::Deny,
+        crate::InteractionDecision::Dismiss => floe_conversation::InteractionDecisionKind::Dismiss,
+    }
+}
+
+async fn execute_interaction_resolve<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
+    local_context: &LocalContextHost,
+    vault: &OpenVault<Keys>,
+    caller: &crate::CallerContext,
+    request: &crate::ResolveInteraction,
+) -> Result<
+    (
+        interaction_resolution::ResolveOutcome,
+        Option<conversation_turn::AutoResumeClaim>,
+    ),
+    AgentFailure,
+> {
+    let calendar_subject = calendar_access::DeviceCalendarSubject { local_context };
+    let personal_subject = personal_grants::native_driver(local_context);
+    let owners = interaction_owners::HostInteractionOwners {
+        core,
+        vault: vault.vault.as_ref(),
+        connections: &vault.connections,
+        calendar_subject: &calendar_subject,
+        personal_subject: &personal_subject,
+        probe_deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+    };
+    let outcome = interaction_resolution::resolve_interaction(
+        vault.conversation_repository.as_ref(),
+        vault.conversation_repository.as_ref(),
+        &owners,
+        &owners,
+        &owners,
+        caller,
+        interaction_resolution::ResolveInteractionCommand {
+            interaction_id: request.interaction_id,
+            command_id: request.command_id,
+            session_id: request.session_id,
+            expected_revision: request.expected_revision,
+            kind: decision_kind(request.decision),
+            target_digest: request.target_digest,
+        },
+        &Cancellation::default(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await?;
+    // A resolved card may complete its group: evaluate the automatic
+    // child claim so the response can carry the linked receipt. Any
+    // other outcome (or a suppressed gate) carries no child.
+    let claim = match &outcome {
+        interaction_resolution::ResolveOutcome::Resolved { interaction } => {
+            conversation_turn::evaluate_auto_resume(
+                &vault.conversation_repository,
+                floe_kernel::PersonId(caller.person_id()),
+                interaction.session_id,
+                interaction.origin_run_id,
+            )
+            .await?
+        }
+        _ => None,
+    };
+    Ok((outcome, claim))
+}
+
+async fn execute_interaction_refresh<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
+    local_context: &LocalContextHost,
+    vault: &OpenVault<Keys>,
+    caller: &crate::CallerContext,
+    request: &crate::RefreshInteraction,
+) -> Result<
+    (
+        interaction_resolution::RefreshOutcome,
+        Option<conversation_turn::AutoResumeClaim>,
+    ),
+    AgentFailure,
+> {
+    let calendar_subject = calendar_access::DeviceCalendarSubject { local_context };
+    let personal_subject = personal_grants::native_driver(local_context);
+    let owners = interaction_owners::HostInteractionOwners {
+        core,
+        vault: vault.vault.as_ref(),
+        connections: &vault.connections,
+        calendar_subject: &calendar_subject,
+        personal_subject: &personal_subject,
+        probe_deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+    };
+    let outcome = interaction_resolution::refresh_interaction(
+        vault.conversation_repository.as_ref(),
+        vault.conversation_repository.as_ref(),
+        &owners,
+        &owners,
+        &owners,
+        caller,
+        interaction_resolution::RefreshInteractionCommand {
+            interaction_id: request.interaction_id,
+            command_id: request.command_id,
+            session_id: request.session_id,
+            expected_revision: request.expected_revision,
+        },
+        &Cancellation::default(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await?;
+    let claim = match &outcome {
+        interaction_resolution::RefreshOutcome::Resolved { interaction } => {
+            conversation_turn::evaluate_auto_resume(
+                &vault.conversation_repository,
+                floe_kernel::PersonId(caller.person_id()),
+                interaction.session_id,
+                interaction.origin_run_id,
+            )
+            .await?
+        }
+        _ => None,
+    };
+    Ok((outcome, claim))
+}
+
+/// One Session's interaction snapshots, oldest first, bounded.
+///
+/// The Session's own interaction refs order the read; refs without a
+/// stored row are skipped. Read-only: never reconciles, admits or mutates.
+async fn list_session_interactions<Keys: VaultKeyProvider + 'static>(
+    vault: &EncryptedAgentVault<Keys>,
+    repository: &VaultConversationRepository<Keys>,
+    person: PersonId,
+    session_id: Uuid,
+) -> Result<Vec<floe_conversation::ConversationInteraction>, AgentFailure> {
+    use floe_conversation::AgentMessage;
+    use std::collections::HashSet;
+    let session = vault.load(person, session_id).await?;
+    let mut seen = HashSet::new();
+    let mut interactions = Vec::new();
+    for message in &session.messages {
+        let AgentMessage::Interaction { interaction_id, .. } = message else {
+            continue;
+        };
+        if !seen.insert(*interaction_id) {
+            continue;
+        }
+        if interactions.len() >= crate::MAX_SESSION_INTERACTIONS {
+            break;
+        }
+        let Some(row) = floe_conversation::InteractionRepository::get_interaction(
+            repository,
+            person,
+            *interaction_id,
+        )
+        .await?
+        else {
+            continue;
+        };
+        if row.session_id != session_id {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        interactions.push(row);
+    }
+    Ok(interactions)
+}
+
 async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     core: &FloeCore,
     vault: &OpenVault<Keys>,
@@ -1429,6 +2086,111 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
                 stage = "runtime",
                 "conversation_turn_failed"
             );
+            // A pre-admission failure still wakes the submitter: after a
+            // published admission this is a no-op.
+            job.publish_admission(Err(failure));
+            return Err(failure);
+        }
+    };
+    let admitted = job
+        .admission
+        .lock()
+        .ok()
+        .and_then(|admission| match admission.as_ref() {
+            Some(Ok(receipt)) => Some(receipt.clone()),
+            Some(Err(_)) | None => None,
+        });
+    let run_receipt = if let Some(admitted) = admitted
+        && let Ok(Some(receipt)) = floe_conversation::get_run(
+            vault.conversation_repository.as_ref(),
+            floe_conversation::RunQuery {
+                principal: job.person.to_string(),
+                run_id: admitted.run_id,
+            },
+        )
+        .await
+    {
+        Some(receipt)
+    } else {
+        None
+    };
+    Ok(VaultExecutionResult {
+        session: Some(session),
+        run_receipt,
+        ..VaultExecutionResult::ready()
+    })
+}
+
+async fn execute_conversation_resume_action<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
+    vault: &OpenVault<Keys>,
+    local_context: &LocalContextHost,
+    job: &Job,
+    request: &ConversationResumeRequest,
+) -> Result<VaultExecutionResult, AgentFailure> {
+    let refreshed = Box::pin(ensure_builtin_experts(
+        vault,
+        job.cancellation.clone(),
+        floe_experts::BuiltinExpertRefresh::ExistingOnly,
+    ))
+    .await;
+    match floe_experts::expert_refresh_outcome(refreshed) {
+        floe_experts::ExpertRefreshOutcome::Ready => {}
+        floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
+            failure = ?failure,
+            stage = "ensure_builtin_experts",
+            "conversation_resume_degraded"
+        ),
+        floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
+    }
+    vault.sync_expert_directory().await?;
+    let origin_run_id = request.origin_run_id;
+    let link = floe_conversation::InteractionResumeRef {
+        origin_run_id,
+        lineage: request.lineage,
+    };
+    let session = match Box::pin(conversation_turn::run_resume(
+        core,
+        vault,
+        local_context,
+        &vault.task_coordinator,
+        &vault.conversation_repository,
+        &job.run_cancellations,
+        &vault.connections,
+        job.person,
+        floe_agent_contract::CommandId::from_uuid(job.id).ok_or(AgentFailure::InvalidInput)?,
+        &conversation_turn::ResumeTurnRequest {
+            session_id: request.session_id,
+            expected_revision: request.expected_revision,
+            device_id: request.device_id.clone(),
+            resume: link,
+        },
+        job.cancellation.clone(),
+        |receipt| job.publish_admission(Ok(receipt.clone())),
+        |event| {
+            if let Ok(mut progress) = job.progress.lock() {
+                if progress.events.len() < 2048 {
+                    progress.events.push(event);
+                } else {
+                    job.cancellation.cancel();
+                }
+            } else {
+                job.cancellation.cancel();
+            }
+        },
+    ))
+    .await
+    {
+        Ok(session) => session,
+        Err(failure) => {
+            tracing::error!(
+                failure = ?failure,
+                stage = "runtime",
+                "conversation_resume_failed"
+            );
+            // A pre-admission failure still wakes the submitter: after a
+            // published admission this is a no-op.
+            job.publish_admission(Err(failure));
             return Err(failure);
         }
     };
@@ -1700,6 +2462,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         WorkerAction::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             execute_conversation_turn_action(core, vault, local_context, job, request).await
+        }
+        WorkerAction::ConversationResume { request } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            execute_conversation_resume_action(core, vault, local_context, job, request).await
         }
         WorkerAction::InspectProposal {
             session_id,
@@ -2023,16 +2789,15 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             if policies.is_empty() {
                                 return Err(AgentFailure::InvalidInput);
                             }
-                            let calendar = policies.len() == 1
-                                && policies[0].view_id == "calendar.timeline";
+                            let calendar =
+                                policies.len() == 1 && policies[0].view_id == "calendar.timeline";
                             if calendar {
-                                let transport =
-                                    RemoteAuthorityEndpoint::from_current_connection(
-                                        connections,
-                                        &person_text,
-                                        caller.device_id(),
-                                        Some(vault),
-                                    )?;
+                                let transport = RemoteAuthorityEndpoint::from_current_connection(
+                                    connections,
+                                    &person_text,
+                                    caller.device_id(),
+                                    Some(vault),
+                                )?;
                                 let window =
                                     remote_authority::authority_window(job.cancellation.clone());
                                 let pairing = floe_access::RemotePairingIdentity {
@@ -2062,8 +2827,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                         vault,
                                     );
                                 let window = floe_access::RemoteCallWindow {
-                                    deadline: tokio::time::Instant::now()
-                                        + Duration::from_secs(30),
+                                    deadline: tokio::time::Instant::now() + Duration::from_secs(30),
                                     cancellation: job.cancellation.clone(),
                                 };
                                 let pairing = floe_access::RemotePairingIdentity {

@@ -88,6 +88,10 @@ pub enum AppQueryDto {
     ConversationGetRun { run_id: Uuid },
     #[serde(rename = "conversation.get_message")]
     ConversationGetMessage { message_id: Uuid },
+    #[serde(rename = "conversation.interaction.get")]
+    ConversationInteractionGet { interaction_id: Uuid },
+    #[serde(rename = "conversation.interaction.list")]
+    ConversationInteractionList { session_id: Uuid },
 }
 
 impl AppQueryDto {
@@ -151,6 +155,10 @@ impl AppQueryDto {
             Self::ConversationGetCommand { command_id } => ("query.command_id", command_id),
             Self::ConversationGetRun { run_id } => ("query.run_id", run_id),
             Self::ConversationGetMessage { message_id } => ("query.message_id", message_id),
+            Self::ConversationInteractionGet { interaction_id } => {
+                ("query.interaction_id", interaction_id)
+            }
+            Self::ConversationInteractionList { session_id } => ("query.session_id", session_id),
         };
         if id.is_nil() { Err(field) } else { Ok(()) }
     }
@@ -207,6 +215,17 @@ pub enum AppQueryResultDto {
     Message {
         #[serde(flatten)]
         message: AppMessageDto,
+    },
+    Interaction {
+        #[serde(flatten)]
+        snapshot: super::AppInteractionSnapshotDto,
+    },
+    InteractionList {
+        #[serde(flatten)]
+        list: super::AppInteractionListDto,
+    },
+    UnknownInteraction {
+        interaction_id: Uuid,
     },
 }
 

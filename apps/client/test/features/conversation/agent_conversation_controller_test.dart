@@ -391,6 +391,15 @@ final class _ImmediateConversationRuntime
   }
 
   @override
+  Future<ConversationTurnCompletion> observeConversationRun(
+    AppCommandReceipt receipt,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<void> cancelConversationTurn(
     AgentConversationTurnRequest request,
   ) async {
@@ -463,6 +472,15 @@ final class _ControllerRuntime implements ConversationRuntimeGateway {
       run: finished,
       session: _runtimeSession(2),
     );
+  }
+
+  @override
+  Future<ConversationTurnCompletion> observeConversationRun(
+    AppCommandReceipt receipt,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
+    throw UnimplementedError();
   }
 
   @override

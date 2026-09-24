@@ -41,7 +41,6 @@ impl StartTurn {
         match &self.mode {
             TurnMode::New => Ok(()),
             TurnMode::Continue(reference) => reference.validate(),
-            TurnMode::Resume(reference) => reference.validate(),
         }
     }
 }
@@ -57,7 +56,6 @@ fn normalize_turn_text(text: &str) -> Result<String, ServiceError> {
 pub enum TurnMode {
     New,
     Continue(ContinuationRef),
-    Resume(ResumeRef),
 }
 
 /// Which model profile a turn runs on is Conversation's own choice of words.
@@ -73,25 +71,6 @@ pub struct ContinuationRef {
 impl ContinuationRef {
     fn validate(&self) -> Result<(), ServiceError> {
         if self.run_id.is_nil() || self.executor_generation == 0 || !(1..=3).contains(&self.level) {
-            Err(ServiceError::InvalidInput)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResumeRef {
-    pub origin_run_id: Uuid,
-    pub lineage: u8,
-}
-
-impl ResumeRef {
-    fn validate(&self) -> Result<(), ServiceError> {
-        if self.origin_run_id.is_nil()
-            || self.lineage == 0
-            || self.lineage > floe_conversation::MAX_RESUME_LINEAGE
-        {
             Err(ServiceError::InvalidInput)
         } else {
             Ok(())
@@ -135,6 +114,132 @@ pub struct CancelRunReceipt {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractionDecision {
+    Approve,
+    Deny,
+    Dismiss,
+}
+
+/// Decide one interaction: the stable command id names the decision, the
+/// reviewed digest binds what the person saw. No authority value crosses:
+/// source, recipient, grant, profile and text all load from the stored
+/// reviewed descriptor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveInteraction {
+    pub command_id: Uuid,
+    pub interaction_id: Uuid,
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub decision: InteractionDecision,
+    pub target_digest: [u8; 32],
+}
+
+impl ResolveInteraction {
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        if self.command_id.is_nil()
+            || self.interaction_id.is_nil()
+            || self.session_id.is_nil()
+            || self.expected_revision == 0
+            || self.target_digest == [0; 32]
+        {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Reconcile one interaction without deciding it: satisfy, supersede or
+/// rejoin, never approve.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefreshInteraction {
+    pub command_id: Uuid,
+    pub interaction_id: Uuid,
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+}
+
+impl RefreshInteraction {
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        if self.command_id.is_nil()
+            || self.interaction_id.is_nil()
+            || self.session_id.is_nil()
+            || self.expected_revision == 0
+        {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Continue one origin's request explicitly: the backend derives intent
+/// from the origin's durable admission, never from caller text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResumeInteraction {
+    pub command_id: Uuid,
+    pub session_id: Uuid,
+    pub origin_run_id: Uuid,
+    pub expected_revision: u64,
+}
+
+impl ResumeInteraction {
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        if self.command_id.is_nil() || self.session_id.is_nil() || self.origin_run_id.is_nil() {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolveInteractionOutcome {
+    Resolved,
+    Resolving,
+    Denied,
+    Cancelled,
+    Superseded,
+    Expired,
+    Stale,
+    Terminal,
+    WrongDevice,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RefreshInteractionOutcome {
+    Resolved,
+    StillPending,
+    Superseded,
+    Terminal,
+    Expired,
+    Stale,
+    WrongDevice,
+}
+
+/// One decision response: the current snapshot plus, when a child was
+/// admitted, the standard linked Run/command receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveInteractionResult {
+    pub command_id: Uuid,
+    pub outcome: ResolveInteractionOutcome,
+    pub interaction: floe_conversation::ConversationInteraction,
+    pub replacement_id: Option<Uuid>,
+    pub linked_run: Option<CommandReceipt>,
+}
+
+/// One refresh response: the reconciled snapshot plus, when refresh
+/// completed the group, the standard linked Run/command receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefreshInteractionResult {
+    pub command_id: Uuid,
+    pub outcome: RefreshInteractionOutcome,
+    pub interaction: floe_conversation::ConversationInteraction,
+    pub replacement_id: Option<Uuid>,
+    pub linked_run: Option<CommandReceipt>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceError {
     InvalidInput,
     NotFound,
@@ -156,6 +261,24 @@ pub trait ConversationCommands {
         caller: &CallerContext,
         request: CancelRun,
     ) -> Result<CancelRunReceipt, ServiceError>;
+
+    fn resolve_interaction(
+        &self,
+        caller: &CallerContext,
+        request: ResolveInteraction,
+    ) -> Result<ResolveInteractionResult, ServiceError>;
+
+    fn refresh_interaction(
+        &self,
+        caller: &CallerContext,
+        request: RefreshInteraction,
+    ) -> Result<RefreshInteractionResult, ServiceError>;
+
+    fn resume_interaction(
+        &self,
+        caller: &CallerContext,
+        request: ResumeInteraction,
+    ) -> Result<CommandReceipt, ServiceError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,12 +303,31 @@ impl ReadConversation {
     }
 }
 
+/// Maximum interaction snapshots returned by one Session list read.
+pub const MAX_SESSION_INTERACTIONS: usize = 64;
+
 pub trait ConversationQueries {
     fn read_conversation(
         &self,
         caller: &CallerContext,
         request: ReadConversation,
     ) -> Result<Option<floe_conversation::RunReceipt>, ServiceError>;
+
+    /// Read one interaction snapshot. Read-only: never reconciles, admits
+    /// or mutates.
+    fn read_interaction(
+        &self,
+        caller: &CallerContext,
+        interaction_id: Uuid,
+    ) -> Result<Option<floe_conversation::ConversationInteraction>, ServiceError>;
+
+    /// List one Session's interaction snapshots, oldest first, bounded.
+    /// Read-only: never reconciles, admits or mutates.
+    fn list_interactions(
+        &self,
+        caller: &CallerContext,
+        session_id: Uuid,
+    ) -> Result<Vec<floe_conversation::ConversationInteraction>, ServiceError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

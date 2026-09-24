@@ -214,6 +214,192 @@ abstract class AppLocalizations {
   /// **'Calendar evidence'**
   String get agentConnectedSource;
 
+  /// No description provided for @agentInteractionSourceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Source access'**
+  String get agentInteractionSourceTitle;
+
+  /// No description provided for @agentInteractionConsentTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Model request'**
+  String get agentInteractionConsentTitle;
+
+  /// No description provided for @agentInteractionStatePending.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for review'**
+  String get agentInteractionStatePending;
+
+  /// No description provided for @agentInteractionStateResolving.
+  ///
+  /// In en, this message translates to:
+  /// **'Working…'**
+  String get agentInteractionStateResolving;
+
+  /// No description provided for @agentInteractionStateResolved.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolved'**
+  String get agentInteractionStateResolved;
+
+  /// No description provided for @agentInteractionStateDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Denied'**
+  String get agentInteractionStateDenied;
+
+  /// No description provided for @agentInteractionStateCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Dismissed'**
+  String get agentInteractionStateCancelled;
+
+  /// No description provided for @agentInteractionStateSuperseded.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated — see the newest card'**
+  String get agentInteractionStateSuperseded;
+
+  /// No description provided for @agentInteractionStateExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'Expired'**
+  String get agentInteractionStateExpired;
+
+  /// No description provided for @agentInteractionAllow.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow'**
+  String get agentInteractionAllow;
+
+  /// No description provided for @agentInteractionDeny.
+  ///
+  /// In en, this message translates to:
+  /// **'Deny'**
+  String get agentInteractionDeny;
+
+  /// No description provided for @agentInteractionDismiss.
+  ///
+  /// In en, this message translates to:
+  /// **'Not now'**
+  String get agentInteractionDismiss;
+
+  /// No description provided for @agentInteractionRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get agentInteractionRefresh;
+
+  /// No description provided for @agentInteractionContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue'**
+  String get agentInteractionContinue;
+
+  /// No description provided for @agentInteractionReviewSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Review'**
+  String get agentInteractionReviewSource;
+
+  /// No description provided for @agentInteractionOpenConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Open settings'**
+  String get agentInteractionOpenConnection;
+
+  /// No description provided for @agentInteractionRequestPermission.
+  ///
+  /// In en, this message translates to:
+  /// **'Request access'**
+  String get agentInteractionRequestPermission;
+
+  /// No description provided for @agentInteractionRecipient.
+  ///
+  /// In en, this message translates to:
+  /// **'Recipient'**
+  String get agentInteractionRecipient;
+
+  /// No description provided for @agentInteractionProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile'**
+  String get agentInteractionProfile;
+
+  /// No description provided for @agentInteractionPurpose.
+  ///
+  /// In en, this message translates to:
+  /// **'Purpose'**
+  String get agentInteractionPurpose;
+
+  /// No description provided for @agentInteractionConsumer.
+  ///
+  /// In en, this message translates to:
+  /// **'Consumer'**
+  String get agentInteractionConsumer;
+
+  /// No description provided for @agentInteractionData.
+  ///
+  /// In en, this message translates to:
+  /// **'Data'**
+  String get agentInteractionData;
+
+  /// No description provided for @agentInteractionScopes.
+  ///
+  /// In en, this message translates to:
+  /// **'Source scopes'**
+  String get agentInteractionScopes;
+
+  /// No description provided for @agentInteractionConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection'**
+  String get agentInteractionConnection;
+
+  /// No description provided for @agentInteractionSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get agentInteractionSource;
+
+  /// No description provided for @agentInteractionMembers.
+  ///
+  /// In en, this message translates to:
+  /// **'Items'**
+  String get agentInteractionMembers;
+
+  /// No description provided for @agentInteractionNextStep.
+  ///
+  /// In en, this message translates to:
+  /// **'Next step'**
+  String get agentInteractionNextStep;
+
+  /// No description provided for @agentInteractionStale.
+  ///
+  /// In en, this message translates to:
+  /// **'Changed — review and tap again'**
+  String get agentInteractionStale;
+
+  /// No description provided for @agentInteractionWrongDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'This was decided on another device'**
+  String get agentInteractionWrongDevice;
+
+  /// No description provided for @agentInteractionExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'Expired — send your message again'**
+  String get agentInteractionExpired;
+
+  /// No description provided for @agentInteractionUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Couldn\'t load this card'**
+  String get agentInteractionUnavailable;
+
   /// No description provided for @agentConnectedSourceDetails.
   ///
   /// In en, this message translates to:

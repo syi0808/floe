@@ -72,8 +72,17 @@ pub use floe_access::{
     RemoteOwnerPublicKey, RemoteProducerIdentity,
 };
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
+pub use floe_agent_contract::UserInteractionKind;
 pub use floe_connections::{CalendarConnectionRef, PairingIssuer, PairingStatus};
+pub use floe_context_contract::{
+    DataClass, GrantConsumer, ProcessingSourceScope, RecipientLineage,
+};
 pub use floe_conversation::AgentOutcome;
+pub use floe_conversation::{
+    ConversationInteraction, InlineObserveTarget, InteractionOrigin, InteractionRequirement,
+    InteractionRequirementKind, InteractionState, NavigationDestination, NavigationOnlyTarget,
+    RecipientConsentTarget, ReviewedTarget,
+};
 pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
@@ -136,15 +145,17 @@ pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
     ConversationCommands, ConversationEvent, ConversationEvents, ConversationQueries, EventPayload,
-    EventRead, ProfileSelection, ReadConversation, ReadConversationEvents, ResumeRef,
-    RunEventRecord, ServiceError, StartTurn, TurnMode,
+    EventRead, InteractionDecision, MAX_SESSION_INTERACTIONS, ProfileSelection, ReadConversation,
+    ReadConversationEvents, RefreshInteraction, RefreshInteractionOutcome,
+    RefreshInteractionResult, ResolveInteraction, ResolveInteractionOutcome,
+    ResolveInteractionResult, ResumeInteraction, RunEventRecord, ServiceError, StartTurn, TurnMode,
 };
 #[cfg(unix)]
 pub use session_services::{
     ConversationSessionCommand, ConversationSessionCommands, ConversationSessionQueries,
     ConversationSessionResult,
 };
-pub use turn_request::ConversationTurnRequest;
+pub use turn_request::{ConversationResumeRequest, ConversationTurnRequest};
 #[cfg(unix)]
 pub use vault_services::{
     VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultLifecycleResult,

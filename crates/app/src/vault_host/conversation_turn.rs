@@ -233,10 +233,7 @@ pub(super) async fn maybe_auto_resume<Keys: VaultKeyProvider + 'static>(
         return Err(AgentFailure::InvalidInput);
     }
     let principal = person_id.to_string();
-    let Some(origin) = conversation_repository
-        .load_receipt(origin_run_id)
-        .await?
-    else {
+    let Some(origin) = conversation_repository.load_receipt(origin_run_id).await? else {
         return Ok(AutoResumeOutcome::Suppressed(
             ResumeSuppression::OriginNotCompleted,
         ));
@@ -315,6 +312,58 @@ pub(super) async fn maybe_auto_resume<Keys: VaultKeyProvider + 'static>(
         }
         Err(failure) => Err(failure),
     }
+}
+
+/// One automatic child worth attempting, without driving it.
+///
+/// The gate filters origin and group only. The Session revision is
+/// deliberately left to admission CAS: a claimed slot rejoins before any
+/// Session comparison (so a retried resolve always recovers its child),
+/// while an unclaimed slot at a stale revision conflicts honestly.
+/// Best-effort like the gate itself: admission re-verifies everything
+/// atomically, so a lost race between this read and the claim still
+/// converges (rejoin or honest conflict), never duplicates.
+pub(super) struct AutoResumeClaim {
+    pub link: floe_conversation::InteractionResumeRef,
+    pub expected_revision: u64,
+}
+
+/// Evaluate the automatic gate for one origin without driving.
+///
+/// Returns the claim when the origin and its group currently admit a
+/// child; returns `None` on any origin/group suppression. Only storage,
+/// identity or cancellation failures propagate.
+pub(super) async fn evaluate_auto_resume<Keys: VaultKeyProvider + 'static>(
+    conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
+    person_id: PersonId,
+    session_id: Uuid,
+    origin_run_id: floe_kernel::RunId,
+) -> Result<Option<AutoResumeClaim>, AgentFailure> {
+    if session_id.is_nil() || !origin_run_id.is_valid() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let principal = person_id.to_string();
+    let origin = match conversation_repository.load_receipt(origin_run_id).await? {
+        Some(origin) => origin,
+        None => return Ok(None),
+    };
+    if origin.principal != principal || origin.session_id != session_id {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let group = floe_conversation::list_run_interactions(
+        conversation_repository.as_ref(),
+        &principal,
+        origin_run_id,
+    )
+    .await?;
+    let link = match floe_conversation::resume_gate(&origin, &group) {
+        Ok(link) => link,
+        Err(_) => return Ok(None),
+    };
+    Ok(Some(AutoResumeClaim {
+        link,
+        expected_revision: origin.session_revision,
+    }))
 }
 
 #[cfg(test)]

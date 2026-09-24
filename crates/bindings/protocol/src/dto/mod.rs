@@ -24,6 +24,7 @@ mod envelope;
 mod errors;
 mod events;
 mod experts;
+mod interactions;
 pub use experts::ExpertOperationResultDto;
 mod context;
 mod local_context;
@@ -74,6 +75,13 @@ pub use day::{
 pub use envelope::{ErrorCodeDto, ErrorDto, ResponseEnvelopeDto, ResponseOutcomeDto};
 pub use errors::{AppResponseDto, AppResponseOutcomeDto, AppWireErrorCodeDto, AppWireErrorDto};
 pub use events::{AppEventDto, AppEventKindDto, AppEventsRequestDto, AppEventsResultDto};
+pub use interactions::{
+    AppConsentScopeDto, AppInteractionActionDto, AppInteractionDecisionDto, AppInteractionKindDto,
+    AppInteractionListDto, AppInteractionRefreshOutcomeDto, AppInteractionRefreshResultDto,
+    AppInteractionResolveOutcomeDto, AppInteractionResolveResultDto, AppInteractionSnapshotDto,
+    AppInteractionStateDto, AppInteractionTargetDto, AppNavigationDestinationDto,
+    AppObservedMemberDto, MAX_INTERACTIONS_PER_LIST,
+};
 pub use local_context::{
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionRequestDto,

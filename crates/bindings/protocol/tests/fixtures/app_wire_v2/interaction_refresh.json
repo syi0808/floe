@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000025",
+  "command_id": "00000000-0000-0000-0000-000000000026",
+  "command": {
+    "kind": "conversation.interaction.refresh",
+    "interaction_id": "00000000-0000-0000-0000-000000000023",
+    "session_id": "00000000-0000-0000-0000-000000000024",
+    "expected_revision": 2
+  }
+}

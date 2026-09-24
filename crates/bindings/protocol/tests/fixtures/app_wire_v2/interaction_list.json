@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-00000000002b",
+  "query": {
+    "kind": "conversation.interaction.list",
+    "session_id": "00000000-0000-0000-0000-000000000024"
+  }
+}

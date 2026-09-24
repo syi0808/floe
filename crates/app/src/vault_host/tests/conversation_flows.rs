@@ -3864,3 +3864,246 @@ async fn pairing_removed_after_allow_fails_child_fresh_without_dispatch() {
     assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
     harness.finish().await;
 }
+
+// ---- worker-driven interaction commands (05-F) ----
+
+#[test]
+fn worker_resolve_drives_auto_child_and_rejoins_retry() {
+    let connections = TestConnections::default();
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mock, _purposes, agent_posts, done, server) = observing_server(
+        consent_inventory(),
+        canonical_answer_script("Resumed."),
+        true,
+    );
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let turn_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            turn_id,
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::ConversationTurn {
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Hello".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    )),
+                }),
+            },
+        )
+        .unwrap();
+    let finished = wait(&worker, person, turn_id);
+    assert_eq!(finished.failure, None, "blocked turn job: {finished:?}");
+    worker
+        .request(person, turn_id, WorkerOperation::Release)
+        .unwrap();
+    let session = finished.session.unwrap();
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
+    let card_id = pending_consent_card(&session);
+    let origin_run_id = session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            AgentMessage::User { turn_id, .. } => Some(*turn_id),
+            _ => None,
+        })
+        .unwrap();
+
+    let caller = crate::CallerContext::verified(
+        crate::LocalIdentityClaim {
+            person_id: person.0,
+            device_id: "mac-local".into(),
+        },
+        1,
+    )
+    .unwrap();
+    let card = worker
+        .get_interaction(person, card_id)
+        .unwrap()
+        .expect("pending card reads back");
+    assert_eq!(card.state, floe_conversation::InteractionState::Pending);
+
+    // Allow through the worker: resolution plus the automatic child in
+    // one response.
+    let resolve = crate::ResolveInteraction {
+        command_id: Uuid::new_v4(),
+        interaction_id: card.id,
+        session_id: session.id,
+        expected_revision: card.revision,
+        decision: crate::InteractionDecision::Approve,
+        target_digest: card.target_digest,
+    };
+    let resolved = worker
+        .resolve_interaction(&caller, resolve.clone())
+        .unwrap();
+    let crate::vault_host::ResolveOutcome::Resolved { interaction } = &resolved.outcome else {
+        panic!("allow resolves: {:?}", resolved.outcome);
+    };
+    assert!(matches!(
+        interaction.state,
+        floe_conversation::InteractionState::Resolved { .. }
+    ));
+    let linked = resolved.linked_run.clone().expect("auto child admitted");
+    assert_eq!(
+        linked.resume_of,
+        Some(floe_kernel::RunId::from_uuid(origin_run_id).unwrap())
+    );
+
+    // The child drives to completion on the worker; the grant it carries
+    // reaches transport exactly once.
+    let child_job = floe_conversation::resume_command_id(linked.resume_of.unwrap())
+        .unwrap()
+        .as_uuid();
+    let driven = wait(&worker, person, child_job);
+    assert_eq!(driven.failure, None, "child job: {driven:?}");
+    worker
+        .request(person, child_job, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 1);
+
+    // A retried resolve (lost response) rejoins the same decision and
+    // the same linked child; it never admits a sibling.
+    let rejoined = worker.resolve_interaction(&caller, resolve).unwrap();
+    assert!(matches!(
+        rejoined.outcome,
+        crate::vault_host::ResolveOutcome::Resolved { .. }
+    ));
+    assert_eq!(
+        rejoined.linked_run.as_ref().map(|receipt| receipt.run_id),
+        Some(linked.run_id)
+    );
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 1);
+
+    let listed = worker.list_interactions(person, session.id).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(matches!(
+        listed[0].state,
+        floe_conversation::InteractionState::Resolved { .. }
+    ));
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+}
+
+#[test]
+fn worker_explicit_resume_claims_slot_at_current_revision() {
+    let connections = TestConnections::default();
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new_with_connection_store(
+        directory.path().join("vaults"),
+        Keys::default(),
+        connections.store(),
+    )
+    .unwrap();
+    perform(&worker, person, WorkerAction::Create);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let (mock, _purposes, agent_posts, done, server) = observing_server(
+        consent_inventory(),
+        canonical_answer_script("Resumed."),
+        true,
+    );
+    connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
+    let turn_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            turn_id,
+            WorkerOperation::Submit {
+                action: Box::new(WorkerAction::ConversationTurn {
+                    request: Box::new(ConversationTurnRequest::new(
+                        session.id,
+                        session.revision,
+                        "Hello".into(),
+                        "mac-local".into(),
+                        ProfileSelection::Explicit("server-model".into()),
+                        false,
+                        None,
+                    )),
+                }),
+            },
+        )
+        .unwrap();
+    let finished = wait(&worker, person, turn_id);
+    assert_eq!(finished.failure, None, "blocked turn job: {finished:?}");
+    worker
+        .request(person, turn_id, WorkerOperation::Release)
+        .unwrap();
+    let session = finished.session.unwrap();
+    let card_id = pending_consent_card(&session);
+    let caller = crate::CallerContext::verified(
+        crate::LocalIdentityClaim {
+            person_id: person.0,
+            device_id: "mac-local".into(),
+        },
+        1,
+    )
+    .unwrap();
+    let card = worker.get_interaction(person, card_id).unwrap().unwrap();
+
+    // Deny the card: no automatic child, and an explicit Continue still
+    // conflicts because nothing resolved.
+    let denied = worker
+        .resolve_interaction(
+            &caller,
+            crate::ResolveInteraction {
+                command_id: Uuid::new_v4(),
+                interaction_id: card.id,
+                session_id: session.id,
+                expected_revision: card.revision,
+                decision: crate::InteractionDecision::Deny,
+                target_digest: card.target_digest,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        denied.outcome,
+        crate::vault_host::ResolveOutcome::Denied { .. }
+    ));
+    assert!(denied.linked_run.is_none());
+    let origin_run_id = card.origin_run_id.as_uuid();
+    assert_eq!(
+        worker.resume_interaction(
+            &caller,
+            crate::ResumeInteraction {
+                command_id: Uuid::new_v4(),
+                session_id: session.id,
+                origin_run_id,
+                expected_revision: session.revision,
+            },
+        ),
+        Err(floe_agent_contract::AgentFailure::Conflict)
+    );
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+}

@@ -98,6 +98,26 @@ pub enum AppCommandDto {
         run_id: Uuid,
         reason: AppCancelRunReasonDto,
     },
+    #[serde(rename = "conversation.interaction.resolve")]
+    ConversationInteractionResolve {
+        interaction_id: Uuid,
+        session_id: Uuid,
+        expected_revision: u64,
+        decision: super::AppInteractionDecisionDto,
+        target_digest: [u8; 32],
+    },
+    #[serde(rename = "conversation.interaction.refresh")]
+    ConversationInteractionRefresh {
+        interaction_id: Uuid,
+        session_id: Uuid,
+        expected_revision: u64,
+    },
+    #[serde(rename = "conversation.interaction.resume")]
+    ConversationInteractionResume {
+        session_id: Uuid,
+        origin_run_id: Uuid,
+        expected_revision: u64,
+    },
 }
 
 impl AppCommandDto {
@@ -182,6 +202,56 @@ impl AppCommandDto {
                 } else {
                     Ok(())
                 }
+            }
+            Self::ConversationInteractionResolve {
+                interaction_id,
+                session_id,
+                expected_revision,
+                target_digest,
+                ..
+            } => {
+                if interaction_id.is_nil() {
+                    return Err("command.interaction_id");
+                }
+                if session_id.is_nil() {
+                    return Err("command.session_id");
+                }
+                if *expected_revision == 0 {
+                    return Err("command.expected_revision");
+                }
+                if *target_digest == [0; 32] {
+                    return Err("command.target_digest");
+                }
+                Ok(())
+            }
+            Self::ConversationInteractionRefresh {
+                interaction_id,
+                session_id,
+                expected_revision,
+            } => {
+                if interaction_id.is_nil() {
+                    return Err("command.interaction_id");
+                }
+                if session_id.is_nil() {
+                    return Err("command.session_id");
+                }
+                if *expected_revision == 0 {
+                    return Err("command.expected_revision");
+                }
+                Ok(())
+            }
+            Self::ConversationInteractionResume {
+                session_id,
+                origin_run_id,
+                ..
+            } => {
+                if session_id.is_nil() {
+                    return Err("command.session_id");
+                }
+                if origin_run_id.is_nil() {
+                    return Err("command.origin_run_id");
+                }
+                Ok(())
             }
         }
     }
@@ -333,5 +403,13 @@ pub enum AppCommandResultDto {
         run_id: Uuid,
         runtime_epoch: u64,
         outcome: AppCancelRunOutcomeDto,
+    },
+    InteractionOperation {
+        #[serde(flatten)]
+        result: super::AppInteractionResolveResultDto,
+    },
+    InteractionRefresh {
+        #[serde(flatten)]
+        result: super::AppInteractionRefreshResultDto,
     },
 }

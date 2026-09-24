@@ -15,6 +15,7 @@ import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
+import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
@@ -25,12 +26,14 @@ class AgentPanel extends StatefulWidget {
     required this.onClose,
     this.onOpenAction,
     this.onOpenSourceReview,
+    this.onOpenConnections,
   });
 
   final AgentController controller;
   final VoidCallback onClose;
   final Future<void> Function(String actionId)? onOpenAction;
   final VoidCallback? onOpenSourceReview;
+  final VoidCallback? onOpenConnections;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -224,6 +227,13 @@ class _AgentPanelState extends State<AgentPanel> {
                 SelectableText(text, style: FloeType.body),
             ],
           ),
+        ),
+        AgentInteractionMessage(:final interactionId) => AgentInteractionCard(
+          key: ValueKey(interactionId),
+          controller: widget.controller,
+          message: message,
+          onOpenSourceReview: widget.onOpenSourceReview,
+          onOpenConnections: widget.onOpenConnections,
         ),
         AgentCapabilityMessage() => ExpansionTile(
           tilePadding: EdgeInsets.zero,

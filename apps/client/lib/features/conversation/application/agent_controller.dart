@@ -8,6 +8,8 @@ import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_interaction_gateway.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
@@ -168,9 +170,348 @@ final class AgentController extends ChangeNotifier {
   String? get memoryFailure => memoryController.failure;
   final Map<String, AgentProposalInspection> _proposals = {};
   final Map<String, String> _proposalFailures = {};
+  final Map<String, AgentInteractionSnapshot> _interactions = {};
+  final Set<String> _interactionBusy = {};
+  final Map<String, String> _interactionFailures = {};
 
   AgentProposalInspection? proposalFor(String callId) => _proposals[callId];
   String? proposalFailureFor(String callId) => _proposalFailures[callId];
+
+  AgentInteractionSnapshot? interactionFor(String interactionId) =>
+      _interactions[interactionId];
+  bool interactionBusyFor(String interactionId) =>
+      _interactionBusy.contains(interactionId);
+  String? interactionFailureFor(String interactionId) =>
+      _interactionFailures[interactionId];
+
+  AgentInteractionGateway? get _interactionGateway =>
+      gateway is AgentInteractionProvider
+      ? (gateway as AgentInteractionProvider).interactionGateway
+      : null;
+
+  bool get hasInteractions => _interactionGateway != null;
+
+  bool canDecideInteraction(
+    AgentInteractionSnapshot snapshot,
+    AgentInteractionDecision decision,
+  ) =>
+      hasInteractions &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      !needsReload &&
+      !needsRecovery &&
+      vaultState == AgentVaultState.ready &&
+      session?.id == snapshot.sessionId &&
+      session?.personId == personId &&
+      !_interactionBusy.contains(snapshot.id) &&
+      snapshot.actions.contains(switch (decision) {
+        AgentInteractionDecision.approve => AgentInteractionAction.allow,
+        AgentInteractionDecision.deny => AgentInteractionAction.deny,
+        AgentInteractionDecision.dismiss => AgentInteractionAction.dismiss,
+      });
+
+  bool canRefreshInteraction(AgentInteractionSnapshot snapshot) =>
+      hasInteractions &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      !needsReload &&
+      !needsRecovery &&
+      vaultState == AgentVaultState.ready &&
+      session?.id == snapshot.sessionId &&
+      session?.personId == personId &&
+      !_interactionBusy.contains(snapshot.id) &&
+      snapshot.actions.contains(AgentInteractionAction.refresh);
+
+  bool canContinueInteraction(AgentInteractionSnapshot snapshot) =>
+      hasInteractions &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      !needsReload &&
+      !needsRecovery &&
+      vaultState == AgentVaultState.ready &&
+      session?.id == snapshot.sessionId &&
+      session?.personId == personId &&
+      !_interactionBusy.contains(snapshot.id) &&
+      snapshot.actions.contains(AgentInteractionAction.continueRequest);
+
+  /// Load one card snapshot when the panel first shows its reference.
+  Future<void> ensureInteraction(String interactionId) async {
+    final gateway = _interactionGateway;
+    final original = session;
+    if (gateway == null ||
+        original == null ||
+        _interactions.containsKey(interactionId) ||
+        _interactionBusy.contains(interactionId) ||
+        _sealed ||
+        _disposed) {
+      return;
+    }
+    _interactionBusy.add(interactionId);
+    _interactionFailures.remove(interactionId);
+    _notify();
+    try {
+      final snapshot = await gateway.loadInteraction(interactionId);
+      if (_sealed || _disposed || session?.id != original.id) return;
+      if (snapshot == null) {
+        _interactionFailures[interactionId] = 'interaction_unavailable';
+        return;
+      }
+      _acceptInteractionSnapshot(snapshot, original);
+    } on Object catch (error) {
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _interactionFailures[interactionId] = _interactionReason(error);
+    } finally {
+      _interactionBusy.remove(interactionId);
+      _notify();
+    }
+  }
+
+  /// Reload every card of the current Session, oldest first.
+  Future<void> refreshInteractions() async {
+    final gateway = _interactionGateway;
+    final original = session;
+    if (gateway == null || original == null || _busy || _sealed || _disposed) {
+      return;
+    }
+    _begin();
+    _notify();
+    try {
+      final snapshots = await gateway.loadSessionInteractions(original.id);
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _interactions.clear();
+      _interactionFailures.clear();
+      for (final snapshot in snapshots) {
+        _acceptInteractionSnapshot(snapshot, original);
+      }
+    } on Object catch (error, stackTrace) {
+      if (_sealed || _disposed) return;
+      _recordError(
+        'interaction_list',
+        error,
+        stackTrace,
+        sessionId: original.id,
+      );
+      _failFromError(error, 'transport_unavailable');
+    } finally {
+      _end();
+      _notify();
+    }
+  }
+
+  Future<void> decideInteraction(
+    AgentInteractionSnapshot snapshot,
+    AgentInteractionDecision decision,
+  ) async {
+    final gateway = _interactionGateway;
+    if (gateway == null || !canDecideInteraction(snapshot, decision)) return;
+    final original = session!;
+    _begin();
+    _interactionBusy.add(snapshot.id);
+    _interactionFailures.remove(snapshot.id);
+    _notify();
+    try {
+      final result = await gateway.decideInteraction(snapshot, decision);
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _acceptInteractionSnapshot(result.snapshot, original);
+      switch (result.outcome) {
+        case AgentInteractionResolveOutcome.stale:
+          // The review moved under this card: the snapshot is current
+          // and the person taps again to decide it.
+          _interactionFailures[snapshot.id] = 'interaction_stale';
+        case AgentInteractionResolveOutcome.wrongDevice:
+          _interactionFailures[snapshot.id] = 'interaction_wrong_device';
+        case AgentInteractionResolveOutcome.expired:
+          _interactionFailures[snapshot.id] = 'interaction_expired';
+        case AgentInteractionResolveOutcome.resolving:
+          break;
+        case AgentInteractionResolveOutcome.resolved:
+        case AgentInteractionResolveOutcome.denied:
+        case AgentInteractionResolveOutcome.cancelled:
+        case AgentInteractionResolveOutcome.superseded:
+        case AgentInteractionResolveOutcome.terminal:
+          break;
+      }
+      if (result.linkedRun != null &&
+          result.outcome == AgentInteractionResolveOutcome.resolved) {
+        await _observeLinkedRun(result.linkedRun!, original);
+      }
+    } on Object catch (error, stackTrace) {
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _recordError(
+        'interaction_decide',
+        error,
+        stackTrace,
+        sessionId: original.id,
+      );
+      _interactionFailures[snapshot.id] = _interactionReason(error);
+    } finally {
+      _interactionBusy.remove(snapshot.id);
+      _end();
+      _notify();
+    }
+  }
+
+  Future<void> refreshInteraction(AgentInteractionSnapshot snapshot) async {
+    final gateway = _interactionGateway;
+    if (gateway == null || !canRefreshInteraction(snapshot)) return;
+    final original = session!;
+    _begin();
+    _interactionBusy.add(snapshot.id);
+    _interactionFailures.remove(snapshot.id);
+    _notify();
+    try {
+      final result = await gateway.refreshInteraction(snapshot);
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _acceptInteractionSnapshot(result.snapshot, original);
+      switch (result.outcome) {
+        case AgentInteractionRefreshOutcome.stale:
+          _interactionFailures[snapshot.id] = 'interaction_stale';
+        case AgentInteractionRefreshOutcome.wrongDevice:
+          _interactionFailures[snapshot.id] = 'interaction_wrong_device';
+        case AgentInteractionRefreshOutcome.expired:
+          _interactionFailures[snapshot.id] = 'interaction_expired';
+        case AgentInteractionRefreshOutcome.resolved:
+        case AgentInteractionRefreshOutcome.stillPending:
+        case AgentInteractionRefreshOutcome.superseded:
+        case AgentInteractionRefreshOutcome.terminal:
+          break;
+      }
+      if (result.linkedRun != null &&
+          result.outcome == AgentInteractionRefreshOutcome.resolved) {
+        await _observeLinkedRun(result.linkedRun!, original);
+      }
+    } on Object catch (error, stackTrace) {
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _recordError(
+        'interaction_refresh',
+        error,
+        stackTrace,
+        sessionId: original.id,
+      );
+      _interactionFailures[snapshot.id] = _interactionReason(error);
+    } finally {
+      _interactionBusy.remove(snapshot.id);
+      _end();
+      _notify();
+    }
+  }
+
+  /// One explicit Continue for a resolved card: the backend derives the
+  /// origin's request and claims its resume slot at the current revision.
+  Future<void> continueInteraction(AgentInteractionSnapshot snapshot) async {
+    final gateway = _interactionGateway;
+    final runtime = _conversationRuntime;
+    if (gateway == null ||
+        runtime == null ||
+        !canContinueInteraction(snapshot)) {
+      return;
+    }
+    final original = session!;
+    _begin();
+    _interactionBusy.add(snapshot.id);
+    _interactionFailures.remove(snapshot.id);
+    progress = AgentProgress.model;
+    _notify();
+    try {
+      final receipt = await gateway.resumeInteraction(
+        sessionId: original.id,
+        originRunId: snapshot.originRunId,
+        expectedRevision: original.revision,
+      );
+      if (_sealed || _disposed || session?.id != original.id) return;
+      await _observeReceipt(receipt, original, runtime);
+    } on Object catch (error, stackTrace) {
+      if (_sealed || _disposed || session?.id != original.id) return;
+      _recordError(
+        'interaction_resume',
+        error,
+        stackTrace,
+        sessionId: original.id,
+      );
+      _interactionFailures[snapshot.id] = _interactionReason(error);
+    } finally {
+      _interactionBusy.remove(snapshot.id);
+      _end();
+      progress = AgentProgress.idle;
+      _notify();
+    }
+  }
+
+  Future<void> _observeLinkedRun(
+    AgentLinkedRun linked,
+    AgentSession original,
+  ) async {
+    final runtime = _conversationRuntime;
+    if (runtime == null) return;
+    await _observeReceipt(
+      AppCommandReceipt(
+        commandId: linked.commandId,
+        runId: linked.runId,
+        sessionRevision: linked.sessionRevision,
+        runtimeEpoch: linked.runtimeEpoch,
+      ),
+      original,
+      runtime,
+    );
+  }
+
+  Future<void> _observeReceipt(
+    AppCommandReceipt receipt,
+    AgentSession original,
+    ConversationRuntimeGateway runtime,
+  ) async {
+    progress = AgentProgress.model;
+    _notify();
+    final completion = await runtime.observeConversationRun(
+      receipt,
+      session!,
+      onRun: (run) {
+        if (_disposed || _sealed || session?.id != original.id) return;
+        _notify();
+      },
+    );
+    if (!_disposed && !_sealed && session?.id == original.id) {
+      _acceptSession(completion.session);
+      _lastConversationRunId = completion.run.runId;
+      needsReload = false;
+      final issue = completion.run.report?.issues.firstOrNull;
+      if (issue != null) {
+        _acceptConversationIssue(issue);
+      }
+    }
+  }
+
+  void _acceptInteractionSnapshot(
+    AgentInteractionSnapshot snapshot,
+    AgentSession original,
+  ) {
+    if (snapshot.sessionId != original.id ||
+        original.personId != personId ||
+        session?.id != original.id) {
+      throw const FormatException('Interaction scope mismatch.');
+    }
+    _interactions[snapshot.id] = snapshot;
+    _interactionFailures.remove(snapshot.id);
+  }
+
+  String _interactionReason(Object error) {
+    if (error is AgentVaultException) {
+      return error.reasonCode ?? error.failure;
+    }
+    return 'transport_unavailable';
+  }
+
+  void _clearInteractions() {
+    _interactions.clear();
+    _interactionBusy.clear();
+    _interactionFailures.clear();
+  }
 
   AgentExpertResult? expertResult(AgentCapabilityMessage message) {
     final classes = session?.dataClasses ?? const <String>[];
@@ -543,6 +884,7 @@ final class AgentController extends ChangeNotifier {
       throw const FormatException('Agent Person mismatch.');
     }
     _clearProposals();
+    _clearInteractions();
     session = saved;
     messages = List.of(saved.messages);
     _clearFailure();
@@ -602,6 +944,7 @@ final class AgentController extends ChangeNotifier {
   Future<void> _lock() async {
     _sealed = true;
     _clearProposals();
+    _clearInteractions();
     registryController.clear();
     memoryController.clear();
     connectionController.clear();
@@ -689,6 +1032,7 @@ final class AgentController extends ChangeNotifier {
     bool? sealSession,
   }) {
     _clearProposals();
+    if (sealSession ?? false) _clearInteractions();
     failure = reason;
     this.recoveryAction = recoveryAction;
     failureDomain = domain;

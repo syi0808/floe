@@ -45,6 +45,39 @@ impl ConversationTurnRequest {
     }
 }
 
+/// One linked resume, as this host states it.
+///
+/// Linkage only: the origin's text, profile and mode resolve from the
+/// origin's durable admission at execution. None of it is a wire shape.
+#[derive(Clone, Debug)]
+pub struct ConversationResumeRequest {
+    /// What the command is, in Conversation's own terms, for same-id
+    /// duplicate checks.
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub device_id: String,
+    pub origin_run_id: RunId,
+    pub lineage: u8,
+}
+
+impl ConversationResumeRequest {
+    pub fn new(
+        session_id: Uuid,
+        expected_revision: u64,
+        device_id: String,
+        origin_run_id: RunId,
+        lineage: u8,
+    ) -> Self {
+        Self {
+            session_id,
+            expected_revision,
+            device_id,
+            origin_run_id,
+            lineage,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

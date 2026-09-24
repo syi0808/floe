@@ -73,7 +73,7 @@ final class AgentSessionScope {
   String get dataClass => provider == 'fixture' ? 'synthetic' : 'personal';
 }
 
-enum AgentMessageKind { user, assistant, preamble, capability }
+enum AgentMessageKind { user, assistant, preamble, capability, interaction }
 
 sealed class AgentMessage {
   const AgentMessage(this.turnId);
@@ -98,12 +98,36 @@ sealed class AgentMessage {
       ),
       'capability' => AgentCapabilityMessage.fromJson(json),
       'delegation' => AgentCapabilityMessage.fromDelegation(json),
+      'interaction' => AgentInteractionMessage.fromJson(json),
       _ => throw const FormatException('Unknown Agent message kind.'),
     };
   }
 
   final String turnId;
   AgentMessageKind get kind;
+}
+
+enum AgentInteractionMessageKind { sourceAccess, processingRecipient }
+
+final class AgentInteractionMessage extends AgentMessage {
+  AgentInteractionMessage.fromJson(Map<String, Object?> json)
+    : interactionId = json['interaction_id']! as String,
+      interactionKind = switch (json['interaction_kind']) {
+        'source_access' => AgentInteractionMessageKind.sourceAccess,
+        'processing_recipient' =>
+          AgentInteractionMessageKind.processingRecipient,
+        _ => throw const FormatException('Unknown interaction kind.'),
+      },
+      super(json['turn_id']! as String) {
+    if (interactionId.isEmpty) {
+      throw const FormatException('Invalid interaction reference.');
+    }
+  }
+
+  @override
+  AgentMessageKind get kind => AgentMessageKind.interaction;
+  final String interactionId;
+  final AgentInteractionMessageKind interactionKind;
 }
 
 final class AgentTextMessage extends AgentMessage {

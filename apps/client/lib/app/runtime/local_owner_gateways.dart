@@ -5,6 +5,7 @@ import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
+import 'package:floe_client/features/conversation/application/agent_interaction_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
@@ -161,7 +162,10 @@ final class NativeMemoryGateway
 }
 
 final class NativeConversationSessionGateway
-    implements AgentConversationGateway, ConversationRuntimeProvider {
+    implements
+        AgentConversationGateway,
+        ConversationRuntimeProvider,
+        AgentInteractionProvider {
   NativeConversationSessionGateway(
     this._transport, {
     FloeClient? runtimeClient,
@@ -184,10 +188,16 @@ final class NativeConversationSessionGateway
             loadSession: loadConversation,
             beforeStartTurn: beforeConversationStart,
           );
+    _interactionGateway = runtimeClient == null
+        ? null
+        : NativeAgentInteractionGateway(runtimeClient);
   }
   late final ConversationRuntimeGateway? _conversationRuntime;
   @override
   ConversationRuntimeGateway? get conversationRuntime => _conversationRuntime;
+  late final AgentInteractionGateway? _interactionGateway;
+  @override
+  AgentInteractionGateway? get interactionGateway => _interactionGateway;
 
   final AppWireTransport _transport;
   final OwnerOperationObserver _operations = OwnerOperationObserver();

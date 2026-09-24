@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 
 const _maxTurnTextBytes = 8 * 1024;
 const _maxTurnPayloadBytes = 64 * 1024;
@@ -58,6 +59,52 @@ final class PreparedCancelRun {
 
   final String commandId;
   final String runId;
+}
+
+final class PreparedInteractionResolve {
+  const PreparedInteractionResolve({
+    required this.commandId,
+    required this.interactionId,
+    required this.sessionId,
+    required this.expectedRevision,
+    required this.decision,
+    required this.targetDigest,
+  });
+
+  final String commandId;
+  final String interactionId;
+  final String sessionId;
+  final int expectedRevision;
+  final AgentInteractionDecision decision;
+  final List<int> targetDigest;
+}
+
+final class PreparedInteractionRefresh {
+  const PreparedInteractionRefresh({
+    required this.commandId,
+    required this.interactionId,
+    required this.sessionId,
+    required this.expectedRevision,
+  });
+
+  final String commandId;
+  final String interactionId;
+  final String sessionId;
+  final int expectedRevision;
+}
+
+final class PreparedInteractionResume {
+  const PreparedInteractionResume({
+    required this.commandId,
+    required this.sessionId,
+    required this.originRunId,
+    required this.expectedRevision,
+  });
+
+  final String commandId;
+  final String sessionId;
+  final String originRunId;
+  final int expectedRevision;
 }
 
 enum AppCancelRunOutcome { accepted }
@@ -381,6 +428,206 @@ final class FloeClient {
         return AppMessage(messageId: returnedId, role: role, text: text);
       }
       throw const FormatException('Invalid app message response.');
+    });
+  }
+
+  PreparedInteractionResolve prepareInteractionResolve({
+    required String interactionId,
+    required String sessionId,
+    required int expectedRevision,
+    required AgentInteractionDecision decision,
+    required List<int> targetDigest,
+  }) {
+    if (_closed) throw StateError('FloeClient is already closed.');
+    if (interactionId.isEmpty ||
+        sessionId.isEmpty ||
+        expectedRevision <= 0 ||
+        targetDigest.length != 32) {
+      throw const FormatException('Invalid interaction decision.');
+    }
+    return PreparedInteractionResolve(
+      commandId: _newId(),
+      interactionId: interactionId,
+      sessionId: sessionId,
+      expectedRevision: expectedRevision,
+      decision: decision,
+      targetDigest: List<int>.unmodifiable(targetDigest),
+    );
+  }
+
+  Future<AgentInteractionResolveResult> submitInteractionResolve(
+    PreparedInteractionResolve command, {
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': command.commandId,
+        'command': {
+          'kind': 'conversation.interaction.resolve',
+          'interaction_id': command.interactionId,
+          'session_id': command.sessionId,
+          'expected_revision': command.expectedRevision,
+          'decision': switch (command.decision) {
+            AgentInteractionDecision.approve => 'approve',
+            AgentInteractionDecision.deny => 'deny',
+            AgentInteractionDecision.dismiss => 'dismiss',
+          },
+          'target_digest': command.targetDigest,
+        },
+      }, timeout: timeout);
+      final parsed = AgentInteractionResolveResult.parse(_map(result));
+      if (parsed.commandId != command.commandId) {
+        throw const FormatException('Interaction resolve command mismatch.');
+      }
+      return parsed;
+    });
+  }
+
+  PreparedInteractionRefresh prepareInteractionRefresh({
+    required String interactionId,
+    required String sessionId,
+    required int expectedRevision,
+  }) {
+    if (_closed) throw StateError('FloeClient is already closed.');
+    if (interactionId.isEmpty || sessionId.isEmpty || expectedRevision <= 0) {
+      throw const FormatException('Invalid interaction refresh.');
+    }
+    return PreparedInteractionRefresh(
+      commandId: _newId(),
+      interactionId: interactionId,
+      sessionId: sessionId,
+      expectedRevision: expectedRevision,
+    );
+  }
+
+  Future<AgentInteractionRefreshResult> submitInteractionRefresh(
+    PreparedInteractionRefresh command, {
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': command.commandId,
+        'command': {
+          'kind': 'conversation.interaction.refresh',
+          'interaction_id': command.interactionId,
+          'session_id': command.sessionId,
+          'expected_revision': command.expectedRevision,
+        },
+      }, timeout: timeout);
+      final parsed = AgentInteractionRefreshResult.parse(_map(result));
+      if (parsed.commandId != command.commandId) {
+        throw const FormatException('Interaction refresh command mismatch.');
+      }
+      return parsed;
+    });
+  }
+
+  PreparedInteractionResume prepareInteractionResume({
+    required String sessionId,
+    required String originRunId,
+    required int expectedRevision,
+  }) {
+    if (_closed) throw StateError('FloeClient is already closed.');
+    if (sessionId.isEmpty || originRunId.isEmpty) {
+      throw const FormatException('Invalid interaction resume.');
+    }
+    return PreparedInteractionResume(
+      commandId: _newId(),
+      sessionId: sessionId,
+      originRunId: originRunId,
+      expectedRevision: expectedRevision,
+    );
+  }
+
+  Future<AppCommandReceipt> submitInteractionResume(
+    PreparedInteractionResume command, {
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': command.commandId,
+        'command': {
+          'kind': 'conversation.interaction.resume',
+          'session_id': command.sessionId,
+          'origin_run_id': command.originRunId,
+          'expected_revision': command.expectedRevision,
+        },
+      }, timeout: timeout);
+      return _commandReceipt(result, expectedCommandId: command.commandId);
+    });
+  }
+
+  Future<AgentInteractionSnapshot?> getInteraction(
+    String interactionId, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    if (interactionId.isEmpty) {
+      return Future.error(const FormatException('Invalid interaction ID.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.queryV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'query': {
+          'kind': 'conversation.interaction.get',
+          'interaction_id': interactionId,
+        },
+      }, timeout: timeout);
+      final payload = _map(result);
+      if (payload['kind'] == 'unknown_interaction' &&
+          payload['interaction_id'] == interactionId) {
+        return null;
+      }
+      final snapshot = AgentInteractionSnapshot.parse(payload);
+      if (snapshot.id != interactionId) {
+        throw const FormatException('Interaction scope mismatch.');
+      }
+      return snapshot;
+    });
+  }
+
+  Future<List<AgentInteractionSnapshot>> listInteractions(
+    String sessionId, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    if (sessionId.isEmpty) {
+      return Future.error(const FormatException('Invalid session ID.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.queryV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'query': {
+          'kind': 'conversation.interaction.list',
+          'session_id': sessionId,
+        },
+      }, timeout: timeout);
+      final payload = _map(result);
+      final interactions = payload['interactions'];
+      if (payload['kind'] != 'interaction_list' ||
+          payload['session_id'] != sessionId ||
+          interactions is! List) {
+        throw const FormatException('Invalid interaction list.');
+      }
+      return List<AgentInteractionSnapshot>.unmodifiable(
+        interactions.map((raw) => AgentInteractionSnapshot.parse(_map(raw))),
+      );
     });
   }
 

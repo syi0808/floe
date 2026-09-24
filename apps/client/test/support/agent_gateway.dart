@@ -163,6 +163,32 @@ final class _TestConversationRuntime implements ConversationRuntimeGateway {
   }
 
   @override
+  Future<ConversationTurnCompletion> observeConversationRun(
+    AppCommandReceipt receipt,
+    AgentSession session, {
+    required void Function(AppRunSnapshot run) onRun,
+  }) async {
+    final run = AppRunSnapshot(
+      runId: receipt.runId,
+      sessionId: session.id,
+      revision: 2,
+      runtimeEpoch: receipt.runtimeEpoch,
+      executorGeneration: 1,
+      state: AppRunState.finished,
+      progress: 'completed',
+      report: const AppTurnReport(
+        execution: 'completed',
+        reply: 'generated',
+        issues: [],
+        finalMessageRef: null,
+      ),
+    );
+    readModel.applyRunSnapshot(run);
+    onRun(run);
+    return ConversationTurnCompletion(run: run, session: session);
+  }
+
+  @override
   Future<void> cancelConversationTurn(
     AgentConversationTurnRequest request,
   ) async {

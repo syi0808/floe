@@ -16,6 +16,13 @@ fn fixture(name: &str) -> Value {
         "message" => include_str!("fixtures/app_wire_v2/message.json"),
         "resync_required" => include_str!("fixtures/app_wire_v2/resync_required.json"),
         "events" => include_str!("fixtures/app_wire_v2/events.json"),
+        "interaction_resolve" => include_str!("fixtures/app_wire_v2/interaction_resolve.json"),
+        "interaction_refresh" => include_str!("fixtures/app_wire_v2/interaction_refresh.json"),
+        "interaction_resume" => include_str!("fixtures/app_wire_v2/interaction_resume.json"),
+        "interaction_get" => include_str!("fixtures/app_wire_v2/interaction_get.json"),
+        "interaction_list" => include_str!("fixtures/app_wire_v2/interaction_list.json"),
+        "interaction_snapshot" => include_str!("fixtures/app_wire_v2/interaction_snapshot.json"),
+        "interaction_resolved" => include_str!("fixtures/app_wire_v2/interaction_resolved.json"),
         _ => panic!("unknown fixture"),
     };
     serde_json::from_str(source).unwrap()
@@ -146,6 +153,89 @@ fn app_wire_validates_continuation_and_event_bounds() {
     }))
     .unwrap();
     assert_eq!(request.validate(), Err("cursor"));
+}
+
+#[test]
+fn app_wire_interaction_fixtures_are_stable() {
+    assert_round_trip::<AppCommandRequestDto>("interaction_resolve");
+    assert_round_trip::<AppCommandRequestDto>("interaction_refresh");
+    assert_round_trip::<AppCommandRequestDto>("interaction_resume");
+    assert_round_trip::<AppQueryRequestDto>("interaction_get");
+    assert_round_trip::<AppQueryRequestDto>("interaction_list");
+    assert_round_trip::<AppResponseDto<AppQueryResultDto>>("interaction_snapshot");
+    assert_round_trip::<AppResponseDto<AppCommandResultDto>>("interaction_resolved");
+
+    let request: AppCommandRequestDto =
+        serde_json::from_value(fixture("interaction_resolve")).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+    let request: AppCommandRequestDto =
+        serde_json::from_value(fixture("interaction_refresh")).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+    let request: AppCommandRequestDto =
+        serde_json::from_value(fixture("interaction_resume")).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+    let request: AppQueryRequestDto = serde_json::from_value(fixture("interaction_get")).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+    let request: AppQueryRequestDto = serde_json::from_value(fixture("interaction_list")).unwrap();
+    assert_eq!(request.validate(), Ok(()));
+}
+
+#[test]
+fn app_wire_interaction_rejects_forged_and_authority_fields() {
+    // Unknown decision variants never parse.
+    let mut unknown_decision = fixture("interaction_resolve");
+    unknown_decision["command"]["decision"] = json!("auto_approve");
+    assert!(serde_json::from_value::<AppCommandRequestDto>(unknown_decision).is_err());
+
+    // Unknown snapshot states never parse.
+    let mut unknown_state = fixture("interaction_snapshot");
+    unknown_state["result"]["state"] = json!("waiting_on_user");
+    assert!(serde_json::from_value::<AppResponseDto<AppQueryResultDto>>(unknown_state).is_err());
+
+    // Authority smuggling is rejected: no recipient, grant, resource,
+    // consumer, purpose, profile, text or parent override on the command.
+    for field in [
+        "recipient",
+        "grant_scope",
+        "resources",
+        "consumer",
+        "purpose",
+        "profile_id",
+        "original_text",
+        "parent_run_id",
+    ] {
+        let mut smuggled = fixture("interaction_resolve");
+        smuggled["command"][field] = json!("model.evil");
+        assert!(
+            serde_json::from_value::<AppCommandRequestDto>(smuggled).is_err(),
+            "{field} must not cross the wire"
+        );
+    }
+
+    // Nil ids and zero revisions fail validation, not parsing.
+    let mut nil_interaction = fixture("interaction_resolve");
+    nil_interaction["command"]["interaction_id"] = json!("00000000-0000-0000-0000-000000000000");
+    let request: AppCommandRequestDto = serde_json::from_value(nil_interaction).unwrap();
+    assert_eq!(request.validate(), Err("command.interaction_id"));
+
+    let mut zero_revision = fixture("interaction_refresh");
+    zero_revision["command"]["expected_revision"] = json!(0);
+    let request: AppCommandRequestDto = serde_json::from_value(zero_revision).unwrap();
+    assert_eq!(request.validate(), Err("command.expected_revision"));
+
+    let mut zero_digest = fixture("interaction_resolve");
+    zero_digest["command"]["target_digest"] = serde_json::to_value([0u8; 32]).unwrap();
+    let request: AppCommandRequestDto = serde_json::from_value(zero_digest).unwrap();
+    assert_eq!(request.validate(), Err("command.target_digest"));
+
+    let mut short_digest = fixture("interaction_resolve");
+    short_digest["command"]["target_digest"] = json!([1, 2, 3]);
+    assert!(serde_json::from_value::<AppCommandRequestDto>(short_digest).is_err());
+
+    let mut nil_origin = fixture("interaction_resume");
+    nil_origin["command"]["origin_run_id"] = json!("00000000-0000-0000-0000-000000000000");
+    let request: AppCommandRequestDto = serde_json::from_value(nil_origin).unwrap();
+    assert_eq!(request.validate(), Err("command.origin_run_id"));
 }
 
 #[test]

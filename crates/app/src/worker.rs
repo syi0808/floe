@@ -156,6 +156,9 @@ pub enum WorkerAction {
     ConversationTurn {
         request: Box<ConversationTurnRequest>,
     },
+    ConversationResume {
+        request: Box<crate::ConversationResumeRequest>,
+    },
     MemoryReview {
         decision: Option<MemoryReviewDecision>,
     },
@@ -200,6 +203,7 @@ impl WorkerAction {
             Self::InspectProposal { .. } => "inspect_proposal",
             Self::ConversationSession { .. } => "conversation_session",
             Self::ConversationTurn { .. } => "conversation_turn",
+            Self::ConversationResume { .. } => "conversation_resume",
             Self::MemoryReview { .. } => "memory_review",
             Self::Memory => "memory",
             Self::Connections => "connections",
@@ -224,6 +228,7 @@ impl WorkerAction {
                 | Self::CalendarAccess { .. }
                 | Self::CalendarSubjectPreview { .. }
                 | Self::ConversationTurn { .. }
+                | Self::ConversationResume { .. }
                 | Self::ConversationSession {
                     operation: ConversationSessionOperation::Get { .. },
                 }
