@@ -2924,6 +2924,166 @@ async fn same_command_different_kind_conflicts() {
 }
 
 #[tokio::test]
+async fn gmail_commit_then_crash_reopens_and_resolves_without_second_mutation() {
+    let host = RemoteFixture::open().await;
+    let target = host.gmail_target();
+    let current = host
+        .base
+        .seed_inline(
+            target.clone(),
+            "floe.source.gmail",
+            host.connection_id.as_str(),
+        )
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    // Decide first (Resolving claimed), then commit the bundle through
+    // the canonical enable, then crash before resolution is recorded.
+    let command = host.base.resolve_command(
+        &current,
+        floe_conversation::InteractionDecisionKind::Approve,
+    );
+    let admitted = floe_conversation::decide_interaction(
+        &host.base.repo,
+        floe_conversation::DecideInteractionCommand {
+            command_id: command.command_id,
+            interaction_id: current.id,
+            principal: host.base.principal(),
+            expected_revision: current.revision,
+            kind: floe_conversation::InteractionDecisionKind::Approve,
+            target_digest: current.target_digest,
+        },
+        NOW,
+    )
+    .await
+    .unwrap();
+    let resolving = match admitted {
+        floe_conversation::DecisionAdmission::Applied(current) => current,
+        floe_conversation::DecisionAdmission::Rejoined(_) => panic!("fresh decision must apply"),
+    };
+    owners
+        .enable_reviewed(&target, host.base.person, DEVICE, &host.base.cancellation)
+        .await
+        .unwrap();
+    let committed = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(committed.len(), 2);
+
+    // Crash: drop the vault and repo, reopen from disk, and reconcile.
+    // The server side (scripted transport) survives unchanged.
+    let RemoteFixture {
+        base,
+        core: old_core,
+        store,
+        transport,
+        connection_id: _,
+    } = host;
+    drop(old_core);
+    let Fixture {
+        runs,
+        repo: old_repo,
+        vault: old_vault,
+        keys,
+        person,
+        session_id,
+        run_id: _run_id,
+        caller,
+        cancellation,
+        _root,
+    } = base;
+    drop(old_repo);
+    drop(old_vault);
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(_root.path(), person, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let repo = floe_vault::VaultConversationRepository::new(Arc::clone(&reopened));
+    let core = crate::FloeCore::open(":memory:").await.unwrap();
+    let owners = RemoteTestOwners {
+        core: &core,
+        vault: &reopened,
+        store: &store,
+        calendar: &calendar,
+        personal: &personal,
+        transport: &transport,
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+    };
+    let outcome = refresh_interaction(
+        &runs,
+        &repo,
+        &owners,
+        &owners,
+        &caller,
+        RefreshInteractionCommand {
+            interaction_id: resolving.id,
+            command_id: Uuid::new_v4(),
+            session_id,
+            expected_revision: resolving.revision,
+        },
+        &cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, RefreshOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = reopened.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 2);
+    for grant in &grants {
+        assert!(
+            committed
+                .iter()
+                .any(|before| before.id() == grant.id() && before.authority() == grant.authority()),
+            "no second mutation: {grant:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn observer_cancellation_never_revokes_a_recorded_decision() {
+    let fixture = Fixture::open().await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
+    // Observer timeout cancels the watch, not the person's explicit
+    // decision: the decision still records and the owner operation still
+    // runs through reconciliation.
+    let cancelled = floe_execution::Cancellation::default();
+    cancelled.cancel();
+    let owners = ScriptedOwners::new(live_precondition());
+    let mutation = FlippingMutation {
+        owners: owners.clone(),
+        flip_to: live_satisfied(),
+    };
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &mutation,
+        &fixture.caller,
+        fixture.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &cancelled,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test]
 async fn owner_refusal_on_matching_precondition_supersedes() {
     let fixture = Fixture::open().await;
     let current = fixture
