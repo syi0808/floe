@@ -12,9 +12,8 @@ use floe_agent_contract::{
     AgentFailure, DependencyCoverage, PersonId, ToolCall, ToolDescriptor, ToolResult,
 };
 use floe_context_contract::{
-    GrantConsumer, GrantOperation, GrantPurpose, GrantSourceBinding, ObservedGrant,
-    ResourceHandle, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
-    SourceAuthority, SourceReadOutcome, SourceUnavailable,
+    GrantConsumer, GrantOperation, GrantPurpose, SourceAccessBlockers, SourceAccessRequirement,
+    SourceAccessRequirementKind, SourceReadOutcome,
 };
 
 use crate::application::service::{ContextService, PreparedContext};
@@ -267,349 +266,6 @@ where
         prepared.read_source(&request).await
     }
 
-    /// The owner-known identity of one personal source a direct tool reads.
-    fn personal_identity(
-        &self,
-        tool_id: &str,
-    ) -> Result<PersonalSourceIdentity, AgentFailure> {
-        let authority = SourceAuthority::new();
-        match tool_id {
-            PEOPLE_IDENTITY_READ => {
-                let mut expected = Vec::with_capacity(2);
-                for connector in ["contacts.apple", "contacts.android"] {
-                    expected.push(
-                        GrantSourceBinding::try_new(
-                            self.person_id,
-                            floe_context_contract::ConnectionId::try_new(
-                                floe_access::contacts_connection(connector),
-                            )
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                            floe_context_contract::ConnectorId::try_new(connector)
-                                .map_err(|_| AgentFailure::InvalidInput)?,
-                            floe_context_contract::ExecutionOwnerId::try_new(
-                                floe_access::contacts_execution_owner(connector, &self.device_id),
-                            )
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                            authority,
-                        )
-                        .map_err(|_| AgentFailure::InvalidInput)?,
-                    );
-                }
-                Ok(PersonalSourceIdentity {
-                    source_id: "floe.source.contacts",
-                    resource: floe_access::PEOPLE_RESOURCE,
-                    expected,
-                    // The platform connector is unknown until a grant names
-                    // it: a missing grant cannot offer inline enable.
-                    known_identity: None,
-                })
-            }
-            SCHEDULE_FEASIBILITY_READ => Ok(PersonalSourceIdentity {
-                source_id: "floe.source.feasibility",
-                resource: floe_access::FEASIBILITY_RESOURCE,
-                expected: vec![floe_access::feasibility_source(
-                    self.person_id,
-                    &self.device_id,
-                    authority,
-                )?],
-                known_identity: Some((
-                    floe_access::FEASIBILITY_CONNECTOR,
-                    floe_access::FEASIBILITY_CONNECTION,
-                )),
-            }),
-            ATTENTION_COARSE_READ => Ok(PersonalSourceIdentity {
-                source_id: "floe.source.attention",
-                resource: floe_access::ATTENTION_RESOURCE,
-                expected: vec![floe_access::attention_source(
-                    self.person_id,
-                    &self.device_id,
-                    authority,
-                )?],
-                known_identity: Some((
-                    floe_access::ATTENTION_CONNECTOR,
-                    floe_access::ATTENTION_CONNECTION,
-                )),
-            }),
-            WELLBEING_DERIVED_READ => Ok(PersonalSourceIdentity {
-                source_id: "floe.source.wellbeing",
-                resource: floe_access::WELLBEING_RESOURCE,
-                expected: vec![floe_access::wellbeing_source(
-                    self.person_id,
-                    &self.device_id,
-                    authority,
-                )?],
-                known_identity: Some((
-                    floe_access::WELLBEING_CONNECTOR,
-                    floe_access::WELLBEING_CONNECTION,
-                )),
-            }),
-            _ => Err(AgentFailure::InvalidInput),
-        }
-    }
-
-    fn personal_requirement(
-        identity: &PersonalSourceIdentity,
-        connector: Option<floe_context_contract::ConnectorId>,
-        connection: Option<floe_context_contract::ConnectionId>,
-        consumer: GrantConsumer,
-        reason: SourceAccessRequirementKind,
-        authority: Option<SourceAuthority>,
-        observed: Option<ObservedGrant>,
-    ) -> Result<SourceAccessRequirement, AgentFailure> {
-        let resources = if connector.is_some() && connection.is_some() {
-            vec![
-                ResourceHandle::try_new(identity.resource)
-                    .map_err(|_| AgentFailure::InvalidInput)?,
-            ]
-        } else {
-            vec![]
-        };
-        let inline = !resources.is_empty()
-            && matches!(
-                reason,
-                SourceAccessRequirementKind::EnableObserve
-                    | SourceAccessRequirementKind::ReviewChangedSource
-            );
-        SourceAccessRequirement::try_new(
-            identity.source_id,
-            connector,
-            connection,
-            GrantOperation::Read,
-            consumer,
-            GrantPurpose::Assistant,
-            resources,
-            None,
-            reason,
-            authority,
-            observed,
-            inline,
-        )
-        .map_err(|_| AgentFailure::InvalidInput)
-    }
-
-    /// The live grants binding this personal source, if the review can name
-    /// exactly one. Duplicates fail closed; absence is proven absence.
-    fn observe_personal_binding(
-        grants: &[floe_access::DataAccessGrant],
-        identity: &PersonalSourceIdentity,
-    ) -> Result<Option<floe_access::DataAccessGrant>, AgentFailure> {
-        let mut binding = grants.iter().filter(|grant| {
-            grant.state() != floe_access::GrantState::Revoked
-                && identity
-                    .expected
-                    .iter()
-                    .any(|expected| grant.source().same_identity(expected))
-        });
-        let Some(grant) = binding.next() else {
-            return Ok(None);
-        };
-        if binding.next().is_some() {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        Ok(Some(grant.clone()))
-    }
-
-    fn observed_grant(
-        grant: &floe_access::DataAccessGrant,
-    ) -> Result<ObservedGrant, AgentFailure> {
-        ObservedGrant::try_new(grant.id(), grant.authority())
-            .map_err(|_| AgentFailure::InvalidInput)
-    }
-
-    /// Classify a failed personal read against current grant facts.
-    ///
-    /// Missing and paused grants are re-enableable, drift and vanished grants
-    /// need review, OS denial names system permission, and duplicate authority
-    /// fails closed. Budget, cancellation, deadline, invalid input and corrupt
-    /// storage stay hard failures with no card.
-    async fn classify_personal_blocker(
-        &self,
-        identity: &PersonalSourceIdentity,
-        consumer: GrantConsumer,
-        error: AgentFailure,
-    ) -> Result<PersonalBlock, AgentFailure> {
-        match error {
-            AgentFailure::CapabilityUnavailable => {
-                return Ok(PersonalBlock::Unavailable(
-                    SourceUnavailable::TemporarilyUnavailable,
-                ));
-            }
-            AgentFailure::AccessReviewRequired
-            | AgentFailure::CredentialExpired
-            | AgentFailure::CapabilityDenied
-            | AgentFailure::PolicyDenied => {}
-            _ => return Err(error),
-        }
-        let grants = self.records.grants().await?;
-        let binding = Self::observe_personal_binding(&grants, identity)?;
-        let known = |identity: &PersonalSourceIdentity| {
-            identity.known_identity.and_then(|(connector, connection)| {
-                Some((
-                    floe_context_contract::ConnectorId::try_new(connector).ok()?,
-                    floe_context_contract::ConnectionId::try_new(connection).ok()?,
-                ))
-            })
-        };
-        let requirement = match error {
-            AgentFailure::AccessReviewRequired => match &binding {
-                None => {
-                    let (connector, connection) =
-                        known(identity).unzip();
-                    Self::personal_requirement(
-                        identity,
-                        connector,
-                        connection,
-                        consumer,
-                        SourceAccessRequirementKind::EnableObserve,
-                        None,
-                        None,
-                    )?
-                }
-                Some(grant) => {
-                    let reason = if grant.state() == floe_access::GrantState::Paused {
-                        SourceAccessRequirementKind::EnableObserve
-                    } else {
-                        SourceAccessRequirementKind::ReviewChangedSource
-                    };
-                    Self::personal_requirement(
-                        identity,
-                        Some(grant.source().connector().clone()),
-                        Some(grant.source().connection_id()),
-                        consumer,
-                        reason,
-                        Some(grant.source().source_authority()),
-                        Some(Self::observed_grant(grant)?),
-                    )?
-                }
-            },
-            AgentFailure::CredentialExpired => {
-                let (connector, connection, authority, observed) = match &binding {
-                    Some(grant) => (
-                        Some(grant.source().connector().clone()),
-                        Some(grant.source().connection_id()),
-                        Some(grant.source().source_authority()),
-                        Some(Self::observed_grant(grant)?),
-                    ),
-                    None => {
-                        let (connector, connection) = known(identity).unzip();
-                        (connector, connection, None, None)
-                    }
-                };
-                Self::personal_requirement(
-                    identity,
-                    connector,
-                    connection,
-                    consumer,
-                    SourceAccessRequirementKind::Reconnect,
-                    authority,
-                    observed,
-                )?
-            }
-            AgentFailure::CapabilityDenied => {
-                // The driver is the OS boundary: a denial past admission
-                // means the system refused, so the review names system
-                // permission rather than the grant. A vanished grant is drift.
-                let (connector, connection, authority, observed) = match &binding {
-                    Some(grant) => (
-                        Some(grant.source().connector().clone()),
-                        Some(grant.source().connection_id()),
-                        Some(grant.source().source_authority()),
-                        Some(Self::observed_grant(grant)?),
-                    ),
-                    None => {
-                        let (connector, connection) = known(identity).unzip();
-                        (connector, connection, None, None)
-                    }
-                };
-                let reason = if binding.is_some() {
-                    SourceAccessRequirementKind::RequestSystemPermission
-                } else {
-                    SourceAccessRequirementKind::ReviewChangedSource
-                };
-                Self::personal_requirement(
-                    identity,
-                    connector,
-                    connection,
-                    consumer,
-                    reason,
-                    authority,
-                    observed,
-                )?
-            }
-            // Mid-read drift: the grant the read started under is no longer
-            // the one current authority names.
-            _ => {
-                let (connector, connection, authority, observed) = match &binding {
-                    Some(grant) => (
-                        Some(grant.source().connector().clone()),
-                        Some(grant.source().connection_id()),
-                        Some(grant.source().source_authority()),
-                        Some(Self::observed_grant(grant)?),
-                    ),
-                    None => {
-                        let (connector, connection) = known(identity).unzip();
-                        (connector, connection, None, None)
-                    }
-                };
-                Self::personal_requirement(
-                    identity,
-                    connector,
-                    connection,
-                    consumer,
-                    SourceAccessRequirementKind::ReviewChangedSource,
-                    authority,
-                    observed,
-                )?
-            }
-        };
-        PersonalBlock::blocked(requirement)
-    }
-
-    /// Classify a failed people read: an admitting grant with no selection
-    /// needs source selection, otherwise the personal ladder applies.
-    async fn classify_people_blocker(
-        &self,
-        identity: &PersonalSourceIdentity,
-        consumer_name: &str,
-        consumer: GrantConsumer,
-        error: AgentFailure,
-    ) -> Result<PersonalBlock, AgentFailure> {
-        if error == AgentFailure::AccessReviewRequired {
-            let grants = self.records.grants().await?;
-            if let Ok(grant) =
-                floe_access::people_read_grant(&grants, self.person_id, &self.device_id, consumer_name)
-            {
-                let handles = self.records.selected_handles(grant.id()).await?;
-                if handles.is_empty() {
-                    let requirement = Self::personal_requirement(
-                        identity,
-                        Some(grant.source().connector().clone()),
-                        Some(grant.source().connection_id()),
-                        consumer,
-                        SourceAccessRequirementKind::SelectResource,
-                        Some(grant.source().source_authority()),
-                        None,
-                    )?;
-                    // Selection happens in the picker, never inline.
-                    debug_assert!(!requirement.inline_resolution());
-                    return PersonalBlock::blocked(requirement);
-                }
-                let requirement = Self::personal_requirement(
-                    identity,
-                    Some(grant.source().connector().clone()),
-                    Some(grant.source().connection_id()),
-                    consumer,
-                    SourceAccessRequirementKind::ReviewChangedSource,
-                    Some(grant.source().source_authority()),
-                    Some(Self::observed_grant(&grant)?),
-                )?;
-                return PersonalBlock::blocked(requirement);
-            }
-        }
-        self.classify_personal_blocker(identity, consumer, error)
-            .await
-    }
-
     /// Invoke one tool, preserving a recoverable source blocker as a typed
     /// outcome instead of raising it. Only hard failures raise.
     pub async fn invoke_outcome(
@@ -627,110 +283,129 @@ where
                 Self::empty_input(call)?;
                 let consumer = GrantConsumer::builtin(ASSISTANT_CONSUMER)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-                let identity = self.personal_identity(call.tool_id.as_str())?;
-                match crate::read_manager_people(
+                match crate::read_manager_people_outcome(
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
                     ASSISTANT_CONSUMER,
+                    consumer,
                     deadline,
                     &cancellation,
                 )
-                .await
+                .await?
                 {
-                    Ok((view, dependency)) => Ok(SourceReadOutcome::Ready(Self::result(
-                        call,
-                        &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
-                        dependency,
-                    )?)),
-                    Err(error) => Ok(self
-                        .classify_people_blocker(&identity, ASSISTANT_CONSUMER, consumer, error)
-                        .await?
-                        .into_outcome()),
+                    SourceReadOutcome::Ready((view, dependency)) => {
+                        Ok(SourceReadOutcome::Ready(Self::result(
+                            call,
+                            &serde_json::to_value(&view)
+                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            dependency,
+                        )?))
+                    }
+                    SourceReadOutcome::Unavailable(reason) => {
+                        Ok(SourceReadOutcome::Unavailable(reason))
+                    }
+                    SourceReadOutcome::NeedsUserAction(blockers) => {
+                        Ok(SourceReadOutcome::NeedsUserAction(blockers))
+                    }
                 }
             }
             SCHEDULE_FEASIBILITY_READ => {
                 Self::empty_input(call)?;
                 let consumer = GrantConsumer::builtin(ASSISTANT_CONSUMER)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-                let identity = self.personal_identity(call.tool_id.as_str())?;
-                match crate::read_feasibility(
+                match crate::read_feasibility_outcome(
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
                     ASSISTANT_CONSUMER,
+                    consumer,
                     call.call_id,
                     deadline,
                     &cancellation,
                 )
-                .await
+                .await?
                 {
-                    Ok((view, dependency)) => Ok(SourceReadOutcome::Ready(Self::result(
-                        call,
-                        &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
-                        dependency,
-                    )?)),
-                    Err(error) => Ok(self
-                        .classify_personal_blocker(&identity, consumer, error)
-                        .await?
-                        .into_outcome()),
+                    SourceReadOutcome::Ready((view, dependency)) => {
+                        Ok(SourceReadOutcome::Ready(Self::result(
+                            call,
+                            &serde_json::to_value(&view)
+                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            dependency,
+                        )?))
+                    }
+                    SourceReadOutcome::Unavailable(reason) => {
+                        Ok(SourceReadOutcome::Unavailable(reason))
+                    }
+                    SourceReadOutcome::NeedsUserAction(blockers) => {
+                        Ok(SourceReadOutcome::NeedsUserAction(blockers))
+                    }
                 }
             }
             ATTENTION_COARSE_READ => {
                 Self::empty_input(call)?;
                 let consumer = floe_access::attention_consumer(ASSISTANT_CONSUMER)?;
-                let identity = self.personal_identity(call.tool_id.as_str())?;
-                match crate::admit_attention(
+                match crate::admit_attention_outcome(
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
-                    consumer.clone(),
+                    consumer,
                     call.call_id,
                     deadline,
                     &cancellation,
                 )
-                .await
+                .await?
                 {
-                    Ok((view, dependency)) => Ok(SourceReadOutcome::Ready(Self::result(
-                        call,
-                        &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
-                        dependency,
-                    )?)),
-                    Err(error) => Ok(self
-                        .classify_personal_blocker(&identity, consumer, error)
-                        .await?
-                        .into_outcome()),
+                    SourceReadOutcome::Ready((view, dependency)) => {
+                        Ok(SourceReadOutcome::Ready(Self::result(
+                            call,
+                            &serde_json::to_value(&view)
+                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            dependency,
+                        )?))
+                    }
+                    SourceReadOutcome::Unavailable(reason) => {
+                        Ok(SourceReadOutcome::Unavailable(reason))
+                    }
+                    SourceReadOutcome::NeedsUserAction(blockers) => {
+                        Ok(SourceReadOutcome::NeedsUserAction(blockers))
+                    }
                 }
             }
             WELLBEING_DERIVED_READ => {
                 Self::empty_input(call)?;
                 let consumer = GrantConsumer::builtin(ASSISTANT_CONSUMER)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-                let identity = self.personal_identity(call.tool_id.as_str())?;
-                match crate::read_wellbeing(
+                match crate::read_wellbeing_outcome(
                     &self.records,
                     &self.driver,
                     self.person_id,
                     &self.device_id,
                     ASSISTANT_CONSUMER,
+                    consumer,
                     call.call_id,
                     deadline,
                     &cancellation,
                 )
-                .await
+                .await?
                 {
-                    Ok((view, dependency)) => Ok(SourceReadOutcome::Ready(Self::result(
-                        call,
-                        &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
-                        dependency,
-                    )?)),
-                    Err(error) => Ok(self
-                        .classify_personal_blocker(&identity, consumer, error)
-                        .await?
-                        .into_outcome()),
+                    SourceReadOutcome::Ready((view, dependency)) => {
+                        Ok(SourceReadOutcome::Ready(Self::result(
+                            call,
+                            &serde_json::to_value(&view)
+                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            dependency,
+                        )?))
+                    }
+                    SourceReadOutcome::Unavailable(reason) => {
+                        Ok(SourceReadOutcome::Unavailable(reason))
+                    }
+                    SourceReadOutcome::NeedsUserAction(blockers) => {
+                        Ok(SourceReadOutcome::NeedsUserAction(blockers))
+                    }
                 }
             }
             MAIL_COMMUNICATION_READ => {
@@ -806,40 +481,6 @@ where
                 }
             }
             _ => Err(AgentFailure::CapabilityDenied),
-        }
-    }
-}
-
-/// The owner-known identity of one personal source a direct tool reads:
-///
-/// the source it reports under, the resource it needs, the grant bindings
-/// that count as this source, and — when the platform identity is fixed —
-/// the connector/connection a missing grant still permits naming.
-struct PersonalSourceIdentity {
-    source_id: &'static str,
-    resource: &'static str,
-    expected: Vec<GrantSourceBinding>,
-    known_identity: Option<(&'static str, &'static str)>,
-}
-
-/// A classified personal blocker: transiently unavailable, or blocked on a
-/// concrete reviewable requirement.
-enum PersonalBlock {
-    Unavailable(SourceUnavailable),
-    Blocked(SourceAccessBlockers),
-}
-
-impl PersonalBlock {
-    fn blocked(requirement: SourceAccessRequirement) -> Result<Self, AgentFailure> {
-        let blockers =
-            SourceAccessBlockers::try_new(vec![requirement]).map_err(|_| AgentFailure::InvalidInput)?;
-        Ok(Self::Blocked(blockers))
-    }
-
-    fn into_outcome(self) -> SourceReadOutcome<ToolResult> {
-        match self {
-            Self::Unavailable(reason) => SourceReadOutcome::Unavailable(reason),
-            Self::Blocked(blockers) => SourceReadOutcome::NeedsUserAction(blockers),
         }
     }
 }

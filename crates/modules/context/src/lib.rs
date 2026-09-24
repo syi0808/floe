@@ -80,10 +80,11 @@ pub use application::personal_sources::{
     ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_EXPERT_CONSUMER, ATTENTION_RESOURCE,
     FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE,
     WELLBEING_CONNECTION, WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention,
-    apple_execution_owner, attention_execution_owner, attention_source,
+    admit_attention_outcome, apple_execution_owner, attention_execution_owner, attention_source,
     authorize_personal_dependency, contacts_connection, contacts_execution_owner,
-    feasibility_source, personal_dependency_holds, read_feasibility, read_manager_people,
-    read_people, read_wellbeing, wellbeing_source,
+    feasibility_source, personal_dependency_holds, read_feasibility, read_feasibility_outcome,
+    read_manager_people, read_manager_people_outcome, read_people, read_wellbeing,
+    read_wellbeing_outcome, wellbeing_source,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{
