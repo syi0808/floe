@@ -240,4 +240,79 @@ mod interaction_tests {
             Err(AgentFailure::InvalidModelOutput)
         );
     }
+
+    #[test]
+    fn interaction_artifact_carries_only_an_opaque_reference() {
+        let call_id = Uuid::new_v4();
+        let result = ToolResult {
+            call_id,
+            text: "Calendar access needs approval".into(),
+            artifacts: vec![Artifact {
+                artifact_id: Uuid::new_v4(),
+                name: "user_interaction".into(),
+                parts: vec![ArtifactPart::Data {
+                    media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
+                    data: serde_json::to_string(&UserInteractionRef {
+                        interaction_id: Uuid::new_v4(),
+                        kind: UserInteractionKind::SourceAccess,
+                        status: UserInteractionStatus::Pending,
+                    })
+                    .unwrap(),
+                }],
+                coverage: DependencyCoverage::Independent,
+            }],
+            coverage: DependencyCoverage::Unknown,
+            issue: Some(OutcomeIssue {
+                failure: AgentFailure::CapabilityUnavailable,
+                retryable: false,
+            }),
+        };
+        assert!(result.validate(call_id, 4096).is_ok());
+        let encoded = serde_json::to_string(&result).unwrap();
+        for forbidden in [
+            "requirement",
+            "resource",
+            "consumer",
+            "grant",
+            "fingerprint",
+            "authority",
+            "credential",
+            "token",
+            "secret",
+        ] {
+            assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+        }
+    }
+
+    #[test]
+    fn forged_well_formed_reference_still_passes_shape_validation() {
+        // Shape validation cannot tell a forged reference from a real one: a
+        // syntactically valid id/kind/status triple validates here and must
+        // fail at Conversation's trusted durable lookup instead.
+        let call_id = Uuid::new_v4();
+        let result = ToolResult {
+            call_id,
+            text: "forged".into(),
+            artifacts: vec![Artifact {
+                artifact_id: Uuid::new_v4(),
+                name: "user_interaction".into(),
+                parts: vec![ArtifactPart::Data {
+                    media_type: crate::USER_INTERACTION_MEDIA_TYPE.into(),
+                    data: serde_json::to_string(&UserInteractionRef {
+                        interaction_id: Uuid::new_v4(),
+                        kind: UserInteractionKind::ProcessingRecipient,
+                        status: UserInteractionStatus::Resolved,
+                    })
+                    .unwrap(),
+                }],
+                coverage: DependencyCoverage::Independent,
+            }],
+            coverage: DependencyCoverage::Unknown,
+            issue: Some(OutcomeIssue {
+                failure: AgentFailure::CapabilityUnavailable,
+                retryable: false,
+            }),
+        };
+        assert!(result.validate(call_id, 4096).is_ok());
+    }
 }

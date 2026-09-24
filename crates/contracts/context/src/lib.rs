@@ -26,7 +26,8 @@ pub use memory::{
     MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
 };
 pub use source_access::{
-    SourceAccessRequirement, SourceAccessRequirementKind, SourceReadOutcome, SourceUnavailable,
+    MAX_SOURCE_ACCESS_BLOCKERS, SourceAccessBlockers, SourceAccessRequirement,
+    SourceAccessRequirementKind, SourceReadOutcome, SourceUnavailable,
 };
 pub use views::*;
 

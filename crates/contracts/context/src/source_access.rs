@@ -147,6 +147,48 @@ impl SourceAccessRequirement {
     }
 }
 
+pub const MAX_SOURCE_ACCESS_BLOCKERS: usize = 8;
+
+/// Several concrete review requirements, one per blocked source.
+///
+/// A multi-source read that is blocked on more than one source reports each
+/// concrete blocker. Callers must not collapse them into a fake aggregate
+/// source: every blocker keeps its own source identity, requirement detail
+/// and grant/authority expectation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceAccessBlockers {
+    blockers: Vec<SourceAccessRequirement>,
+}
+
+impl SourceAccessBlockers {
+    pub fn try_new(blockers: Vec<SourceAccessRequirement>) -> Result<Self, GrantValidationError> {
+        if blockers.is_empty() {
+            return Err(GrantValidationError::MissingScope);
+        }
+        if blockers.len() > MAX_SOURCE_ACCESS_BLOCKERS {
+            return Err(GrantValidationError::TooLarge("blockers"));
+        }
+        for blocker in &blockers {
+            blocker.validate()?;
+        }
+        for (index, blocker) in blockers.iter().enumerate() {
+            if blockers[..index].contains(blocker) {
+                return Err(GrantValidationError::Duplicate("blocker"));
+            }
+        }
+        Ok(Self { blockers })
+    }
+
+    pub fn blockers(&self) -> &[SourceAccessRequirement] {
+        &self.blockers
+    }
+
+    pub fn validate(&self) -> Result<(), GrantValidationError> {
+        Self::try_new(self.blockers.clone()).map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +234,38 @@ mod tests {
         assert!(requirement.validate().is_err());
         requirement.processing_recipient = Some("model.example".into());
         assert!(requirement.validate().is_ok());
+    }
+
+    #[test]
+    fn blockers_keep_each_concrete_source_requirement() {
+        let first = requirement("floe.source.calendar").unwrap();
+        let mut second = requirement("floe.source.tasks").unwrap();
+        second.reason = SourceAccessRequirementKind::Reconnect;
+        let blockers = SourceAccessBlockers::try_new(vec![first.clone(), second.clone()]).unwrap();
+        assert_eq!(blockers.blockers(), &[first, second]);
+        assert!(blockers.validate().is_ok());
+    }
+
+    #[test]
+    fn blockers_reject_empty_oversized_duplicate_or_invalid_members() {
+        assert_eq!(
+            SourceAccessBlockers::try_new(vec![]),
+            Err(GrantValidationError::MissingScope)
+        );
+        let distinct: Vec<_> = (0..=MAX_SOURCE_ACCESS_BLOCKERS)
+            .map(|index| requirement(&format!("floe.source.{index}")).unwrap())
+            .collect();
+        assert_eq!(
+            SourceAccessBlockers::try_new(distinct),
+            Err(GrantValidationError::TooLarge("blockers"))
+        );
+        let repeated = requirement("floe.source.calendar").unwrap();
+        assert_eq!(
+            SourceAccessBlockers::try_new(vec![repeated.clone(), repeated]),
+            Err(GrantValidationError::Duplicate("blocker"))
+        );
+        let mut invalid = requirement("floe.source.calendar").unwrap();
+        invalid.source_id = String::new();
+        assert!(SourceAccessBlockers::try_new(vec![invalid]).is_err());
     }
 }

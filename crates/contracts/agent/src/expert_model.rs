@@ -287,4 +287,28 @@ mod observation_tests {
             reason_code: "temporarily_unavailable".into(),
         }.validate(4096).is_ok());
     }
+
+    #[test]
+    fn user_action_observation_serializes_as_opaque_reference_only() {
+        let observation = ExpertCapabilityObservation::NeedsUserAction {
+            interaction: crate::UserInteractionRef {
+                interaction_id: Uuid::new_v4(),
+                kind: crate::UserInteractionKind::SourceAccess,
+                status: crate::UserInteractionStatus::Pending,
+            },
+            summary: "Calendar access needs approval".into(),
+        };
+        assert!(observation.validate(4096).is_ok());
+        let encoded = serde_json::to_string(&observation).unwrap();
+        for forbidden in [
+            "requirement",
+            "resource",
+            "consumer",
+            "grant",
+            "fingerprint",
+            "authority",
+        ] {
+            assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+        }
+    }
 }

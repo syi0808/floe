@@ -10,15 +10,19 @@ pub const USER_INTERACTION_MEDIA_TYPE: &str =
 #[serde(rename_all = "snake_case")]
 pub enum UserInteractionKind {
     SourceAccess,
+    ProcessingRecipient,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserInteractionStatus {
     Pending,
-    Allowed,
+    Resolving,
+    Resolved,
     Denied,
+    Cancelled,
     Superseded,
+    Expired,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -30,6 +34,9 @@ pub struct UserInteractionRef {
 }
 
 impl UserInteractionRef {
+    /// Shape validation only: a well-formed reference is never authorization.
+    /// Only Conversation's trusted lookup of the durable interaction row
+    /// decides what the reference means and whether it is actionable.
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.interaction_id.is_nil() {
             return Err(AgentFailure::InvalidModelOutput);
@@ -59,5 +66,43 @@ mod tests {
             "status": "other"
         });
         assert!(serde_json::from_value::<UserInteractionRef>(value.take()).is_err());
+    }
+
+    #[test]
+    fn lifecycle_statuses_round_trip() {
+        for status in [
+            UserInteractionStatus::Pending,
+            UserInteractionStatus::Resolving,
+            UserInteractionStatus::Resolved,
+            UserInteractionStatus::Denied,
+            UserInteractionStatus::Cancelled,
+            UserInteractionStatus::Superseded,
+            UserInteractionStatus::Expired,
+        ] {
+            for kind in [
+                UserInteractionKind::SourceAccess,
+                UserInteractionKind::ProcessingRecipient,
+            ] {
+                let reference = UserInteractionRef {
+                    interaction_id: Uuid::new_v4(),
+                    kind,
+                    status,
+                };
+                assert!(reference.validate().is_ok());
+                let decoded: UserInteractionRef =
+                    serde_json::from_str(&serde_json::to_string(&reference).unwrap()).unwrap();
+                assert_eq!(decoded, reference);
+            }
+        }
+    }
+
+    #[test]
+    fn removed_allowed_spelling_is_rejected() {
+        let value = serde_json::json!({
+            "interaction_id": Uuid::new_v4(),
+            "kind": "source_access",
+            "status": "allowed"
+        });
+        assert!(serde_json::from_value::<UserInteractionRef>(value).is_err());
     }
 }
