@@ -1,13 +1,22 @@
-use floe_access::{DependencyAuthorization, DependencyResolver};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use chrono::Utc;
+use floe_access::{
+    ContextualRecipientAuthority, DependencyAuthorization, DependencyResolver, RecipientConsent,
+    RecipientConsentStore, SystemConsentClock, grant_recipient_consent,
+};
 use floe_agent_contract::{
-    AgentContext, AgentFailure, AllowedCatalog, ContextDependency, DataClass, ModelConversation,
-    ModelConversationEntry, ModelPort, ModelRequest, ModelResponse, ModelStep,
+    AgentContext, AgentFailure, AllowedCatalog, BoxFuture, ContextDependency, DataClass,
+    ModelCallOutcome, ModelConversation, ModelConversationEntry, ModelPort, ModelRequest,
+    ModelStep,
     prompts::{
         BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL,
         CAPABILITY_PROTOCOL_REVISION, PromptAssembly, PromptComponentKind, PromptRole,
         product_component,
     },
 };
+use floe_context_contract::RecipientLineage;
 use floe_execution::{
     Cancellation, ExecutionScope,
     budget::{BudgetConfig, BudgetLedger, ModelUsage},
@@ -16,9 +25,9 @@ use floe_inference::{
     CANONICAL_MODEL_CONSUMER, CANONICAL_MODEL_PURPOSE, DataRecipient, InferenceService,
     ModelProvider, SavedServerConnection,
 };
-use floe_kernel::{RunId, TraceContext};
+use floe_kernel::{PersonId, RunId, TraceContext};
 use floe_provider_adapters::{
-    control::{CurrentSavedConnectionStore, SavedConnectionRecipientAuthority},
+    control::{CurrentSavedConnectionStore, SavedConnectionAdmission},
     models::RootModelProvider,
 };
 use tokio::time::{Duration, Instant};
@@ -37,9 +46,61 @@ impl DependencyResolver for NoSourceDependencies {
 }
 
 pub struct Outcome {
-    pub result: Result<ModelResponse, AgentFailure>,
+    pub result: Result<ModelCallOutcome, AgentFailure>,
     pub usage: ModelUsage,
     attempt_id: Uuid,
+}
+
+#[derive(Default)]
+struct MemoryConsents {
+    records: Mutex<HashMap<Uuid, RecipientConsent>>,
+}
+
+impl RecipientConsentStore for MemoryConsents {
+    fn grant_consent<'a>(
+        &'a self,
+        consent: RecipientConsent,
+    ) -> BoxFuture<'a, Result<RecipientConsent, AgentFailure>> {
+        Box::pin(async move {
+            consent.validate().map_err(|_| AgentFailure::InvalidInput)?;
+            let mut records = self.records.lock().unwrap();
+            if let Some(existing) = records.get(&consent.id()) {
+                return Ok(existing.clone());
+            }
+            records.insert(consent.id(), consent.clone());
+            Ok(consent)
+        })
+    }
+
+    fn find_consent<'a>(
+        &'a self,
+        consent_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<RecipientConsent>, AgentFailure>> {
+        Box::pin(async move { Ok(self.records.lock().unwrap().get(&consent_id).cloned()) })
+    }
+
+    fn revoke_consent<'a>(&'a self, consent_id: Uuid) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            let mut records = self.records.lock().unwrap();
+            let Some(existing) = records.get(&consent_id).cloned() else {
+                return Err(AgentFailure::NotFound);
+            };
+            let revoked = existing
+                .revoked()
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+            records.insert(consent_id, revoked);
+            Ok(())
+        })
+    }
+
+    fn prune_expired<'a>(&'a self, now_unix_ms: i64) -> BoxFuture<'a, Result<u64, AgentFailure>> {
+        Box::pin(async move {
+            let mut records = self.records.lock().unwrap();
+            let before = records.len();
+            records.retain(|_, consent| consent.expires_at().timestamp_millis() > now_unix_ms);
+            Ok((before - records.len()) as u64)
+        })
+    }
 }
 
 pub async fn assert_remote_profile(saved: &SavedServerConnection) {
@@ -62,15 +123,45 @@ pub async fn assert_remote_profile(saved: &SavedServerConnection) {
 }
 
 pub async fn attempt(saved: &SavedServerConnection) -> Outcome {
+    attempt_inner(saved, false).await
+}
+
+/// The consented path: grants the exact contextual consent the dispatch
+/// derives, so an admitted pairing reaches the transport.
+pub async fn attempt_with_consent(saved: &SavedServerConnection) -> Outcome {
+    attempt_inner(saved, true).await
+}
+
+async fn attempt_inner(saved: &SavedServerConnection, grant_consent: bool) -> Outcome {
     let current = CurrentSavedConnectionStore::fixed(Some(saved.clone()));
     let provider =
         RootModelProvider::from_current_connection(&current, &saved.person_id, &saved.device_id)
             .unwrap();
-    let authority = SavedConnectionRecipientAuthority::new(
-        current,
-        saved.person_id.clone(),
-        saved.device_id.clone(),
-    );
+    let admission =
+        SavedConnectionAdmission::new(current, saved.person_id.clone(), saved.device_id.clone());
+    let consents = MemoryConsents::default();
+    let lineage = RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
+    if grant_consent {
+        let person = PersonId::from_uuid(Uuid::parse_str(&saved.person_id).unwrap()).unwrap();
+        let consent = RecipientConsent::try_new(
+            person,
+            saved.device_id.clone(),
+            saved.client_id.clone(),
+            "OpenAI (Codex OAuth)",
+            "server-model",
+            CANONICAL_MODEL_PURPOSE,
+            CANONICAL_MODEL_CONSUMER,
+            vec![DataClass::Synthetic],
+            vec![],
+            lineage,
+            Uuid::new_v4(),
+            1,
+            Utc::now(),
+        )
+        .unwrap();
+        grant_recipient_consent(&consents, consent).await.unwrap();
+    }
+    let authority = ContextualRecipientAuthority::new(&consents, admission, SystemConsentClock);
     let service = InferenceService::new(provider, NoSourceDependencies, authority);
     let prompt = PromptAssembly {
         schema_version: 1,
@@ -137,6 +228,7 @@ pub async fn attempt(saved: &SavedServerConnection) -> Outcome {
         consumer: CANONICAL_MODEL_CONSUMER.into(),
         preferred_profile_id: Some("server-model".into()),
         replay: vec![],
+        lineage: Some(lineage),
     };
     let ledger = BudgetLedger::new(BudgetConfig::new(8192, 1_000_000), ModelUsage::default());
     let scope = ExecutionScope::root(
@@ -161,7 +253,15 @@ pub fn assert_generated(outcome: Outcome) {
         outcome.usage.estimated_tokens,
         outcome.result.as_ref().err()
     );
-    let response = outcome.result.expect("real configured Codex generation");
+    let response = match outcome.result.expect("real configured Codex generation") {
+        ModelCallOutcome::Ready(response) => response,
+        ModelCallOutcome::NeedsUserAction(requirement) => {
+            panic!(
+                "live generation blocked unexpectedly: {}",
+                requirement.recipient()
+            )
+        }
+    };
     assert_eq!(response.attempt_id, outcome.attempt_id);
     assert_eq!(outcome.usage.attempts, 1);
     assert_eq!(outcome.usage.tokens, response.usage.tokens);

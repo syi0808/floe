@@ -1,12 +1,12 @@
-use floe_agent_contract::{AgentFailure, ExpertInsight, ExpertModelRequirement};
+use floe_agent_contract::{
+    AgentFailure, ExpertInsight, ExpertModelOutcome, ExpertModelRequirement,
+};
 use floe_context_contract::{CalendarContextView, DataClass, calendar_context_evidence};
 use uuid::Uuid;
 
-use crate::{
-    BuiltinExpertHost, BuiltinExpertRequest, StatefulExpertDraft, StatefulFocusProposal,
-};
 use crate::prompts::schedule_expert_prompt;
-use crate::shared::run_expert_model;
+use crate::shared::{ExpertJudgment, run_expert_model};
+use crate::{BuiltinExpertHost, BuiltinExpertRequest, StatefulExpertDraft, StatefulFocusProposal};
 
 pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
@@ -14,7 +14,7 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
     views: &[CalendarContextView],
     view_calls: u32,
     propose_focus: bool,
-) -> Result<StatefulExpertDraft, AgentFailure> {
+) -> Result<ExpertJudgment<StatefulExpertDraft>, AgentFailure> {
     let first = views.first().ok_or(AgentFailure::CapabilityUnavailable)?;
     let mut context = request.context.clone();
     context.memories.clear();
@@ -23,7 +23,7 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
         evidence.push(calendar_context_evidence(view)?);
     }
     context.evidence.extend(evidence);
-    let answer = run_expert_model(
+    let answer = match run_expert_model(
         host.model(),
         host.policy(),
         ExpertModelRequirement::Any,
@@ -39,7 +39,13 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
         request.deadline,
         &request.cancellation,
     )
-    .await?;
+    .await?
+    {
+        ExpertModelOutcome::Answered(answer) => answer,
+        ExpertModelOutcome::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     let summary = answer.answer.trim();
     if summary.is_empty() || summary.len() > 2048 {
         return Err(AgentFailure::InvalidModelOutput);
@@ -93,11 +99,15 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
             None => insights.push(ExpertInsight::NoFocusWindow),
         }
     }
-    Ok(StatefulExpertDraft {
+    Ok(ExpertJudgment::Decided(StatefulExpertDraft {
         source_handle: first.source_handle.clone(),
         data_class: DataClass::Personal,
         expires_at_unix_ms: u64::try_from(
-            views.iter().map(|view| view.expires_at_unix_ms).min().unwrap_or_default(),
+            views
+                .iter()
+                .map(|view| view.expires_at_unix_ms)
+                .min()
+                .unwrap_or_default(),
         )
         .map_err(|_| AgentFailure::InvalidInput)?,
         insights,
@@ -105,5 +115,5 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
         summary: summary.to_owned(),
         model_calls: 1,
         view_calls,
-    })
+    }))
 }

@@ -9,10 +9,10 @@ use std::{future::Future, pin::Pin, sync::Mutex};
 
 use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, AllowedCatalog, DataClass, DependencyCoverage, ExpertModelAnswer,
-    ExpertModelCall, ExpertModelRequirement, ExpertReasoningStep, ExpertStep, ExpertStepOutcome,
-    ExpertTranscriptEntry, InferencePolicyDecision, InvocationKey, ModelConversation,
-    ModelConversationEntry, ModelPlacement, ModelRequest, ModelStep, ToolCall, ToolDescriptor,
-    ToolResult, TransferConsent,
+    ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement, ExpertReasoningStep, ExpertStep,
+    ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry, InferencePolicyDecision,
+    InvocationKey, ModelCallOutcome, ModelConversation, ModelConversationEntry, ModelPlacement,
+    ModelRequest, ModelStep, ToolCall, ToolDescriptor, ToolResult, TransferConsent,
 };
 use floe_context::{
     AttentionView, CalendarContextView, NativeContextView, PeopleView, PersonalGrantRecords,
@@ -263,6 +263,15 @@ pub(crate) struct ExpertModelHost<'a> {
     pub(crate) executor: &'a dyn InferenceExecutor,
     pub(crate) scope: &'a floe_execution::ExecutionScope,
     pub(crate) captured: &'a Mutex<Vec<floe_context_contract::ContextDependency>>,
+    /// The intent lineage this delegation's dispatches run under, derived
+    /// from the admitted delegation (Session + manager origin Run). `None`
+    /// for non-Conversation delegation, whose external dispatches fail
+    /// closed without a reviewable requirement.
+    pub(crate) lineage: Option<floe_context_contract::RecipientLineage>,
+    /// The trusted model requirement this invocation blocked on, stashed
+    /// for the endpoint to publish. First blockage wins: the Expert stops
+    /// at the first one, so at most one is ever stashed.
+    pub(crate) model_blocked: &'a Mutex<Option<floe_context_contract::ProcessingRequirement>>,
 }
 
 impl ExpertModelHost<'_> {
@@ -289,13 +298,32 @@ impl ExpertModelHost<'_> {
             TaskId::from_uuid(invocation_id),
         )
     }
+
+    /// Stash the trusted requirement one dispatch blocked on for the
+    /// endpoint to publish. First blockage wins.
+    fn stash_blocked(
+        &self,
+        requirement: floe_context_contract::ProcessingRequirement,
+    ) -> Result<(), AgentFailure> {
+        requirement
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let mut blocked = self
+            .model_blocked
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if blocked.is_none() {
+            *blocked = Some(requirement);
+        }
+        Ok(())
+    }
 }
 
 impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         Box::pin(async move {
             if call.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
@@ -341,7 +369,7 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
                 call.max_cost_micros,
                 call.invocation_id,
             );
-            let response = self
+            let outcome = self
                 .executor
                 .execute(
                     ModelRequest {
@@ -353,22 +381,30 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
                         consumer: floe_agent_contract::EXPERT_INFERENCE_CONSUMER.into(),
                         preferred_profile_id: None,
                         replay: vec![],
+                        lineage: self.lineage,
                     },
                     &child,
                     execution_constraint(call.requirement),
                 )
                 .await?;
+            let response = match outcome {
+                ModelCallOutcome::Ready(response) => response,
+                ModelCallOutcome::NeedsUserAction(requirement) => {
+                    self.stash_blocked(requirement.clone())?;
+                    return Ok(ExpertModelOutcome::Blocked(requirement));
+                }
+            };
             // One question, one reply: a preamble, a tool call or a
             // delegation is not an answer to an Expert's assignment.
             let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else {
                 return Err(AgentFailure::InvalidModelOutput);
             };
-            Ok(ExpertModelAnswer {
+            Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: AGENT_VERSION,
                 answer: text.clone(),
                 used_tokens: response.usage.tokens,
                 cost_micros: response.usage.cost_micros,
-            })
+            }))
         })
     }
 }
@@ -377,7 +413,7 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
     fn step<'a>(
         &'a self,
         step: ExpertReasoningStep,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepOutcome, AgentFailure>> {
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ExpertStepResult, AgentFailure>> {
         Box::pin(async move {
             if step.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
@@ -412,7 +448,7 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
                 step.remaining_cost_micros,
                 step.invocation_id,
             );
-            let response = self
+            let outcome = self
                 .executor
                 .execute(
                     ModelRequest {
@@ -424,12 +460,20 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
                         consumer: floe_agent_contract::EXPERT_INFERENCE_CONSUMER.into(),
                         preferred_profile_id: None,
                         replay: vec![],
+                        lineage: self.lineage,
                     },
                     &child,
                     execution_constraint(step.requirement),
                 )
                 .await?;
-            Ok(ExpertStepOutcome {
+            let response = match outcome {
+                ModelCallOutcome::Ready(response) => response,
+                ModelCallOutcome::NeedsUserAction(requirement) => {
+                    self.stash_blocked(requirement.clone())?;
+                    return Ok(ExpertStepResult::Blocked(requirement));
+                }
+            };
+            Ok(ExpertStepResult::Stepped(ExpertStepOutcome {
                 schema_version: AGENT_VERSION,
                 steps: response
                     .steps
@@ -448,7 +492,7 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
                 replay: None,
                 used_tokens: response.usage.tokens,
                 cost_micros: response.usage.cost_micros,
-            })
+            }))
         })
     }
 }
@@ -488,9 +532,7 @@ impl PersonalViewSource<'_> {
             .await?
         {
             floe_context_contract::SourceReadOutcome::Ready((view, dependency)) => {
-                if let (Some(recorder), false) =
-                    (self.recorder, self.dependency_turn_id.is_nil())
-                {
+                if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
                     recorder.record(
                         self.dependency_turn_id,
                         self.dependency_result_id,
@@ -499,16 +541,12 @@ impl PersonalViewSource<'_> {
                 }
                 Ok(floe_context_contract::SourceReadOutcome::Ready(view))
             }
-            floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
-                Ok(floe_context_contract::SourceReadOutcome::Unavailable(
-                    reason,
-                ))
-            }
-            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
-                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
-                    blockers,
-                ))
-            }
+            floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
+                floe_context_contract::SourceReadOutcome::Unavailable(reason),
+            ),
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+            ),
         }
     }
 
@@ -532,9 +570,7 @@ impl PersonalViewSource<'_> {
             .await?
         {
             floe_context_contract::SourceReadOutcome::Ready((view, dependency)) => {
-                if let (Some(recorder), false) =
-                    (self.recorder, self.dependency_turn_id.is_nil())
-                {
+                if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
                     recorder.record(
                         self.dependency_turn_id,
                         self.dependency_result_id,
@@ -543,16 +579,12 @@ impl PersonalViewSource<'_> {
                 }
                 Ok(floe_context_contract::SourceReadOutcome::Ready(view))
             }
-            floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
-                Ok(floe_context_contract::SourceReadOutcome::Unavailable(
-                    reason,
-                ))
-            }
-            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
-                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
-                    blockers,
-                ))
-            }
+            floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
+                floe_context_contract::SourceReadOutcome::Unavailable(reason),
+            ),
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+            ),
         }
     }
 
@@ -675,11 +707,9 @@ impl PersonalViewSource<'_> {
             floe_context_contract::SourceReadOutcome::Unavailable(_) => {
                 Ok(floe_context_contract::SourceReadOutcome::Ready(vec![]))
             }
-            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
-                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
-                    blockers,
-                ))
-            }
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+            ),
         }
     }
 }
@@ -1006,12 +1036,9 @@ fn calendar_read_outcome<Value>(
                 floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
             ))
         }
-        Err(AgentFailure::AccessReviewRequired) => calendar_access_requirement(
-            Some(connection),
-            consumer,
-            review.reason,
-            review.observed,
-        ),
+        Err(AgentFailure::AccessReviewRequired) => {
+            calendar_access_requirement(Some(connection), consumer, review.reason, review.observed)
+        }
         Err(AgentFailure::CredentialExpired) => calendar_access_requirement(
             Some(connection),
             consumer,
@@ -1076,8 +1103,9 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
             if connection.disconnected {
                 let observed = match calendar_connector_id(&connection) {
                     Some(connector_id) => {
-                        let grants =
-                            floe_vault::VaultGrantRecords::new(self.vault).grants().await?;
+                        let grants = floe_vault::VaultGrantRecords::new(self.vault)
+                            .grants()
+                            .await?;
                         observe_calendar_binding(
                             &grants,
                             person_id,
@@ -1320,9 +1348,8 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         >,
     > {
         Box::pin(async move {
-            let grant_consumer =
-                floe_context_contract::GrantConsumer::builtin(consumer)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
+            let grant_consumer = floe_context_contract::GrantConsumer::builtin(consumer)
+                .map_err(|_| AgentFailure::InvalidInput)?;
             floe_context::read_wellbeing_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
@@ -1361,9 +1388,8 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         >,
     > {
         Box::pin(async move {
-            let grant_consumer =
-                floe_context_contract::GrantConsumer::builtin(consumer)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
+            let grant_consumer = floe_context_contract::GrantConsumer::builtin(consumer)
+                .map_err(|_| AgentFailure::InvalidInput)?;
             floe_context::read_manager_people_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
@@ -1701,6 +1727,25 @@ mod tests {
         );
     }
 
+    fn ready(steps: Vec<ModelStep>) -> Result<ModelCallOutcome, AgentFailure> {
+        Ok(ModelCallOutcome::Ready(
+            floe_agent_contract::ModelResponse {
+                attempt_id: Uuid::new_v4(),
+                steps,
+                usage: floe_agent_contract::ModelUsage {
+                    tokens: 11,
+                    cost_micros: 22,
+                },
+            },
+        ))
+    }
+
+    fn blocked(
+        requirement: floe_context_contract::ProcessingRequirement,
+    ) -> Result<ModelCallOutcome, AgentFailure> {
+        Ok(ModelCallOutcome::NeedsUserAction(requirement))
+    }
+
     struct FakeExecutor {
         calls: Mutex<
             Vec<(
@@ -1708,11 +1753,11 @@ mod tests {
                 floe_inference::InferenceExecutionConstraint,
             )>,
         >,
-        script: Mutex<VecDeque<Result<Vec<ModelStep>, AgentFailure>>>,
+        script: Mutex<VecDeque<Result<ModelCallOutcome, AgentFailure>>>,
     }
 
     impl FakeExecutor {
-        fn new(script: Vec<Result<Vec<ModelStep>, AgentFailure>>) -> Self {
+        fn new(script: Vec<Result<ModelCallOutcome, AgentFailure>>) -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
                 script: Mutex::new(script.into_iter().collect()),
@@ -1737,23 +1782,14 @@ mod tests {
             constraint: floe_inference::InferenceExecutionConstraint,
         ) -> floe_agent_contract::BoxFuture<
             'a,
-            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+            Result<floe_agent_contract::ModelCallOutcome, AgentFailure>,
         > {
             self.calls
                 .lock()
                 .unwrap()
                 .push((request.clone(), constraint));
             let next = self.script.lock().unwrap().pop_front().unwrap();
-            Box::pin(async move {
-                Ok(floe_agent_contract::ModelResponse {
-                    attempt_id: request.attempt_id,
-                    steps: next?,
-                    usage: floe_agent_contract::ModelUsage {
-                        tokens: 11,
-                        cost_micros: 22,
-                    },
-                })
-            })
+            Box::pin(async move { next })
         }
     }
 
@@ -1831,16 +1867,19 @@ mod tests {
 
     #[tokio::test]
     async fn expert_can_answer_after_user_action_capability_observation() {
-        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
             text: "Calendar access is needed.".into(),
             artifacts: vec![],
         }])]);
         let scope = test_scope();
         let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
         let host = ExpertModelHost {
             executor: &executor,
             scope: &scope,
             captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
         };
         let mut step = test_step();
         let interaction_id = Uuid::new_v4();
@@ -1857,7 +1896,10 @@ mod tests {
                 summary: "Calendar access needs approval".into(),
             },
         });
-        let outcome = ExpertReasoner::step(&host, step).await.unwrap();
+        let ExpertStepResult::Stepped(outcome) = ExpertReasoner::step(&host, step).await.unwrap()
+        else {
+            panic!("test executor must step");
+        };
         assert_eq!(
             outcome.steps,
             vec![ExpertStep::Answer {
@@ -1877,18 +1919,25 @@ mod tests {
 
     #[tokio::test]
     async fn single_answer_accepts_exactly_one_answer_with_inference_usage() {
-        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
             text: "Protect focus.".into(),
             artifacts: vec![],
         }])]);
         let scope = test_scope();
         let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
         let host = ExpertModelHost {
             executor: &executor,
             scope: &scope,
             captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
         };
-        let answer = ExpertModel::answer(&host, test_call()).await.unwrap();
+        let ExpertModelOutcome::Answered(answer) =
+            ExpertModel::answer(&host, test_call()).await.unwrap()
+        else {
+            panic!("test executor must answer");
+        };
         assert_eq!(answer.schema_version, AGENT_VERSION);
         assert_eq!(answer.answer, "Protect focus.");
         assert_eq!(answer.used_tokens, 11);
@@ -1909,6 +1958,76 @@ mod tests {
         );
         assert!(calls[0].0.catalog.tools.is_empty());
         assert!(calls[0].0.catalog.cards.is_empty());
+    }
+
+    fn blocked_requirement() -> floe_context_contract::ProcessingRequirement {
+        floe_context_contract::ProcessingRequirement::try_new(
+            "model.example",
+            "server-model",
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            vec![floe_agent_contract::DataClass::Personal],
+            vec![],
+            Uuid::new_v4(),
+            1,
+            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn blocked_answer_stashes_requirement_and_forwards_lineage() {
+        let requirement = blocked_requirement();
+        let lineage =
+            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                .unwrap();
+        let executor = FakeExecutor::new(vec![blocked(requirement.clone())]);
+        let scope = test_scope();
+        let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+            lineage: Some(lineage),
+            model_blocked: &model_blocked,
+        };
+        let ExpertModelOutcome::Blocked(reported) =
+            ExpertModel::answer(&host, test_call()).await.unwrap()
+        else {
+            panic!("blocked dispatch must report Blocked");
+        };
+        assert_eq!(reported, requirement);
+        // The trusted stash carries the same requirement for the endpoint
+        // to publish; the dispatch ran under the delegation lineage.
+        assert_eq!(*model_blocked.lock().unwrap(), Some(requirement));
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0.lineage, Some(lineage));
+    }
+
+    #[tokio::test]
+    async fn blocked_reasoning_step_stashes_requirement_and_reports_blocked() {
+        let requirement = blocked_requirement();
+        let executor = FakeExecutor::new(vec![blocked(requirement.clone())]);
+        let scope = test_scope();
+        let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
+        let host = ExpertModelHost {
+            executor: &executor,
+            scope: &scope,
+            captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
+        };
+        let ExpertStepResult::Blocked(reported) =
+            ExpertReasoner::step(&host, test_step()).await.unwrap()
+        else {
+            panic!("blocked dispatch must report Blocked");
+        };
+        assert_eq!(reported, requirement);
+        assert_eq!(*model_blocked.lock().unwrap(), Some(requirement));
     }
 
     #[tokio::test]
@@ -1940,13 +2059,16 @@ mod tests {
                 },
             ],
         ] {
-            let executor = FakeExecutor::new(vec![Ok(steps)]);
+            let executor = FakeExecutor::new(vec![ready(steps)]);
             let scope = test_scope();
             let captured = Mutex::new(Vec::new());
+            let model_blocked = Mutex::new(None);
             let host = ExpertModelHost {
                 executor: &executor,
                 scope: &scope,
                 captured: &captured,
+                lineage: None,
+                model_blocked: &model_blocked,
             };
             assert_eq!(
                 ExpertModel::answer(&host, test_call()).await.err(),
@@ -1971,16 +2093,19 @@ mod tests {
                 floe_inference::InferenceExecutionConstraint::RemoteOnly,
             ),
         ] {
-            let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+            let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
                 text: "ok".into(),
                 artifacts: vec![],
             }])]);
             let scope = test_scope();
             let captured = Mutex::new(Vec::new());
+            let model_blocked = Mutex::new(None);
             let host = ExpertModelHost {
                 executor: &executor,
                 scope: &scope,
                 captured: &captured,
+                lineage: None,
+                model_blocked: &model_blocked,
             };
             let mut call = test_call();
             call.requirement = requirement;
@@ -1991,7 +2116,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_backed_input_dispatches_with_exact_captured_coverage() {
-        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
             text: "ok".into(),
             artifacts: vec![],
         }])]);
@@ -2026,10 +2151,13 @@ mod tests {
         )
         .unwrap();
         let captured = Mutex::new(vec![dependency.clone()]);
+        let model_blocked = Mutex::new(None);
         let host = ExpertModelHost {
             executor: &executor,
             scope: &scope,
             captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
         };
         ExpertModel::answer(&host, test_call()).await.unwrap();
         let calls = executor.calls();
@@ -2074,15 +2202,18 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+            let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
                 text: "unreachable".into(),
                 artifacts: vec![],
             }])]);
             let captured = Mutex::new(Vec::new());
+            let model_blocked = Mutex::new(None);
             let host = ExpertModelHost {
                 executor: &executor,
                 scope: &scope,
                 captured: &captured,
+                lineage: None,
+                model_blocked: &model_blocked,
             };
             let result = ExpertModel::answer(&host, call).await;
             assert!(result.is_err(), "case {index} unexpectedly succeeded");
@@ -2093,7 +2224,7 @@ mod tests {
     #[tokio::test]
     async fn reasoning_step_maps_declared_capabilities_and_denies_delegation() {
         let call_id = Uuid::new_v4();
-        let executor = FakeExecutor::new(vec![Ok(vec![
+        let executor = FakeExecutor::new(vec![ready(vec![
             ModelStep::Preamble {
                 text: "Checking.".into(),
             },
@@ -2105,10 +2236,13 @@ mod tests {
         ])]);
         let scope = test_scope();
         let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
         let host = ExpertModelHost {
             executor: &executor,
             scope: &scope,
             captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
         };
         let mut step = test_step();
         step.transcript.push(ExpertTranscriptEntry::Capability {
@@ -2119,7 +2253,10 @@ mod tests {
                 result: "no conflicts".into(),
             },
         });
-        let outcome = ExpertReasoner::step(&host, step).await.unwrap();
+        let ExpertStepResult::Stepped(outcome) = ExpertReasoner::step(&host, step).await.unwrap()
+        else {
+            panic!("test executor must step");
+        };
         assert_eq!(outcome.schema_version, AGENT_VERSION);
         assert_eq!(outcome.used_tokens, 11);
         assert_eq!(outcome.cost_micros, 22);
@@ -2139,7 +2276,7 @@ mod tests {
         assert_eq!(calls[0].0.catalog.tools.len(), 1);
         assert_eq!(calls[0].0.catalog.tools[0].id, "calendar.read");
 
-        let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Delegate {
+        let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Delegate {
             agent_id: "floe.builtin.focus.v1".into(),
             definition_revision: 1,
             message: "you take it".into(),
@@ -2149,6 +2286,8 @@ mod tests {
             executor: &executor,
             scope: &scope,
             captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
         };
         assert_eq!(
             ExpertReasoner::step(&host, test_step()).await.err(),
@@ -2189,15 +2328,18 @@ mod tests {
             text: "no task".into(),
         }];
         for step in [undeclared, writable, wrong_schema, taskless] {
-            let executor = FakeExecutor::new(vec![Ok(vec![ModelStep::Answer {
+            let executor = FakeExecutor::new(vec![ready(vec![ModelStep::Answer {
                 text: "unreachable".into(),
                 artifacts: vec![],
             }])]);
             let captured = Mutex::new(Vec::new());
+            let model_blocked = Mutex::new(None);
             let host = ExpertModelHost {
                 executor: &executor,
                 scope: &scope,
                 captured: &captured,
+                lineage: None,
+                model_blocked: &model_blocked,
             };
             assert!(ExpertReasoner::step(&host, step).await.is_err());
             assert!(executor.calls().is_empty());

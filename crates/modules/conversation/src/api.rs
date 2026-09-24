@@ -76,6 +76,13 @@ pub struct TurnRequest {
     /// interpretation. Never part of the canonical turn intent or request
     /// identity, exactly like device/credential state.
     pub delegation_context: Option<DelegationExecutionContext>,
+    /// The verified calling device, supplied by admitted App execution.
+    /// Runtime-only (never part of intent): binds a published model
+    /// blockage to this device so a foreign device can never decide it.
+    pub device_id: String,
+    /// Wall-clock milliseconds for durable interaction publication when a
+    /// model dispatch blocks. Runtime-only (never part of intent).
+    pub now_unix_ms: i64,
 }
 
 impl TurnRequest {
@@ -89,6 +96,11 @@ impl TurnRequest {
             || self.replay.len() > 128
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && !matches!(&self.mode, TurnMode::New)
+            || self.device_id.trim() != self.device_id
+            || self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.device_id.chars().any(char::is_control)
+            || self.now_unix_ms < 0
         {
             return Err(AgentFailure::InvalidInput);
         }

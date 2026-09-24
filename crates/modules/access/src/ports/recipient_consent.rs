@@ -28,15 +28,9 @@ pub trait RecipientConsentStore: Sync {
         consent_id: Uuid,
     ) -> BoxFuture<'a, Result<Option<RecipientConsent>, AgentFailure>>;
 
-    fn revoke_consent<'a>(
-        &'a self,
-        consent_id: Uuid,
-    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+    fn revoke_consent<'a>(&'a self, consent_id: Uuid) -> BoxFuture<'a, Result<(), AgentFailure>>;
 
-    fn prune_expired<'a>(
-        &'a self,
-        now_unix_ms: i64,
-    ) -> BoxFuture<'a, Result<u64, AgentFailure>>;
+    fn prune_expired<'a>(&'a self, now_unix_ms: i64) -> BoxFuture<'a, Result<u64, AgentFailure>>;
 }
 
 /// Non-secret pairing identity, reloaded on every dispatch check.
@@ -70,5 +64,77 @@ pub struct SystemConsentClock;
 impl RecipientConsentClock for SystemConsentClock {
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
+    }
+}
+
+impl<T: RecipientConsentStore + ?Sized> RecipientConsentStore for &T {
+    fn grant_consent<'a>(
+        &'a self,
+        consent: RecipientConsent,
+    ) -> BoxFuture<'a, Result<RecipientConsent, AgentFailure>> {
+        (*self).grant_consent(consent)
+    }
+
+    fn find_consent<'a>(
+        &'a self,
+        consent_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<RecipientConsent>, AgentFailure>> {
+        (*self).find_consent(consent_id)
+    }
+
+    fn revoke_consent<'a>(&'a self, consent_id: Uuid) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        (*self).revoke_consent(consent_id)
+    }
+
+    fn prune_expired<'a>(&'a self, now_unix_ms: i64) -> BoxFuture<'a, Result<u64, AgentFailure>> {
+        (*self).prune_expired(now_unix_ms)
+    }
+}
+
+impl<T: RecipientConsentStore + Send + ?Sized> RecipientConsentStore for std::sync::Arc<T> {
+    fn grant_consent<'a>(
+        &'a self,
+        consent: RecipientConsent,
+    ) -> BoxFuture<'a, Result<RecipientConsent, AgentFailure>> {
+        (**self).grant_consent(consent)
+    }
+
+    fn find_consent<'a>(
+        &'a self,
+        consent_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<RecipientConsent>, AgentFailure>> {
+        (**self).find_consent(consent_id)
+    }
+
+    fn revoke_consent<'a>(&'a self, consent_id: Uuid) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        (**self).revoke_consent(consent_id)
+    }
+
+    fn prune_expired<'a>(&'a self, now_unix_ms: i64) -> BoxFuture<'a, Result<u64, AgentFailure>> {
+        (**self).prune_expired(now_unix_ms)
+    }
+}
+
+impl<T: ModelConnectionAdmission + ?Sized> ModelConnectionAdmission for &T {
+    fn admit(&self) -> Result<AdmittedModelConnection, AgentFailure> {
+        (*self).admit()
+    }
+}
+
+impl<T: ModelConnectionAdmission + ?Sized> ModelConnectionAdmission for std::sync::Arc<T> {
+    fn admit(&self) -> Result<AdmittedModelConnection, AgentFailure> {
+        (**self).admit()
+    }
+}
+
+impl<T: RecipientConsentClock + ?Sized> RecipientConsentClock for &T {
+    fn now(&self) -> DateTime<Utc> {
+        (*self).now()
+    }
+}
+
+impl<T: RecipientConsentClock + ?Sized> RecipientConsentClock for std::sync::Arc<T> {
+    fn now(&self) -> DateTime<Utc> {
+        (**self).now()
     }
 }

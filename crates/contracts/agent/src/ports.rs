@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::{
     AgentFailure, AllowedCatalog, AuthorizedModelProjection, DelegationExecutionContext,
-    DelegationRequest, DependencyCoverage, ModelProjectionRequest, ModelRequest, ModelResponse,
-    ModelStep, ProjectionRef, ReplayReceipt, TaskReceipt, ToolCall, ToolResult,
+    DelegationRequest, DependencyCoverage, ModelProjectionRequest, ModelRequest, ModelStep,
+    ProjectionRef, ReplayReceipt, TaskReceipt, ToolCall, ToolResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -83,12 +83,14 @@ impl ValidatedModelBatch {
             || self.batch_id.is_nil()
             || self.steps.is_empty()
             || self.steps.len() > 1024
-            || self.tool_revisions.iter().any(|pinned| {
-                pinned.tool_id.trim().is_empty() || pinned.definition_revision == 0
-            })
-            || self.agent_revisions.iter().any(|pinned| {
-                pinned.agent_id.trim().is_empty() || pinned.definition_revision == 0
-            })
+            || self
+                .tool_revisions
+                .iter()
+                .any(|pinned| pinned.tool_id.trim().is_empty() || pinned.definition_revision == 0)
+            || self
+                .agent_revisions
+                .iter()
+                .any(|pinned| pinned.agent_id.trim().is_empty() || pinned.definition_revision == 0)
             || has_duplicate_tool_pins(&self.tool_revisions)
             || has_duplicate_agent_pins(&self.agent_revisions)
             || self.projection_coverage.validate().is_err()
@@ -187,11 +189,16 @@ pub trait ModelProjectionPort: Sync {
 }
 
 pub trait ModelPort: Sync {
+    /// One typed model call: either the model answered, or the exact
+    /// selected route needs contextual recipient consent before any
+    /// transmission. Hard failures (policy prohibition, transport errors,
+    /// invalid input) stay Err; only the recoverable consent case is
+    /// Ok(NeedsUserAction). No parallel generate path exists.
     fn generate<'a>(
         &'a self,
         request: ModelRequest,
         scope: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::ModelCallOutcome, AgentFailure>>;
 }
 
 pub trait ToolPort: Sync {

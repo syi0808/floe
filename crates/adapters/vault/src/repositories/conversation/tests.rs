@@ -12,9 +12,9 @@ use floe_agent_contract::prompts::{
 use floe_agent_contract::{
     AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture, ContextEnvelope,
     ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
-    DependencyCoverage, ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, PinnedToolRevision, ProjectionRef, RoleSpec,
-    RuntimeContext, ScopedInstructions, ToolCall, ToolDescriptor, ToolPort, ToolResult,
+    DependencyCoverage, ModelCallOutcome, ModelPort, ModelProjectionPort, ModelProjectionRequest,
+    ModelRequest, ModelResponse, ModelStep, ModelUsage, PinnedToolRevision, ProjectionRef,
+    RoleSpec, RuntimeContext, ScopedInstructions, ToolCall, ToolDescriptor, ToolPort, ToolResult,
     ValidatedModelBatch,
 };
 use floe_conversation::SessionStore;
@@ -137,10 +137,10 @@ impl ModelPort for Model {
         &'a self,
         request: ModelRequest,
         _: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: vec![ModelStep::Answer {
                     text: "encrypted answer".into(),
@@ -150,7 +150,7 @@ impl ModelPort for Model {
                     tokens: 2,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }
@@ -165,10 +165,10 @@ impl ModelPort for FinalizingModel {
         &'a self,
         request: ModelRequest,
         _: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: if call == 0 {
                     vec![ModelStep::CallTool {
@@ -189,7 +189,7 @@ impl ModelPort for FinalizingModel {
                     tokens: 2,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }
@@ -209,10 +209,10 @@ impl ModelPort for ToolThenAnswerModel {
         &'a self,
         request: ModelRequest,
         _: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: if call == 0 {
                     vec![ModelStep::CallTool {
@@ -230,7 +230,7 @@ impl ModelPort for ToolThenAnswerModel {
                     tokens: 2,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }
@@ -388,6 +388,8 @@ fn request(
         session_id,
         expected_session_revision: 0,
         principal: String::new(),
+        device_id: "test-device".into(),
+        now_unix_ms: 1_700_000_000_000,
         prompt: "hello".into(),
         mode: TurnMode::New,
         retry_of: None,
@@ -1715,11 +1717,11 @@ impl ModelPort for KeyRevokingModel {
         &'a self,
         request: ModelRequest,
         _: &'a floe_execution::ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.keys.0.lock().unwrap().clear();
         Box::pin(async move {
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: vec![ModelStep::Answer {
                     text: "must not publish after key loss".into(),
@@ -1729,7 +1731,7 @@ impl ModelPort for KeyRevokingModel {
                     tokens: 10,
                     cost_micros: 0,
                 },
-            })
+            }))
         })
     }
 }
@@ -2186,13 +2188,19 @@ fn explicit_terminal_interactions_project_once_and_model_answers_never_do() {
     terminal.validate().unwrap();
     let messages = super::terminal_messages(run_id, &terminal).unwrap();
     assert_eq!(messages.len(), 2);
-    assert!(matches!(messages[0], AgentMessage::Assistant { .. }));
+    // Owner-set linkage projects once, before the Assistant answer, so a
+    // Completed transcript still ends with its answer.
     assert!(matches!(
-        messages[1],
+        messages[0],
         AgentMessage::Interaction {
             interaction_kind: UserInteractionKind::ProcessingRecipient,
             ..
         }
+    ));
+    assert!(matches!(
+        messages[1],
+        AgentMessage::Assistant { ref text, .. }
+            if text == floe_conversation::MODEL_CONSENT_LIMITATION
     ));
 
     // Without owner-set linkage the same forged Answer projects nothing.

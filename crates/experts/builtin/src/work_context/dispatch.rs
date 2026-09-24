@@ -6,7 +6,8 @@ use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
 
 use floe_context_contract::WorkContextView;
 
-use crate::work_context::{WorkContextExpertResult, run_work_context_expert};
+use crate::shared::ExpertJudgment;
+use crate::work_context::run_work_context_expert;
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
     granted_context,
@@ -33,7 +34,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             );
         }
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::WorkContext.result_artifact_name(),
                 BlockedExpertStatus::NeedsUserAction,
@@ -47,13 +50,23 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     let view: WorkContextView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let model = host.model();
-    let result: WorkContextExpertResult = run_work_context_expert(
+    let result = match run_work_context_expert(
         model,
         host.policy(),
         request.portfolio_invocation(granted_context(host, request)),
         view,
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(result) => result,
+        ExpertJudgment::Blocked(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::WorkContext.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Model approval needs your review, so there is no work assessment.".into(),
+            );
+        }
+    };
     drop(source_view);
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::WorkContext.result_artifact_name(),

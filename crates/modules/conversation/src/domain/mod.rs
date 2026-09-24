@@ -511,7 +511,10 @@ impl RunTerminal {
                 .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
             || self.steps.len() > floe_agent_contract::MAX_AGENT_MESSAGES
             || self.interactions.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
-            || self.interactions.iter().any(|reference| reference.validate().is_err())
+            || self
+                .interactions
+                .iter()
+                .any(|reference| reference.validate().is_err())
         {
             return Err(AgentFailure::InvalidInput);
         }

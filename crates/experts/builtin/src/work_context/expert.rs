@@ -5,12 +5,14 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::{WorkContextView, validate_work_context_view, work_context_evidence};
 
 use crate::prompts::work_context_expert_prompt;
-use crate::shared::{PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary};
+use crate::shared::{
+    ExpertJudgment, PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -47,9 +49,9 @@ pub async fn run_work_context_expert<Model: ExpertModel>(
     policy: &InferencePolicyDecision,
     invocation: PortfolioExpertInvocation,
     view: WorkContextView,
-) -> Result<WorkContextExpertResult, AgentFailure> {
+) -> Result<ExpertJudgment<WorkContextExpertResult>, AgentFailure> {
     validate_work_context_view(&view, invocation.current_time_unix_ms)?;
-    let output: WorkOutput = run_portfolio_model(
+    let output: WorkOutput = match run_portfolio_model(
         model,
         policy,
         ExpertModelRequirement::RemoteOnly,
@@ -57,7 +59,13 @@ pub async fn run_work_context_expert<Model: ExpertModel>(
         work_context_evidence(&view)?,
         work_context_expert_prompt(),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(output) => output,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     validate_summary(&output.summary)?;
     if output.insights.len() > 16 {
         return Err(AgentFailure::BudgetExceeded);
@@ -85,7 +93,7 @@ pub async fn run_work_context_expert<Model: ExpertModel>(
             return Err(AgentFailure::InvalidModelOutput);
         }
     }
-    Ok(WorkContextExpertResult {
+    Ok(ExpertJudgment::Decided(WorkContextExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handle: view.source_handle,
@@ -93,5 +101,5 @@ pub async fn run_work_context_expert<Model: ExpertModel>(
         expires_at_unix_ms: view.expires_at_unix_ms,
         summary: output.summary,
         insights: output.insights,
-    })
+    }))
 }

@@ -1,7 +1,8 @@
-//! Trusted publication of owner-produced source requirements.
+//! Trusted publication of owner-produced requirements.
 //!
 //! Context and the delegated host report recoverable source blockers as typed
-//! outcomes. This boundary converts each owner-produced requirement into the
+//! outcomes, and the delegated model host reports a blocked dispatch the same
+//! way. This boundary converts each owner-produced requirement into the
 //! reviewed descriptor the person's decision binds, publishes it under the
 //! admitted origin through Conversation, and settles the blocked Tool result
 //! with safe references only. Model-produced JSON — even with a matching
@@ -250,6 +251,58 @@ fn interaction_status(state: &floe_conversation::InteractionState) -> UserIntera
         floe_conversation::InteractionState::Superseded { .. } => UserInteractionStatus::Superseded,
         floe_conversation::InteractionState::Expired => UserInteractionStatus::Expired,
     }
+}
+
+/// Publish the durable card for one expert model blockage under the Task
+/// origin and return the trusted ref the endpoint attaches.
+///
+/// The requirement is the trusted host-captured dispatch the model owner
+/// blocked on, never expert-authored content. Publication replays
+/// deterministically: an identical blockage rejoins the same card.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_model_blocker<Runs, Interactions>(
+    runs: &Runs,
+    interactions: &Interactions,
+    principal: &str,
+    session_id: Uuid,
+    origin_run_id: RunId,
+    task_id: Uuid,
+    device_id: &str,
+    requirement: floe_context_contract::ProcessingRequirement,
+    now_unix_ms: i64,
+) -> Result<UserInteractionRef, AgentFailure>
+where
+    Runs: floe_conversation::ConversationRepository + ?Sized,
+    Interactions: floe_conversation::InteractionRepository + ?Sized,
+{
+    let admission = floe_conversation::publish_model_requirement(
+        runs,
+        interactions,
+        floe_conversation::PublishModelRequirement {
+            principal: principal.to_owned(),
+            session_id,
+            origin_run_id,
+            origin: floe_conversation::InteractionOrigin::Task {
+                task_id,
+                capability_call_id: None,
+            },
+            requirement,
+            device_id: device_id.to_owned(),
+        },
+        now_unix_ms,
+    )
+    .await?;
+    let record = match admission {
+        floe_conversation::PublishAdmission::Created(record)
+        | floe_conversation::PublishAdmission::Existing(record) => record,
+    };
+    let reference = UserInteractionRef {
+        interaction_id: record.id,
+        kind: record.kind,
+        status: interaction_status(&record.state),
+    };
+    reference.validate()?;
+    Ok(reference)
 }
 
 /// Publish every blocker under the admitted origin and return the safe refs.

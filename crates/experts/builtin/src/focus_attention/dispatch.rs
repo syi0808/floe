@@ -6,7 +6,8 @@
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::SourceReadOutcome;
 
-use crate::focus_attention::{FocusContextViews, FocusExpertResult, run_focus_expert_with_views};
+use crate::focus_attention::{FocusContextViews, run_focus_expert_with_views};
+use crate::shared::ExpertJudgment;
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
     granted_context,
@@ -29,7 +30,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             );
         }
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
                 BlockedExpertStatus::NeedsUserAction,
@@ -50,11 +53,13 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         SourceReadOutcome::Ready(views) => views,
         SourceReadOutcome::Unavailable(_) => vec![],
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             vec![]
         }
     };
-    let result: FocusExpertResult = run_focus_expert_with_views(
+    let result = match run_focus_expert_with_views(
         host.model(),
         host.policy(),
         request.personal_invocation(context),
@@ -64,7 +69,17 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             active_work,
         },
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(result) => result,
+        ExpertJudgment::Blocked(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Model approval needs your review, so there is no focus assessment.".into(),
+            );
+        }
+    };
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
         result.summary.clone(),

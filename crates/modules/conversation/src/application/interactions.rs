@@ -168,6 +168,103 @@ where
     interactions.publish_interaction(record).await
 }
 
+/// A blocked model dispatch, ready to publish under its attempted origin.
+#[derive(Clone, Debug)]
+pub struct PublishModelRequirement {
+    pub principal: String,
+    pub session_id: Uuid,
+    pub origin_run_id: RunId,
+    /// The exact attempted origin: Model{attempt_id} for a root or
+    /// finalization dispatch, Task{task_id} for a delegated dispatch.
+    pub origin: InteractionOrigin,
+    pub requirement: floe_agent_contract::ProcessingRequirement,
+    pub device_id: String,
+}
+
+/// Publish the durable card for one blocked model dispatch.
+///
+/// Converts the owner-produced requirement into the reviewed interaction
+/// verbatim, binds the verified calling device, and verifies the attempted
+/// origin against the origin Run's durable journal. The requirement's
+/// lineage must match this execution's Session and origin Run; a mismatch
+/// fails closed. A replay of the identical publication rejoins the same
+/// row. Returns the published (or rejoined) interaction.
+pub async fn publish_model_requirement<Runs, Interactions>(
+    runs: &Runs,
+    interactions: &Interactions,
+    request: PublishModelRequirement,
+    now_unix_ms: i64,
+) -> Result<PublishAdmission, AgentFailure>
+where
+    Runs: ConversationRepository + ?Sized,
+    Interactions: InteractionRepository + ?Sized,
+{
+    request
+        .requirement
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    if request.principal.trim() != request.principal
+        || request.principal.is_empty()
+        || request.principal.len() > 256
+        || request.principal.chars().any(char::is_control)
+        || request.session_id.is_nil()
+        || !request.origin_run_id.is_valid()
+        || request.device_id.trim() != request.device_id
+        || request.device_id.is_empty()
+        || request.device_id.len() > 256
+        || request.device_id.chars().any(char::is_control)
+        || now_unix_ms < 0
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    request
+        .origin
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    // The lineage binds this explicit intent: a requirement minted for
+    // another Session or origin never publishes here.
+    if request.requirement.lineage().session_id() != request.session_id
+        || request.requirement.lineage().origin_run_id() != request.origin_run_id.as_uuid()
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    publish_interaction(
+        runs,
+        interactions,
+        PublishInteractionRequest {
+            principal: request.principal,
+            session_id: request.session_id,
+            origin_run_id: request.origin_run_id,
+            origin: request.origin,
+            kind: UserInteractionKind::ProcessingRecipient,
+            requirement: InteractionRequirement {
+                kind: crate::InteractionRequirementKind::ApproveProcessingRecipient,
+                // For a processing requirement the source slot carries the
+                // exact recipient identity under review.
+                source_id: request.requirement.recipient().to_owned(),
+                connection_id: None,
+                consumer: request.requirement.consumer().to_owned(),
+                purpose: request.requirement.purpose().to_owned(),
+                inline: true,
+            },
+            target: ReviewedTarget::RecipientConsent(crate::RecipientConsentTarget {
+                recipient: request.requirement.recipient().to_owned(),
+                profile_id: request.requirement.profile_id().to_owned(),
+                purpose: request.requirement.purpose().to_owned(),
+                consumer: request.requirement.consumer().to_owned(),
+                input_data_classes: request.requirement.input_data_classes().to_vec(),
+                source_scopes: request.requirement.source_scopes().to_vec(),
+                lineage: request.requirement.lineage(),
+                device_id: request.device_id,
+                projection_ref: request.requirement.projection_ref(),
+                projection_revision: request.requirement.projection_revision(),
+            }),
+        },
+        now_unix_ms,
+    )
+    .await
+}
+
 /// Decide a Pending interaction, or rejoin an identical recorded decision.
 ///
 /// Deciding a lapsed interaction persists Expired and conflicts; it never

@@ -11,13 +11,14 @@ use uuid::Uuid;
 use floe_agent_contract::prompts::PromptAssembly;
 use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
-    ExpertModelRequirement, SessionProtection,
+    ExpertModelOutcome, ExpertModelRequirement, SessionProtection,
 };
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
     CalendarContextView, CommunicationView, ContextEvidence, ContextIssueReason, ContextSource,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, SourceReadOutcome, calendar_context_evidence,
-    communication_context_evidence, validate_calendar_context_view, validate_communication_view,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, ProcessingRequirement, SourceReadOutcome,
+    calendar_context_evidence, communication_context_evidence, validate_calendar_context_view,
+    validate_communication_view,
 };
 
 pub(crate) fn optional_calendar_views(
@@ -107,10 +108,21 @@ fn admissible(
     Ok(())
 }
 
+/// What one Expert model call produced for its caller: a decoded judgment,
+/// or the trusted requirement the host must publish before the Expert can
+/// proceed. The Expert reports a blocked-domain judgment and stops; it
+/// never proposes, alters, or publishes the requirement itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExpertJudgment<Output> {
+    Decided(Output),
+    Blocked(ProcessingRequirement),
+}
+
 /// The one bounded model call an Expert makes, stating what execution class it
 /// requires. The pre-check validates the context shape only; transfer
 /// authority is the Access dispatch fence inside canonical Inference, never
-/// this call.
+/// this call. A blocked dispatch passes through untouched: bounds apply to
+/// an answer, and a blockage carries no usage.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_expert_model<Model: ExpertModel>(
     model: &Model,
@@ -127,14 +139,14 @@ pub(crate) async fn run_expert_model<Model: ExpertModel>(
     max_output_bytes: usize,
     deadline: Instant,
     cancellation: &floe_execution::Cancellation,
-) -> Result<ExpertModelAnswer, AgentFailure> {
+) -> Result<ExpertModelOutcome, AgentFailure> {
     policy.authorize(
         floe_agent_contract::ModelPlacement::DeviceLocal,
         SessionProtection::Encrypted,
         &context,
         u64::try_from(current_time_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
     )?;
-    let answer = model
+    let outcome = model
         .answer(ExpertModelCall {
             person_id,
             invocation_id,
@@ -150,13 +162,16 @@ pub(crate) async fn run_expert_model<Model: ExpertModel>(
             cancellation: cancellation.clone(),
         })
         .await?;
-    if answer.schema_version != AGENT_VERSION
-        || answer.used_tokens > max_model_tokens
-        || answer.cost_micros > max_model_cost_micros
-    {
-        return Err(AgentFailure::BudgetExceeded);
+    match &outcome {
+        ExpertModelOutcome::Answered(answer)
+            if answer.schema_version != AGENT_VERSION
+                || answer.used_tokens > max_model_tokens
+                || answer.cost_micros > max_model_cost_micros =>
+        {
+            Err(AgentFailure::BudgetExceeded)
+        }
+        _ => Ok(outcome),
     }
-    Ok(answer)
 }
 
 /// Run the model for an Expert whose evidence is one communication view.
@@ -167,7 +182,7 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
     invocation: &MailExpertInvocation,
     prompt: PromptAssembly,
     mut context: AgentContext,
-) -> Result<ExpertModelAnswer, AgentFailure> {
+) -> Result<ExpertJudgment<ExpertModelAnswer>, AgentFailure> {
     admissible(
         &invocation.assignment,
         invocation.max_output_bytes,
@@ -184,7 +199,7 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
     context
         .evidence
         .push(communication_context_evidence(&invocation.view)?);
-    run_expert_model(
+    let outcome = run_expert_model(
         model,
         policy,
         requirement,
@@ -200,7 +215,11 @@ pub(crate) async fn run_mail_model<Model: ExpertModel>(
         invocation.deadline,
         &invocation.cancellation,
     )
-    .await
+    .await?;
+    Ok(match outcome {
+        ExpertModelOutcome::Answered(answer) => ExpertJudgment::Decided(answer),
+        ExpertModelOutcome::Blocked(requirement) => ExpertJudgment::Blocked(requirement),
+    })
 }
 
 /// Run the model for an Expert whose evidence is one portfolio view.
@@ -211,7 +230,7 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
     invocation: &PortfolioExpertInvocation,
     evidence: ContextEvidence,
     prompt: PromptAssembly,
-) -> Result<Output, AgentFailure> {
+) -> Result<ExpertJudgment<Output>, AgentFailure> {
     admissible(
         &invocation.assignment,
         invocation.max_output_bytes,
@@ -221,7 +240,7 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
     )?;
     let mut context = invocation.context.clone();
     context.evidence.push(evidence);
-    let answer = run_expert_model(
+    let outcome = run_expert_model(
         model,
         policy,
         requirement,
@@ -238,7 +257,13 @@ pub(crate) async fn run_portfolio_model<Output: DeserializeOwned, Model: ExpertM
         &invocation.cancellation,
     )
     .await?;
-    decode_answer(&answer, invocation.max_output_bytes)
+    match outcome {
+        ExpertModelOutcome::Answered(answer) => Ok(ExpertJudgment::Decided(decode_answer(
+            &answer,
+            invocation.max_output_bytes,
+        )?)),
+        ExpertModelOutcome::Blocked(requirement) => Ok(ExpertJudgment::Blocked(requirement)),
+    }
 }
 
 /// Run the model for an Expert whose evidence is the Person's own views.
@@ -249,7 +274,7 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertMo
     invocation: &PersonalExpertInvocation,
     evidence: Vec<ContextEvidence>,
     prompt: PromptAssembly,
-) -> Result<Output, AgentFailure> {
+) -> Result<ExpertJudgment<Output>, AgentFailure> {
     admissible(
         &invocation.assignment,
         invocation.max_output_bytes,
@@ -259,7 +284,7 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertMo
     )?;
     let mut context = invocation.context.clone();
     context.evidence.extend(evidence);
-    let answer = run_expert_model(
+    let outcome = run_expert_model(
         model,
         policy,
         requirement,
@@ -276,7 +301,13 @@ pub(crate) async fn run_personal_model<Output: DeserializeOwned, Model: ExpertMo
         &invocation.cancellation,
     )
     .await?;
-    decode_answer(&answer, invocation.max_output_bytes)
+    match outcome {
+        ExpertModelOutcome::Answered(answer) => Ok(ExpertJudgment::Decided(decode_answer(
+            &answer,
+            invocation.max_output_bytes,
+        )?)),
+        ExpertModelOutcome::Blocked(requirement) => Ok(ExpertJudgment::Blocked(requirement)),
+    }
 }
 
 /// The judgment an Expert's one answer carries.

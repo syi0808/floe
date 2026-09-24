@@ -234,10 +234,15 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             &person_id.to_string(),
             &request.device_id,
         )?;
-        let authority = floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
+        let admission = floe_provider_adapters::control::SavedConnectionAdmission::new(
             inputs.connections.clone(),
             person_id.to_string(),
             request.device_id.clone(),
+        );
+        let authority = floe_access::ContextualRecipientAuthority::new(
+            vault,
+            admission,
+            floe_access::SystemConsentClock,
         );
         let model_service = floe_inference::InferenceService::new(provider, resolver, authority);
         // Canonical root projection: Conversation filtering plus Context
@@ -307,6 +312,8 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     session_id,
                     expected_session_revision: request.expected_revision,
                     principal: person_id.to_string(),
+                    device_id: request.device_id.clone(),
+                    now_unix_ms: chrono::Utc::now().timestamp_millis(),
                     prompt: request.text.clone(),
                     mode: inputs.mode.clone(),
                     retry_of,
@@ -444,7 +451,7 @@ mod tests {
     };
     use super::interaction_publication::PublishingToolPort;
     use floe_agent_contract::ModelPlacement;
-    use floe_agent_contract::{ModelRequest, ModelResponse};
+    use floe_agent_contract::{ModelCallOutcome, ModelRequest, ModelResponse};
     use floe_context::AttentionView;
     use floe_conversation::AgentMessage;
     use floe_conversation::{ConversationRepository, InteractionRepository};
@@ -806,7 +813,7 @@ mod tests {
             constraint: floe_inference::InferenceExecutionConstraint,
         ) -> floe_agent_contract::BoxFuture<
             'a,
-            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+            Result<floe_agent_contract::ModelCallOutcome, AgentFailure>,
         > {
             self.calls
                 .lock()
@@ -819,17 +826,19 @@ mod tests {
                 .pop_front()
                 .expect("canned expert answer");
             Box::pin(async move {
-                Ok(floe_agent_contract::ModelResponse {
-                    attempt_id: request.attempt_id,
-                    steps: vec![floe_agent_contract::ModelStep::Answer {
-                        text: answer,
-                        artifacts: vec![],
-                    }],
-                    usage: floe_agent_contract::ModelUsage {
-                        tokens: 64,
-                        cost_micros: 0,
+                Ok(floe_agent_contract::ModelCallOutcome::Ready(
+                    floe_agent_contract::ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![floe_agent_contract::ModelStep::Answer {
+                            text: answer,
+                            artifacts: vec![],
+                        }],
+                        usage: floe_agent_contract::ModelUsage {
+                            tokens: 64,
+                            cost_micros: 0,
+                        },
                     },
-                })
+                ))
             })
         }
     }
@@ -950,7 +959,7 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a floe_execution::ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
                 let context = &request.projection.envelope.contextual_data;
                 assert!(context.memories.is_empty());
@@ -961,7 +970,7 @@ mod tests {
                 });
                 let attempt_id = request.attempt_id;
                 self.requests.lock().unwrap().push(request);
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id,
                     steps: vec![floe_agent_contract::ModelStep::Answer {
                         text: if asks_memory {
@@ -976,7 +985,7 @@ mod tests {
                         tokens: 1,
                         cost_micros: 0,
                     },
-                })
+                }))
             })
         }
     }
@@ -1057,6 +1066,8 @@ mod tests {
                     session_id: session.id,
                     expected_session_revision: session.revision,
                     principal: person_id.to_string(),
+                    device_id: "test-device".into(),
+                    now_unix_ms: 1_700_000_000_000,
                     prompt: text.into(),
                     mode: floe_conversation::TurnMode::New,
                     retry_of: None,
@@ -1525,10 +1536,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let floe_context_contract::SourceReadOutcome::Ready((
-            attention_view,
-            attention_dependency,
-        )) = outcome
+        let floe_context_contract::SourceReadOutcome::Ready((attention_view, attention_dependency)) =
+            outcome
         else {
             panic!("admitted attention read must stay ready");
         };
@@ -2085,7 +2094,9 @@ mod tests {
         assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
         assert_eq!(
             stored.origin,
-            floe_conversation::InteractionOrigin::Tool { call_id: call.call_id }
+            floe_conversation::InteractionOrigin::Tool {
+                call_id: call.call_id
+            }
         );
         assert!(matches!(
             stored.target,
@@ -3467,8 +3478,18 @@ mod tests {
     struct B2AllowAuthority;
 
     impl floe_access::ModelDispatchRecipientAuthority for B2AllowAuthority {
-        fn check_recipient(&self, _recipient: &str) -> Result<(), AgentFailure> {
-            Ok(())
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a floe_access::ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move { Ok(floe_access::RecipientCheckOutcome::Granted) })
         }
     }
 
@@ -3744,7 +3765,9 @@ mod tests {
             input_data_classes: vec![DataClass::Personal],
             purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
             consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+            profile_id: "b2-device".into(),
             target: floe_access::ModelDispatchTarget::Device,
+            lineage: None,
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
             cancellation: Cancellation::default(),
         };
@@ -3758,7 +3781,9 @@ mod tests {
         // no unauthorized projection.
         assert_eq!(
             floe_access::consume_model_dispatch(permit).await.err(),
-            Some(AgentFailure::AccessReviewRequired)
+            Some(floe_access::ModelDispatchDenial::Hard(
+                AgentFailure::AccessReviewRequired
+            ))
         );
         // End to end through InferenceService: dispatch denies, the provider
         // is never posted, and nothing is charged.
@@ -3782,6 +3807,7 @@ mod tests {
                     consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
                     preferred_profile_id: None,
                     replay: vec![],
+                    lineage: None,
                 },
                 &scope,
             )
@@ -3901,6 +3927,7 @@ mod tests {
                     consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
                     preferred_profile_id: None,
                     replay: vec![],
+                    lineage: None,
                 },
                 &scope,
             )

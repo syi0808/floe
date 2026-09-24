@@ -4,7 +4,7 @@ use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::PersonId;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
-    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome,
     ExpertModelRequirement, InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, DataClass, ModelPlacement, TransferConsent};
@@ -27,6 +27,13 @@ use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
 const NOW: i64 = 1_789_000_000_000;
+
+fn decided<Output>(judgment: floe_experts_builtin::ExpertJudgment<Output>) -> Output {
+    match judgment {
+        floe_experts_builtin::ExpertJudgment::Decided(output) => output,
+        floe_experts_builtin::ExpertJudgment::Blocked(_) => panic!("test model must answer"),
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,16 +65,16 @@ impl ExpertModel for Model {
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
-    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         let answer = self.outputs.lock().unwrap().pop_front().unwrap();
         self.calls.lock().unwrap().push(call);
         Box::pin(async move {
-            Ok(ExpertModelAnswer {
+            Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: AGENT_VERSION,
                 answer,
                 used_tokens: 64,
                 cost_micros: 0,
-            })
+            }))
         })
     }
 }
@@ -121,21 +128,25 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
         serde_json::from_str(include_str!("fixtures/mail_expert_corpus.json")).unwrap();
     for scenario in scenarios {
         let model = Model::new([scenario.commitments_output, scenario.communication_output]);
-        let commitments = run_commitments_expert_with_views(
-            &model,
-            &policy(),
-            invocation(&scenario.assignment, scenario.item.clone()),
-            CommitmentsContextViews::default(),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{} commitments: {error:?}", scenario.id));
-        let communication = run_communication_expert(
-            &model,
-            &policy(),
-            invocation(&scenario.assignment, scenario.item),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{} communication: {error:?}", scenario.id));
+        let commitments = decided(
+            run_commitments_expert_with_views(
+                &model,
+                &policy(),
+                invocation(&scenario.assignment, scenario.item.clone()),
+                CommitmentsContextViews::default(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{} commitments: {error:?}", scenario.id)),
+        );
+        let communication = decided(
+            run_communication_expert(
+                &model,
+                &policy(),
+                invocation(&scenario.assignment, scenario.item),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{} communication: {error:?}", scenario.id)),
+        );
         assert_eq!(commitments.findings.len(), scenario.expected_commitments);
         assert_eq!(commitments.source_handles, ["mail:corpus"]);
         assert_eq!(
@@ -249,9 +260,11 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
         ]
     })]);
 
-    let result = run_commitments_expert_with_views(&model, &policy(), invocation, views)
-        .await
-        .unwrap();
+    let result = decided(
+        run_commitments_expert_with_views(&model, &policy(), invocation, views)
+            .await
+            .unwrap(),
+    );
 
     assert_eq!(result.expires_at_unix_ms, NOW + 200_000);
     assert_eq!(
@@ -328,9 +341,11 @@ async fn calendar_only_evidence_preserves_calendar_provenance() {
         }]
     })]);
 
-    let result = run_commitments_expert_with_views(&model, &policy(), invocation, views)
-        .await
-        .unwrap();
+    let result = decided(
+        run_commitments_expert_with_views(&model, &policy(), invocation, views)
+            .await
+            .unwrap(),
+    );
 
     assert_eq!(result.source_handles, ["calendar:only"]);
     assert_eq!(result.expires_at_unix_ms, NOW + 250_000);
@@ -413,4 +428,62 @@ fn corpus_uses_observed_only_for_explicit_evidence() {
         serde_json::from_value(scenarios[0].commitments_output["findings"].clone()).unwrap();
     assert_eq!(output[0].epistemic_status, FindingEpistemicStatus::Observed);
     assert_eq!(output[0].confidence_millis, 1000);
+}
+
+struct Blocking {
+    requirement: floe_context_contract::ProcessingRequirement,
+}
+
+impl ExpertModel for Blocking {
+    fn answer<'a>(
+        &'a self,
+        _: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
+        let requirement = self.requirement.clone();
+        Box::pin(async move { Ok(ExpertModelOutcome::Blocked(requirement)) })
+    }
+}
+
+fn blocked_requirement() -> floe_context_contract::ProcessingRequirement {
+    floe_context_contract::ProcessingRequirement::try_new(
+        "model.example",
+        "server-model",
+        "everyday_assistance",
+        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        vec![DataClass::Personal],
+        vec![],
+        Uuid::new_v4(),
+        1,
+        floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn blocked_model_call_passes_the_requirement_through_untouched() {
+    let requirement = blocked_requirement();
+    let model = Blocking {
+        requirement: requirement.clone(),
+    };
+    let item = CommunicationItem {
+        evidence_handle: "mail:evidence".into(),
+        thread_handle: "mail:thread".into(),
+        received_unix_ms: NOW - 1,
+        from: "alex@example.com".into(),
+        to: "person@example.com".into(),
+        subject: "Possible follow-up".into(),
+        snippet: "Maybe check in next week.".into(),
+        labels: vec!["INBOX".into()],
+    };
+    assert_eq!(
+        run_commitments_expert_with_views(
+            &model,
+            &policy(),
+            invocation("Assess", item),
+            CommitmentsContextViews::default(),
+        )
+        .await
+        .unwrap(),
+        floe_experts_builtin::ExpertJudgment::Blocked(requirement)
+    );
 }

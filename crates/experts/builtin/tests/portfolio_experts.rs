@@ -4,7 +4,7 @@ use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::PersonId;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
-    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome,
     ExpertModelRequirement, InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
@@ -18,6 +18,13 @@ use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
 const NOW: i64 = 1_789_000_000_000;
+
+fn decided<Output>(judgment: floe_experts_builtin::ExpertJudgment<Output>) -> Output {
+    match judgment {
+        floe_experts_builtin::ExpertJudgment::Decided(output) => output,
+        floe_experts_builtin::ExpertJudgment::Blocked(_) => panic!("test model must answer"),
+    }
+}
 
 struct Model {
     outputs: Mutex<VecDeque<String>>,
@@ -37,16 +44,16 @@ impl ExpertModel for Model {
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
-    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         let answer = self.outputs.lock().unwrap().pop_front().unwrap();
         self.calls.lock().unwrap().push(call);
         Box::pin(async move {
-            Ok(ExpertModelAnswer {
+            Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: AGENT_VERSION,
                 answer,
                 used_tokens: 64,
                 cost_micros: 0,
-            })
+            }))
         })
     }
 }
@@ -147,12 +154,16 @@ async fn work_and_life_experts_return_source_linked_advice_without_action_author
             }]
         }),
     ]);
-    let work = run_work_context_expert(&model, &policy(), invocation(), work())
-        .await
-        .unwrap();
-    let logistics = run_life_logistics_expert(&model, &policy(), invocation(), logistics())
-        .await
-        .unwrap();
+    let work = decided(
+        run_work_context_expert(&model, &policy(), invocation(), work())
+            .await
+            .unwrap(),
+    );
+    let logistics = decided(
+        run_life_logistics_expert(&model, &policy(), invocation(), logistics())
+            .await
+            .unwrap(),
+    );
     assert_eq!(work.scope_handle, "workspace:selected");
     assert_eq!(logistics.preparations[0].urgency, LogisticsUrgency::Soon);
     assert!(logistics.preparations[0].requires_approval);
@@ -207,14 +218,14 @@ async fn an_expert_refuses_an_answer_that_overspends_or_overflows_its_bound() {
         fn answer<'a>(
             &'a self,
             _: ExpertModelCall,
-        ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+        ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
             Box::pin(async move {
-                Ok(ExpertModelAnswer {
+                Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                     schema_version: AGENT_VERSION,
                     answer: self.answer.clone(),
                     used_tokens: self.used_tokens,
                     cost_micros: self.cost_micros,
-                })
+                }))
             })
         }
     }
@@ -259,5 +270,44 @@ async fn an_expert_refuses_an_answer_that_overspends_or_overflows_its_bound() {
             .await
             .unwrap_err(),
         AgentFailure::BudgetExceeded
+    );
+}
+
+struct Blocking {
+    requirement: floe_context_contract::ProcessingRequirement,
+}
+
+impl ExpertModel for Blocking {
+    fn answer<'a>(
+        &'a self,
+        _: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
+        let requirement = self.requirement.clone();
+        Box::pin(async move { Ok(ExpertModelOutcome::Blocked(requirement)) })
+    }
+}
+
+#[tokio::test]
+async fn blocked_model_call_passes_the_requirement_through_untouched() {
+    let requirement = floe_context_contract::ProcessingRequirement::try_new(
+        "model.example",
+        "server-model",
+        "everyday_assistance",
+        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        vec![floe_agent_contract::DataClass::Personal],
+        vec![],
+        Uuid::new_v4(),
+        1,
+        floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap(),
+    )
+    .unwrap();
+    let model = Blocking {
+        requirement: requirement.clone(),
+    };
+    assert_eq!(
+        run_work_context_expert(&model, &policy(), invocation(), work())
+            .await
+            .unwrap(),
+        floe_experts_builtin::ExpertJudgment::Blocked(requirement)
     );
 }

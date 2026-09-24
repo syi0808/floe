@@ -6,9 +6,8 @@
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::SourceReadOutcome;
 
-use crate::relationships::{
-    RelationshipsContextViews, RelationshipsExpertResult, run_relationships_expert_with_views,
-};
+use crate::relationships::{RelationshipsContextViews, run_relationships_expert_with_views};
+use crate::shared::ExpertJudgment;
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
     granted_context,
@@ -32,17 +31,18 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             );
         }
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Relationships.result_artifact_name(),
                 BlockedExpertStatus::NeedsUserAction,
-                "Contacts access needs your review, so there is no relationship assessment."
-                    .into(),
+                "Contacts access needs your review, so there is no relationship assessment.".into(),
             );
         }
     };
     let confirmed_interactions = host.confirmed_interaction_views(request, &people).await?;
-    let result: RelationshipsExpertResult = run_relationships_expert_with_views(
+    let result = match run_relationships_expert_with_views(
         host.model(),
         host.policy(),
         request.personal_invocation(granted_context(host, request)),
@@ -51,7 +51,17 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             confirmed_interactions,
         },
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(result) => result,
+        ExpertJudgment::Blocked(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Model approval needs your review, so there is no relationship assessment.".into(),
+            );
+        }
+    };
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::Relationships.result_artifact_name(),
         result.summary.clone(),

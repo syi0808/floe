@@ -1,10 +1,14 @@
 use chrono::Utc;
-use floe_context_contract::{DataClass, DependencyCoverage, ProcessingRestriction};
+use floe_context_contract::{
+    DataClass, DependencyCoverage, ProcessingRequirement, ProcessingRestriction,
+    ProcessingSourceScope,
+};
 use floe_kernel::AgentFailure;
 
 use crate::ports::dependency_authorization::{DependencyAuthorization, DependencyResolver};
 use crate::ports::model_dispatch::{
-    ModelDispatchRecipientAuthority, ModelDispatchRequest, ModelDispatchTarget,
+    ModelDispatchDenial, ModelDispatchRecipientAuthority, ModelDispatchRequest,
+    ModelDispatchTarget, RecipientCheckOutcome,
 };
 
 /// Admitted but not yet handed off to transport.
@@ -27,7 +31,7 @@ pub async fn admit_model_dispatch<'resolver, 'authority, Resolver, Authority>(
     request: ModelDispatchRequest,
     resolver: &'resolver Resolver,
     authority: &'authority Authority,
-) -> Result<ModelDispatchPermit<'resolver, 'authority, Resolver, Authority>, AgentFailure>
+) -> Result<ModelDispatchPermit<'resolver, 'authority, Resolver, Authority>, ModelDispatchDenial>
 where
     Resolver: DependencyResolver,
     Authority: ModelDispatchRecipientAuthority,
@@ -42,7 +46,7 @@ where
 
 pub async fn consume_model_dispatch<'resolver, 'authority, Resolver, Authority>(
     permit: ModelDispatchPermit<'resolver, 'authority, Resolver, Authority>,
-) -> Result<ModelDispatchFence<'resolver, 'authority, Resolver, Authority>, AgentFailure>
+) -> Result<ModelDispatchFence<'resolver, 'authority, Resolver, Authority>, ModelDispatchDenial>
 where
     Resolver: DependencyResolver,
     Authority: ModelDispatchRecipientAuthority,
@@ -69,29 +73,35 @@ where
     Resolver: DependencyResolver,
     Authority: ModelDispatchRecipientAuthority,
 {
-    // After the response, before it leaves Inference.
-    authorize_request(&fence.request, fence.resolver, fence.authority).await
+    // After the response, before it leaves Inference. Any denial here
+    // suppresses the already-transmitted response; a missing consent never
+    // becomes a re-review for transmitted bytes.
+    authorize_request(&fence.request, fence.resolver, fence.authority)
+        .await
+        .map_err(ModelDispatchDenial::into_hard)
 }
 
 async fn authorize_request<Resolver, Authority>(
     request: &ModelDispatchRequest,
     resolver: &Resolver,
     authority: &Authority,
-) -> Result<(), AgentFailure>
+) -> Result<(), ModelDispatchDenial>
 where
     Resolver: DependencyResolver,
     Authority: ModelDispatchRecipientAuthority,
 {
-    request.validate()?;
+    request.validate().map_err(ModelDispatchDenial::Hard)?;
     if request.cancellation.is_cancelled() {
-        return Err(AgentFailure::Cancelled);
+        return Err(ModelDispatchDenial::Hard(AgentFailure::Cancelled));
     }
     if tokio::time::Instant::now() >= request.deadline {
-        return Err(AgentFailure::DeadlineExceeded);
+        return Err(ModelDispatchDenial::Hard(AgentFailure::DeadlineExceeded));
     }
-    deny_forbidden_data_classes(request)?;
+    deny_forbidden_data_classes(request).map_err(ModelDispatchDenial::Hard)?;
     match &request.target {
-        ModelDispatchTarget::Device => authorize_device(request, resolver).await,
+        ModelDispatchTarget::Device => authorize_device(request, resolver)
+            .await
+            .map_err(ModelDispatchDenial::Hard),
         ModelDispatchTarget::External { recipient } => {
             authorize_external(request, recipient, resolver, authority).await
         }
@@ -146,30 +156,89 @@ async fn authorize_external<Resolver, Authority>(
     recipient: &str,
     resolver: &Resolver,
     authority: &Authority,
-) -> Result<(), AgentFailure>
+) -> Result<(), ModelDispatchDenial>
 where
     Resolver: DependencyResolver,
     Authority: ModelDispatchRecipientAuthority,
 {
-    // Exact-recipient authority first: a revoked recipient denies before
+    // Exact-recipient authority first: a hard denial (revoked recipient,
+    // failed pairing, missing lineage, store failure) denies before
     // dependency detail is consulted.
-    authority.check_recipient(recipient)?;
+    let granted = match authority.check_recipient(request).await {
+        Ok(RecipientCheckOutcome::Granted) => true,
+        Ok(RecipientCheckOutcome::Missing) => false,
+        Err(failure) => return Err(ModelDispatchDenial::Hard(failure)),
+    };
+    // A missing consent is reviewable only when the route is otherwise
+    // admissible: validate the current source/dependency and class
+    // restrictions before deriving any requirement. Dependency failures
+    // keep their original hard failure; only the consent absence itself
+    // is recoverable.
     match &request.coverage {
-        DependencyCoverage::Unknown => Err(AgentFailure::PolicyDenied),
-        DependencyCoverage::Independent => Ok(()),
+        DependencyCoverage::Unknown => return Err(hard()),
+        DependencyCoverage::Independent => {}
         DependencyCoverage::Dependent { dependencies } => {
             let authorization = DependencyAuthorization {
                 deadline: request.deadline,
                 cancellation: request.cancellation.clone(),
             };
             for dependency in dependencies {
-                check_dependency_identity(request, dependency)?;
-                resolver.authorize(dependency, &authorization).await?;
-                check_processing_restriction(dependency, recipient)?;
+                check_dependency_identity(request, dependency)
+                    .map_err(ModelDispatchDenial::Hard)?;
+                resolver
+                    .authorize(dependency, &authorization)
+                    .await
+                    .map_err(ModelDispatchDenial::Hard)?;
+                check_processing_restriction(dependency, recipient)
+                    .map_err(ModelDispatchDenial::Hard)?;
             }
-            Ok(())
         }
     }
+    if granted {
+        return Ok(());
+    }
+    let Some(lineage) = request.lineage else {
+        // No lineage, no review: callers without Conversation lineage
+        // (learner, provider smoke) fail closed without a card.
+        return Err(hard());
+    };
+    let requirement = processing_requirement(request, recipient, lineage).map_err(|_| hard())?;
+    Err(ModelDispatchDenial::NeedsConsent(requirement))
+}
+
+fn hard() -> ModelDispatchDenial {
+    ModelDispatchDenial::Hard(AgentFailure::PolicyDenied)
+}
+
+/// The reviewable requirement for one otherwise admissible dispatch,
+/// derived from the actual request: exact recipient, reviewed profile,
+/// purpose/consumer, data classes, source scopes, projection identity
+/// (audit), and lineage. Never called for prohibited input.
+fn processing_requirement(
+    request: &ModelDispatchRequest,
+    recipient: &str,
+    lineage: floe_context_contract::RecipientLineage,
+) -> Result<ProcessingRequirement, AgentFailure> {
+    let scopes = match &request.coverage {
+        DependencyCoverage::Unknown | DependencyCoverage::Independent => vec![],
+        DependencyCoverage::Dependent { dependencies } => dependencies
+            .iter()
+            .map(ProcessingSourceScope::from_dependency)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AgentFailure::InvalidInput)?,
+    };
+    ProcessingRequirement::try_new(
+        recipient.to_owned(),
+        request.profile_id.clone(),
+        request.purpose.clone(),
+        request.consumer.clone(),
+        request.input_data_classes.clone(),
+        scopes,
+        request.projection_ref,
+        request.projection_revision,
+        lineage,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
 }
 
 fn check_dependency_identity(
@@ -292,14 +361,35 @@ mod tests {
     }
 
     impl ModelDispatchRecipientAuthority for TestAuthority {
-        fn check_recipient(&self, recipient: &str) -> Result<(), AgentFailure> {
-            if recipient.trim().is_empty() {
-                return Err(AgentFailure::InvalidInput);
-            }
-            if self.revoked.load(Ordering::SeqCst) {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            Ok(())
+        fn check_recipient<'a>(
+            &'a self,
+            request: &'a ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<dyn Future<Output = Result<RecipientCheckOutcome, AgentFailure>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                let recipient = request.target.recipient().unwrap_or_default();
+                if recipient.trim().is_empty() {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                if self.revoked.load(Ordering::SeqCst) {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                Ok(RecipientCheckOutcome::Granted)
+            })
+        }
+    }
+
+    struct MissingAuthority;
+
+    impl ModelDispatchRecipientAuthority for MissingAuthority {
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<dyn Future<Output = Result<RecipientCheckOutcome, AgentFailure>> + Send + 'a>,
+        > {
+            Box::pin(async move { Ok(RecipientCheckOutcome::Missing) })
         }
     }
 
@@ -363,7 +453,12 @@ mod tests {
             input_data_classes: vec![DataClass::Personal],
             purpose: "everyday_assistance".into(),
             consumer: "conversation.root".into(),
+            profile_id: "server-model".into(),
             target,
+            lineage: Some(
+                floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                    .unwrap(),
+            ),
             deadline: Instant::now() + std::time::Duration::from_secs(30),
             cancellation: Cancellation::default(),
         }
@@ -373,10 +468,12 @@ mod tests {
         request: ModelDispatchRequest,
         resolver: &TestResolver,
         authority: &TestAuthority,
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<(), ModelDispatchDenial> {
         let permit = admit_model_dispatch(request, resolver, authority).await?;
         let fence = consume_model_dispatch(permit).await?;
-        revalidate_model_dispatch(&fence).await
+        revalidate_model_dispatch(&fence)
+            .await
+            .map_err(ModelDispatchDenial::Hard)
     }
 
     #[tokio::test]
@@ -442,7 +539,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -467,7 +564,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -488,7 +585,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -517,7 +614,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -539,7 +636,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -559,7 +656,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -581,7 +678,7 @@ mod tests {
                     admit_model_dispatch(request, &resolver, &authority)
                         .await
                         .err(),
-                    Some(AgentFailure::PolicyDenied),
+                    Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied)),
                     "class {class:?} must never reach a model"
                 );
             }
@@ -604,7 +701,7 @@ mod tests {
             admit_model_dispatch(request, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
     }
 
@@ -631,7 +728,7 @@ mod tests {
             admit_model_dispatch(dependent, &resolver, &authority)
                 .await
                 .err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
 
         // The original Independent device permit still consumes because it has
@@ -655,11 +752,12 @@ mod tests {
         external_authority.revoke();
         assert_eq!(
             consume_model_dispatch(external_permit).await.err(),
-            Some(AgentFailure::PolicyDenied)
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
         );
 
         // Original device permit consumes without recipient authority.
-        consume_model_dispatch(permit).await.unwrap();
+        let fence = consume_model_dispatch(permit).await.unwrap();
+        revalidate_model_dispatch(&fence).await.unwrap();
     }
 
     #[tokio::test]
@@ -680,6 +778,167 @@ mod tests {
             .unwrap();
         let fence = consume_model_dispatch(permit).await.unwrap();
         authority.revoke();
+        assert_eq!(
+            revalidate_model_dispatch(&fence).await.err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_consent_on_admissible_independent_route_is_reviewable() {
+        let person_id = person();
+        let resolver = TestResolver::live();
+        let authority = MissingAuthority;
+        let request = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        let denial = admit_model_dispatch(request, &resolver, &authority)
+            .await
+            .err()
+            .unwrap();
+        let ModelDispatchDenial::NeedsConsent(requirement) = denial else {
+            panic!("admissible route must be reviewable: {denial:?}");
+        };
+        assert_eq!(requirement.recipient(), "gateway-local");
+        assert_eq!(requirement.profile_id(), "server-model");
+        assert_eq!(requirement.purpose(), "everyday_assistance");
+        assert_eq!(requirement.consumer(), "conversation.root");
+        assert!(requirement.source_scopes().is_empty());
+        assert!(requirement.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn missing_consent_on_admissible_dependent_route_binds_scope() {
+        let person_id = person();
+        let resolver = TestResolver::live();
+        let authority = MissingAuthority;
+        let mut request = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        request.coverage =
+            DependencyCoverage::dependent(approved_dependency(person_id, "gateway-local")).unwrap();
+        let denial = admit_model_dispatch(request, &resolver, &authority)
+            .await
+            .err()
+            .unwrap();
+        let ModelDispatchDenial::NeedsConsent(requirement) = denial else {
+            panic!("admissible route must be reviewable: {denial:?}");
+        };
+        assert_eq!(requirement.source_scopes().len(), 1);
+        let scope = &requirement.source_scopes()[0];
+        assert_eq!(scope.connection_id().as_str(), "connection");
+        assert_eq!(scope.resources().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prohibited_routes_stay_hard_when_consent_is_missing() {
+        let person_id = person();
+        let resolver = TestResolver::live();
+        let authority = MissingAuthority;
+        // LocalOnly-to-external is never reviewable.
+        let mut local_only = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        local_only.coverage = DependencyCoverage::dependent(dependency(
+            person_id,
+            ProcessingRestriction::LocalOnly,
+            vec![GrantDataCategory::Metadata],
+        ))
+        .unwrap();
+        assert_eq!(
+            admit_model_dispatch(local_only, &resolver, &authority)
+                .await
+                .err(),
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
+        );
+        // Recipient mismatch is never reviewable.
+        let mut mismatch = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "other-recipient".into(),
+            },
+        );
+        mismatch.coverage =
+            DependencyCoverage::dependent(approved_dependency(person_id, "gateway-local")).unwrap();
+        assert_eq!(
+            admit_model_dispatch(mismatch, &resolver, &authority)
+                .await
+                .err(),
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
+        );
+        // Unknown coverage is never reviewable.
+        let mut unknown = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        unknown.coverage = DependencyCoverage::Unknown;
+        assert_eq!(
+            admit_model_dispatch(unknown, &resolver, &authority)
+                .await
+                .err(),
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
+        );
+        // Missing lineage is never reviewable.
+        let mut unlined = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        unlined.lineage = None;
+        assert_eq!(
+            admit_model_dispatch(unlined, &resolver, &authority)
+                .await
+                .err(),
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
+        );
+        // Forbidden classes are never reviewable.
+        let mut forbidden = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        forbidden.input_data_classes = vec![DataClass::HighlySensitive];
+        assert_eq!(
+            admit_model_dispatch(forbidden, &resolver, &authority)
+                .await
+                .err(),
+            Some(ModelDispatchDenial::Hard(AgentFailure::PolicyDenied))
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_consent_after_handoff_suppresses_without_review() {
+        let person_id = person();
+        let resolver = TestResolver::live();
+        let granted = TestAuthority::live();
+        let mut request = base_request(
+            person_id,
+            ModelDispatchTarget::External {
+                recipient: "gateway-local".into(),
+            },
+        );
+        request.coverage =
+            DependencyCoverage::dependent(approved_dependency(person_id, "gateway-local")).unwrap();
+        let permit = admit_model_dispatch(request, &resolver, &granted)
+            .await
+            .unwrap();
+        // Handoff fence holds the granted authority; revalidation below uses
+        // a revoked authority to prove suppression maps to hard denial.
+        let fence = consume_model_dispatch(permit).await.unwrap();
+        granted.revoke();
         assert_eq!(
             revalidate_model_dispatch(&fence).await.err(),
             Some(AgentFailure::PolicyDenied)

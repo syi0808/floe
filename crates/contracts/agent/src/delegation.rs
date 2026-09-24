@@ -185,10 +185,7 @@ mod tests {
             session_id: Uuid::nil(),
             ..context()
         };
-        assert_eq!(
-            nil_session.validate(),
-            Err(AgentFailure::InvalidInput)
-        );
+        assert_eq!(nil_session.validate(), Err(AgentFailure::InvalidInput));
         for device_id in ["", "   ", &"d".repeat(MAX_DELEGATION_DEVICE_ID_BYTES + 1)] {
             let bad_device = DelegationExecutionContext {
                 device_id: device_id.into(),
@@ -231,7 +228,12 @@ mod tests {
         let encoded = serde_json::to_value(context()).unwrap();
         let object = encoded.as_object().unwrap();
         assert_eq!(object.len(), 4);
-        for key in ["session_id", "device_id", "agent_context", "max_output_bytes"] {
+        for key in [
+            "session_id",
+            "device_id",
+            "agent_context",
+            "max_output_bytes",
+        ] {
             assert!(object.contains_key(key), "missing {key}");
         }
         let rendered = serde_json::to_string(&encoded).unwrap();

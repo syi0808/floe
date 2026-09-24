@@ -8,7 +8,11 @@ use floe_context_contract::{
 };
 use serde::Serialize;
 
-use crate::{BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest};
+use crate::shared::ExpertJudgment;
+use crate::{
+    BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput,
+    BuiltinExpertRequest,
+};
 
 use super::{expert, plan_request};
 
@@ -56,7 +60,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 return blocked(BlockedResult::Unavailable { reason }, vec![]);
             }
             SourceReadOutcome::NeedsUserAction(blockers) => {
-                blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+                blockers
+                    .validate()
+                    .map_err(|_| AgentFailure::StaleContext)?;
                 // The host publishes the requirement it captured; the report
                 // proposes no requirement of its own.
                 return blocked(BlockedResult::NeedsUserAction, vec![]);
@@ -132,14 +138,26 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             return Err(AgentFailure::StaleContext);
         }
         let views: Vec<_> = pages.into_values().collect();
-        let draft = expert::judge(
+        let draft = match expert::judge(
             host,
             request,
             &views,
             (page_index + 1) as u32,
             plan.propose_focus,
         )
-        .await?;
+        .await?
+        {
+            ExpertJudgment::Decided(draft) => draft,
+            ExpertJudgment::Blocked(_) => {
+                // The host publishes the model requirement it captured; the
+                // report proposes no requirement of its own.
+                return BuiltinExpertOutput::from_blocked(
+                    BuiltinExpertKind::Schedule.result_artifact_name(),
+                    BlockedExpertStatus::NeedsUserAction,
+                    "Model approval needs your review, so there is no schedule assessment.".into(),
+                );
+            }
+        };
         return host.settle_stateful_result(request, draft).await;
     }
     Err(AgentFailure::BudgetExceeded)
@@ -166,13 +184,14 @@ mod tests {
 
     use chrono::Duration;
     use floe_agent_contract::{
-        AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall, PersonId,
+        AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+        ExpertModelOutcome, PersonId,
     };
     use floe_context_contract::{
         AttentionView, AuthorizedRead, CalendarContextItem, ConfirmedInteractionView,
-        ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
-        MemoryContextSnapshot, NativeContextView, PeopleView, SourceAccessBlockers,
-        SourceAccessRequirement, SourceAccessRequirementKind, WellbeingView, WorkContextView,
+        ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, MemoryContextSnapshot,
+        NativeContextView, PeopleView, SourceAccessBlockers, SourceAccessRequirement,
+        SourceAccessRequirementKind, WellbeingView, WorkContextView,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
@@ -205,15 +224,15 @@ mod tests {
         fn answer<'a>(
             &'a self,
             _: ExpertModelCall,
-        ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+        ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {
-                Ok(ExpertModelAnswer {
+                Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                     schema_version: floe_agent_contract::AGENT_VERSION,
                     answer: "The calendar has one appointment.".into(),
                     used_tokens: 10,
                     cost_micros: 0,
-                })
+                }))
             })
         }
     }

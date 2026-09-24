@@ -1,16 +1,15 @@
 use floe_access::{
-    DependencyResolver, ModelDispatchRecipientAuthority, ModelDispatchRequest, ModelDispatchTarget,
-    admit_model_dispatch, consume_model_dispatch, revalidate_model_dispatch,
+    DependencyResolver, ModelDispatchDenial, ModelDispatchRecipientAuthority, ModelDispatchRequest,
+    ModelDispatchTarget, admit_model_dispatch, consume_model_dispatch, revalidate_model_dispatch,
 };
 use floe_agent_contract::{
-    AgentFailure, AllowedCatalog, ModelPort, ModelRequest, ModelResponse, ModelStep, ModelUsage,
+    AgentFailure, AllowedCatalog, ModelCallOutcome, ModelPort, ModelRequest, ModelResponse,
+    ModelStep, ModelUsage,
 };
 use floe_execution::ExecutionScope;
 use uuid::Uuid;
 
-use crate::api::{
-    DataRecipient, ExecutionLocation, InferenceExecutionConstraint, ModelProfile,
-};
+use crate::api::{DataRecipient, ExecutionLocation, InferenceExecutionConstraint, ModelProfile};
 use crate::ports::model_provider::{
     CanonicalModelRequest, ModelProvider, PreparedModelProfile, PreparedModelTransport,
 };
@@ -78,12 +77,16 @@ impl<Provider, Resolver, Authority> InferenceService<Provider, Resolver, Authori
 /// (delegated Experts, Schedule, Knowledge Learner) share this path; domain
 /// callers add only their purpose/consumer and an execution constraint.
 pub trait InferenceExecutor: Sync {
+    /// One typed execution: either the model answered, or the exact
+    /// selected route needs contextual recipient consent before any
+    /// transmission. Hard failures stay Err; only the recoverable
+    /// consent case is Ok(NeedsUserAction).
     fn execute<'a>(
         &'a self,
         request: ModelRequest,
         scope: &'a ExecutionScope,
         constraint: InferenceExecutionConstraint,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>;
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>;
 }
 
 impl<Provider, Resolver, Authority> ModelPort for InferenceService<Provider, Resolver, Authority>
@@ -97,7 +100,7 @@ where
         &'a self,
         request: ModelRequest,
         scope: &'a ExecutionScope,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         Box::pin(async move {
             // Purpose/consumer must agree across the canonical chain. The root
             // uses one purpose and one consumer; App no longer invents another
@@ -113,7 +116,8 @@ where
     }
 }
 
-impl<Provider, Resolver, Authority> InferenceExecutor for InferenceService<Provider, Resolver, Authority>
+impl<Provider, Resolver, Authority> InferenceExecutor
+    for InferenceService<Provider, Resolver, Authority>
 where
     Provider: ModelProvider + Sync,
     Provider::Prepared: Send,
@@ -125,7 +129,7 @@ where
         request: ModelRequest,
         scope: &'a ExecutionScope,
         constraint: InferenceExecutionConstraint,
-    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         Box::pin(async move { self.generate_inner(request, scope, constraint).await })
     }
 }
@@ -142,7 +146,7 @@ where
         request: ModelRequest,
         scope: &ExecutionScope,
         constraint: InferenceExecutionConstraint,
-    ) -> Result<ModelResponse, AgentFailure> {
+    ) -> Result<ModelCallOutcome, AgentFailure> {
         request.validate()?;
         if scope.cancellation().is_cancelled() {
             return Err(AgentFailure::Cancelled);
@@ -169,7 +173,7 @@ where
                 .attempt_candidate(&request, scope, person_id, candidate)
                 .await
             {
-                Ok(response) => {
+                Ok(ModelCallOutcome::Ready(response)) => {
                     // The Engine journals exactly what this response reports,
                     // so report the aggregate this call consumed: earlier
                     // dispatched candidates keep their unknown/known charge in
@@ -177,7 +181,12 @@ where
                     // Without fallback the delta is the winner's actual usage.
                     let after = scope.budget().snapshot();
                     let usage = aggregate_usage(&before, &after);
-                    return Ok(ModelResponse { usage, ..response });
+                    return Ok(ModelCallOutcome::Ready(ModelResponse { usage, ..response }));
+                }
+                // A missing consent never triggers hidden fallback to another
+                // recipient: the requirement names the exact selected route.
+                Ok(ModelCallOutcome::NeedsUserAction(requirement)) => {
+                    return Ok(ModelCallOutcome::NeedsUserAction(requirement));
                 }
                 Err(failure) => {
                     // Explicit never falls back; Auto falls back only on
@@ -201,7 +210,7 @@ where
         scope: &ExecutionScope,
         person_id: floe_access::PersonId,
         candidate: &PreparedModelProfile<Provider::Prepared>,
-    ) -> Result<ModelResponse, AgentFailure> {
+    ) -> Result<ModelCallOutcome, AgentFailure> {
         let target = dispatch_target(&candidate.profile)?;
         let dispatch = ModelDispatchRequest {
             person_id,
@@ -211,12 +220,22 @@ where
             input_data_classes: request.projection.input_data_classes.clone(),
             purpose: request.purpose.clone(),
             consumer: request.consumer.clone(),
+            profile_id: candidate.profile.id.clone(),
             target,
+            lineage: request.lineage,
             deadline: scope.deadline(),
             cancellation: scope.cancellation().clone(),
         };
-        // Access admit before any budget reservation.
-        let permit = admit_model_dispatch(dispatch, &self.resolver, &self.authority).await?;
+        // Access admit before any budget reservation. A recoverable denial
+        // returns the requirement derived from this exact selected
+        // candidate: zero budget reserved, zero transport calls.
+        let permit = match admit_model_dispatch(dispatch, &self.resolver, &self.authority).await {
+            Ok(permit) => permit,
+            Err(ModelDispatchDenial::Hard(failure)) => return Err(failure),
+            Err(ModelDispatchDenial::NeedsConsent(requirement)) => {
+                return Ok(ModelCallOutcome::NeedsUserAction(requirement));
+            }
+        };
 
         // Sole model budget owner: the live scope budget, no detached ledger.
         let mut tokens = scope.budget().max_tokens().min(MAX_ATTEMPT_TOKENS);
@@ -226,8 +245,17 @@ where
             .min(MAX_ATTEMPT_COST_MICROS);
         let mut attempt = scope.budget().begin(&mut tokens, &mut cost)?;
 
-        // Consume immediately before the provider handoff.
-        let fence = consume_model_dispatch(permit).await?;
+        // Consume immediately before the provider handoff. A consent
+        // revoked between admit and handoff returns the requirement with
+        // zero outbound bytes; the un-dispatched budget attempt drops
+        // without charge.
+        let fence = match consume_model_dispatch(permit).await {
+            Ok(fence) => fence,
+            Err(ModelDispatchDenial::Hard(failure)) => return Err(failure),
+            Err(ModelDispatchDenial::NeedsConsent(requirement)) => {
+                return Ok(ModelCallOutcome::NeedsUserAction(requirement));
+            }
+        };
 
         let canonical = CanonicalModelRequest {
             attempt_id: request.attempt_id,
@@ -279,15 +307,17 @@ where
             .settle(usage.tokens, usage.cost_micros)
             .map_err(|_| AgentFailure::BudgetExceeded)?;
         // Post-response authority revalidation before the response leaves.
-        // Usage stays charged when revalidation fails.
+        // Usage stays charged when revalidation fails. A revocation after
+        // handoff suppresses; transmitted bytes are never recalled by a
+        // re-review.
         if revalidate_model_dispatch(&fence).await.is_err() {
             return Err(AgentFailure::PolicyDenied);
         }
-        Ok(ModelResponse {
+        Ok(ModelCallOutcome::Ready(ModelResponse {
             attempt_id: request.attempt_id,
             steps,
             usage,
-        })
+        }))
     }
 }
 
@@ -389,7 +419,12 @@ fn auto_candidates<'a, Prepared>(
     if eligible.is_empty() {
         return Err(AgentFailure::ModelUnavailable);
     }
-    eligible.sort_by_key(|candidate| (rank_profile(&candidate.profile), candidate.profile.id.clone()));
+    eligible.sort_by_key(|candidate| {
+        (
+            rank_profile(&candidate.profile),
+            candidate.profile.id.clone(),
+        )
+    });
     // Same-rank ambiguity fails closed rather than choosing arbitrarily.
     let top_rank = rank_profile(&eligible[0].profile);
     let top_count = eligible
@@ -502,13 +537,11 @@ mod tests {
     };
 
     use floe_access::{DependencyResolver, ModelDispatchRecipientAuthority};
+    use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind, PromptRole};
     use floe_agent_contract::{
         AgentFailure, AllowedCatalog, AuthorizedModelProjection, ContextEnvelope, ContextManifest,
         ContextualData, DataClass, DependencyCoverage, ModelRequest, ModelResponse, ModelStep,
-        ModelUsage, ProjectionRef, RuntimeContext, ScopedInstructions,
-    };
-    use floe_agent_contract::prompts::{
-        PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
+        ProjectionRef, RuntimeContext, ScopedInstructions,
     };
     use floe_context_contract::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
@@ -528,11 +561,11 @@ mod tests {
         DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile,
         ModelPurpose,
     };
-    use floe_access::DependencyAuthorization;
     use crate::ports::model_provider::{
         CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,
         PreparedModelTransport,
     };
+    use floe_access::DependencyAuthorization;
 
     struct TestTransport {
         calls: AtomicUsize,
@@ -632,8 +665,7 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
             Box::pin(async move { Ok(()) })
         }
     }
@@ -645,8 +677,7 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
             Box::pin(async move { Err(AgentFailure::PolicyDenied) })
         }
     }
@@ -654,8 +685,34 @@ mod tests {
     struct AllowAuthority;
 
     impl ModelDispatchRecipientAuthority for AllowAuthority {
-        fn check_recipient(&self, _recipient: &str) -> Result<(), AgentFailure> {
-            Ok(())
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a floe_access::ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move { Ok(floe_access::RecipientCheckOutcome::Granted) })
+        }
+    }
+
+    struct MissingAuthority;
+
+    impl ModelDispatchRecipientAuthority for MissingAuthority {
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move { Ok(floe_access::RecipientCheckOutcome::Missing) })
         }
     }
 
@@ -665,12 +722,23 @@ mod tests {
     }
 
     impl ModelDispatchRecipientAuthority for CountingAuthority {
-        fn check_recipient(&self, _recipient: &str) -> Result<(), AgentFailure> {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            if call >= self.deny_from {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            Ok(())
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a floe_access::ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                if call >= self.deny_from {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                Ok(floe_access::RecipientCheckOutcome::Granted)
+            })
         }
     }
 
@@ -880,7 +948,10 @@ mod tests {
         }
     }
 
-    fn projection(coverage: DependencyCoverage, classes: Vec<DataClass>) -> AuthorizedModelProjection {
+    fn projection(
+        coverage: DependencyCoverage,
+        classes: Vec<DataClass>,
+    ) -> AuthorizedModelProjection {
         AuthorizedModelProjection {
             projection_ref: ProjectionRef::new(),
             projection_revision: 1,
@@ -905,11 +976,30 @@ mod tests {
             consumer: CANONICAL_MODEL_CONSUMER.into(),
             preferred_profile_id: preferred,
             replay: vec![],
+            lineage: Some(
+                floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                    .unwrap(),
+            ),
+        }
+    }
+
+    fn ready(outcome: ModelCallOutcome) -> ModelResponse {
+        match outcome {
+            ModelCallOutcome::Ready(response) => response,
+            ModelCallOutcome::NeedsUserAction(requirement) => {
+                panic!(
+                    "expected Ready, got requirement for {}",
+                    requirement.recipient()
+                )
+            }
         }
     }
 
     fn scope() -> (BudgetLedger, ExecutionScope) {
-        let ledger = BudgetLedger::new(BudgetConfig::new(100_000, 10_000_000), LedgerUsage::default());
+        let ledger = BudgetLedger::new(
+            BudgetConfig::new(100_000, 10_000_000),
+            LedgerUsage::default(),
+        );
         let scope = ExecutionScope::root(
             Cancellation::default(),
             Instant::now() + std::time::Duration::from_secs(30),
@@ -970,9 +1060,12 @@ mod tests {
             None,
         );
         let (_ledger, scope) = scope();
-        let response: ModelResponse = service.generate(request, &scope).await.unwrap();
+        let response = ready(service.generate(request, &scope).await.unwrap());
         assert_eq!(response.attempt_id, attempt_id);
-        assert_eq!(transport.seen_attempt.lock().unwrap().as_slice(), &[attempt_id]);
+        assert_eq!(
+            transport.seen_attempt.lock().unwrap().as_slice(),
+            &[attempt_id]
+        );
         assert_eq!(transport.calls(), 1);
     }
 
@@ -1035,7 +1128,7 @@ mod tests {
             ],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
-        let mut proj = projection(DependencyCoverage::Independent, vec![DataClass::Personal]);
+        let proj = projection(DependencyCoverage::Independent, vec![DataClass::Personal]);
         // Independent external is allowed when recipient authority holds.
         let request = model_request(RunId::new().as_uuid(), &person.to_string(), proj, None);
         let (_ledger, scope) = scope();
@@ -1049,7 +1142,10 @@ mod tests {
         let person = PersonId::new();
         let transport = Arc::new(TestTransport::answer());
         let provider = TestProvider {
-            profiles: vec![(external_profile("server", "ext", true), Arc::clone(&transport))],
+            profiles: vec![(
+                external_profile("server", "ext", true),
+                Arc::clone(&transport),
+            )],
         };
         let service = InferenceService::new(provider, DenyResolver, AllowAuthority);
         let mut proj = projection(
@@ -1090,7 +1186,10 @@ mod tests {
                     },
                     Arc::clone(&failing),
                 ),
-                (external_profile("server", "ext", true), Arc::clone(&succeeding)),
+                (
+                    external_profile("server", "ext", true),
+                    Arc::clone(&succeeding),
+                ),
             ],
         };
         // Gateway (rank 1) is top when no Device rank 0 exists; it fails with
@@ -1146,7 +1245,10 @@ mod tests {
         let provider = TestProvider {
             profiles: vec![
                 (device_profile("device", true), Arc::clone(&failing)),
-                (external_profile("server", "ext", true), Arc::clone(&succeeding)),
+                (
+                    external_profile("server", "ext", true),
+                    Arc::clone(&succeeding),
+                ),
             ],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
@@ -1157,7 +1259,7 @@ mod tests {
             None,
         );
         let (ledger, scope) = scope();
-        let response = service.generate(request, &scope).await.unwrap();
+        let response = ready(service.generate(request, &scope).await.unwrap());
         assert_eq!(failing.calls(), 1);
         assert_eq!(succeeding.calls(), 1);
         // The device attempt charged one unknown estimate (allowance-capped);
@@ -1191,7 +1293,7 @@ mod tests {
             None,
         );
         let (ledger, scope) = scope();
-        let response = service.generate(request, &scope).await.unwrap();
+        let response = ready(service.generate(request, &scope).await.unwrap());
         assert_eq!(response.usage.tokens, 10);
         assert_eq!(response.usage.cost_micros, 5);
         let snapshot = ledger.snapshot();
@@ -1211,7 +1313,10 @@ mod tests {
         // external dependent profile where revalidation consults it.
         let ext_transport = Arc::new(TestTransport::answer());
         let ext_provider = TestProvider {
-            profiles: vec![(external_profile("server", "ext", true), Arc::clone(&ext_transport))],
+            profiles: vec![(
+                external_profile("server", "ext", true),
+                Arc::clone(&ext_transport),
+            )],
         };
         let authority = CountingAuthority {
             calls: AtomicUsize::new(0),
@@ -1304,9 +1409,8 @@ mod tests {
         // The root canonical service type itself carries no secret route
         // bundle: its public generics are provider/resolver/authority traits,
         // never a bearer, base URL or endpoint string.
-        let service_name = std::any::type_name::<
-            InferenceService<TestProvider, AllowResolver, AllowAuthority>,
-        >();
+        let service_name =
+            std::any::type_name::<InferenceService<TestProvider, AllowResolver, AllowAuthority>>();
         assert!(!service_name.contains("bearer"));
     }
 
@@ -1326,6 +1430,10 @@ mod tests {
             consumer: consumer.into(),
             preferred_profile_id: preferred,
             replay: vec![],
+            lineage: Some(
+                floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                    .unwrap(),
+            ),
         }
     }
 
@@ -1398,10 +1506,12 @@ mod tests {
             None,
         );
         let (_ledger, scope) = scope();
-        let response = service
-            .execute(request, &scope, InferenceExecutionConstraint::Any)
-            .await
-            .unwrap();
+        let response = ready(
+            service
+                .execute(request, &scope, InferenceExecutionConstraint::Any)
+                .await
+                .unwrap(),
+        );
         assert_eq!(response.usage.tokens, 10);
         assert_eq!(device.calls(), 1);
         assert_eq!(server.calls(), 0);
@@ -1414,8 +1524,7 @@ mod tests {
             profiles: vec![(device_profile("device", true), Arc::clone(&transport))],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
-        let mut proj =
-            projection(DependencyCoverage::Independent, vec![DataClass::Personal]);
+        let mut proj = projection(DependencyCoverage::Independent, vec![DataClass::Personal]);
         proj.envelope.scoped_instructions.purpose = "other-purpose".into();
         let request = model_request(
             RunId::new().as_uuid(),
@@ -1443,10 +1552,7 @@ mod tests {
             profiles: vec![
                 (device_profile("device", true), Arc::clone(&device)),
                 (gateway_profile("gateway", true), Arc::clone(&gateway)),
-                (
-                    external_profile("server", "ext", true),
-                    Arc::clone(&remote),
-                ),
+                (external_profile("server", "ext", true), Arc::clone(&remote)),
             ],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
@@ -1473,10 +1579,7 @@ mod tests {
         let provider = TestProvider {
             profiles: vec![
                 (device_profile("device", true), Arc::clone(&device)),
-                (
-                    external_profile("server", "ext", true),
-                    Arc::clone(&remote),
-                ),
+                (external_profile("server", "ext", true), Arc::clone(&remote)),
             ],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
@@ -1545,10 +1648,7 @@ mod tests {
 
         let remote = Arc::new(TestTransport::answer());
         let provider = TestProvider {
-            profiles: vec![(
-                external_profile("server", "ext", true),
-                Arc::clone(&remote),
-            )],
+            profiles: vec![(external_profile("server", "ext", true), Arc::clone(&remote))],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
         let request = model_request(
@@ -1573,16 +1673,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_consent_returns_requirement_with_zero_transport_calls() {
+        let person = PersonId::new();
+        let device = Arc::new(TestTransport::answer());
+        let server = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (device_profile("device", false), Arc::clone(&device)),
+                (external_profile("server", "ext", true), Arc::clone(&server)),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, MissingAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &person.to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        let outcome = service.generate(request, &scope).await.unwrap();
+        let ModelCallOutcome::NeedsUserAction(requirement) = outcome else {
+            panic!("missing consent must surface the requirement");
+        };
+        assert_eq!(requirement.recipient(), "ext");
+        assert_eq!(requirement.profile_id(), "server");
+        assert_eq!(device.calls(), 0);
+        assert_eq!(server.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn missing_consent_never_falls_back_to_another_recipient() {
+        let person = PersonId::new();
+        let first = Arc::new(TestTransport::answer());
+        let second = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![
+                (
+                    external_profile("first", "one.example", true),
+                    Arc::clone(&first),
+                ),
+                (
+                    external_profile("second", "two.example", true),
+                    Arc::clone(&second),
+                ),
+            ],
+        };
+        let service = InferenceService::new(provider, AllowResolver, MissingAuthority);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &person.to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        // Same-rank external ambiguity denies before any consent question.
+        assert_eq!(
+            service.generate(request, &scope).await.err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(first.calls(), 0);
+        assert_eq!(second.calls(), 0);
+    }
+
+    struct GrantThenMissing {
+        calls: AtomicUsize,
+    }
+
+    impl ModelDispatchRecipientAuthority for GrantThenMissing {
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a floe_access::ModelDispatchRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let call = self.calls.fetch_add(1, Ordering::SeqCst);
+                if call == 0 {
+                    return Ok(floe_access::RecipientCheckOutcome::Granted);
+                }
+                Ok(floe_access::RecipientCheckOutcome::Missing)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn consent_missing_between_admit_and_handoff_returns_requirement() {
+        let person = PersonId::new();
+        let server = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(external_profile("server", "ext", true), Arc::clone(&server))],
+        };
+        let service = InferenceService::new(
+            provider,
+            AllowResolver,
+            GrantThenMissing {
+                calls: AtomicUsize::new(0),
+            },
+        );
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &person.to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        let outcome = service.generate(request, &scope).await.unwrap();
+        assert!(matches!(outcome, ModelCallOutcome::NeedsUserAction(_)));
+        assert_eq!(server.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn hard_revoke_between_admit_and_handoff_suppresses() {
+        let person = PersonId::new();
+        let server = Arc::new(TestTransport::answer());
+        let provider = TestProvider {
+            profiles: vec![(external_profile("server", "ext", true), Arc::clone(&server))],
+        };
+        let revoked = CountingAuthority {
+            calls: AtomicUsize::new(0),
+            deny_from: 1,
+        };
+        let service = InferenceService::new(provider, AllowResolver, revoked);
+        let request = model_request(
+            RunId::new().as_uuid(),
+            &person.to_string(),
+            projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
+            None,
+        );
+        let (_ledger, scope) = scope();
+        assert_eq!(
+            service.generate(request, &scope).await.err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(server.calls(), 0);
+    }
+
+    #[tokio::test]
     async fn explicit_profile_violating_constraint_never_falls_back() {
         let device = Arc::new(TestTransport::answer());
         let remote = Arc::new(TestTransport::answer());
         let provider = TestProvider {
             profiles: vec![
                 (device_profile("device", true), Arc::clone(&device)),
-                (
-                    external_profile("server", "ext", true),
-                    Arc::clone(&remote),
-                ),
+                (external_profile("server", "ext", true), Arc::clone(&remote)),
             ],
         };
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);

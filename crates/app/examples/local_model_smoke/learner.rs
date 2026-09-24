@@ -2,7 +2,7 @@ use std::{collections::HashMap, os::unix::fs::PermissionsExt, sync::Mutex};
 
 use chrono::Utc;
 use floe_agent_contract::{
-    AgentContext, AgentFailure, AllowedCatalog, DataClass, ModelConversation,
+    AgentContext, AgentFailure, AllowedCatalog, DataClass, ModelCallOutcome, ModelConversation,
     ModelConversationEntry, ModelRequest, ModelStep,
 };
 use floe_conversation::{AgentMessage, AgentOutcome, SessionStore};
@@ -35,7 +35,10 @@ impl LearnerModel for SmokeLearnerModel<'_> {
         floe_agent_contract::ModelPlacement::DeviceLocal
     }
 
-    async fn review(&self, request: LearnerModelRequest) -> Result<LearnerReviewOutput, AgentFailure> {
+    async fn review(
+        &self,
+        request: LearnerModelRequest,
+    ) -> Result<LearnerReviewOutput, AgentFailure> {
         if request.remaining_tokens == 0
             || request.remaining_cost_micros == 0
             || request.max_output_bytes == 0
@@ -71,8 +74,8 @@ impl LearnerModel for SmokeLearnerModel<'_> {
             tools: vec![],
             revision: 1,
         };
-        let projection = floe_context::assemble_context_projection(
-            floe_context::ContextProjectionInput {
+        let projection =
+            floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
                 role: floe_context::ContextProjectionRole::Learner,
                 purpose: LEARNER_INFERENCE_PURPOSE,
                 response_contract: "One structured memory review answer.",
@@ -85,8 +88,7 @@ impl LearnerModel for SmokeLearnerModel<'_> {
                 authorized_history_dependencies: &[],
                 input_data_classes: vec![DataClass::Personal],
                 max_output_bytes: request.max_output_bytes,
-            },
-        )?;
+            })?;
         let ledger = BudgetLedger::new(
             BudgetConfig::new(request.remaining_tokens, request.remaining_cost_micros),
             ModelUsage::default(),
@@ -100,7 +102,7 @@ impl LearnerModel for SmokeLearnerModel<'_> {
             ledger.work_lease(),
             trace,
         );
-        let response = self
+        let outcome = self
             .executor
             .execute(
                 ModelRequest {
@@ -112,11 +114,18 @@ impl LearnerModel for SmokeLearnerModel<'_> {
                     consumer: LEARNER_INFERENCE_CONSUMER.into(),
                     preferred_profile_id: None,
                     replay: vec![],
+                    // The smoke learner runs under no Conversation lineage:
+                    // a recoverable consent case fails closed without a card.
+                    lineage: None,
                 },
                 &scope,
                 InferenceExecutionConstraint::DeviceOnly,
             )
             .await?;
+        let response = match outcome {
+            ModelCallOutcome::Ready(response) => response,
+            ModelCallOutcome::NeedsUserAction(_) => return Err(AgentFailure::PolicyDenied),
+        };
         let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else {
             return Err(AgentFailure::InvalidModelOutput);
         };
@@ -142,9 +151,8 @@ impl floe_access::DependencyResolver for SmokeResolver {
         &'a self,
         _dependency: &'a floe_context_contract::ContextDependency,
         _request: &'a floe_access::DependencyAuthorization,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
         Box::pin(async move { Err(AgentFailure::PolicyDenied) })
     }
 }
@@ -152,8 +160,18 @@ impl floe_access::DependencyResolver for SmokeResolver {
 struct SmokeAuthority;
 
 impl floe_access::ModelDispatchRecipientAuthority for SmokeAuthority {
-    fn check_recipient(&self, _recipient: &str) -> Result<(), AgentFailure> {
-        Err(AgentFailure::PolicyDenied)
+    fn check_recipient<'a>(
+        &'a self,
+        _request: &'a floe_access::ModelDispatchRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Err(AgentFailure::PolicyDenied) })
     }
 }
 
@@ -216,8 +234,7 @@ pub(super) async fn run(with_expiry: bool) -> Result<Value, AgentFailure> {
         LEARNER_INFERENCE_PURPOSE,
         LEARNER_INFERENCE_CONSUMER,
     )?;
-    let service =
-        floe_inference::InferenceService::new(provider, SmokeResolver, SmokeAuthority);
+    let service = floe_inference::InferenceService::new(provider, SmokeResolver, SmokeAuthority);
     let model = SmokeLearnerModel { executor: &service };
     let processed = LearnerService {
         model: &model,

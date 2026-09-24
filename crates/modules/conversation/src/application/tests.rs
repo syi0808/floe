@@ -3,31 +3,33 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use floe_agent_contract::{
-    AgentMessage, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
-    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
-    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelConversation,
-    ModelConversationEntry, ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, ProjectionRef, RoleSpec, RuntimeContext,
-    ScopedInstructions, TaskReceipt, ToolCall, ToolDescriptor, ToolPort, ToolResult,
-};
 use floe_agent_contract::prompts::{
     PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
-use floe_agent_runtime::FinalPayloadValidator;
-use floe_execution::{
-    ExecutionScope,
-    budget::{BudgetAttempt, BudgetConfig},
+use floe_agent_contract::{
+    AgentMessage, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
+    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
+    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelCallOutcome,
+    ModelConversation, ModelConversationEntry, ModelPort, ModelProjectionPort,
+    ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage, ProjectionRef,
+    RoleSpec, RuntimeContext, ScopedInstructions, TaskReceipt, ToolCall, ToolDescriptor, ToolPort,
+    ToolResult,
 };
-use floe_kernel::{AgentFailure, CommandId, RunId};
+use floe_agent_runtime::FinalPayloadValidator;
+use floe_execution::{ExecutionScope, budget::BudgetConfig};
+use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
     AdmittedTurn, CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt,
-    CancelRunRequest, CancelRunStatus, ConversationPorts, ConversationRepository, JournalEntry,
-    ManagerConfig, RecoveryReceipt, RecoveryRequest, RunCancellationRegistry, RunReceipt, RunState,
-    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnRequest,
+    CancelRunRequest, CancelRunStatus, ConversationInteraction, ConversationPorts,
+    ConversationRepository, DecisionAdmission, ExpireInteraction, ExpireOutcome,
+    InteractionDecision, InteractionRepository, InteractionResolution, InteractionState,
+    JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_STORED_INTERACTIONS_PER_RUN, ManagerConfig,
+    PublishAdmission, RecoveryReceipt, RecoveryRequest, RunCancellationRegistry, RunReceipt,
+    RunState, RunTerminal, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnRequest,
+    next_state_after_decision, state_after_resolution,
 };
 
 use super::ConversationService;
@@ -49,6 +51,8 @@ struct State {
     commands: HashMap<CommandId, RunId>,
     cancellations: HashMap<CommandId, CancelRunReceipt>,
     runs: HashMap<RunId, StoredRun>,
+    interactions: HashMap<Uuid, ConversationInteraction>,
+    decisions: HashMap<Uuid, InteractionDecision>,
 }
 
 #[derive(Default)]
@@ -345,6 +349,268 @@ impl ConversationRepository for MemoryRepository {
     }
 }
 
+impl InteractionRepository for MemoryRepository {
+    fn publish_interaction<'a>(
+        &'a self,
+        record: ConversationInteraction,
+    ) -> BoxFuture<'a, Result<PublishAdmission, AgentFailure>> {
+        Box::pin(async move {
+            record.validate()?;
+            let mut state = self.state.lock().unwrap();
+            if let Some(existing) = state.interactions.get(&record.id) {
+                if existing.requirement_digest != record.requirement_digest
+                    || existing.target_digest != record.target_digest
+                    || existing.origin_run_id != record.origin_run_id
+                    || existing.origin != record.origin
+                {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                return Ok(PublishAdmission::Existing(existing.clone()));
+            }
+            let origin = state
+                .runs
+                .get(&record.origin_run_id)
+                .ok_or(AgentFailure::NotFound)?;
+            if origin.admitted.receipt.session_id != record.session_id {
+                return Err(AgentFailure::Conflict);
+            }
+            if origin.admitted.receipt.state == RunState::Cancelled {
+                return Err(AgentFailure::Conflict);
+            }
+            let stored = state
+                .interactions
+                .values()
+                .filter(|entry| entry.origin_run_id == record.origin_run_id)
+                .count();
+            if stored >= MAX_STORED_INTERACTIONS_PER_RUN {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            let active = state
+                .interactions
+                .values()
+                .filter(|entry| {
+                    entry.origin_run_id == record.origin_run_id && !entry.state.is_terminal()
+                })
+                .count();
+            if active >= MAX_ACTIVE_INTERACTIONS_PER_RUN {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            state.interactions.insert(record.id, record.clone());
+            Ok(PublishAdmission::Created(record))
+        })
+    }
+
+    fn get_interaction<'a>(
+        &'a self,
+        person_id: PersonId,
+        interaction_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<ConversationInteraction>, AgentFailure>> {
+        Box::pin(async move {
+            if interaction_id.is_nil() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let state = self.state.lock().unwrap();
+            Ok(state
+                .interactions
+                .get(&interaction_id)
+                .filter(|record| record.person_id == person_id)
+                .cloned())
+        })
+    }
+
+    fn list_run_interactions<'a>(
+        &'a self,
+        person_id: PersonId,
+        origin_run_id: RunId,
+    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>> {
+        Box::pin(async move {
+            if !origin_run_id.is_valid() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let state = self.state.lock().unwrap();
+            let mut records: Vec<ConversationInteraction> = state
+                .interactions
+                .values()
+                .filter(|record| {
+                    record.person_id == person_id && record.origin_run_id == origin_run_id
+                })
+                .cloned()
+                .collect();
+            if records.len() > MAX_STORED_INTERACTIONS_PER_RUN {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            records.sort_by(|left, right| {
+                (left.created_at_unix_ms, left.id).cmp(&(right.created_at_unix_ms, right.id))
+            });
+            Ok(records)
+        })
+    }
+
+    fn record_decision<'a>(
+        &'a self,
+        decision: InteractionDecision,
+    ) -> BoxFuture<'a, Result<DecisionAdmission, AgentFailure>> {
+        Box::pin(async move {
+            decision.validate()?;
+            let mut state = self.state.lock().unwrap();
+            if let Some(recorded) = state.decisions.get(&decision.command_id) {
+                if !decision.matches_recorded(recorded) {
+                    return Err(AgentFailure::Conflict);
+                }
+                let current = state
+                    .interactions
+                    .get(&decision.interaction_id)
+                    .cloned()
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                return Ok(DecisionAdmission::Rejoined(current));
+            }
+            let current = state
+                .interactions
+                .get(&decision.interaction_id)
+                .cloned()
+                .ok_or(AgentFailure::NotFound)?;
+            if decision.principal != current.person_id.to_string() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            if current.revision != decision.interaction_revision
+                || current.target_digest != decision.target_digest
+                || decision.decided_at_unix_ms < current.created_at_unix_ms
+                || decision.decided_at_unix_ms >= current.expires_at_unix_ms
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut updated = current;
+            updated.state = next_state_after_decision(&updated.state, &decision)?;
+            updated.revision = updated
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            updated
+                .validate()
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            state.decisions.insert(decision.command_id, decision);
+            state.interactions.insert(updated.id, updated.clone());
+            Ok(DecisionAdmission::Applied(updated))
+        })
+    }
+
+    fn record_resolution<'a>(
+        &'a self,
+        resolution: InteractionResolution,
+    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>> {
+        Box::pin(async move {
+            resolution.validate()?;
+            let mut state = self.state.lock().unwrap();
+            let recorded = state
+                .decisions
+                .get(&resolution.decision_id)
+                .cloned()
+                .ok_or(AgentFailure::Conflict)?;
+            if recorded.interaction_id != resolution.interaction_id
+                || resolution.resolved_at_unix_ms < recorded.decided_at_unix_ms
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let current = state
+                .interactions
+                .get(&resolution.interaction_id)
+                .cloned()
+                .ok_or(AgentFailure::NotFound)?;
+            if resolution.person_id != current.person_id {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            if current.revision != resolution.expected_revision {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut updated = current;
+            updated.state = state_after_resolution(
+                &updated.state,
+                resolution.decision_id,
+                resolution.owner_operation_id,
+                resolution.resolved_at_unix_ms,
+            )?;
+            updated.revision = updated
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            updated
+                .validate()
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            state.interactions.insert(updated.id, updated.clone());
+            Ok(updated)
+        })
+    }
+
+    fn mark_superseded<'a>(
+        &'a self,
+        supersede: SupersedeInteraction,
+    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>> {
+        Box::pin(async move {
+            supersede.validate()?;
+            let mut state = self.state.lock().unwrap();
+            let current = state
+                .interactions
+                .get(&supersede.interaction_id)
+                .cloned()
+                .ok_or(AgentFailure::NotFound)?;
+            if supersede.person_id != current.person_id {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            if current.revision != supersede.expected_revision || current.state.is_terminal() {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut updated = current;
+            updated.state = InteractionState::Superseded {
+                superseded_by: supersede.superseded_by,
+            };
+            updated.revision = updated
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            updated
+                .validate()
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            state.interactions.insert(updated.id, updated.clone());
+            Ok(updated)
+        })
+    }
+
+    fn mark_expired<'a>(
+        &'a self,
+        expire: ExpireInteraction,
+    ) -> BoxFuture<'a, Result<ExpireOutcome, AgentFailure>> {
+        Box::pin(async move {
+            expire.validate()?;
+            let mut state = self.state.lock().unwrap();
+            let current = state
+                .interactions
+                .get(&expire.interaction_id)
+                .cloned()
+                .ok_or(AgentFailure::NotFound)?;
+            if expire.person_id != current.person_id {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            if current.state.is_terminal() {
+                return Ok(ExpireOutcome::AlreadyTerminal(current));
+            }
+            if expire.now_unix_ms < current.expires_at_unix_ms {
+                return Ok(ExpireOutcome::NotExpired(current));
+            }
+            let mut updated = current;
+            updated.state = InteractionState::Expired;
+            updated.revision = updated
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            updated
+                .validate()
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            state.interactions.insert(updated.id, updated.clone());
+            Ok(ExpireOutcome::Expired(updated))
+        })
+    }
+}
+
 #[derive(Default)]
 struct Journal {
     revision: std::sync::atomic::AtomicU64,
@@ -403,62 +669,62 @@ fn authorized_test_projection(
     coverage: DependencyCoverage,
 ) -> AuthorizedModelProjection {
     let envelope = ContextEnvelope {
+        schema_version: floe_agent_contract::AGENT_VERSION,
+        stable_instructions: PromptAssembly {
             schema_version: floe_agent_contract::AGENT_VERSION,
-            stable_instructions: PromptAssembly {
-                schema_version: floe_agent_contract::AGENT_VERSION,
-                role: PromptRole::Manager,
-                components: vec![
-                    PromptComponent {
-                        kind: PromptComponentKind::BehaviorKernel,
-                        source: "test-kernel".into(),
-                        revision: 1,
-                        content: "kernel".into(),
-                    },
-                    PromptComponent {
-                        kind: PromptComponentKind::Role,
-                        source: "test-role".into(),
-                        revision: 1,
-                        content: "role".into(),
-                    },
-                    PromptComponent {
-                        kind: PromptComponentKind::CapabilityProtocol,
-                        source: "test-protocol".into(),
-                        revision: 1,
-                        content: "protocol".into(),
-                    },
-                ],
-            },
-            scoped_instructions: ScopedInstructions {
-                purpose: "test-purpose".into(),
-                response_contract: request.role.output_contract.clone(),
-                available_capabilities: vec![],
-                active_experts: vec![],
-                correction: request.correction.clone(),
-            },
-            contextual_data: ContextualData {
-                projection_version: 1,
-                memories: vec![],
-                optional_context_issues: vec![],
-                evidence: vec![],
-            },
-            conversation,
-            runtime: RuntimeContext {
-                max_output_bytes: request.max_output_bytes,
-            },
-            manifest: ContextManifest {
-                prompt_components: vec![],
-                evidence: vec![],
-                memories: vec![],
-                agent_cards: vec![],
-            },
-        };
-        AuthorizedModelProjection {
-            projection_ref: ProjectionRef::new(),
-            projection_revision: 1,
-            envelope,
-            coverage,
-            input_data_classes: vec![DataClass::Synthetic],
-        }
+            role: PromptRole::Manager,
+            components: vec![
+                PromptComponent {
+                    kind: PromptComponentKind::BehaviorKernel,
+                    source: "test-kernel".into(),
+                    revision: 1,
+                    content: "kernel".into(),
+                },
+                PromptComponent {
+                    kind: PromptComponentKind::Role,
+                    source: "test-role".into(),
+                    revision: 1,
+                    content: "role".into(),
+                },
+                PromptComponent {
+                    kind: PromptComponentKind::CapabilityProtocol,
+                    source: "test-protocol".into(),
+                    revision: 1,
+                    content: "protocol".into(),
+                },
+            ],
+        },
+        scoped_instructions: ScopedInstructions {
+            purpose: "test-purpose".into(),
+            response_contract: request.role.output_contract.clone(),
+            available_capabilities: vec![],
+            active_experts: vec![],
+            correction: request.correction.clone(),
+        },
+        contextual_data: ContextualData {
+            projection_version: 1,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        conversation,
+        runtime: RuntimeContext {
+            max_output_bytes: request.max_output_bytes,
+        },
+        manifest: ContextManifest {
+            prompt_components: vec![],
+            evidence: vec![],
+            memories: vec![],
+            agent_cards: vec![],
+        },
+    };
+    AuthorizedModelProjection {
+        projection_ref: ProjectionRef::new(),
+        projection_revision: 1,
+        envelope,
+        coverage,
+        input_data_classes: vec![DataClass::Synthetic],
+    }
 }
 
 impl ModelProjectionPort for TestProjector {
@@ -503,10 +769,10 @@ impl ModelPort for AnswerModel {
         &'a self,
         request: ModelRequest,
         _: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: vec![ModelStep::Answer {
                     text: format!("answered: {}", current_user_text(&request)),
@@ -516,7 +782,7 @@ impl ModelPort for AnswerModel {
                     tokens: 1,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }
@@ -532,13 +798,13 @@ impl ModelPort for FinalizationModel {
         &'a self,
         request: ModelRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             if call == 0 {
                 assert_eq!(request.catalog.tools.len(), 1);
                 assert_eq!(scope.budget().max_tokens(), 4_096);
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![ModelStep::CallTool {
                         tool_id: "lookup".into(),
@@ -549,7 +815,7 @@ impl ModelPort for FinalizationModel {
                         tokens: 11,
                         cost_micros: 2,
                     },
-                })
+                }))
             } else {
                 assert_eq!(call, 1);
                 *self.finalization_scope.lock().unwrap() = Some(scope.clone());
@@ -568,7 +834,7 @@ impl ModelPort for FinalizationModel {
                 assert_eq!(request.preferred_profile_id, None);
                 assert_eq!(request.replay.len(), 1);
                 assert_eq!(scope.budget().max_tokens(), 1_024);
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![ModelStep::Answer {
                         text: "The lookup succeeded, but the full request did not complete.".into(),
@@ -578,7 +844,7 @@ impl ModelPort for FinalizationModel {
                         tokens: 7,
                         cost_micros: 1,
                     },
-                })
+                }))
             }
         })
     }
@@ -639,12 +905,12 @@ impl ModelPort for BlockingModel {
         &'a self,
         request: ModelRequest,
         _: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             self.entered.add_permits(1);
             self.release.acquire().await.unwrap().forget();
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: vec![ModelStep::Answer {
                     text: "done".into(),
@@ -654,7 +920,7 @@ impl ModelPort for BlockingModel {
                     tokens: 1,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }
@@ -689,8 +955,7 @@ impl FinalPayloadValidator for Validator {
         text: &str,
         _: &[floe_agent_contract::Artifact],
     ) -> Result<(), AgentFailure> {
-        if (role == "manager" || role == crate::FINALIZATION_ROLE_ID) && !text.trim().is_empty()
-        {
+        if (role == "manager" || role == crate::FINALIZATION_ROLE_ID) && !text.trim().is_empty() {
             Ok(())
         } else {
             Err(AgentFailure::InvalidModelOutput)
@@ -765,6 +1030,8 @@ fn request(
         session_id,
         expected_session_revision,
         principal: "person-a".into(),
+        device_id: "device-a".into(),
+        now_unix_ms: 1_700_000_000_000,
         prompt: prompt.into(),
         mode: crate::TurnMode::New,
         retry_of: None,
@@ -1361,7 +1628,7 @@ impl ModelPort for SettlingFinalizationModel {
         &'a self,
         request: ModelRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async move {
             // Mirror the settling owner's discipline: one budget attempt per
@@ -1386,32 +1653,31 @@ impl ModelPort for SettlingFinalizationModel {
                 // First work attempt: full per-attempt allowance.
                 assert_eq!(tokens, 4_096);
                 attempt.settle(4_096, 10).unwrap();
-                Ok(tool_batch(4_096, 10))
+                Ok(ModelCallOutcome::Ready(tool_batch(4_096, 10)))
             } else if call == 1 {
                 // Second work attempt: the allowance clamps to the remaining
                 // work partition (8_192 - 1_024 - 4_096), proving work cannot
                 // consume the reserve.
                 assert_eq!(tokens, 3_072);
                 attempt.settle(3_072, 10).unwrap();
-                Ok(tool_batch(3_072, 10))
+                Ok(ModelCallOutcome::Ready(tool_batch(3_072, 10)))
             } else {
                 assert_eq!(call, 2);
                 assert_eq!(scope.budget().max_tokens(), 1_024);
                 assert_eq!(tokens, 1_024);
                 self.scopes.lock().unwrap().push(scope.clone());
                 attempt.settle(100, 3).unwrap();
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![ModelStep::Answer {
-                        text: "The lookup succeeded, but the full request did not complete."
-                            .into(),
+                        text: "The lookup succeeded, but the full request did not complete.".into(),
                         artifacts: vec![],
                     }],
                     usage: ModelUsage {
                         tokens: 100,
                         cost_micros: 3,
                     },
-                })
+                }))
             }
         })
     }
@@ -1734,9 +2000,10 @@ impl ModelProjectionPort for FilteringProjector {
             let mut coverage = DependencyCoverage::Independent;
             for dependency in &projected.authorized_history_dependencies {
                 coverage = coverage
-                    .merge(&DependencyCoverage::dependent(dependency.clone()).map_err(|_| {
-                        AgentFailure::InvalidModelOutput
-                    })?)
+                    .merge(
+                        &DependencyCoverage::dependent(dependency.clone())
+                            .map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    )
                     .map_err(|_| AgentFailure::InvalidModelOutput)?;
             }
             let shown = projected
@@ -1799,7 +2066,7 @@ impl ModelPort for ToolThenAnswer {
         &'a self,
         request: ModelRequest,
         _: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         Box::pin(async move {
             let settled = request
                 .projection
@@ -1820,14 +2087,14 @@ impl ModelPort for ToolThenAnswer {
                     input: "{}".into(),
                 }]
             };
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps,
                 usage: ModelUsage {
                     tokens: 1,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }

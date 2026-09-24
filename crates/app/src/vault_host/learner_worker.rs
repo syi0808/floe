@@ -7,7 +7,7 @@
 //! or second usage ledger exists here.
 
 use floe_agent_contract::{
-    AgentContext, AgentFailure, AllowedCatalog, DataClass, ModelConversation,
+    AgentContext, AgentFailure, AllowedCatalog, DataClass, ModelCallOutcome, ModelConversation,
     ModelConversationEntry, ModelPlacement, ModelRequest, ModelStep,
 };
 use floe_execution::Cancellation;
@@ -130,7 +130,7 @@ impl LearnerModel for LearnerModelHost<'_> {
             ledger.work_lease(),
             trace,
         );
-        let response = self
+        let outcome = self
             .executor
             .execute(
                 ModelRequest {
@@ -142,11 +142,19 @@ impl LearnerModel for LearnerModelHost<'_> {
                     consumer: LEARNER_INFERENCE_CONSUMER.into(),
                     preferred_profile_id: None,
                     replay: vec![],
+                    // The background learner runs under no Conversation
+                    // lineage: a recoverable consent case fails closed
+                    // without a card.
+                    lineage: None,
                 },
                 &scope,
                 InferenceExecutionConstraint::DeviceOnly,
             )
             .await?;
+        let response = match outcome {
+            ModelCallOutcome::Ready(response) => response,
+            ModelCallOutcome::NeedsUserAction(_) => return Err(AgentFailure::PolicyDenied),
+        };
         // One question, one reply: a preamble, a tool call, a delegation or
         // a second step is not the structured answer this role accepts.
         let [ModelStep::Answer { text, .. }] = response.steps.as_slice() else {
@@ -211,8 +219,18 @@ impl floe_access::DependencyResolver for LearnerDependencyResolver {
 struct LearnerRecipientAuthority;
 
 impl floe_access::ModelDispatchRecipientAuthority for LearnerRecipientAuthority {
-    fn check_recipient(&self, _recipient: &str) -> Result<(), AgentFailure> {
-        Err(AgentFailure::PolicyDenied)
+    fn check_recipient<'a>(
+        &'a self,
+        _request: &'a floe_access::ModelDispatchRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Err(AgentFailure::PolicyDenied) })
     }
 }
 
@@ -280,7 +298,7 @@ mod tests {
             request: ModelRequest,
             scope: &'a floe_execution::ExecutionScope,
             constraint: InferenceExecutionConstraint,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             self.seen.lock().unwrap().push((request, constraint));
             self.seen_scopes.lock().unwrap().push(ScopeFacts {
@@ -289,7 +307,8 @@ mod tests {
                 deadline: scope.deadline(),
                 run_id: scope.root_run_id(),
             });
-            Box::pin(async move { Ok(self.response.clone()) })
+            let response = self.response.clone();
+            Box::pin(async move { Ok(ModelCallOutcome::Ready(response)) })
         }
     }
 
@@ -550,8 +569,24 @@ mod tests {
                 .await,
             Err(AgentFailure::PolicyDenied)
         );
+        let dispatch = floe_access::ModelDispatchRequest {
+            person_id: person_id,
+            projection_ref: Uuid::new_v4(),
+            projection_revision: 1,
+            coverage: floe_context_contract::DependencyCoverage::Independent,
+            input_data_classes: vec![],
+            purpose: "test".into(),
+            consumer: "test".into(),
+            profile_id: "device".into(),
+            target: floe_access::ModelDispatchTarget::External {
+                recipient: "external".into(),
+            },
+            lineage: None,
+            deadline: Instant::now() + Duration::from_secs(1),
+            cancellation: Cancellation::default(),
+        };
         assert_eq!(
-            LearnerRecipientAuthority.check_recipient("external"),
+            LearnerRecipientAuthority.check_recipient(&dispatch).await,
             Err(AgentFailure::PolicyDenied)
         );
     }

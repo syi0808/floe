@@ -829,30 +829,40 @@ fn terminal_messages(
 ) -> Result<Vec<AgentMessage>, AgentFailure> {
     let mut messages = Vec::new();
     let mut projected: Vec<Uuid> = Vec::new();
-    let mut project_refs =
-        |messages: &mut Vec<AgentMessage>,
-         refs: Vec<floe_agent_contract::UserInteractionRef>|
-         -> Result<(), AgentFailure> {
-            for reference in refs {
-                if projected.contains(&reference.interaction_id) {
-                    continue;
-                }
-                if projected.len() >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                projected.push(reference.interaction_id);
-                messages.push(AgentMessage::Interaction {
-                    turn_id: run_id.as_uuid(),
-                    interaction_id: reference.interaction_id,
-                    interaction_kind: reference.kind,
-                });
+    let mut project_refs = |messages: &mut Vec<AgentMessage>,
+                            refs: Vec<floe_agent_contract::UserInteractionRef>|
+     -> Result<(), AgentFailure> {
+        for reference in refs {
+            if projected.contains(&reference.interaction_id) {
+                continue;
             }
-            Ok(())
-        };
+            if projected.len() >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            projected.push(reference.interaction_id);
+            messages.push(AgentMessage::Interaction {
+                turn_id: run_id.as_uuid(),
+                interaction_id: reference.interaction_id,
+                interaction_kind: reference.kind,
+            });
+        }
+        Ok(())
+    };
+    // Owner-set linkage for completions the model did not author
+    // (deterministic no-model limitation): deduplicated with step refs.
+    // Projected first so a Completed transcript still ends with its
+    // Assistant answer, matching source-blocker turns where the ref
+    // precedes the explanation.
+    for reference in &terminal.interactions {
+        reference
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+    }
+    project_refs(&mut messages, terminal.interactions.clone())?;
     for step in &terminal.steps {
         match step {
             // Model-authored Answers never project refs: only the explicit
-            // owner-set terminal linkage below and trusted-port step
+            // owner-set terminal linkage above and trusted-port step
             // artifacts become Interaction messages.
             EngineStep::Answer { text, .. } => messages.push(AgentMessage::Assistant {
                 turn_id: run_id.as_uuid(),
@@ -863,21 +873,16 @@ fn terminal_messages(
                     turn_id: run_id.as_uuid(),
                     task: legacy_task(run_id, receipt)?,
                 });
-                project_refs(&mut messages, step_interaction_refs(&receipt.snapshot.artifacts)?)?;
+                project_refs(
+                    &mut messages,
+                    step_interaction_refs(&receipt.snapshot.artifacts)?,
+                )?;
             }
             EngineStep::Tool(result) => {
                 project_refs(&mut messages, step_interaction_refs(&result.artifacts)?)?;
             }
         }
     }
-    // Owner-set linkage for completions the model did not author
-    // (deterministic no-model limitation): deduplicated with step refs.
-    for reference in &terminal.interactions {
-        reference
-            .validate()
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-    }
-    project_refs(&mut messages, terminal.interactions.clone())?;
     Ok(messages)
 }
 

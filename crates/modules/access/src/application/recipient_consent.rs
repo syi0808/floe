@@ -22,7 +22,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::ports::recipient_consent::RecipientConsentStore;
+use crate::ports::model_dispatch::{
+    ModelDispatchRecipientAuthority, ModelDispatchRequest, RecipientCheckOutcome,
+};
+use crate::ports::recipient_consent::{
+    ModelConnectionAdmission, RecipientConsentClock, RecipientConsentStore,
+};
 
 /// Bounded consent lifetime: 24 hours from the review, matching the
 /// interaction pending-review lifetime. Survives a crash between approval
@@ -89,9 +94,7 @@ impl RecipientConsent {
         now: DateTime<Utc>,
     ) -> Result<Self, GrantValidationError> {
         input_data_classes.sort();
-        source_scopes.sort_by_cached_key(|scope| {
-            serde_json::to_vec(scope).unwrap_or_default()
-        });
+        source_scopes.sort_by_cached_key(|scope| serde_json::to_vec(scope).unwrap_or_default());
         let device_id = device_id.into();
         let client_id = client_id.into();
         let recipient = recipient.into();
@@ -212,9 +215,10 @@ impl RecipientConsent {
             .checked_add_signed(RECIPIENT_CONSENT_TTL)
             .ok_or(GrantValidationError::InvalidState)?;
         let refreshed = Self {
-            revision: self.revision.checked_add(1).ok_or(
-                GrantValidationError::InvalidState,
-            )?,
+            revision: self
+                .revision
+                .checked_add(1)
+                .ok_or(GrantValidationError::InvalidState)?,
             state: RecipientConsentState::Active,
             created_at: now,
             expires_at,
@@ -335,12 +339,7 @@ pub fn recipient_consent_id(
     hasher.update(b"floe.access.recipient-consent\0");
     hasher.update(person_id.as_uuid().as_bytes());
     for value in [
-        device_id,
-        client_id,
-        recipient,
-        profile_id,
-        purpose,
-        consumer,
+        device_id, client_id, recipient, profile_id, purpose, consumer,
     ] {
         hasher.update((value.len() as u64).to_be_bytes());
         hasher.update(value.as_bytes());
@@ -366,14 +365,14 @@ pub async fn grant_recipient_consent(
     store: &impl RecipientConsentStore,
     consent: RecipientConsent,
 ) -> Result<RecipientConsent, AgentFailure> {
-    consent
-        .validate()
-        .map_err(|_| AgentFailure::InvalidInput)?;
+    consent.validate().map_err(|_| AgentFailure::InvalidInput)?;
     store
         .prune_expired(consent.created_at.timestamp_millis())
         .await?;
     if let Some(existing) = store.find_consent(consent.id).await? {
-        existing.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
+        existing
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
         if existing.person_id != consent.person_id {
             return Err(AgentFailure::CapabilityDenied);
         }
@@ -402,7 +401,9 @@ pub async fn revoke_recipient_consent(
         .find_consent(consent_id)
         .await?
         .ok_or(AgentFailure::NotFound)?;
-    existing.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
+    existing
+        .validate()
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
     if existing.person_id != person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
@@ -410,6 +411,111 @@ pub async fn revoke_recipient_consent(
         return Ok(());
     }
     store.revoke_consent(consent_id).await
+}
+
+/// The canonical exact-recipient authority: current pairing admission plus
+/// current contextual consent lookup. No saved global flags, no standing
+/// authorization.
+///
+/// Every check reloads the live pairing (person/device/client binding) and
+/// looks up the content-derived consent id for this exact dispatch. A
+/// usable match grants; anything else is missing (reviewable at Access
+/// discretion) or a hard fail-closed denial. Store and pairing failures
+/// always map to PolicyDenied so a revocation can never trigger a hidden
+/// fallback to another recipient.
+pub struct ContextualRecipientAuthority<Store, Admission, Clock> {
+    store: Store,
+    admission: Admission,
+    clock: Clock,
+}
+
+impl<Store, Admission, Clock> ContextualRecipientAuthority<Store, Admission, Clock> {
+    pub fn new(store: Store, admission: Admission, clock: Clock) -> Self {
+        Self {
+            store,
+            admission,
+            clock,
+        }
+    }
+}
+
+impl<Store, Admission, Clock> ModelDispatchRecipientAuthority
+    for ContextualRecipientAuthority<Store, Admission, Clock>
+where
+    Store: RecipientConsentStore + Send,
+    Admission: ModelConnectionAdmission,
+    Clock: RecipientConsentClock,
+{
+    fn check_recipient<'a>(
+        &'a self,
+        request: &'a ModelDispatchRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<RecipientCheckOutcome, AgentFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let recipient = match &request.target {
+                crate::ports::model_dispatch::ModelDispatchTarget::External { recipient } => {
+                    recipient.clone()
+                }
+                crate::ports::model_dispatch::ModelDispatchTarget::Device => {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            };
+            let Some(lineage) = request.lineage else {
+                // No lineage, no review and no grant: fail closed.
+                return Err(AgentFailure::PolicyDenied);
+            };
+            // The live pairing, admitted per check. Removal, re-pairing, or
+            // identity mismatch denies the very next fence.
+            let admitted = self
+                .admission
+                .admit()
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+            if admitted.person_id != request.person_id.to_string() {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let scopes = match &request.coverage {
+                floe_context_contract::DependencyCoverage::Unknown
+                | floe_context_contract::DependencyCoverage::Independent => vec![],
+                floe_context_contract::DependencyCoverage::Dependent { dependencies } => {
+                    dependencies
+                        .iter()
+                        .map(floe_context_contract::ProcessingSourceScope::from_dependency)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|_| AgentFailure::PolicyDenied)?
+                }
+            };
+            let id = recipient_consent_id(
+                request.person_id,
+                &admitted.device_id,
+                &admitted.client_id,
+                &recipient,
+                &request.profile_id,
+                &request.purpose,
+                &request.consumer,
+                &request.input_data_classes,
+                &scopes,
+                lineage,
+            );
+            let found = self
+                .store
+                .find_consent(id)
+                .await
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+            let Some(consent) = found else {
+                return Ok(RecipientCheckOutcome::Missing);
+            };
+            consent.validate().map_err(|_| AgentFailure::PolicyDenied)?;
+            if consent.id() != id || !consent.is_usable_at(self.clock.now()) {
+                return Ok(RecipientCheckOutcome::Missing);
+            }
+            Ok(RecipientCheckOutcome::Granted)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -468,10 +574,11 @@ mod tests {
         ) -> crate::ports::remote_grants::BoxFuture<'a, Result<RecipientConsent, AgentFailure>>
         {
             Box::pin(async move {
-                consent
-                    .validate()
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                self.records.lock().unwrap().insert(consent.id, consent.clone());
+                consent.validate().map_err(|_| AgentFailure::InvalidInput)?;
+                self.records
+                    .lock()
+                    .unwrap()
+                    .insert(consent.id, consent.clone());
                 Ok(consent)
             })
         }
@@ -479,8 +586,10 @@ mod tests {
         fn find_consent<'a>(
             &'a self,
             consent_id: Uuid,
-        ) -> crate::ports::remote_grants::BoxFuture<'a, Result<Option<RecipientConsent>, AgentFailure>>
-        {
+        ) -> crate::ports::remote_grants::BoxFuture<
+            'a,
+            Result<Option<RecipientConsent>, AgentFailure>,
+        > {
             Box::pin(async move { Ok(self.records.lock().unwrap().get(&consent_id).cloned()) })
         }
 
@@ -496,7 +605,9 @@ mod tests {
                 let mut revoked = existing;
                 revoked.state = RecipientConsentState::Revoked;
                 revoked.revision += 1;
-                revoked.validate().map_err(|_| AgentFailure::StorageUnavailable)?;
+                revoked
+                    .validate()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
                 records.insert(consent_id, revoked);
                 Ok(())
             })
@@ -509,9 +620,7 @@ mod tests {
             Box::pin(async move {
                 let mut records = self.records.lock().unwrap();
                 let before = records.len();
-                records.retain(|_, consent| {
-                    consent.expires_at.timestamp_millis() > now_unix_ms
-                });
+                records.retain(|_, consent| consent.expires_at.timestamp_millis() > now_unix_ms);
                 Ok((before - records.len()) as u64)
             })
         }
@@ -596,10 +705,14 @@ mod tests {
     async fn grant_rejoins_regrants_and_revokes() {
         let store = MemoryStore::new();
         let review = consent();
-        let granted = grant_recipient_consent(&store, review.clone()).await.unwrap();
+        let granted = grant_recipient_consent(&store, review.clone())
+            .await
+            .unwrap();
         assert_eq!(granted.revision, 1);
         // Identical review rejoins without a new revision.
-        let rejoined = grant_recipient_consent(&store, review.clone()).await.unwrap();
+        let rejoined = grant_recipient_consent(&store, review.clone())
+            .await
+            .unwrap();
         assert_eq!(rejoined, granted);
         // Revoke ends it; revoke is idempotent.
         revoke_recipient_consent(&store, granted.id, granted.person_id)
@@ -653,5 +766,164 @@ mod tests {
         assert!(store.find_consent(stale.id).await.unwrap().is_some());
         grant_recipient_consent(&store, consent()).await.unwrap();
         assert!(store.find_consent(stale.id).await.unwrap().is_none());
+    }
+
+    struct FakeAdmission {
+        admitted:
+            Mutex<Result<crate::ports::recipient_consent::AdmittedModelConnection, AgentFailure>>,
+    }
+
+    impl FakeAdmission {
+        fn live(person_id: PersonId) -> Self {
+            Self {
+                admitted: Mutex::new(Ok(
+                    crate::ports::recipient_consent::AdmittedModelConnection {
+                        person_id: person_id.to_string(),
+                        device_id: "device".into(),
+                        client_id: "client".into(),
+                    },
+                )),
+            }
+        }
+    }
+
+    impl crate::ports::recipient_consent::ModelConnectionAdmission for FakeAdmission {
+        fn admit(
+            &self,
+        ) -> Result<crate::ports::recipient_consent::AdmittedModelConnection, AgentFailure>
+        {
+            self.admitted.lock().unwrap().clone()
+        }
+    }
+
+    struct ManualClock {
+        now: Mutex<DateTime<Utc>>,
+    }
+
+    impl ManualClock {
+        fn at(now: DateTime<Utc>) -> Self {
+            Self {
+                now: Mutex::new(now),
+            }
+        }
+    }
+
+    impl crate::ports::recipient_consent::RecipientConsentClock for ManualClock {
+        fn now(&self) -> DateTime<Utc> {
+            *self.now.lock().unwrap()
+        }
+    }
+
+    fn dispatch_request(
+        consent: &RecipientConsent,
+    ) -> crate::ports::model_dispatch::ModelDispatchRequest {
+        crate::ports::model_dispatch::ModelDispatchRequest {
+            person_id: consent.person_id(),
+            projection_ref: Uuid::new_v4(),
+            projection_revision: 7,
+            coverage: floe_context_contract::DependencyCoverage::Independent,
+            input_data_classes: consent.input_data_classes().to_vec(),
+            purpose: consent.purpose().to_owned(),
+            consumer: consent.consumer().to_owned(),
+            profile_id: consent.profile_id().to_owned(),
+            target: crate::ports::model_dispatch::ModelDispatchTarget::External {
+                recipient: consent.recipient().to_owned(),
+            },
+            lineage: Some(consent.lineage()),
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: floe_execution::Cancellation::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn authority_grants_matches_and_fails_closed() {
+        let store = MemoryStore::new();
+        let review = consent();
+        let granted = grant_recipient_consent(&store, review.clone())
+            .await
+            .unwrap();
+        let admission = FakeAdmission::live(granted.person_id());
+        let clock = ManualClock::at(now());
+        let authority = ContextualRecipientAuthority::new(&store, &admission, &clock);
+        // The reviewed dispatch grants.
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Granted)
+        );
+        // A different recipient, profile, or lineage is missing, not granted.
+        let mut other = dispatch_request(&granted);
+        other.target = crate::ports::model_dispatch::ModelDispatchTarget::External {
+            recipient: "other.example".into(),
+        };
+        assert_eq!(
+            authority.check_recipient(&other).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Missing)
+        );
+        // No lineage fails closed without a reviewable outcome.
+        let mut unlined = dispatch_request(&granted);
+        unlined.lineage = None;
+        assert_eq!(
+            authority.check_recipient(&unlined).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        // Re-pairing never matches the old review.
+        *admission.admitted.lock().unwrap() =
+            Ok(crate::ports::recipient_consent::AdmittedModelConnection {
+                person_id: granted.person_id().to_string(),
+                device_id: "device".into(),
+                client_id: "repaired-client".into(),
+            });
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Missing)
+        );
+        // A foreign pairing fails closed.
+        *admission.admitted.lock().unwrap() =
+            Ok(crate::ports::recipient_consent::AdmittedModelConnection {
+                person_id: PersonId::new().to_string(),
+                device_id: "device".into(),
+                client_id: "client".into(),
+            });
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        // Pairing removal fails closed.
+        *admission.admitted.lock().unwrap() = Err(AgentFailure::NotFound);
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn authority_treats_revoked_and_expired_as_missing() {
+        let store = MemoryStore::new();
+        let review = consent();
+        let granted = grant_recipient_consent(&store, review.clone())
+            .await
+            .unwrap();
+        let admission = FakeAdmission::live(granted.person_id());
+        let clock = ManualClock::at(now());
+        let authority = ContextualRecipientAuthority::new(&store, &admission, &clock);
+        revoke_recipient_consent(&store, granted.id(), granted.person_id())
+            .await
+            .unwrap();
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Missing)
+        );
+        // A fresh review of identical content grants again under the clock.
+        let rereview = granted.refresh_for_regrant(now()).unwrap();
+        grant_recipient_consent(&store, rereview).await.unwrap();
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Granted)
+        );
+        *clock.now.lock().unwrap() = now() + RECIPIENT_CONSENT_TTL;
+        assert_eq!(
+            authority.check_recipient(&dispatch_request(&granted)).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Missing)
+        );
     }
 }

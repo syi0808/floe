@@ -5,15 +5,16 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::{
     CalendarContextView, WellbeingView, personal_context_evidence, validate_wellbeing_view,
 };
 
 use crate::prompts::wellbeing_expert_prompt;
 use crate::shared::{
-    PersonalExpertInvocation, add_schedule_views, run_personal_model, validate_judgment,
+    ExpertJudgment, PersonalExpertInvocation, add_schedule_views, run_personal_model,
+    validate_judgment,
 };
 
 #[derive(Clone, Debug)]
@@ -60,7 +61,7 @@ pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
     policy: &InferencePolicyDecision,
     invocation: PersonalExpertInvocation,
     views: WellbeingContextViews,
-) -> Result<WellbeingExpertResult, AgentFailure> {
+) -> Result<ExpertJudgment<WellbeingExpertResult>, AgentFailure> {
     validate_wellbeing_view(&views.wellbeing, invocation.current_time_unix_ms)?;
     let mut evidence = vec![personal_context_evidence(&views.wellbeing)?];
     let mut available = views.wellbeing.evidence_handles.clone();
@@ -74,7 +75,7 @@ pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
         &mut source_handles,
         &mut expires_at_unix_ms,
     )?;
-    let output: WellbeingOutput = run_personal_model(
+    let output: WellbeingOutput = match run_personal_model(
         model,
         policy,
         ExpertModelRequirement::Any,
@@ -82,7 +83,13 @@ pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
         evidence,
         wellbeing_expert_prompt(),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(output) => output,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     validate_judgment(
         &output.summary,
         &output.rationale,
@@ -90,7 +97,7 @@ pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
         &available,
         matches!(output.schedule_impact, ScheduleImpact::NoConclusion),
     )?;
-    Ok(WellbeingExpertResult {
+    Ok(ExpertJudgment::Decided(WellbeingExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handle: views.wellbeing.source_handle,
@@ -100,5 +107,5 @@ pub async fn run_wellbeing_expert_with_views<Model: ExpertModel>(
         schedule_impact: output.schedule_impact,
         rationale: output.rationale,
         evidence_handles: output.evidence_handles,
-    })
+    }))
 }

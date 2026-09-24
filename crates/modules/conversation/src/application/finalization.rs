@@ -2,17 +2,19 @@ use std::time::Duration;
 
 use floe_agent_contract::{
     AllowedCatalog, DependencyCoverage, EngineRequest, EngineStep, ModelConversation,
-    ModelConversationEntry, RoleSpec,
+    ModelConversationEntry, RoleSpec, UserInteractionRef, UserInteractionStatus,
 };
-use floe_agent_runtime::{Engine, EnginePorts, EngineReport};
+use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, RunId};
 
 use crate::{
-    ConversationPorts, ConversationRepository, FINALIZATION_OUTPUT_CONTRACT,
-    FINALIZATION_ROLE_ID, FINALIZATION_ROLE_PROMPT, RunState, RunTerminal,
+    ConversationPorts, ConversationRepository, FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_ID,
+    FINALIZATION_ROLE_PROMPT, InteractionOrigin, InteractionRepository, MODEL_CONSENT_LIMITATION,
+    PublishAdmission, PublishModelRequirement, RunState, RunTerminal, TurnRequest,
 };
 
+use super::interactions::publish_model_requirement;
 use super::recovery::project_active_journal;
 
 const MAX_FINALIZATION_DURATION: Duration = Duration::from_secs(10);
@@ -23,7 +25,9 @@ pub(super) enum FinalizationOutcome {
     AttemptedWithoutReply,
 }
 
-pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
+pub(super) async fn finalize_exhausted_run<
+    Repository: ConversationRepository + InteractionRepository,
+>(
     engine: &Engine,
     repository: &Repository,
     run_id: RunId,
@@ -31,6 +35,7 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
     work_request: &EngineRequest,
     ports: ConversationPorts<'_>,
     issue: AgentFailure,
+    turn: &TurnRequest,
 ) -> Result<FinalizationOutcome, AgentFailure> {
     if !matches!(issue, AgentFailure::BudgetExceeded | AgentFailure::Stalled) {
         return Ok(FinalizationOutcome::NotAttempted(issue));
@@ -122,8 +127,9 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
         // Finalization never delegates: its catalog carries no cards, so no
         // execution context is required.
         delegation_context: None,
+        lineage: work_request.lineage,
     };
-    let report = engine
+    let outcome = engine
         .drive(
             request,
             EnginePorts {
@@ -136,27 +142,73 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
             },
         )
         .await;
-    let Ok(report) = report else {
+    let Ok(outcome) = outcome else {
         return Ok(FinalizationOutcome::AttemptedWithoutReply);
     };
-    let EngineReport {
-        steps,
-        output,
-        answering_projection_coverage,
-        ..
-    } = report;
-    let Some(output) = output else {
-        return Ok(FinalizationOutcome::AttemptedWithoutReply);
-    };
-    let coverage = finalization_coverage(&usable, answering_projection_coverage, &steps)?;
-    Ok(FinalizationOutcome::Replied(RunTerminal {
-        state: RunState::Failed,
-        output: Some(output),
-        steps,
-        coverage,
-        issue: Some(issue),
-        interactions: vec![],
-    }))
+    match outcome {
+        // A blocked finalization dispatch: publish the durable card under
+        // the exact attempted origin and complete with the deterministic
+        // limitation. The exhaustion issue is superseded: no output was
+        // produced, and the fresh review unblocks a linked resume.
+        EngineOutcome::Blocked(blocked) => {
+            let published = match publish_model_requirement(
+                repository,
+                repository,
+                PublishModelRequirement {
+                    principal: turn.principal.clone(),
+                    session_id: turn.session_id,
+                    origin_run_id: run_id,
+                    origin: InteractionOrigin::Model {
+                        attempt_id: blocked.attempt_id,
+                    },
+                    requirement: blocked.requirement,
+                    device_id: turn.device_id.clone(),
+                },
+                turn.now_unix_ms,
+            )
+            .await
+            {
+                Ok(PublishAdmission::Created(record)) => record,
+                Ok(PublishAdmission::Existing(record)) => record,
+                Err(_) => return Ok(FinalizationOutcome::AttemptedWithoutReply),
+            };
+            Ok(FinalizationOutcome::Replied(RunTerminal {
+                state: RunState::Completed,
+                output: Some(MODEL_CONSENT_LIMITATION.into()),
+                steps: vec![EngineStep::Answer {
+                    text: MODEL_CONSENT_LIMITATION.into(),
+                    artifacts: vec![],
+                }],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                interactions: vec![UserInteractionRef {
+                    interaction_id: published.id,
+                    kind: published.kind,
+                    status: UserInteractionStatus::Pending,
+                }],
+            }))
+        }
+        EngineOutcome::Completed(report) => {
+            let EngineReport {
+                steps,
+                output,
+                answering_projection_coverage,
+                ..
+            } = report;
+            let Some(output) = output else {
+                return Ok(FinalizationOutcome::AttemptedWithoutReply);
+            };
+            let coverage = finalization_coverage(&usable, answering_projection_coverage, &steps)?;
+            Ok(FinalizationOutcome::Replied(RunTerminal {
+                state: RunState::Failed,
+                output: Some(output),
+                steps,
+                coverage,
+                issue: Some(issue),
+                interactions: vec![],
+            }))
+        }
+    }
 }
 
 fn exchange_call_id(entry: &ModelConversationEntry) -> Option<uuid::Uuid> {

@@ -12,7 +12,6 @@ pub const FOCUS_REQUEST: &str = "/focus";
 /// The shortest focus window the Expert will propose from now.
 const FOCUS_LEAD: Duration = Duration::minutes(1);
 
-
 /// The requested window and intent, independent of available sources.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScheduleRequestPlan {
@@ -212,9 +211,11 @@ mod tests {
         let plan = plan_request("/focus", local, now).unwrap();
         assert!(plan.propose_focus);
         assert!(plan.starts_at >= now);
-        assert!(!plan_request("what is today like?", local, now)
-            .unwrap()
-            .propose_focus);
+        assert!(
+            !plan_request("what is today like?", local, now)
+                .unwrap()
+                .propose_focus
+        );
         assert!(plan_request("/focus", local, now + Duration::days(2)).is_err());
     }
 }

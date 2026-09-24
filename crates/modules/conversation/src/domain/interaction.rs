@@ -824,8 +824,7 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             let scope_count = u64::try_from(target.source_scopes.len()).unwrap_or(u64::MAX);
             bytes.extend_from_slice(&scope_count.to_be_bytes());
             for scope in &target.source_scopes {
-                let encoded =
-                    serde_json::to_vec(scope).map_err(|_| AgentFailure::InvalidInput)?;
+                let encoded = serde_json::to_vec(scope).map_err(|_| AgentFailure::InvalidInput)?;
                 append_bytes(&mut bytes, &encoded);
             }
             bytes.extend_from_slice(target.lineage.session_id().as_bytes());
@@ -1169,10 +1168,7 @@ mod tests {
             &mismatched.target_digest,
         )
         .unwrap();
-        assert_eq!(
-            mismatched.validate(),
-            Err(AgentFailure::StorageUnavailable)
-        );
+        assert_eq!(mismatched.validate(), Err(AgentFailure::StorageUnavailable));
     }
 
     pub(crate) fn consent_target() -> RecipientConsentTarget {
@@ -1194,8 +1190,8 @@ mod tests {
     fn consent_target_validates_digest_binds_and_round_trips() {
         let target = consent_target();
         assert!(target.validate().is_ok());
-        let digest = canonical_target_digest(&ReviewedTarget::RecipientConsent(target.clone()))
-            .unwrap();
+        let digest =
+            canonical_target_digest(&ReviewedTarget::RecipientConsent(target.clone())).unwrap();
         assert_ne!(digest, [0; 32]);
         let decoded: RecipientConsentTarget =
             serde_json::from_str(&serde_json::to_string(&target).unwrap()).unwrap();
@@ -1220,8 +1216,7 @@ mod tests {
             digest
         );
         let mut changed = target.clone();
-        changed.lineage =
-            RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        changed.lineage = RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
         assert_ne!(
             canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
             digest

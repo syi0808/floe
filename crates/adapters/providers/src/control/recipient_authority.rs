@@ -1,28 +1,32 @@
-//! Current saved-connection recipient authority for model dispatch.
+//! Current saved-connection pairing admission for model dispatch.
 //!
-//! Each [`ModelDispatchRecipientAuthority::check_recipient`] call reloads the
-//! current saved connection and binds it to the verified person/device with
-//! [`admit_saved_connection`]. A copied recipient list is never stored: any
-//! removal, recipient change, consent revocation or identity mismatch denies.
-//! Credentials are never returned or logged; malformed, foreign, absent or
-//! revoked state fails closed.
+//! Each [`ModelConnectionAdmission::admit`] call reloads the current saved
+//! connection and binds it to the verified person/device with
+//! [`admit_saved_connection`]. Admission carries pairing identity only
+//! (person/device/client): recorded global consent flags are accepted as
+//! stored shape but never consulted, because they are not product
+//! authorization. Contextual consent lives in the Access-owned consent
+//! store, consulted by [`ContextualRecipientAuthority`] alongside this
+//! admission. Credentials are never returned or logged; malformed,
+//! foreign or absent state fails closed.
 
+use floe_access::{AdmittedModelConnection, ModelConnectionAdmission};
 use floe_agent_contract::AgentFailure;
 
 use crate::control::server_connection::SavedServerConnectionStore;
 
-/// Current exact-recipient authority backed by a saved-connection store.
+/// Current pairing admission backed by a saved-connection store.
 ///
 /// `Store` supplies the current saved connection on every check. Production
 /// uses [`SavedServerConnectionStore`] (the host keychain slot); tests inject
 /// a fake store with the same reload-per-check semantics.
-pub struct SavedConnectionRecipientAuthority<Store> {
+pub struct SavedConnectionAdmission<Store> {
     store: Store,
     person_id: String,
     device_id: String,
 }
 
-impl<Store> SavedConnectionRecipientAuthority<Store> {
+impl<Store> SavedConnectionAdmission<Store> {
     pub fn new(store: Store, person_id: String, device_id: String) -> Self {
         Self {
             store,
@@ -32,41 +36,27 @@ impl<Store> SavedConnectionRecipientAuthority<Store> {
     }
 }
 
-impl<Store> floe_access::ModelDispatchRecipientAuthority
-    for SavedConnectionRecipientAuthority<Store>
+impl<Store> ModelConnectionAdmission for SavedConnectionAdmission<Store>
 where
     Store: floe_inference::SavedConnectionStore + Send + Sync,
 {
-    fn check_recipient(&self, recipient: &str) -> Result<(), AgentFailure> {
+    fn admit(&self) -> Result<AdmittedModelConnection, AgentFailure> {
         // Reload the current saved connection on every check. Any store
-        // failure, absence, admission failure or consent mismatch denies.
-        // All denials map to `PolicyDenied` so Inference treats them as
-        // admission denials (no transport fallback bypass).
-        let stored = self
-            .store
-            .load()
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+        // failure, absence or admission failure denies. All denials map to
+        // `PolicyDenied` so Inference treats them as admission denials (no
+        // transport fallback bypass).
+        let stored = self.store.load().map_err(|_| AgentFailure::PolicyDenied)?;
         let Some(saved) = stored else {
             return Err(AgentFailure::PolicyDenied);
         };
-        let admitted = floe_inference::admit_saved_connection(
-            saved,
-            &self.person_id,
-            &self.device_id,
-        )
-        .map_err(|_| AgentFailure::PolicyDenied)?;
-        if !admitted.allow_external {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        if admitted
-            .external_recipients
-            .iter()
-            .any(|allowed| allowed == recipient)
-        {
-            Ok(())
-        } else {
-            Err(AgentFailure::PolicyDenied)
-        }
+        let admitted =
+            floe_inference::admit_saved_connection(saved, &self.person_id, &self.device_id)
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+        Ok(AdmittedModelConnection {
+            person_id: admitted.person_id,
+            device_id: admitted.device_id,
+            client_id: admitted.client_id,
+        })
     }
 }
 
@@ -123,20 +113,26 @@ impl floe_inference::SavedConnectionStore for CurrentSavedConnectionStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::future::Future;
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
 
-    use floe_access::{DependencyAuthorization, DependencyResolver, ModelDispatchRecipientAuthority};
-    use floe_agent_contract::{
-        AgentFailure, AllowedCatalog, AuthorizedModelProjection, ContextEnvelope, ContextManifest,
-        ContextualData, DataClass, DependencyCoverage, ModelPort, ModelRequest, ModelStep,
-        ProjectionRef, RuntimeContext, ScopedInstructions,
+    use chrono::{DateTime, Utc};
+    use floe_access::{
+        AdmittedModelConnection, ContextualRecipientAuthority, DependencyAuthorization,
+        DependencyResolver, ModelConnectionAdmission, RecipientConsent, RecipientConsentClock,
+        RecipientConsentStore, grant_recipient_consent,
     };
     use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind, PromptRole};
-    use floe_context_contract::ContextDependency;
+    use floe_agent_contract::{
+        AgentFailure, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
+        ContextManifest, ContextualData, DataClass, DependencyCoverage, ModelPort, ModelRequest,
+        ModelStep, ProjectionRef, RuntimeContext, ScopedInstructions,
+    };
+    use floe_context_contract::{ContextDependency, RecipientLineage};
     use floe_execution::{
         Cancellation,
         budget::{BudgetConfig, BudgetLedger, ModelUsage as LedgerUsage},
@@ -169,63 +165,43 @@ mod tests {
         }
     }
 
-    fn authority_for(
+    fn admission_for(
         saved: Option<floe_inference::SavedServerConnection>,
-    ) -> SavedConnectionRecipientAuthority<FixedSavedConnectionStore> {
-        SavedConnectionRecipientAuthority::new(
+    ) -> SavedConnectionAdmission<FixedSavedConnectionStore> {
+        SavedConnectionAdmission::new(
             FixedSavedConnectionStore::fixed(saved),
             PERSON.into(),
             DEVICE.into(),
         )
     }
 
-    #[test]
-    fn connection_removed_denies_recipient() {
-        let authority = authority_for(None);
-        assert_eq!(
-            authority.check_recipient(RECIPIENT).err(),
-            Some(AgentFailure::PolicyDenied)
-        );
+    fn pairing() -> AdmittedModelConnection {
+        AdmittedModelConnection {
+            person_id: PERSON.into(),
+            device_id: DEVICE.into(),
+            client_id: "paired-client".into(),
+        }
     }
 
     #[test]
-    fn allow_external_revoked_denies_recipient() {
+    fn connection_removed_denies_admission() {
+        let admission = admission_for(None);
+        assert_eq!(admission.admit().err(), Some(AgentFailure::PolicyDenied));
+    }
+
+    #[test]
+    fn recorded_consent_flags_are_never_consulted() {
+        // Admission carries pairing identity only. Revoked global flags,
+        // changed recipient lists, and empty recipients still admit: exact
+        // contextual consent lives in the Access-owned consent store, which
+        // ContextualRecipientAuthority consults alongside this admission.
         let mut revoked = saved();
         revoked.allow_external = false;
         revoked.external_recipients = vec![];
-        let authority = authority_for(Some(revoked));
-        assert_eq!(
-            authority.check_recipient(RECIPIENT).err(),
-            Some(AgentFailure::PolicyDenied)
-        );
-    }
-
-    #[test]
-    fn recipient_removed_denies_exact_recipient() {
-        let mut removed = saved();
-        removed.allow_external = false;
-        removed.external_recipients = vec![];
-        // Admitted shape with external disabled carries no recipients, so the
-        // previously consented exact recipient no longer holds authority.
-        let authority = authority_for(Some(removed));
-        assert_eq!(
-            authority.check_recipient(RECIPIENT).err(),
-            Some(AgentFailure::PolicyDenied)
-        );
-    }
-
-    #[test]
-    fn different_recipient_added_while_requested_removed_denies() {
+        assert_eq!(admission_for(Some(revoked)).admit().unwrap(), pairing());
         let mut replaced = saved();
         replaced.external_recipients = vec!["someone-else.example".into()];
-        let authority = authority_for(Some(replaced));
-        assert_eq!(
-            authority.check_recipient(RECIPIENT).err(),
-            Some(AgentFailure::PolicyDenied)
-        );
-        // The replacement itself is exact-matched, proving equality is exact
-        // rather than a blanket external allow.
-        assert!(authority.check_recipient("someone-else.example").is_ok());
+        assert_eq!(admission_for(Some(replaced)).admit().unwrap(), pairing());
     }
 
     #[test]
@@ -233,17 +209,13 @@ mod tests {
         let mut foreign_person = saved();
         foreign_person.person_id = "00000000-0000-4000-8000-000000000002".into();
         assert_eq!(
-            authority_for(Some(foreign_person))
-                .check_recipient(RECIPIENT)
-                .err(),
+            admission_for(Some(foreign_person)).admit().err(),
             Some(AgentFailure::PolicyDenied)
         );
         let mut foreign_device = saved();
         foreign_device.device_id = "other-device".into();
         assert_eq!(
-            authority_for(Some(foreign_device))
-                .check_recipient(RECIPIENT)
-                .err(),
+            admission_for(Some(foreign_device)).admit().err(),
             Some(AgentFailure::PolicyDenied)
         );
     }
@@ -254,9 +226,7 @@ mod tests {
         let mut duplicated = saved();
         duplicated.external_recipients = vec![RECIPIENT.into(), RECIPIENT.into()];
         assert_eq!(
-            authority_for(Some(duplicated))
-                .check_recipient(RECIPIENT)
-                .err(),
+            admission_for(Some(duplicated)).admit().err(),
             Some(AgentFailure::PolicyDenied)
         );
         // allow_external inconsistent with the recipient list violates
@@ -265,48 +235,36 @@ mod tests {
         inconsistent.allow_external = true;
         inconsistent.external_recipients = vec![];
         assert_eq!(
-            authority_for(Some(inconsistent))
-                .check_recipient(RECIPIENT)
-                .err(),
+            admission_for(Some(inconsistent)).admit().err(),
             Some(AgentFailure::PolicyDenied)
         );
         // Untrimmed recipient violates admission invariants.
         let mut untrimmed = saved();
         untrimmed.external_recipients = vec![" partner.example".into()];
         assert_eq!(
-            authority_for(Some(untrimmed))
-                .check_recipient(RECIPIENT)
-                .err(),
+            admission_for(Some(untrimmed)).admit().err(),
             Some(AgentFailure::PolicyDenied)
         );
     }
 
     #[test]
-    fn unchanged_exact_consent_is_accepted() {
-        let authority = authority_for(Some(saved()));
-        assert!(authority.check_recipient(RECIPIENT).is_ok());
-        // Exact match is case-sensitive: a near miss still denies.
-        assert_eq!(
-            authority.check_recipient("Partner.Example").err(),
-            Some(AgentFailure::PolicyDenied)
-        );
+    fn unchanged_pairing_admits_identity() {
+        assert_eq!(admission_for(Some(saved())).admit().unwrap(), pairing());
     }
 
     #[test]
-    fn credential_rotation_with_unchanged_recipient_still_passes_authority() {
-        // Access never inspects credentials: rotating token/base URL while the
-        // exact recipient, person, device and consent flag are unchanged keeps
-        // recipient authority. Transport success/failure stays independent.
+    fn credential_rotation_with_unchanged_binding_still_admits() {
+        // Admission never inspects credentials: rotating token/base URL while
+        // person, device and client are unchanged keeps pairing admission.
+        // Transport success/failure stays independent.
         let mut rotated = saved();
         rotated.token = "r".repeat(40);
         rotated.base_url = "http://127.0.0.1:8555".into();
-        let authority = authority_for(Some(rotated));
-        assert!(authority.check_recipient(RECIPIENT).is_ok());
+        assert_eq!(admission_for(Some(rotated)).admit().unwrap(), pairing());
     }
 
     #[test]
     fn every_check_reloads_the_current_store() {
-        use std::sync::Mutex;
         struct MutableStore {
             current: Arc<Mutex<Option<floe_inference::SavedServerConnection>>>,
         }
@@ -319,16 +277,12 @@ mod tests {
         let store = CurrentSavedConnectionStore::new(MutableStore {
             current: current.clone(),
         });
-        let authority =
-            SavedConnectionRecipientAuthority::new(store.clone(), PERSON.into(), DEVICE.into());
-        assert!(authority.check_recipient(RECIPIENT).is_ok());
+        let admission = SavedConnectionAdmission::new(store.clone(), PERSON.into(), DEVICE.into());
+        assert_eq!(admission.admit().unwrap(), pairing());
         // Mutating the current store is observed on the very next check: no
         // snapshot was kept at construction.
         *current.lock().unwrap() = None;
-        assert_eq!(
-            authority.check_recipient(RECIPIENT).err(),
-            Some(AgentFailure::PolicyDenied)
-        );
+        assert_eq!(admission.admit().err(), Some(AgentFailure::PolicyDenied));
         assert!(
             crate::sources::ServerSourceClient::from_current_connection(&store, PERSON, DEVICE)
                 .unwrap()
@@ -337,7 +291,123 @@ mod tests {
     }
 
     // Canonical handoff regressions below drive `InferenceService` with the
-    // production authority type, not an Access unit-test fake.
+    // production authority composition (saved-connection admission plus the
+    // Access-owned consent lookup), not an Access unit-test fake. A memory
+    // consent store stands in for the vault.
+
+    #[derive(Default)]
+    struct MemoryConsents {
+        records: Mutex<HashMap<Uuid, RecipientConsent>>,
+    }
+
+    impl RecipientConsentStore for MemoryConsents {
+        fn grant_consent<'a>(
+            &'a self,
+            consent: RecipientConsent,
+        ) -> BoxFuture<'a, Result<RecipientConsent, AgentFailure>> {
+            Box::pin(async move {
+                consent.validate().map_err(|_| AgentFailure::InvalidInput)?;
+                let mut records = self.records.lock().unwrap();
+                if let Some(existing) = records.get(&consent.id()) {
+                    existing
+                        .validate()
+                        .map_err(|_| AgentFailure::StorageUnavailable)?;
+                    return Ok(existing.clone());
+                }
+                records.insert(consent.id(), consent.clone());
+                Ok(consent)
+            })
+        }
+
+        fn find_consent<'a>(
+            &'a self,
+            consent_id: Uuid,
+        ) -> BoxFuture<'a, Result<Option<RecipientConsent>, AgentFailure>> {
+            Box::pin(async move {
+                if consent_id.is_nil() {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                Ok(self.records.lock().unwrap().get(&consent_id).cloned())
+            })
+        }
+
+        fn revoke_consent<'a>(
+            &'a self,
+            consent_id: Uuid,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async move {
+                let mut records = self.records.lock().unwrap();
+                let Some(existing) = records.get(&consent_id).cloned() else {
+                    return Err(AgentFailure::NotFound);
+                };
+                let revoked = existing
+                    .revoked()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                records.insert(consent_id, revoked);
+                Ok(())
+            })
+        }
+
+        fn prune_expired<'a>(
+            &'a self,
+            now_unix_ms: i64,
+        ) -> BoxFuture<'a, Result<u64, AgentFailure>> {
+            Box::pin(async move {
+                if now_unix_ms < 0 {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                let mut records = self.records.lock().unwrap();
+                let before = records.len();
+                records.retain(|_, consent| consent.expires_at().timestamp_millis() > now_unix_ms);
+                Ok((before - records.len()) as u64)
+            })
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct FixedClock {
+        now: DateTime<Utc>,
+    }
+
+    impl RecipientConsentClock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.now
+        }
+    }
+
+    const GRANT_NOW_MS: i64 = 1_800_000_000_000;
+
+    fn grant_now() -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(GRANT_NOW_MS).unwrap()
+    }
+
+    /// Grant the exact consent the canonical dispatch derives: the reviewed
+    /// recipient/profile/purpose/consumer, the projected input classes, no
+    /// source scopes (independent coverage), and the dispatch lineage, bound
+    /// to the live pairing identity.
+    async fn grant_dispatch_consent(
+        consents: &MemoryConsents,
+        person: PersonId,
+        lineage: RecipientLineage,
+    ) {
+        let consent = RecipientConsent::try_new(
+            person,
+            DEVICE,
+            "paired-client",
+            RECIPIENT,
+            "server",
+            CANONICAL_MODEL_PURPOSE,
+            CANONICAL_MODEL_CONSUMER,
+            vec![DataClass::Personal],
+            vec![],
+            lineage,
+            Uuid::new_v4(),
+            1,
+            grant_now(),
+        )
+        .unwrap();
+        grant_recipient_consent(consents, consent).await.unwrap();
+    }
 
     #[derive(Clone)]
     struct TestTransport {
@@ -402,8 +472,7 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
             Box::pin(async move { Ok(()) })
         }
     }
@@ -443,9 +512,9 @@ mod tests {
     }
 
     fn envelope() -> ContextEnvelope {
+        use floe_agent_contract::prompts::product_component;
         use floe_agent_contract::prompts::{BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION};
         use floe_agent_contract::prompts::{CAPABILITY_PROTOCOL, CAPABILITY_PROTOCOL_REVISION};
-        use floe_agent_contract::prompts::product_component;
         let assembly = PromptAssembly {
             schema_version: floe_agent_contract::AGENT_VERSION,
             role: PromptRole::Manager,
@@ -510,7 +579,10 @@ mod tests {
         }
     }
 
-    fn model_request(projection: AuthorizedModelProjection) -> ModelRequest {
+    fn model_request(
+        projection: AuthorizedModelProjection,
+        lineage: RecipientLineage,
+    ) -> ModelRequest {
         ModelRequest {
             attempt_id: RunId::new().as_uuid(),
             principal: PersonId::new().to_string(),
@@ -520,12 +592,19 @@ mod tests {
             consumer: CANONICAL_MODEL_CONSUMER.into(),
             preferred_profile_id: Some("server".into()),
             replay: vec![],
+            lineage: Some(lineage),
         }
     }
 
+    fn lineage() -> RecipientLineage {
+        RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap()
+    }
+
     fn scope() -> (BudgetLedger, floe_execution::ExecutionScope) {
-        let ledger =
-            BudgetLedger::new(BudgetConfig::new(100_000, 10_000_000), LedgerUsage::default());
+        let ledger = BudgetLedger::new(
+            BudgetConfig::new(100_000, 10_000_000),
+            LedgerUsage::default(),
+        );
         let scope = floe_execution::ExecutionScope::root(
             Cancellation::default(),
             Instant::now() + std::time::Duration::from_secs(30),
@@ -537,8 +616,9 @@ mod tests {
 
     #[tokio::test]
     async fn recipient_revoked_before_handoff_never_posts_agent_request() {
-        // The store consents only for the admit check; every later Access
-        // check (consume fence) sees the connection removed.
+        // The pairing is live only for the admit check; every later Access
+        // check (consume fence) sees the connection removed, even though a
+        // contextual consent covers the dispatch.
         let person = PersonId::new();
         let store = Arc::new(RevokingStore {
             consented: {
@@ -553,23 +633,29 @@ mod tests {
         });
         struct Shared(Arc<RevokingStore>);
         impl floe_inference::SavedConnectionStore for Shared {
-            fn load(
-                &self,
-            ) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
+            fn load(&self) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
                 self.0.load()
             }
         }
-        let authority = SavedConnectionRecipientAuthority::new(
+        let dispatch_lineage = lineage();
+        let consents = MemoryConsents::default();
+        grant_dispatch_consent(&consents, person, dispatch_lineage).await;
+        let admission = SavedConnectionAdmission::new(
             Shared(Arc::clone(&store)),
             person.to_string(),
             DEVICE.into(),
+        );
+        let authority = ContextualRecipientAuthority::new(
+            &consents,
+            admission,
+            FixedClock { now: grant_now() },
         );
         let transport = TestTransport::answer();
         let provider = TestProvider {
             profiles: vec![(external_profile(), transport.clone())],
         };
         let service = InferenceService::new(provider, AllowResolver, authority);
-        let mut request = model_request(projection());
+        let mut request = model_request(projection(), dispatch_lineage);
         request.principal = person.to_string();
         let (ledger, scope) = scope();
         assert_eq!(
@@ -587,8 +673,8 @@ mod tests {
 
     #[tokio::test]
     async fn external_model_response_is_suppressed_after_recipient_consent_revocation() {
-        // Admit and consume see consent; post-response revalidation sees the
-        // connection removed.
+        // Admit and consume see the live pairing; post-response revalidation
+        // sees the connection removed, suppressing the transmitted response.
         let person = PersonId::new();
         let store = Arc::new(RevokingStore {
             consented: {
@@ -603,23 +689,29 @@ mod tests {
         });
         struct Shared(Arc<RevokingStore>);
         impl floe_inference::SavedConnectionStore for Shared {
-            fn load(
-                &self,
-            ) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
+            fn load(&self) -> Result<Option<floe_inference::SavedServerConnection>, AgentFailure> {
                 self.0.load()
             }
         }
-        let authority = SavedConnectionRecipientAuthority::new(
+        let dispatch_lineage = lineage();
+        let consents = MemoryConsents::default();
+        grant_dispatch_consent(&consents, person, dispatch_lineage).await;
+        let admission = SavedConnectionAdmission::new(
             Shared(Arc::clone(&store)),
             person.to_string(),
             DEVICE.into(),
+        );
+        let authority = ContextualRecipientAuthority::new(
+            &consents,
+            admission,
+            FixedClock { now: grant_now() },
         );
         let transport = TestTransport::answer();
         let provider = TestProvider {
             profiles: vec![(external_profile(), transport.clone())],
         };
         let service = InferenceService::new(provider, AllowResolver, authority);
-        let mut request = model_request(projection());
+        let mut request = model_request(projection(), dispatch_lineage);
         request.principal = person.to_string();
         let (ledger, scope) = scope();
         assert_eq!(

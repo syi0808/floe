@@ -29,4 +29,6 @@ pub use host::{
 };
 #[cfg(test)]
 mod test_host;
-pub use shared::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};
+pub use shared::{
+    ExpertJudgment, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
+};

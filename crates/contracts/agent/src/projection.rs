@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AllowedCatalog, ContextEnvelope, DataClass, DependencyCoverage,
-    ModelConversation, RoleSpec, MAX_OUTPUT_BYTES,
+    AgentFailure, AllowedCatalog, ContextEnvelope, DataClass, DependencyCoverage, MAX_OUTPUT_BYTES,
+    ModelConversation, RoleSpec,
 };
 
 /// Canonical host correction for one invalid structured model output.

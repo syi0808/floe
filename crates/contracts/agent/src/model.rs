@@ -133,6 +133,11 @@ pub struct EngineRequest {
     /// the Conversation owner. Required when a validated batch contains a
     /// Delegate step; absent otherwise.
     pub delegation_context: Option<DelegationExecutionContext>,
+    /// The opaque intent lineage model dispatches run under, supplied by
+    /// the Conversation owner and forwarded verbatim to every model call.
+    /// Absent only for callers with no Conversation lineage, whose
+    /// external dispatches fail closed without a reviewable requirement.
+    pub lineage: Option<floe_context_contract::RecipientLineage>,
 }
 
 impl EngineRequest {
@@ -172,6 +177,12 @@ impl EngineRequest {
         if let Some(context) = &self.delegation_context {
             context.validate()?;
         }
+        if self
+            .lineage
+            .is_some_and(|lineage| lineage.validate().is_err())
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         Ok(())
     }
 }
@@ -187,6 +198,11 @@ pub struct ModelRequest {
     pub consumer: String,
     pub preferred_profile_id: Option<String>,
     pub replay: Vec<crate::ReplayReceipt>,
+    /// The opaque intent lineage this dispatch runs under. A missing
+    /// consent is reviewable only when lineage is present; callers
+    /// without Conversation lineage (learner, provider smoke) fail
+    /// closed without a card.
+    pub lineage: Option<floe_context_contract::RecipientLineage>,
 }
 
 impl ModelRequest {
@@ -204,6 +220,9 @@ impl ModelRequest {
                 .as_ref()
                 .is_some_and(|profile| profile.trim().is_empty() || profile.len() > 128)
             || self.replay.len() > 128
+            || self
+                .lineage
+                .is_some_and(|lineage| lineage.validate().is_err())
         {
             return Err(AgentFailure::InvalidInput);
         }

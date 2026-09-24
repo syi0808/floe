@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::{
     CalendarContextView, FLOE_TASK_VIEW_ID, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
     NativeContextItem, NativeContextView, calendar_context_evidence, native_context_evidence,
@@ -15,7 +15,8 @@ use floe_context_contract::{
 
 use crate::prompts::commitments_expert_prompt;
 use crate::shared::{
-    MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary,
+    ExpertJudgment, MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model,
+    validate_summary,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -89,9 +90,9 @@ pub async fn run_commitments_expert_with_views<Model: ExpertModel>(
     policy: &InferencePolicyDecision,
     invocation: MailExpertInvocation,
     views: CommitmentsContextViews,
-) -> Result<CommitmentsExpertResult, AgentFailure> {
+) -> Result<ExpertJudgment<CommitmentsExpertResult>, AgentFailure> {
     let evidence = commitment_evidence(&invocation, &views)?;
-    let response = run_mail_model(
+    let response = match run_mail_model(
         model,
         policy,
         ExpertModelRequirement::RemoteOnly,
@@ -99,7 +100,13 @@ pub async fn run_commitments_expert_with_views<Model: ExpertModel>(
         commitments_expert_prompt(),
         evidence.context,
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(response) => response,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     let mut output: CommitmentsModelOutput = decode_answer(&response, invocation.max_output_bytes)?;
     validate_summary(&output.summary)?;
     if output.findings.len() > MAX_MAIL_EXPERT_FINDINGS {
@@ -131,14 +138,14 @@ pub async fn run_commitments_expert_with_views<Model: ExpertModel>(
             return Err(AgentFailure::InvalidModelOutput);
         }
     }
-    Ok(CommitmentsExpertResult {
+    Ok(ExpertJudgment::Decided(CommitmentsExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handles: evidence.source_handles,
         expires_at_unix_ms: evidence.expires_at_unix_ms,
         summary: output.summary,
         findings: output.findings,
-    })
+    }))
 }
 
 struct CommitmentEvidence {

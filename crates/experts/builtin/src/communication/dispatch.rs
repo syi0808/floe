@@ -8,7 +8,8 @@ use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
 
 use floe_context_contract::CommunicationView;
 
-use crate::communication::{CommunicationExpertResult, run_communication_expert};
+use crate::communication::run_communication_expert;
+use crate::shared::ExpertJudgment;
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
     granted_context,
@@ -44,7 +45,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             );
         }
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Communication.result_artifact_name(),
                 BlockedExpertStatus::NeedsUserAction,
@@ -57,12 +60,22 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     }
     let view: CommunicationView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-    let result: CommunicationExpertResult = run_communication_expert(
+    let result = match run_communication_expert(
         model,
         host.policy(),
         request.mail_invocation(granted_context(host, request), view),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(result) => result,
+        ExpertJudgment::Blocked(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Communication.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Model approval needs your review, so there is no communication assessment.".into(),
+            );
+        }
+    };
     drop(source_view);
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::Communication.result_artifact_name(),

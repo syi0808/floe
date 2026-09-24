@@ -49,9 +49,7 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
             return Err(AgentFailure::InvalidInput);
         }
         agent_context.validate()?;
-        active_experts
-            .iter()
-            .try_for_each(AgentCard::validate)?;
+        active_experts.iter().try_for_each(AgentCard::validate)?;
         Ok(Self {
             evidence,
             resolver,
@@ -214,8 +212,9 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async move { Ok(()) })
         }
     }
@@ -227,8 +226,9 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
             Box::pin(async move { Err(AgentFailure::PolicyDenied) })
         }
     }
@@ -285,12 +285,7 @@ mod tests {
         }
     }
 
-    fn history_pair() -> (
-        ModelConversation,
-        Uuid,
-        Uuid,
-        ContextDependency,
-    ) {
+    fn history_pair() -> (ModelConversation, Uuid, Uuid, ContextDependency) {
         let user_id = Uuid::new_v4();
         let assistant_id = Uuid::new_v4();
         let held = dependency();
@@ -364,10 +359,7 @@ mod tests {
             MapReader {
                 coverage: Mutex::new(HashMap::from([
                     (user_id, DependencyCoverage::Independent),
-                    (
-                        assistant_id,
-                        DependencyCoverage::dependent(held).unwrap(),
-                    ),
+                    (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                 ])),
             },
             DenyAll,
@@ -403,10 +395,7 @@ mod tests {
             MapReader {
                 coverage: Mutex::new(HashMap::from([
                     (user_id, DependencyCoverage::Independent),
-                    (
-                        assistant_id,
-                        DependencyCoverage::dependent(held).unwrap(),
-                    ),
+                    (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                 ])),
             },
             AcceptAll,
@@ -512,10 +501,7 @@ mod tests {
             MapReader {
                 coverage: Mutex::new(HashMap::from([
                     (user_id, DependencyCoverage::Independent),
-                    (
-                        assistant_id,
-                        DependencyCoverage::dependent(held).unwrap(),
-                    ),
+                    (assistant_id, DependencyCoverage::dependent(held).unwrap()),
                 ])),
             },
             AcceptAll,

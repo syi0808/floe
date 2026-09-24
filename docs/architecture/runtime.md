@@ -26,8 +26,10 @@ Responsibilities do not collapse across this chain:
 - Conversation owns Run/transcript/continuation and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage).
 - Context owns source-backed projection, coverage, provenance and freshness.
 - Inference owns profile/route/attempt/usage and transport retry/fallback policy.
-- Access owns exact-recipient processing/dispatch/release authority.
+- Access owns exact-recipient processing/dispatch/release authority, including the contextual recipient-consent store.
 - Provider adapters resolve private credentials and execute transport.
+
+A dispatch the fence cannot admit on a recoverable consent case blocks as a typed expected completion, never a forged answer or a silent reroute: Inference returns the exact requirement, the Engine journals the blocked attempt, and Conversation publishes the durable card under the attempted origin and completes with the deterministic limitation. Missing consent never triggers hidden fallback to another recipient; hard denials (prohibited classes, foreign identity, no lineage, transport failure) fail closed without a card. Approved consent unblocks only the exact reviewed dispatch: recipient, profile, purpose, consumer, classes, scopes, lineage, pairing and device all bind the consent id.
 
 Product Run snapshots project model-attempt and delegated-Task references from Conversation's
 durable intent journal. The refs remain derived read data: FFI does not manufacture them, and
@@ -39,7 +41,7 @@ The canonical `InferenceService : ModelPort` production cutover is complete and 
 
 `ConversationTurnRequest` carries only session/revision, text, profile intent, continuation/retry intent and the verified device identity. It has no credential source or lookup semantics.
 
-The Vault worker owns one shared `CurrentSavedConnectionStore`, cloned into the open Vault and its root, built-in Expert and Schedule compositions. Production binds the host keychain; tests inject a fixed or mutable store at worker construction. Provider-owned `RootModelProvider::from_current_connection[_scoped]` and `ServerSourceClient::from_current_connection` load and admit the current connection against the verified person/device, returning opaque capabilities. App neither materializes saved credentials nor selects model placement. Recipient authority shares this store and reloads it at every fence rather than trusting the prepared transport's snapshot.
+The Vault worker owns one shared `CurrentSavedConnectionStore`, cloned into the open Vault and its root, built-in Expert and Schedule compositions. Production binds the host keychain; tests inject a fixed or mutable store at worker construction. Provider-owned `RootModelProvider::from_current_connection[_scoped]` and `ServerSourceClient::from_current_connection` load and admit the current connection against the verified person/device, returning opaque capabilities. App neither materializes saved credentials nor selects model placement. Recipient authority composes the Access-owned consent store with pairing admission over this store plus a clock, reloaded at every fence rather than trusting the prepared transport's snapshot; recorded global consent flags are stored shape only and never consulted as authority.
 
 `InferenceAvailability` observes execution classes for a purpose/consumer through the same candidate rules used for execution. Experts owns card eligibility against that non-secret observation. Availability is not dispatch authorization: actual execution still runs the canonical Inference/Access checks. Remote source capability is observed independently of model availability; source catalogs remain lazy and never participate in profile discovery or selection.
 
@@ -56,7 +58,7 @@ Agent Runtime Engine
   -> ToolResult { coverage, artifacts, issue } + durable UserInteractionRef
 ```
 
-Tool availability is a source/authority property, not a model-route property. The Tool result carries its own evidence/coverage rather than relying on an App-side side channel. Context returns owner-produced outcomes (ready, temporarily unavailable, or review-required blockers); only the App boundary publishes requirements as durable interactions under the admitted Tool origin and settles the blocked result with safe refs. Experts follow the same shape through the common delegation endpoint: host-captured blockers publish under the Task origin, and a deterministic blocked-domain report completes the Task with no conclusion and no model-proposed requirement.
+Tool availability is a source/authority property, not a model-route property. The Tool result carries its own evidence/coverage rather than relying on an App-side side channel. Context returns owner-produced outcomes (ready, temporarily unavailable, or review-required blockers); only the App boundary publishes requirements as durable interactions under the admitted Tool origin and settles the blocked result with safe refs. Experts follow the same shape through the common delegation endpoint: host-captured blockers publish under the Task origin, and a deterministic blocked-domain report completes the Task with no conclusion and no model-proposed requirement. A blocked expert model dispatch follows the same shape: the delegation lineage binds the dispatch, the host-captured requirement publishes under the Task origin, and the expert reports a blocked-domain judgment.
 
 The production Context Tool path is canonical, alongside the canonical Delegation path through `TaskCoordinator : DelegationPort`.
 

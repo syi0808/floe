@@ -5,13 +5,14 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::CommunicationView;
 
 use crate::prompts::communication_expert_prompt;
 use crate::shared::{
-    MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model, validate_summary,
+    ExpertJudgment, MAX_MAIL_EXPERT_FINDINGS, MailExpertInvocation, decode_answer, run_mail_model,
+    validate_summary,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -67,8 +68,8 @@ pub async fn run_communication_expert<Model: ExpertModel>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: MailExpertInvocation,
-) -> Result<CommunicationExpertResult, AgentFailure> {
-    let response = run_mail_model(
+) -> Result<ExpertJudgment<CommunicationExpertResult>, AgentFailure> {
+    let response = match run_mail_model(
         model,
         policy,
         ExpertModelRequirement::RemoteOnly,
@@ -76,7 +77,13 @@ pub async fn run_communication_expert<Model: ExpertModel>(
         communication_expert_prompt(),
         invocation.context.clone(),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(response) => response,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     let mut output: CommunicationModelOutput =
         decode_answer(&response, invocation.max_output_bytes)?;
     validate_summary(&output.summary)?;
@@ -104,14 +111,14 @@ pub async fn run_communication_expert<Model: ExpertModel>(
         };
         assessment.requires_review = assessment.draft.is_some();
     }
-    Ok(CommunicationExpertResult {
+    Ok(ExpertJudgment::Decided(CommunicationExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handle: invocation.view.source_handle,
         expires_at_unix_ms: invocation.view.expires_at_unix_ms,
         summary: output.summary,
         assessments: output.assessments,
-    })
+    }))
 }
 
 fn evidence_exists(view: &CommunicationView, handle: &str) -> bool {

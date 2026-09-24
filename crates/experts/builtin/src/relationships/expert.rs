@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_agent_contract::{AgentFailure, DataClass};
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::{
     ConfirmedInteractionView, ContextEvidence, PeopleView, personal_context_evidence,
     validate_confirmed_interaction_view, validate_people_view,
@@ -14,8 +14,8 @@ use floe_context_contract::{
 
 use crate::prompts::relationships_expert_prompt;
 use crate::shared::{
-    PersonalExpertInvocation, ensure_unique_source, run_personal_model, valid_handle,
-    validate_summary,
+    ExpertJudgment, PersonalExpertInvocation, ensure_unique_source, run_personal_model,
+    valid_handle, validate_summary,
 };
 
 #[derive(Clone, Debug)]
@@ -58,7 +58,7 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
     policy: &InferencePolicyDecision,
     invocation: PersonalExpertInvocation,
     views: RelationshipsContextViews,
-) -> Result<RelationshipsExpertResult, AgentFailure> {
+) -> Result<ExpertJudgment<RelationshipsExpertResult>, AgentFailure> {
     validate_people_view(&views.people, invocation.current_time_unix_ms)?;
     let mut evidence = vec![personal_context_evidence(&views.people)?];
     let mut source_handles = vec![views.people.source_handle.clone()];
@@ -100,7 +100,7 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
                 .map_err(|_| AgentFailure::InvalidInput)?,
         });
     }
-    let output: RelationshipsOutput = run_personal_model(
+    let output: RelationshipsOutput = match run_personal_model(
         model,
         policy,
         ExpertModelRequirement::Any,
@@ -108,7 +108,13 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
         evidence,
         relationships_expert_prompt(),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(output) => output,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     validate_summary(&output.summary)?;
     if output.follow_ups.len() > 16 {
         return Err(AgentFailure::BudgetExceeded);
@@ -146,7 +152,7 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
             return Err(AgentFailure::InvalidModelOutput);
         }
     }
-    Ok(RelationshipsExpertResult {
+    Ok(ExpertJudgment::Decided(RelationshipsExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handle: views.people.source_handle,
@@ -154,7 +160,7 @@ pub async fn run_relationships_expert_with_views<Model: ExpertModel>(
         expires_at_unix_ms,
         summary: output.summary,
         follow_ups: output.follow_ups,
-    })
+    }))
 }
 
 #[derive(Serialize)]

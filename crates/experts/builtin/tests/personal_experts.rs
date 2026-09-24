@@ -4,7 +4,7 @@ use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::PersonId;
 use floe_agent_contract::prompts::PromptRole;
 use floe_agent_contract::{
-    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    AgentContext, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome,
     ExpertModelRequirement, InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, ModelPlacement, TransferConsent};
@@ -33,6 +33,13 @@ use uuid::Uuid;
 
 const NOW: i64 = 1_789_000_000_000;
 
+fn decided<Output>(judgment: floe_experts_builtin::ExpertJudgment<Output>) -> Output {
+    match judgment {
+        floe_experts_builtin::ExpertJudgment::Decided(output) => output,
+        floe_experts_builtin::ExpertJudgment::Blocked(_) => panic!("test model must answer"),
+    }
+}
+
 struct Model {
     outputs: Mutex<VecDeque<String>>,
     calls: Mutex<Vec<ExpertModelCall>>,
@@ -51,16 +58,16 @@ impl ExpertModel for Model {
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
-    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         let answer = self.outputs.lock().unwrap().pop_front().unwrap();
         self.calls.lock().unwrap().push(call);
         Box::pin(async move {
-            Ok(ExpertModelAnswer {
+            Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: AGENT_VERSION,
                 answer,
                 used_tokens: 64,
                 cost_micros: 0,
-            })
+            }))
         })
     }
 }
@@ -228,40 +235,46 @@ async fn personal_experts_combine_typed_views_with_bounded_provenance() {
             "evidence_handles": ["health:derived", "calendar:focus"]
         }),
     ]);
-    let relationships = run_relationships_expert_with_views(
-        &model,
-        &policy(),
-        invocation(),
-        RelationshipsContextViews {
-            people: people(),
-            confirmed_interactions: vec![interactions()],
-        },
-    )
-    .await
-    .unwrap();
-    let focus = run_focus_expert_with_views(
-        &model,
-        &policy(),
-        invocation(),
-        FocusContextViews {
-            attention: attention(),
-            calendars: vec![calendar()],
-            active_work: vec![work()],
-        },
-    )
-    .await
-    .unwrap();
-    let wellbeing = run_wellbeing_expert_with_views(
-        &model,
-        &policy(),
-        invocation(),
-        WellbeingContextViews {
-            wellbeing: wellbeing(),
-            calendars: vec![calendar()],
-        },
-    )
-    .await
-    .unwrap();
+    let relationships = decided(
+        run_relationships_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            RelationshipsContextViews {
+                people: people(),
+                confirmed_interactions: vec![interactions()],
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let focus = decided(
+        run_focus_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            FocusContextViews {
+                attention: attention(),
+                calendars: vec![calendar()],
+                active_work: vec![work()],
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let wellbeing = decided(
+        run_wellbeing_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            WellbeingContextViews {
+                wellbeing: wellbeing(),
+                calendars: vec![calendar()],
+            },
+        )
+        .await
+        .unwrap(),
+    );
 
     assert_eq!(relationships.follow_ups[0].identity_handle, "person:alex");
     assert_eq!(relationships.expires_at_unix_ms, NOW + 240_000);
@@ -410,17 +423,19 @@ async fn relationships_require_interaction_or_confirmed_memory_support() {
             "confidence_millis": 900
         }]
     })]);
-    let result = run_relationships_expert_with_views(
-        &model,
-        &policy(),
-        invocation,
-        RelationshipsContextViews {
-            people,
-            confirmed_interactions: vec![],
-        },
-    )
-    .await
-    .unwrap();
+    let result = decided(
+        run_relationships_expert_with_views(
+            &model,
+            &policy(),
+            invocation,
+            RelationshipsContextViews {
+                people,
+                confirmed_interactions: vec![],
+            },
+        )
+        .await
+        .unwrap(),
+    );
     assert_eq!(result.follow_ups[0].evidence_handles[1], memory_handle);
     assert_eq!(result.expires_at_unix_ms, NOW + 90_000);
     assert!(
@@ -473,5 +488,52 @@ async fn multi_view_judgments_reject_cross_source_evidence_invention() {
         )
         .await,
         Err(AgentFailure::InvalidInput)
+    );
+}
+
+struct Blocking {
+    requirement: floe_context_contract::ProcessingRequirement,
+}
+
+impl ExpertModel for Blocking {
+    fn answer<'a>(
+        &'a self,
+        _: ExpertModelCall,
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
+        let requirement = self.requirement.clone();
+        Box::pin(async move { Ok(ExpertModelOutcome::Blocked(requirement)) })
+    }
+}
+
+#[tokio::test]
+async fn blocked_model_call_passes_the_requirement_through_untouched() {
+    let requirement = floe_context_contract::ProcessingRequirement::try_new(
+        "model.example",
+        "server-model",
+        "everyday_assistance",
+        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        vec![floe_agent_contract::DataClass::Personal],
+        vec![],
+        Uuid::new_v4(),
+        1,
+        floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap(),
+    )
+    .unwrap();
+    let model = Blocking {
+        requirement: requirement.clone(),
+    };
+    assert_eq!(
+        run_relationships_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            RelationshipsContextViews {
+                people: people(),
+                confirmed_interactions: vec![interactions()],
+            },
+        )
+        .await
+        .unwrap(),
+        floe_experts_builtin::ExpertJudgment::Blocked(requirement)
     );
 }

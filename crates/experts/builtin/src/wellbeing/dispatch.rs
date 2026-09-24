@@ -3,9 +3,8 @@
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::SourceReadOutcome;
 
-use crate::wellbeing::{
-    WellbeingContextViews, WellbeingExpertResult, run_wellbeing_expert_with_views,
-};
+use crate::shared::ExpertJudgment;
+use crate::wellbeing::{WellbeingContextViews, run_wellbeing_expert_with_views};
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
     granted_context,
@@ -21,12 +20,13 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
                 BlockedExpertStatus::Unavailable,
-                "Wellbeing is temporarily unavailable, so there is no wellbeing assessment."
-                    .into(),
+                "Wellbeing is temporarily unavailable, so there is no wellbeing assessment.".into(),
             );
         }
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
                 BlockedExpertStatus::NeedsUserAction,
@@ -40,7 +40,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         host.calendar_views(request, request.nearby_calendar_query()?)
             .await?,
     );
-    let result: WellbeingExpertResult = run_wellbeing_expert_with_views(
+    let result = match run_wellbeing_expert_with_views(
         host.model(),
         host.policy(),
         request.personal_invocation(context),
@@ -49,7 +49,17 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             calendars,
         },
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(result) => result,
+        ExpertJudgment::Blocked(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Model approval needs your review, so there is no wellbeing assessment.".into(),
+            );
+        }
+    };
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
         result.summary.clone(),

@@ -5,17 +5,17 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use floe_agent_contract::{
-    AgentFailure, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall,
+    AgentFailure, BoxFuture, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome,
     InferencePolicyDecision,
 };
 use floe_context_contract::{
-    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, ConfirmedInteractionView,
-    ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
-    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-    GrantSourceBinding, HeldGrant, MemoryContextSnapshot, NativeContextView, PeopleView,
-    ProcessingRestriction, ResourceHandle, SourceAccessBlockers, SourceAccessRequirement,
-    SourceAccessRequirementKind, SourceAuthority, SourceReadOutcome, SourceUnavailable,
-    WellbeingView, WorkContextView,
+    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery,
+    ConfirmedInteractionView, ConnectionId, ConnectorId, ConsumerPolicyAuthority,
+    ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
+    GrantOperation, GrantPurpose, GrantSourceBinding, HeldGrant, MemoryContextSnapshot,
+    NativeContextView, PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
+    SourceAccessRequirement, SourceAccessRequirementKind, SourceAuthority, SourceReadOutcome,
+    SourceUnavailable, WellbeingView, WorkContextView,
 };
 use floe_execution::Cancellation;
 use tokio::time::Instant;
@@ -33,16 +33,16 @@ impl ExpertModel for ScriptedModel {
     fn answer<'a>(
         &'a self,
         _: ExpertModelCall,
-    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let answer = self.answer.lock().unwrap().clone();
         Box::pin(async move {
-            Ok(ExpertModelAnswer {
+            Ok(ExpertModelOutcome::Answered(ExpertModelAnswer {
                 schema_version: floe_agent_contract::AGENT_VERSION,
                 answer,
                 used_tokens: 10,
                 cost_micros: 0,
-            })
+            }))
         })
     }
 }
@@ -100,7 +100,10 @@ impl ScriptedHost {
         }
     }
 
-    fn take<T: Clone>(slot: &Scripted<T>, what: &str) -> Result<SourceReadOutcome<T>, AgentFailure> {
+    fn take<T: Clone>(
+        slot: &Scripted<T>,
+        what: &str,
+    ) -> Result<SourceReadOutcome<T>, AgentFailure> {
         slot.lock()
             .unwrap()
             .clone()
@@ -258,7 +261,9 @@ pub fn request(agent_id: &str) -> BuiltinExpertRequest {
     }
 }
 
-pub fn attention_fixture(person: floe_agent_contract::PersonId) -> (AttentionView, ContextDependency) {
+pub fn attention_fixture(
+    person: floe_agent_contract::PersonId,
+) -> (AttentionView, ContextDependency) {
     let now = chrono::Utc::now();
     let view = AttentionView {
         schema_version: floe_agent_contract::AGENT_VERSION,
@@ -306,11 +311,7 @@ mod tests {
     use super::*;
     use crate::BuiltinExpertKind;
 
-    fn assert_blocked(
-        output: &BuiltinExpertOutput,
-        status: &str,
-        host: &ScriptedHost,
-    ) {
+    fn assert_blocked(output: &BuiltinExpertOutput, status: &str, host: &ScriptedHost) {
         assert!(
             output.data.contains(status),
             "blocked report must name {status}: {}",
@@ -378,12 +379,10 @@ mod tests {
 
         let host = ScriptedHost::new("unused");
         *host.wellbeing.lock().unwrap() = Some(unavailable());
-        let output = crate::wellbeing::dispatch(
-            &host,
-            &request(BuiltinExpertKind::Wellbeing.package_id()),
-        )
-        .await
-        .unwrap();
+        let output =
+            crate::wellbeing::dispatch(&host, &request(BuiltinExpertKind::Wellbeing.package_id()))
+                .await
+                .unwrap();
         assert_blocked(&output, "unavailable", &host);
 
         let host = ScriptedHost::new("unused");
@@ -403,11 +402,10 @@ mod tests {
             r#"{"summary": "Stay focused.", "recommendation": "protect_focus", "rationale": "Deep work.", "evidence_handles": ["att:1"]}"#,
         );
         let expert_request = request(BuiltinExpertKind::FocusAttention.package_id());
-        *host.attention.lock().unwrap() = Some(Ok(SourceReadOutcome::Ready(
-            attention_fixture(expert_request.person_id),
-        )));
-        *host.calendar.lock().unwrap() =
-            Some(Ok(SourceReadOutcome::Ready(vec![])));
+        *host.attention.lock().unwrap() = Some(Ok(SourceReadOutcome::Ready(attention_fixture(
+            expert_request.person_id,
+        ))));
+        *host.calendar.lock().unwrap() = Some(Ok(SourceReadOutcome::Ready(vec![])));
         *host.work.lock().unwrap() = Some(needs_user_action("floe.source.work-context"));
         let output = crate::focus_attention::dispatch(&host, &expert_request)
             .await

@@ -27,7 +27,9 @@ pub(super) struct JournalProjection {
 pub(super) enum JournalLineage {
     Empty,
     Fresh,
-    ResumeBatchOnly { batch: ValidatedModelBatch },
+    ResumeBatchOnly {
+        batch: ValidatedModelBatch,
+    },
     ResumeClaimed {
         batch: ValidatedModelBatch,
         cursor: BatchCursor,
@@ -335,9 +337,7 @@ fn project_entries(
                 };
                 // Only the current cursor's active intent may settle, and only
                 // once: the cursor has not advanced past its ordinal yet.
-                if state.cursor.unwrap_or(0) != settled.ordinal
-                    || state.settled_step.is_some()
-                {
+                if state.cursor.unwrap_or(0) != settled.ordinal || state.settled_step.is_some() {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 let call = settled.call;
@@ -420,8 +420,7 @@ fn project_entries(
                     state.batch.batch_id,
                     ordinal,
                 );
-                if request.invocation_key != expected_key || request.task_id != expected_task
-                {
+                if request.invocation_key != expected_key || request.task_id != expected_task {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 if !request.task_id.is_valid()
@@ -458,9 +457,7 @@ fn project_entries(
                 let Some(state) = pending.as_mut() else {
                     return Err(AgentFailure::StorageUnavailable);
                 };
-                if state.cursor.unwrap_or(0) != settled.ordinal
-                    || state.settled_step.is_some()
-                {
+                if state.cursor.unwrap_or(0) != settled.ordinal || state.settled_step.is_some() {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 let request = settled.request;
@@ -641,8 +638,7 @@ fn project_entries(
                                     state.cursor = Some(cursor.next_step_index);
                                     Some((last, text))
                                 }
-                                ModelStep::CallTool { .. }
-                                | ModelStep::Delegate { .. } => {
+                                ModelStep::CallTool { .. } | ModelStep::Delegate { .. } => {
                                     if state.settled_step != Some(last) {
                                         return Err(AgentFailure::StorageUnavailable);
                                     }
@@ -689,9 +685,9 @@ fn project_entries(
                         cursor: cursor.clone(),
                     };
                 }
-                let completed = pending
-                    .as_ref()
-                    .is_some_and(|state| cursor.next_step_index as usize == state.batch.steps.len());
+                let completed = pending.as_ref().is_some_and(|state| {
+                    cursor.next_step_index as usize == state.batch.steps.len()
+                });
                 if completed {
                     pending = None;
                     uncheckpointed_completion = true;
@@ -957,7 +953,9 @@ mod tests {
                     cost_micros: 1,
                 },
             },
-            JournalEvent::ValidatedBatch { batch: batch.clone() },
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
             JournalEvent::BatchProgress {
                 cursor: BatchCursor {
                     batch_id,
@@ -1323,8 +1321,7 @@ mod tests {
     fn crashed_answer_batch_preserves_exact_projection_coverage() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let coverage =
-            DependencyCoverage::dependent(history_dependency()).unwrap();
+        let coverage = DependencyCoverage::dependent(history_dependency()).unwrap();
         let mut model_batch = answer_batch(attempt_id, Uuid::new_v4(), ProjectionRef::new());
         model_batch.projection_coverage = coverage.clone();
         // Crash after the batch/cursor ack, before the answer commits: the
@@ -1491,9 +1488,7 @@ mod tests {
                             cost_micros: 1,
                         },
                     },
-                    JournalEvent::ValidatedBatch {
-                        batch: model_batch,
-                    },
+                    JournalEvent::ValidatedBatch { batch: model_batch },
                 ]),
             ),
             Err(AgentFailure::StorageUnavailable)
@@ -1520,9 +1515,7 @@ mod tests {
                         attempt_id,
                         projection_ref: model_batch.projection_ref,
                     },
-                    JournalEvent::ValidatedBatch {
-                        batch: model_batch,
-                    },
+                    JournalEvent::ValidatedBatch { batch: model_batch },
                 ]),
             ),
             Err(AgentFailure::StorageUnavailable)
@@ -1813,8 +1806,7 @@ mod tests {
                 },
             ],
         );
-        let stale_call =
-            tool_call_for(&model_batch, 0, "read.context", 99, r#"{"path":"a"}"#);
+        let stale_call = tool_call_for(&model_batch, 0, "read.context", 99, r#"{"path":"a"}"#);
         let stale_result = ToolResult {
             call_id: stale_call.call_id,
             text: "tool descriptor is stale".into(),
@@ -1982,10 +1974,7 @@ mod tests {
             snapshot.model_conversation.current_turn
         );
         assert_eq!(snapshot.replay.len(), 1);
-        assert_eq!(
-            snapshot.replay[0].task_state,
-            Some(TaskState::Rejected)
-        );
+        assert_eq!(snapshot.replay[0].task_state, Some(TaskState::Rejected));
     }
 
     #[test]
@@ -2109,14 +2098,8 @@ mod tests {
                         attempt_id,
                         projection_ref: ProjectionRef::new(),
                     },
-                    JournalEvent::ModelResult {
-                        attempt_id,
-                        usage,
-                    },
-                    JournalEvent::ModelResult {
-                        attempt_id,
-                        usage,
-                    },
+                    JournalEvent::ModelResult { attempt_id, usage },
+                    JournalEvent::ModelResult { attempt_id, usage },
                 ]),
             ),
             Err(AgentFailure::StorageUnavailable)
@@ -2278,9 +2261,7 @@ mod tests {
         });
         events.push(JournalEvent::Checkpoint { iteration: 1 });
         let rerecorded = batch(Uuid::new_v4(), model_batch.steps.clone());
-        events.push(JournalEvent::ValidatedBatch {
-            batch: rerecorded,
-        });
+        events.push(JournalEvent::ValidatedBatch { batch: rerecorded });
         assert!(matches!(
             project_continuation(&admitted, &entries(events)),
             Err(AgentFailure::StorageUnavailable)
@@ -2476,9 +2457,7 @@ mod tests {
         assert_eq!(snapshot.usage.tokens, 3);
     }
 
-    fn pending_answer_batch(
-        attempt_id: Uuid,
-    ) -> (ValidatedModelBatch, Vec<JournalEvent>) {
+    fn pending_answer_batch(attempt_id: Uuid) -> (ValidatedModelBatch, Vec<JournalEvent>) {
         let batch = answer_batch(attempt_id, Uuid::new_v4(), ProjectionRef::new());
         let batch_id = batch.batch_id;
         let prefix = vec![
@@ -2493,7 +2472,9 @@ mod tests {
                     cost_micros: 1,
                 },
             },
-            JournalEvent::ValidatedBatch { batch: batch.clone() },
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
             JournalEvent::BatchProgress {
                 cursor: BatchCursor {
                     batch_id,
@@ -2504,10 +2485,7 @@ mod tests {
         (batch, prefix)
     }
 
-    fn delegation_request(
-        admitted: &AdmittedTurn,
-        context_refs: Vec<String>,
-    ) -> DelegationRequest {
+    fn delegation_request(admitted: &AdmittedTurn, context_refs: Vec<String>) -> DelegationRequest {
         DelegationRequest {
             task_id: floe_agent_contract::TaskId::new(),
             parent_run_id: Some(admitted.receipt.run_id.as_uuid()),
@@ -2533,15 +2511,8 @@ mod tests {
         assert_eq!(oversized.len(), floe_agent_contract::MAX_CONTEXT_REFS + 1);
         let (batch, mut events) =
             pending_delegation_batch(&admitted, attempt_id, oversized.clone());
-        let request = delegation_request_for(
-            &admitted,
-            &batch,
-            0,
-            "expert-a",
-            2,
-            "summarize",
-            oversized,
-        );
+        let request =
+            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", oversized);
         events.push(JournalEvent::DelegationIntent { request });
         assert!(matches!(
             project_continuation(&admitted, &entries(events)),
@@ -2603,10 +2574,7 @@ mod tests {
         assert_eq!(snapshot.completed_iterations, 1);
         assert!(snapshot.pending_batch.is_none());
         assert_eq!(snapshot.replay.len(), 1);
-        assert_eq!(
-            snapshot.replay[0].task_state,
-            Some(TaskState::Completed)
-        );
+        assert_eq!(snapshot.replay[0].task_state, Some(TaskState::Completed));
     }
 
     #[test]
@@ -2729,10 +2697,16 @@ mod tests {
     fn delegation_intent_payload_must_match_validated_step() {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
-        let (batch, mut events) =
-            pending_delegation_batch(&admitted, attempt_id, vec!["a".into()]);
-        let request =
-            delegation_request_for(&admitted, &batch, 0, "expert-a", 2, "summarize", vec!["b".into()]);
+        let (batch, mut events) = pending_delegation_batch(&admitted, attempt_id, vec!["a".into()]);
+        let request = delegation_request_for(
+            &admitted,
+            &batch,
+            0,
+            "expert-a",
+            2,
+            "summarize",
+            vec!["b".into()],
+        );
         events.push(JournalEvent::DelegationIntent { request });
         assert!(matches!(
             project_continuation(&admitted, &entries(events)),
@@ -2789,7 +2763,7 @@ mod tests {
         let admitted = admitted();
         let attempt_id = Uuid::new_v4();
         let context_refs = vec!["turn:1".into()];
-        let (batch, mut events) =
+        let (_batch, mut events) =
             pending_delegation_batch(&admitted, attempt_id, context_refs.clone());
         // Same payload, random stable identity: must fail closed.
         let request = delegation_request(&admitted, context_refs);
@@ -2920,16 +2894,16 @@ mod tests {
             snapshot.model_conversation.current_turn
         );
         // Resume starts the tool at ordinal 1 under its stable identity.
-        let pending = snapshot.pending_batch.as_ref().expect("batch stays pending");
+        let pending = snapshot
+            .pending_batch
+            .as_ref()
+            .expect("batch stays pending");
         assert!(matches!(
             pending.steps.get(1),
             Some(ModelStep::CallTool { .. })
         ));
-        let expected_call = floe_agent_runtime::stable_call_id(
-            model_batch.execution_id,
-            model_batch.batch_id,
-            1,
-        );
+        let expected_call =
+            floe_agent_runtime::stable_call_id(model_batch.execution_id, model_batch.batch_id, 1);
         let next_call = tool_call_for(&model_batch, 1, "read.context", 3, r#"{"path":"a"}"#);
         assert_eq!(next_call.call_id, expected_call);
     }

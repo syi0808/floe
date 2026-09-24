@@ -2,21 +2,24 @@ use std::sync::Arc;
 
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep,
-    MessageRole, ModelConversation, ModelConversationEntry, ValidatedModelBatch,
+    MessageRole, ModelConversation, ModelConversationEntry, UserInteractionRef,
+    UserInteractionStatus, ValidatedModelBatch,
 };
-use floe_agent_runtime::{Engine, EnginePorts, EngineReport};
+use floe_agent_runtime::{Engine, EngineBlocked, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    CONVERSATION_MODEL_CONSUMER, CancelRunRequest, CancelRunStatus, CommandQuery, CompactionReceipt,
-    CompactionRequest, ContinuationSnapshot, ConversationPorts, ConversationRepository,
-    ManagerConfig, ProfileSelection, RecoveryReceipt, RecoveryRequest, RunCancellationRegistry,
-    RunQuery, RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode,
-    TurnRequest,
+    CONVERSATION_MODEL_CONSUMER, CancelRunRequest, CancelRunStatus, CommandQuery,
+    CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationPorts,
+    ConversationRepository, InteractionOrigin, InteractionRepository, MODEL_CONSENT_LIMITATION,
+    ManagerConfig, ProfileSelection, PublishAdmission, PublishModelRequirement, RecoveryReceipt,
+    RecoveryRequest, RunCancellationRegistry, RunQuery, RunReceipt, RunState, RunTerminal,
+    TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
+use super::interactions::publish_model_requirement;
 use super::recovery::{JournalLineage, project_journal, project_transcript_history};
 
 pub struct ConversationService<Repository> {
@@ -26,7 +29,7 @@ pub struct ConversationService<Repository> {
     config: ManagerConfig,
 }
 
-impl<Repository: ConversationRepository> ConversationService<Repository> {
+impl<Repository: ConversationRepository + InteractionRepository> ConversationService<Repository> {
     pub fn new(repository: Arc<Repository>, config: ManagerConfig) -> Result<Self, AgentFailure> {
         Self::with_run_cancellations(
             repository,
@@ -243,6 +246,9 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 )
                 .await;
         }
+        // Retained for blockage publication after the Engine consumes the
+        // request below.
+        let turn_context = request.clone();
         let ledger = BudgetLedger::new(self.config.budget, prior_usage);
         let scope = ExecutionScope::root(
             request.cancellation,
@@ -262,13 +268,12 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                     Vec::with_capacity(snapshot.model_conversation.current_turn.len() + 1);
                 current_turn.push(user_entry);
                 current_turn.extend(snapshot.model_conversation.current_turn);
-                let resume = snapshot
-                    .pending_batch
-                    .zip(snapshot.batch_cursor)
-                    .map(|(validated_batch, cursor)| EngineResumeState {
+                let resume = snapshot.pending_batch.zip(snapshot.batch_cursor).map(
+                    |(validated_batch, cursor)| EngineResumeState {
                         validated_batch,
                         cursor,
-                    });
+                    },
+                );
                 (
                     ModelConversation {
                         history: snapshot.model_conversation.history,
@@ -300,8 +305,13 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             }
         };
         continuation_replay.extend(request.replay);
+        // The lineage binds this explicit intent: the admitted Run's own
+        // identity. A linked resume (05-E) will carry its origin instead.
+        let lineage =
+            floe_agent_contract::RecipientLineage::try_new(request.session_id, run_id.as_uuid())
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
         let engine_request = EngineRequest {
-            principal: request.principal,
+            principal: request.principal.clone(),
             role_spec: self.config.role_spec.clone(),
             scope,
             conversation: model_conversation,
@@ -317,6 +327,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             replay: continuation_replay,
             resume,
             delegation_context: request.delegation_context,
+            lineage: Some(lineage),
         };
         let result = self
             .engine
@@ -333,7 +344,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             )
             .await;
         let terminal = match result {
-            Ok(report) => {
+            Ok(EngineOutcome::Completed(report)) => {
                 let EngineReport {
                     steps,
                     output,
@@ -359,10 +370,19 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                             &engine_request,
                             ports,
                             AgentFailure::Stalled,
+                            &turn_context,
                         )
                         .await
                     }
                 }
+            }
+            // A blocked first (or mid-run) dispatch: publish the durable
+            // card under the exact attempted origin, commit the
+            // deterministic source-independent limitation, and complete the
+            // original Run without fabricating model output.
+            Ok(EngineOutcome::Blocked(blocked)) => {
+                self.complete_blocked_run(run_id, &turn_context, blocked)
+                    .await
             }
             Err(failure @ (AgentFailure::BudgetExceeded | AgentFailure::Stalled)) => {
                 self.finalize_exhaustion(
@@ -371,6 +391,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                     &engine_request,
                     ports,
                     failure,
+                    &turn_context,
                 )
                 .await
             }
@@ -381,6 +402,65 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             .await
     }
 
+    /// Complete a Run whose model dispatch blocked on exact-recipient
+    /// consent: publish the card, then finish Completed with the
+    /// deterministic limitation plus the immutable interaction linkage.
+    ///
+    /// Coverage merges the limitation's independent base with settled
+    /// steps, so previously settled work is preserved honestly and no
+    /// successful source coverage is fabricated. A publication or coverage
+    /// failure fails the Run closed instead of completing without a card.
+    async fn complete_blocked_run(
+        &self,
+        run_id: RunId,
+        request: &TurnRequest,
+        blocked: EngineBlocked,
+    ) -> RunTerminal {
+        let mut steps = blocked.steps;
+        steps.push(EngineStep::Answer {
+            text: MODEL_CONSENT_LIMITATION.into(),
+            artifacts: vec![],
+        });
+        let coverage = match report_coverage(Some(DependencyCoverage::Independent), &steps) {
+            Ok(coverage) => coverage,
+            Err(failure) => return RunTerminal::from_failure(failure),
+        };
+        let published = match publish_model_requirement(
+            self.repository.as_ref(),
+            self.repository.as_ref(),
+            PublishModelRequirement {
+                principal: request.principal.clone(),
+                session_id: request.session_id,
+                origin_run_id: run_id,
+                origin: InteractionOrigin::Model {
+                    attempt_id: blocked.attempt_id,
+                },
+                requirement: blocked.requirement,
+                device_id: request.device_id.clone(),
+            },
+            request.now_unix_ms,
+        )
+        .await
+        {
+            Ok(PublishAdmission::Created(record)) => record,
+            Ok(PublishAdmission::Existing(record)) => record,
+            Err(failure) => return RunTerminal::from_failure(failure),
+        };
+        let reference = UserInteractionRef {
+            interaction_id: published.id,
+            kind: published.kind,
+            status: UserInteractionStatus::Pending,
+        };
+        RunTerminal {
+            state: RunState::Completed,
+            output: Some(MODEL_CONSENT_LIMITATION.into()),
+            steps,
+            coverage,
+            issue: None,
+            interactions: vec![reference],
+        }
+    }
+
     async fn finalize_exhaustion(
         &self,
         run_id: RunId,
@@ -388,6 +468,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         request: &EngineRequest,
         ports: ConversationPorts<'_>,
         issue: AgentFailure,
+        turn: &TurnRequest,
     ) -> RunTerminal {
         match finalize_exhausted_run(
             &self.engine,
@@ -397,6 +478,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             request,
             ports,
             issue,
+            turn,
         )
         .await
         {
@@ -596,7 +678,10 @@ pub async fn continuation<Repository: ConversationRepository>(
         // batch only after durably re-recording the exact batch and starting
         // cursor. A child that crashed before takeover leaves the parent
         // pending state authoritative.
-        let live = projected.pending_batch.clone().zip(projected.cursor.clone());
+        let live = projected
+            .pending_batch
+            .clone()
+            .zip(projected.cursor.clone());
         carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
     }
     let model_conversation = ModelConversation {
@@ -606,9 +691,8 @@ pub async fn continuation<Repository: ConversationRepository>(
     if model_conversation.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
         return Err(AgentFailure::BudgetExceeded);
     }
-    let (pending_batch, batch_cursor) = carried.map_or((None, None), |(batch, cursor)| {
-        (Some(batch), Some(cursor))
-    });
+    let (pending_batch, batch_cursor) =
+        carried.map_or((None, None), |(batch, cursor)| (Some(batch), Some(cursor)));
     Ok(ContinuationSnapshot {
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
         session_id: current.session_id,
@@ -642,10 +726,7 @@ fn reconcile_resume_lineage(
         (Some(parent), JournalLineage::Empty) => Ok(Some(parent)),
         // Batch-only re-records never started: an exact batch keeps the
         // parent authoritative, anything else is corruption.
-        (
-            Some((parent_batch, parent_cursor)),
-            JournalLineage::ResumeBatchOnly { batch },
-        ) => {
+        (Some((parent_batch, parent_cursor)), JournalLineage::ResumeBatchOnly { batch }) => {
             if *batch == parent_batch {
                 Ok(Some((parent_batch, parent_cursor)))
             } else {
@@ -654,10 +735,7 @@ fn reconcile_resume_lineage(
         }
         // Exact batch/cursor takeover confirmed: the child's live state
         // becomes authoritative from this point on.
-        (
-            Some((parent_batch, parent_cursor)),
-            JournalLineage::ResumeClaimed { batch, cursor },
-        ) => {
+        (Some((parent_batch, parent_cursor)), JournalLineage::ResumeClaimed { batch, cursor }) => {
             if *batch == parent_batch && *cursor == parent_cursor {
                 Ok(live)
             } else {
@@ -827,9 +905,10 @@ mod tests {
     #[test]
     fn child_resume_must_match_parent_projection_coverage() {
         use floe_context_contract::{
-            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId,
-            GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
-            GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+            ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency,
+            ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
+            GrantOperation, GrantPurpose, GrantSourceBinding, ProcessingRestriction,
+            ResourceHandle, SourceAuthority,
         };
         let parent_batch = tool_batch();
         let parent_cursor = cursor_at(&parent_batch, 1);
@@ -1007,11 +1086,7 @@ mod tests {
             Err(AgentFailure::StorageUnavailable)
         ));
         assert!(matches!(
-            reconcile_resume_lineage(
-                None,
-                &JournalLineage::ResumeClaimed { batch, cursor },
-                None,
-            ),
+            reconcile_resume_lineage(None, &JournalLineage::ResumeClaimed { batch, cursor }, None,),
             Err(AgentFailure::StorageUnavailable)
         ));
         // Empty and fresh journals without a parent stay allowed.

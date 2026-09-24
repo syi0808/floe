@@ -6,13 +6,14 @@ pub use application::model_dispatch::{
     ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
     revalidate_model_dispatch,
 };
-pub use application::recipient_consent::{
-    RECIPIENT_CONSENT_NAMESPACE, RECIPIENT_CONSENT_TTL, RecipientConsent, RecipientConsentState,
-    grant_recipient_consent, recipient_consent_id, revoke_recipient_consent,
-};
 pub use application::personal_grants::{
     apply as apply_personal_access, apply_contacts,
     validate_request as validate_personal_access_request,
+};
+pub use application::recipient_consent::{
+    ContextualRecipientAuthority, RECIPIENT_CONSENT_NAMESPACE, RECIPIENT_CONSENT_TTL,
+    RecipientConsent, RecipientConsentState, grant_recipient_consent, recipient_consent_id,
+    revoke_recipient_consent,
 };
 pub use application::{
     ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
@@ -78,14 +79,15 @@ pub use ports::dependency_authorization::{
     DependencyAuthorization, DependencyLiveness, DependencyResolver,
 };
 pub use ports::model_dispatch::{
-    ModelDispatchRecipientAuthority, ModelDispatchRequest, ModelDispatchTarget,
+    ModelDispatchDenial, ModelDispatchRecipientAuthority, ModelDispatchRequest,
+    ModelDispatchTarget, RecipientCheckOutcome,
+};
+pub use ports::personal_grants::{
+    PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };
 pub use ports::recipient_consent::{
     AdmittedModelConnection, ModelConnectionAdmission, RecipientConsentClock,
     RecipientConsentStore, SystemConsentClock,
-};
-pub use ports::personal_grants::{
-    PersonalGrantStore, PersonalSubjectEvidence, PersonalSubjectInspector, PersonalSubjectProbe,
 };
 pub use ports::remote_authorization::{
     RemoteAuthorityStore, RemoteAuthorityTransport, RemoteAuthorizationKeys,

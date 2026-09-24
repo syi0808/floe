@@ -17,8 +17,8 @@ mod message;
 mod model;
 mod model_conversation;
 mod ports;
-pub mod prompts;
 mod projection;
+pub mod prompts;
 mod replay;
 mod timeline_view;
 
@@ -31,9 +31,9 @@ pub use capability::{
 };
 pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};
 pub use delegation::{
-    DelegationExecutionContext, DelegationRequest, TaskReceipt, TaskSnapshot, TaskState,
-    delegation_request_digest, valid_context_refs, MAX_DELEGATION_DEVICE_ID_BYTES,
-    MAX_DELEGATION_EXECUTION_CONTEXT_BYTES,
+    DelegationExecutionContext, DelegationRequest, MAX_DELEGATION_DEVICE_ID_BYTES,
+    MAX_DELEGATION_EXECUTION_CONTEXT_BYTES, TaskReceipt, TaskSnapshot, TaskState,
+    delegation_request_digest, valid_context_refs,
 };
 pub use endpoint::{
     AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
@@ -41,17 +41,18 @@ pub use endpoint::{
 };
 pub use envelope::{
     AgentCardManifestEntry, ContextEnvelope, ContextManifest, ContextualData,
-    EvidenceManifestEntry, MemoryManifestEntry, PromptManifestEntry, RuntimeContext,
-    ScopedInstructions, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
+    EvidenceManifestEntry, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
+    MemoryManifestEntry, PromptManifestEntry, RuntimeContext, ScopedInstructions,
 };
 pub use expert::{
     ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertResult,
     MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
 };
 pub use expert_model::{
-    CapabilityDescriptor, ExpertCapabilityObservation, ExpertModel, ExpertModelAnswer, ExpertModelCall, ExpertModelRequirement,
-    ExpertReasoner, ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertTranscriptEntry,
-    SourceHistoryBoundary, EXPERT_INFERENCE_CONSUMER,
+    CapabilityDescriptor, EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation, ExpertModel,
+    ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement, ExpertReasoner,
+    ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry,
+    SourceHistoryBoundary,
 };
 pub use floe_context_contract::{
     CalendarProvider, CalendarReadAccessStamp, CalendarScope, ContextDependency, ContextEvidence,
@@ -76,20 +77,20 @@ pub use message::{
     AgentCard, AgentMessage, Artifact, ArtifactPart, MessageRole, OutcomeIssue, ToolResult,
 };
 pub use model::{
-    AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep, ModelCallOutcome,
-    ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor,
-    validate_tool_input,
+    AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep,
+    ModelCallOutcome, ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall,
+    ToolDescriptor, validate_tool_input,
 };
 pub use model_conversation::{
-    ModelConversation, ModelConversationEntry, MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES,
+    MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES, ModelConversation, ModelConversationEntry,
 };
 pub use ports::{
     BatchCursor, BoxFuture, DelegationPort, ExecutionJournal, JournalAck, JournalEvent, ModelPort,
     ModelProjectionPort, PinnedAgentRevision, PinnedToolRevision, ToolPort, ValidatedModelBatch,
 };
 pub use projection::{
-    AuthorizedModelProjection, ModelCorrection, ModelProjectionRequest, ProjectionRef,
-    MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
+    AuthorizedModelProjection, MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
+    ModelCorrection, ModelProjectionRequest, ProjectionRef,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
 pub use timeline_view::TimelineViewRead;

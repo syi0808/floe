@@ -7,18 +7,18 @@ use std::{
     time::Duration,
 };
 
+use floe_agent_contract::prompts::{
+    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
+};
 use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentDefinition, AgentEndpoint,
     AgentFailure, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
     ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
     DependencyCoverage, EndpointInvocation, EngineRequest, ExecutionJournal, ExpertReport,
-    JournalAck, JournalEvent, ModelConversation, ModelConversationEntry, ModelPlacement, ModelPort,
-    ModelProjectionPort, ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep,
-    ModelUsage, ProjectionRef, RoleSpec, RuntimeContext, ScopedInstructions, TaskId, TaskSnapshot,
-    TaskState, ToolCall, ToolPort, ToolResult,
-};
-use floe_agent_contract::prompts::{
-    PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
+    JournalAck, JournalEvent, ModelCallOutcome, ModelConversation, ModelConversationEntry,
+    ModelPlacement, ModelPort, ModelProjectionPort, ModelProjectionRequest, ModelRequest,
+    ModelResponse, ModelStep, ModelUsage, ProjectionRef, RoleSpec, RuntimeContext,
+    ScopedInstructions, TaskId, TaskSnapshot, TaskState, ToolCall, ToolPort, ToolResult,
 };
 use floe_agent_contract::{RunId, TraceContext};
 use floe_agent_runtime::Engine;
@@ -348,7 +348,7 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
             purpose: "everyday-assistance",
         })
         .unwrap();
-    let engine_report = Engine::default()
+    let engine_report = match Engine::default()
         .drive_with_default_validator(
             manager_request(catalog, engine_scope),
             &PROJECTOR,
@@ -361,7 +361,16 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
             &Journal,
         )
         .await
-        .unwrap();
+        .unwrap()
+    {
+        floe_agent_runtime::EngineOutcome::Completed(report) => report,
+        floe_agent_runtime::EngineOutcome::Blocked(blocked) => {
+            panic!(
+                "manager drive blocked unexpectedly: {:?}",
+                blocked.requirement
+            )
+        }
+    };
     directory.set_enabled("floe.test.ninth", 1, false).unwrap();
     let second = floe_agent_contract::DelegationPort::delegate(&coordinator, request, &task_scope)
         .await
@@ -751,7 +760,7 @@ impl ModelPort for ManagerModel {
         &'a self,
         request: ModelRequest,
         _: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
         let observed_coverage = Arc::clone(&self.observed_coverage);
         let selected_agent_id = self.selected_agent_id.clone();
         Box::pin(async move {
@@ -784,14 +793,14 @@ impl ModelPort for ManagerModel {
                     artifacts: vec![],
                 }
             };
-            Ok(ModelResponse {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
                 attempt_id: request.attempt_id,
                 steps: vec![step],
                 usage: ModelUsage {
                     tokens: 1,
                     cost_micros: 1,
                 },
-            })
+            }))
         })
     }
 }
@@ -888,7 +897,7 @@ async fn run_manager(
     let run_id = RunId::new();
     let root_scope = scope(run_id, None);
     let observed_coverage = Arc::new(Mutex::new(vec![]));
-    let report = Engine::default()
+    let report = match Engine::default()
         .drive_with_default_validator(
             manager_request(catalog, root_scope),
             &PROJECTOR,
@@ -901,7 +910,16 @@ async fn run_manager(
             &Journal,
         )
         .await
-        .unwrap();
+        .unwrap()
+    {
+        floe_agent_runtime::EngineOutcome::Completed(report) => report,
+        floe_agent_runtime::EngineOutcome::Blocked(blocked) => {
+            panic!(
+                "manager drive blocked unexpectedly: {:?}",
+                blocked.requirement
+            )
+        }
+    };
 
     let coverage = observed_coverage.lock().unwrap().clone();
     (report, schedule_calls, communication_calls, coverage)
@@ -932,6 +950,7 @@ fn manager_request(catalog: AllowedCatalog, scope: ExecutionScope) -> EngineRequ
         replay: vec![],
         resume: None,
         delegation_context: Some(delegation_context()),
+        lineage: None,
     }
 }
 
@@ -1182,10 +1201,7 @@ async fn exact_duplicate_request_replays_without_endpoint_redispatch() {
         .await
         .unwrap();
     assert_eq!(first.snapshot.state, TaskState::Completed);
-    let second = coordinator
-        .delegate(request, &task_scope)
-        .await
-        .unwrap();
+    let second = coordinator.delegate(request, &task_scope).await.unwrap();
     assert_eq!(second.snapshot, first.snapshot);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -1229,18 +1245,12 @@ async fn same_task_with_changed_execution_context_conflicts() {
     changed.execution_context.device_id = "changed-device".into();
     changed.execution_context.session_id = Uuid::new_v4();
     assert_eq!(
-        coordinator
-            .delegate(changed, &task_scope)
-            .await
-            .err(),
+        coordinator.delegate(changed, &task_scope).await.err(),
         Some(AgentFailure::Conflict)
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     // The exact original still replays.
-    let replayed = coordinator
-        .delegate(request, &task_scope)
-        .await
-        .unwrap();
+    let replayed = coordinator.delegate(request, &task_scope).await.unwrap();
     assert_eq!(replayed.snapshot, first.snapshot);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -1350,9 +1360,6 @@ async fn deadline_during_execution_produces_timed_out_terminal_task() {
         .await
         .unwrap();
     assert_eq!(receipt.snapshot.state, TaskState::TimedOut);
-    assert_eq!(
-        receipt.snapshot.issue,
-        Some(AgentFailure::DeadlineExceeded)
-    );
+    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::DeadlineExceeded));
     assert_eq!(receipt.snapshot.result, None);
 }

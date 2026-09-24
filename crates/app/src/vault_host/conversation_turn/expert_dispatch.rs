@@ -177,10 +177,15 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
             )
             .await;
-            let authority = floe_provider_adapters::control::SavedConnectionRecipientAuthority::new(
+            let admission = floe_provider_adapters::control::SavedConnectionAdmission::new(
                 self.connections.clone(),
                 person_id.to_string(),
                 context.device_id.clone(),
+            );
+            let authority = floe_access::ContextualRecipientAuthority::new(
+                std::sync::Arc::clone(&self.vault),
+                admission,
+                floe_access::SystemConsentClock,
             );
             let personal_resolver = personal_grants::PersonalDependencyResolver {
                 vault: &self.vault,
@@ -730,7 +735,16 @@ impl InProcessAgent for ConversationExperts<'_> {
         // This message's attempts settle against a bounded child of the Task
         // scope, and its source reads are captured for the exact dispatch
         // coverage. Both bindings last exactly as long as this message runs.
+        // The delegation's intent lineage (Session + manager origin Run)
+        // binds this message's dispatches; a non-Conversation delegation
+        // carries none, and its external dispatches fail closed.
         let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
+        let lineage = floe_context_contract::RecipientLineage::try_new(
+            request.session_id,
+            request.parent_turn_id,
+        )
+        .ok();
         let host = DelegatedMessageExperts {
             experts: self,
             recorder: CapturingRecorder {
@@ -741,6 +755,8 @@ impl InProcessAgent for ConversationExperts<'_> {
                 executor: self.executor,
                 scope: self.scope,
                 captured: &captured,
+                lineage,
+                model_blocked: &model_blocked,
             },
             captured: Mutex::new(Vec::new()),
         };
@@ -782,6 +798,40 @@ impl InProcessAgent for ConversationExperts<'_> {
                 .artifacts
                 .extend(super::interaction_publication::interaction_ref_artifacts(
                     &refs,
+                )?);
+        }
+        let model_requirement = model_blocked
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .take();
+        if let Some(requirement) = model_requirement {
+            // A blocked Expert model reports its blocked-domain judgment
+            // above; the trusted host publishes the captured requirement's
+            // card under the Task origin and attaches the durable ref, so
+            // the Manager sees exactly what to resume after Allow.
+            let runs = self.runs.ok_or(AgentFailure::CapabilityUnavailable)?;
+            let interactions = self
+                .interactions
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            let device_id = self.device_id.ok_or(AgentFailure::CapabilityUnavailable)?;
+            let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
+                .ok_or(AgentFailure::InvalidInput)?;
+            let reference = super::interaction_publication::publish_model_blocker(
+                runs,
+                interactions,
+                &request.person_id.to_string(),
+                request.session_id,
+                origin_run_id,
+                expert_request.task_id,
+                device_id,
+                requirement,
+                expert_request.current_time_unix_ms,
+            )
+            .await?;
+            output
+                .artifacts
+                .extend(super::interaction_publication::interaction_ref_artifacts(
+                    &[reference],
                 )?);
         }
         let task = floe_experts::completed_expert_task(
@@ -842,7 +892,7 @@ mod capture_tests {
             _: floe_inference::InferenceExecutionConstraint,
         ) -> floe_agent_contract::BoxFuture<
             'a,
-            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+            Result<floe_agent_contract::ModelCallOutcome, AgentFailure>,
         > {
             Box::pin(async { panic!("capture tests call no model") })
         }
@@ -1002,6 +1052,7 @@ mod capture_tests {
             snapshots: None,
         };
         let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
         let host = DelegatedMessageExperts {
             experts: &experts,
             recorder: CapturingRecorder {
@@ -1012,6 +1063,8 @@ mod capture_tests {
                 executor: &executor,
                 scope: &scope,
                 captured: &captured,
+                lineage: None,
+                model_blocked: &model_blocked,
             },
             captured: Mutex::new(Vec::new()),
         };
@@ -1143,21 +1196,23 @@ mod capture_tests {
             _: floe_inference::InferenceExecutionConstraint,
         ) -> floe_agent_contract::BoxFuture<
             'a,
-            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+            Result<floe_agent_contract::ModelCallOutcome, AgentFailure>,
         > {
             let text = self.text.clone();
             Box::pin(async move {
-                Ok(floe_agent_contract::ModelResponse {
-                    attempt_id: uuid::Uuid::new_v4(),
-                    steps: vec![floe_agent_contract::ModelStep::Answer {
-                        text,
-                        artifacts: vec![],
-                    }],
-                    usage: floe_agent_contract::ModelUsage {
-                        tokens: 10,
-                        cost_micros: 10,
+                Ok(floe_agent_contract::ModelCallOutcome::Ready(
+                    floe_agent_contract::ModelResponse {
+                        attempt_id: uuid::Uuid::new_v4(),
+                        steps: vec![floe_agent_contract::ModelStep::Answer {
+                            text,
+                            artifacts: vec![],
+                        }],
+                        usage: floe_agent_contract::ModelUsage {
+                            tokens: 10,
+                            cost_micros: 10,
+                        },
                     },
-                })
+                ))
             })
         }
     }
@@ -1231,6 +1286,7 @@ mod capture_tests {
             snapshots: None,
         };
         let dependencies = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
         let host = DelegatedMessageExperts {
             experts: &experts,
             recorder: CapturingRecorder {
@@ -1241,6 +1297,8 @@ mod capture_tests {
                 executor: &executor,
                 scope: &scope,
                 captured: &dependencies,
+                lineage: None,
+                model_blocked: &model_blocked,
             },
             captured: Mutex::new(Vec::new()),
         };
@@ -1280,5 +1338,485 @@ mod capture_tests {
             !dependencies.lock().unwrap().is_empty(),
             "admitted attention evidence stays recorded"
         );
+    }
+
+    struct BlockingExecutor {
+        requirement: floe_context_contract::ProcessingRequirement,
+    }
+
+    impl floe_inference::InferenceExecutor for BlockingExecutor {
+        fn execute<'a>(
+            &'a self,
+            _: floe_agent_contract::ModelRequest,
+            _: &'a floe_execution::ExecutionScope,
+            _: floe_inference::InferenceExecutionConstraint,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::ModelCallOutcome, AgentFailure>,
+        > {
+            let requirement = self.requirement.clone();
+            Box::pin(async move {
+                Ok(floe_agent_contract::ModelCallOutcome::NeedsUserAction(
+                    requirement,
+                ))
+            })
+        }
+    }
+
+    fn blocked_requirement() -> floe_context_contract::ProcessingRequirement {
+        floe_context_contract::ProcessingRequirement::try_new(
+            "model.example",
+            "server-model",
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            vec![floe_agent_contract::DataClass::Personal],
+            vec![],
+            uuid::Uuid::new_v4(),
+            1,
+            floe_context_contract::RecipientLineage::try_new(
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn blocked_model_call_reports_blocked_domain_judgment_without_artifacts() {
+        let requirement = blocked_requirement();
+        let executor = BlockingExecutor {
+            requirement: requirement.clone(),
+        };
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
+        );
+        let policy = expert_policy();
+        let context = floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        };
+        let attention = ReadyAttention;
+        let calendar = BlockedCalendar;
+        let settlement = RejectStatefulSettlement;
+        let store = ProbeRecorder;
+        let experts = ConversationExperts {
+            executor: &executor,
+            scope: &scope,
+            availability: floe_inference::InferenceAvailability::default(),
+            source_client: None,
+            calendar_reader: Some(&calendar),
+            policy: &policy,
+            context: &context,
+            attention: Some(&attention),
+            people_reader: None,
+            wellbeing_reader: None,
+            recorder: Some(&store),
+            remote_reader: None,
+            context_reader: None,
+            task_views: &[],
+            cards: vec![],
+            stateful_settlement: &settlement,
+            task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
+            snapshots: None,
+        };
+        let dependencies = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
+        let host = DelegatedMessageExperts {
+            experts: &experts,
+            recorder: CapturingRecorder {
+                inner: None,
+                captured: &dependencies,
+            },
+            model: ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &dependencies,
+                lineage: None,
+                model_blocked: &model_blocked,
+            },
+            captured: Mutex::new(Vec::new()),
+        };
+        let expert_request = BuiltinExpertRequest {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                .package_id()
+                .into(),
+            person_id: floe_kernel::PersonId::new(),
+            task_id: uuid::Uuid::new_v4(),
+            invocation_id: uuid::Uuid::new_v4(),
+            assignment: "focus".into(),
+            current_time_unix_ms: chrono::Utc::now().timestamp_millis(),
+            context: context.clone(),
+            max_output_bytes: 16_384,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: floe_execution::Cancellation::default(),
+        };
+        // The judgment stops at the blocked dispatch: a deterministic
+        // blocked-domain report that proposes no requirement of its own,
+        // while the trusted host stash holds the requirement to publish.
+        let output = floe_experts_builtin::focus_attention::dispatch(&host, &expert_request)
+            .await
+            .unwrap();
+        assert!(
+            output.summary.contains("Model approval"),
+            "blocked judgment must name the review: {}",
+            output.summary
+        );
+        assert!(
+            output.data.contains("needs_user_action"),
+            "blocked report carries the status: {}",
+            output.data
+        );
+        assert!(
+            output.artifacts.is_empty(),
+            "the judgment proposes no requirement of its own"
+        );
+        assert_eq!(*model_blocked.lock().unwrap(), Some(requirement));
+    }
+
+    #[derive(Clone, Default)]
+    struct TestKeys(
+        std::sync::Arc<
+            Mutex<std::collections::HashMap<(floe_kernel::PersonId, uuid::Uuid), [u8; 32]>>,
+        >,
+    );
+
+    impl floe_vault::VaultKeyProvider for TestKeys {
+        fn load(
+            &self,
+            person: floe_kernel::PersonId,
+            vault: uuid::Uuid,
+        ) -> Result<floe_vault::VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person, vault))
+                .copied()
+                .map(floe_vault::VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person: floe_kernel::PersonId,
+            vault: uuid::Uuid,
+            key: &floe_vault::VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person, vault), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    struct AvailableProvider;
+
+    impl floe_inference::ModelProvider for AvailableProvider {
+        type Prepared = ProbeTransport;
+
+        async fn observe_profiles(
+            &self,
+        ) -> Vec<floe_inference::PreparedModelProfile<Self::Prepared>> {
+            vec![floe_inference::PreparedModelProfile {
+                profile: floe_inference::ModelProfile {
+                    id: "device-model".into(),
+                    purpose: floe_inference::ModelPurpose::new(
+                        floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+                    )
+                    .unwrap(),
+                    consumer: floe_inference::ModelConsumer::new(
+                        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                    )
+                    .unwrap(),
+                    execution_location: floe_inference::ExecutionLocation::Device,
+                    data_recipient: floe_inference::DataRecipient::Device,
+                    capabilities: floe_inference::ModelCapabilities(vec![]),
+                    available: true,
+                },
+                transport: ProbeTransport,
+            }]
+        }
+    }
+
+    #[derive(Clone)]
+    struct ProbeTransport;
+
+    impl floe_inference::PreparedModelTransport for ProbeTransport {
+        fn generate(
+            &self,
+            _: floe_inference::CanonicalModelRequest,
+        ) -> impl std::future::Future<
+            Output = Result<floe_inference::CanonicalModelResponse, AgentFailure>,
+        > + Send {
+            async { Err(AgentFailure::ModelUnavailable) }
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_model_call_publishes_card_under_task_origin() {
+        use floe_experts::{A2AMessageRole, A2APart, A2ATaskState, InProcessAgent};
+        use std::os::unix::fs::DirBuilderExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("vaults");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let person = floe_kernel::PersonId::new();
+        let run_id = floe_kernel::RunId::new();
+        let task_id = uuid::Uuid::new_v4();
+        let vault = std::sync::Arc::new(
+            floe_vault::EncryptedAgentVault::create(&root, person, TestKeys::default())
+                .await
+                .unwrap(),
+        );
+        vault.activate_conversation_executor().await.unwrap();
+        let runs = floe_vault::VaultConversationRepository::new(std::sync::Arc::clone(&vault));
+        let started = floe_conversation::start_session(
+            &runs,
+            floe_conversation::SessionRequest {
+                principal: person.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let session_id = started.session_id;
+        // The blocked dispatch runs under the delegation lineage the
+        // endpoint derives: this Session plus the manager origin Run.
+        let requirement = floe_context_contract::ProcessingRequirement::try_new(
+            "model.example",
+            "server-model",
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            vec![floe_agent_contract::DataClass::Personal],
+            vec![],
+            uuid::Uuid::new_v4(),
+            1,
+            floe_context_contract::RecipientLineage::try_new(session_id, run_id.as_uuid()).unwrap(),
+        )
+        .unwrap();
+        let executor = BlockingExecutor {
+            requirement: requirement.clone(),
+        };
+        let command_id = floe_agent_contract::CommandId::new();
+        floe_conversation::ConversationRepository::admit_turn(
+            &runs,
+            floe_conversation::TurnAdmissionRequest {
+                run_id,
+                command_id,
+                session_id,
+                expected_session_revision: 0,
+                principal: person.to_string(),
+                request_digest: [7; 32],
+                mode: floe_conversation::TurnMode::New,
+                retry_of: None,
+                profile: floe_conversation::ProfileSelection::Auto,
+                user_message: floe_agent_contract::AgentMessage {
+                    message_id: command_id.as_uuid(),
+                    role: floe_agent_contract::MessageRole::User,
+                    text: "Focus now".into(),
+                    call_id: None,
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let delegation = floe_agent_contract::DelegationRequest {
+            task_id: floe_agent_contract::TaskId::from_uuid(task_id)
+                .expect("task id must be valid"),
+            parent_run_id: Some(run_id.as_uuid()),
+            principal: person.to_string(),
+            invocation_key: floe_agent_contract::InvocationKey::new(),
+            selected_agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                .package_id()
+                .into(),
+            selected_definition_revision: 1,
+            message: "focus".into(),
+            context_refs: vec![],
+            execution_context: floe_agent_contract::DelegationExecutionContext {
+                session_id,
+                device_id: "test-device".into(),
+                agent_context: floe_agent_contract::AgentContext {
+                    projection_version: 1,
+                    persona: None,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                },
+                max_output_bytes: 16_384,
+            },
+        };
+        floe_conversation::ConversationRepository::journal(&runs, run_id)
+            .unwrap()
+            .record_intent(floe_agent_contract::JournalEvent::DelegationIntent {
+                request: delegation,
+            })
+            .await
+            .unwrap();
+
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
+        );
+        let policy = expert_policy();
+        let context = floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        };
+        let attention = ReadyAttention;
+        let calendar = BlockedCalendar;
+        let settlement = RejectStatefulSettlement;
+        let store = ProbeRecorder;
+        let availability = floe_inference::InferenceAvailability::observe(
+            &AvailableProvider,
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        )
+        .await;
+        let device_id = "test-device";
+        let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
+        let experts = ConversationExperts {
+            executor: &executor,
+            scope: &scope,
+            availability,
+            source_client: None,
+            calendar_reader: Some(&calendar),
+            policy: &policy,
+            context: &context,
+            attention: Some(&attention),
+            people_reader: None,
+            wellbeing_reader: None,
+            recorder: Some(&store),
+            remote_reader: None,
+            context_reader: None,
+            task_views: &[],
+            cards: vec![floe_agent_contract::AgentCard {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                protocol_version: floe_experts::A2A_PROTOCOL_VERSION.into(),
+                id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                    .package_id()
+                    .into(),
+                version: "1.0.0".into(),
+                name: "Focus Expert".into(),
+                description: "Protects the current focus".into(),
+                domain_tags: vec!["focus".into()],
+                skills: vec!["Protect the current focus".into()],
+                supported_placements: vec![floe_agent_contract::ModelPlacement::DeviceLocal],
+            }],
+            stateful_settlement: &settlement,
+            task_runners: &[],
+            runs: Some(&runs),
+            interactions: Some(&runs),
+            device_id: Some(device_id),
+            snapshots: Some(&snapshots),
+        };
+        let task = experts
+            .handle_message(floe_experts::A2ASendMessageRequest {
+                usage: floe_inference::UsageLedger::default(),
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                person_id: person,
+                session_id,
+                parent_turn_id: run_id.as_uuid(),
+                agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                    .package_id()
+                    .into(),
+                message: floe_experts::A2AMessage {
+                    message_id: uuid::Uuid::new_v4(),
+                    context_id: uuid::Uuid::new_v4(),
+                    task_id: Some(task_id),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "focus".into(),
+                    }],
+                },
+                max_output_bytes: 16_384,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+                cancellation: floe_execution::Cancellation::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.state, A2ATaskState::Completed);
+        // The optional calendar blocker and the model blockage each
+        // publish: both trusted refs attach beside the result artifact.
+        let mut refs = task
+            .artifacts
+            .iter()
+            .filter_map(|artifact| {
+                artifact.parts.iter().find_map(|part| match part {
+                    floe_experts::A2APart::Data { media_type, data }
+                        if media_type == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE =>
+                    {
+                        Some(
+                            serde_json::from_str::<floe_agent_contract::UserInteractionRef>(data)
+                                .unwrap(),
+                        )
+                    }
+                    _ => None,
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(refs.len(), 2);
+        refs.sort_by_key(|reference| reference.interaction_id);
+        let kinds = refs
+            .iter()
+            .map(|reference| reference.kind)
+            .collect::<Vec<_>>();
+        assert!(kinds.contains(&floe_agent_contract::UserInteractionKind::SourceAccess));
+        assert!(kinds.contains(&floe_agent_contract::UserInteractionKind::ProcessingRecipient));
+        let model_ref = refs
+            .iter()
+            .find(|reference| {
+                reference.kind == floe_agent_contract::UserInteractionKind::ProcessingRecipient
+            })
+            .unwrap();
+        let stored = floe_conversation::InteractionRepository::get_interaction(
+            &runs,
+            person,
+            model_ref.interaction_id,
+        )
+        .await
+        .unwrap()
+        .expect("blocked dispatch must publish a durable interaction");
+        assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
+        assert_eq!(
+            stored.origin,
+            floe_conversation::InteractionOrigin::Task {
+                task_id,
+                capability_call_id: None,
+            }
+        );
+        assert_eq!(
+            stored.requirement.kind,
+            floe_conversation::InteractionRequirementKind::ApproveProcessingRecipient
+        );
+        assert_eq!(stored.requirement.source_id, requirement.recipient());
+        assert_eq!(stored.requirement.consumer, requirement.consumer());
+        assert_eq!(stored.requirement.purpose, requirement.purpose());
     }
 }

@@ -5,12 +5,14 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::{LogisticsView, logistics_context_evidence, validate_logistics_view};
 
 use crate::prompts::life_logistics_expert_prompt;
-use crate::shared::{PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary};
+use crate::shared::{
+    ExpertJudgment, PortfolioExpertInvocation, run_portfolio_model, valid_text, validate_summary,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,9 +54,9 @@ pub async fn run_life_logistics_expert<Model: ExpertModel>(
     policy: &InferencePolicyDecision,
     invocation: PortfolioExpertInvocation,
     view: LogisticsView,
-) -> Result<LifeLogisticsExpertResult, AgentFailure> {
+) -> Result<ExpertJudgment<LifeLogisticsExpertResult>, AgentFailure> {
     validate_logistics_view(&view, invocation.current_time_unix_ms)?;
-    let output: LogisticsOutput = run_portfolio_model(
+    let output: LogisticsOutput = match run_portfolio_model(
         model,
         policy,
         ExpertModelRequirement::RemoteOnly,
@@ -62,7 +64,13 @@ pub async fn run_life_logistics_expert<Model: ExpertModel>(
         logistics_context_evidence(&view)?,
         life_logistics_expert_prompt(),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(output) => output,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     validate_summary(&output.summary)?;
     if output.preparations.len() > 16 {
         return Err(AgentFailure::BudgetExceeded);
@@ -80,12 +88,12 @@ pub async fn run_life_logistics_expert<Model: ExpertModel>(
             return Err(AgentFailure::InvalidModelOutput);
         }
     }
-    Ok(LifeLogisticsExpertResult {
+    Ok(ExpertJudgment::Decided(LifeLogisticsExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handle: view.source_handle,
         expires_at_unix_ms: view.expires_at_unix_ms,
         summary: output.summary,
         preparations: output.preparations,
-    })
+    }))
 }

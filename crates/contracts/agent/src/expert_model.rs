@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context_contract::DataClass;
+use floe_context_contract::{DataClass, ProcessingRequirement};
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, PersonId};
 
@@ -59,11 +59,26 @@ pub struct ExpertModelCall {
 }
 
 /// The single answer the call produced, and what it cost.
+#[derive(Clone, Debug)]
 pub struct ExpertModelAnswer {
     pub schema_version: u32,
     pub answer: String,
     pub used_tokens: u64,
     pub cost_micros: u64,
+}
+
+/// What one Expert model call produced: the single answer, or the exact
+/// dispatch the model owner blocked on before any transmission.
+///
+/// `Blocked` is a distinct typed expected completion, not a failure: the
+/// Expert reports a blocked-domain judgment and stops, while the trusted
+/// host publishes the requirement's card and attaches the durable refs.
+/// Hard failures (policy prohibition, transport errors, invalid input)
+/// stay `Err(AgentFailure)`.
+#[derive(Clone, Debug)]
+pub enum ExpertModelOutcome {
+    Answered(ExpertModelAnswer),
+    Blocked(ProcessingRequirement),
 }
 
 /// The model an Expert reasons on.
@@ -73,11 +88,12 @@ pub trait ExpertModel: Sync {
     /// Anything but a single answer is `InvalidModelOutput`: the caller asked
     /// one question and is owed one reply. The call's requirement states what
     /// execution class the Expert needs; which provider satisfies it is the
-    /// model owner's answer, never the Expert's.
+    /// model owner's answer, never the Expert's. A recoverable consent
+    /// blockage is `Ok(Blocked)`, never an error and never a forged answer.
     fn answer<'a>(
         &'a self,
         call: ExpertModelCall,
-    ) -> BoxFuture<'a, Result<ExpertModelAnswer, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ExpertModelOutcome, AgentFailure>>;
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -192,6 +208,7 @@ pub struct ExpertReasoningStep {
 }
 
 /// What the model did with one step.
+#[derive(Clone, Debug)]
 pub struct ExpertStepOutcome {
     pub schema_version: u32,
     pub steps: Vec<ExpertStep>,
@@ -225,6 +242,17 @@ impl ExpertStepOutcome {
     }
 }
 
+/// What one Expert reasoning step produced: the step outcome, or the exact
+/// dispatch the model owner blocked on before any transmission.
+///
+/// Same contract as [`ExpertModelOutcome`]: the Expert reports a
+/// blocked-domain judgment and stops; the trusted host publishes the card.
+#[derive(Clone, Debug)]
+pub enum ExpertStepResult {
+    Stepped(ExpertStepOutcome),
+    Blocked(ProcessingRequirement),
+}
+
 /// A model an Expert reasons with over several steps, calling its own bounded
 /// capabilities in between.
 ///
@@ -235,7 +263,7 @@ pub trait ExpertReasoner: ExpertModel {
     fn step<'a>(
         &'a self,
         step: ExpertReasoningStep,
-    ) -> BoxFuture<'a, Result<ExpertStepOutcome, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ExpertStepResult, AgentFailure>>;
 }
 
 /// What counts as source-derived history in a transcript.
@@ -283,9 +311,13 @@ mod observation_tests {
             .validate(4096),
             Err(AgentFailure::InvalidModelOutput)
         );
-        assert!(ExpertCapabilityObservation::Unavailable {
-            reason_code: "temporarily_unavailable".into(),
-        }.validate(4096).is_ok());
+        assert!(
+            ExpertCapabilityObservation::Unavailable {
+                reason_code: "temporarily_unavailable".into(),
+            }
+            .validate(4096)
+            .is_ok()
+        );
     }
 
     #[test]

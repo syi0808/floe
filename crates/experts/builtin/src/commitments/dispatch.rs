@@ -10,9 +10,8 @@ use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
 
 use floe_context_contract::CommunicationView;
 
-use crate::commitments::{
-    CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
-};
+use crate::commitments::{CommitmentsContextViews, run_commitments_expert_with_views};
+use crate::shared::ExpertJudgment;
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
     granted_context,
@@ -70,7 +69,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             );
         }
         SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            blockers
+                .validate()
+                .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Commitments.result_artifact_name(),
                 BlockedExpertStatus::NeedsUserAction,
@@ -89,7 +90,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         host.calendar_views(request, request.nearby_calendar_query()?)
             .await?,
     );
-    let result: CommitmentsExpertResult = run_commitments_expert_with_views(
+    let result = match run_commitments_expert_with_views(
         model,
         host.policy(),
         request.mail_invocation(context, view),
@@ -98,7 +99,17 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             tasks: task_views,
         },
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(result) => result,
+        ExpertJudgment::Blocked(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Commitments.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Model approval needs your review, so there are no commitment findings.".into(),
+            );
+        }
+    };
     drop(source_view);
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::Commitments.result_artifact_name(),

@@ -11,7 +11,7 @@ use std::{
 };
 
 use floe_access::{RemoteCallWindow, RemotePairingChallenge, inspect_remote_authority};
-use floe_agent_contract::{AgentFailure, PersonId};
+use floe_agent_contract::{AgentFailure, ModelCallOutcome, PersonId};
 use floe_connections::{
     PairingConfirmationRequest, PairingIdentity, PairingService, PairingStatusRequest,
     admit_pairing_report,
@@ -319,12 +319,20 @@ async fn exercise_live_server(model: Option<String>) {
     let generated = if model.is_some() {
         live_model::assert_remote_profile(&saved).await;
         let denied = live_model::attempt(&saved).await;
-        assert_eq!(denied.result.unwrap_err(), AgentFailure::PolicyDenied);
+        let ModelCallOutcome::NeedsUserAction(requirement) =
+            denied.result.expect("unconsented dispatch is reviewable")
+        else {
+            panic!("unconsented live dispatch must block, not generate");
+        };
+        assert_eq!(requirement.recipient(), "OpenAI (Codex OAuth)");
         assert_eq!(denied.usage.attempts, 0);
         let mut consented = saved.clone();
         consented.allow_external = true;
         consented.external_recipients = vec!["OpenAI (Codex OAuth)".into()];
-        Some((live_model::attempt(&consented).await, consented))
+        Some((
+            live_model::attempt_with_consent(&consented).await,
+            consented,
+        ))
     } else {
         None
     };
@@ -355,7 +363,7 @@ async fn exercise_live_server(model: Option<String>) {
         Err(AgentFailure::CredentialExpired)
     );
     if let Some((outcome, consented)) = generated {
-        let after_revoke = live_model::attempt(&consented).await;
+        let after_revoke = live_model::attempt_with_consent(&consented).await;
         assert!(after_revoke.result.is_err());
         assert_eq!(after_revoke.usage.attempts, 0);
         live_model::assert_generated(outcome);

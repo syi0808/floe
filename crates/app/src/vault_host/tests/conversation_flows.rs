@@ -1110,10 +1110,10 @@ fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
         })
         .unwrap_or_else(|| panic!("durable Commitments blocker: {session:?}"));
     assert!(
-        session.messages.iter().any(|message| matches!(
-            message,
-            AgentMessage::Interaction { .. }
-        )),
+        session
+            .messages
+            .iter()
+            .any(|message| matches!(message, AgentMessage::Interaction { .. })),
         "completed turn must carry the Interaction message: {session:?}"
     );
     assert_eq!(server.join().unwrap().len(), 2);
@@ -1129,7 +1129,10 @@ fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
         .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(task_id).unwrap()))
         .unwrap()
         .unwrap();
-    assert_eq!(task.snapshot.state, floe_agent_contract::TaskState::Completed);
+    assert_eq!(
+        task.snapshot.state,
+        floe_agent_contract::TaskState::Completed
+    );
     assert_eq!(task.snapshot.issue, None);
     let reference = task
         .snapshot
@@ -1945,16 +1948,14 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
 }
 
 #[test]
-fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
+fn canonical_root_unconsented_external_recipient_blocks_with_card_without_agent_post() {
     let connections = TestConnections::default();
     let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let keys = Keys::default();
     let person = PersonId::new();
-    let worker = Worker::new_with_connection_store(
-        directory.path().join("vaults"),
-        Keys::default(),
-        connections.store(),
-    )
-    .unwrap();
+    let worker =
+        Worker::new_with_connection_store(root.clone(), keys.clone(), connections.store()).unwrap();
     perform(&worker, person, WorkerAction::Create);
     let session = perform(
         &worker,
@@ -1993,9 +1994,9 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
                         ProfileSelection::Explicit("server-model".into()),
                         false,
                         None,
-                        // The saved connection never consented to external
-                        // use, so the exact-recipient fence must deny before
-                        // any transport handoff.
+                        // No contextual consent covers the selected
+                        // recipient, so the dispatch blocks into a
+                        // reviewable card before any transport handoff.
                     )),
                 }),
             },
@@ -2003,19 +2004,190 @@ fn canonical_root_unconsented_external_recipient_denies_without_agent_post() {
         .unwrap();
     let finished = wait(&worker, person, request_id);
     assert_eq!(finished.failure, None, "external turn job: {finished:?}");
+    let session = finished.session.unwrap();
+    // The missing eligible consent blocks the first dispatch into a
+    // deterministic completed turn: the limitation text, no fabricated
+    // model output, and exactly one interaction ref.
     assert_eq!(
-        finished.session.unwrap().last_outcome,
-        Some(floe_conversation::AgentOutcome::Halted {
-            reason: AgentFailure::PolicyDenied
-        })
+        session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Completed),
+        "session: {session:?}"
     );
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Assistant { text, .. }
+            if text == floe_conversation::MODEL_CONSENT_LIMITATION
+    )));
+    let interactions: Vec<_> = session
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Interaction { interaction_id, .. } => Some(*interaction_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(interactions.len(), 1, "session: {session:?}");
     done.store(true, Ordering::Release);
     server.join().unwrap();
     assert!(purposes.load(Ordering::SeqCst) >= 1);
     assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
+    // The single ref resolves to a durable pending Model-origin card
+    // naming the exact selected recipient under review.
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let reopened = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::new(reopened));
+    let stored = runtime
+        .block_on(floe_conversation::InteractionRepository::get_interaction(
+            &repository,
+            person,
+            interactions[0],
+        ))
+        .unwrap()
+        .expect("blocked dispatch must publish a durable interaction");
+    assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
+    assert!(
+        matches!(
+            stored.origin,
+            floe_conversation::InteractionOrigin::Model { .. }
+        ),
+        "blocked root dispatch publishes under the Model origin: {:?}",
+        stored.origin
+    );
+    assert_eq!(stored.requirement.source_id, "someone-else.example");
+    let floe_conversation::ReviewedTarget::RecipientConsent(target) = &stored.target else {
+        panic!(
+            "model blockage must review a recipient consent: {:?}",
+            stored.target
+        );
+    };
+    assert_eq!(target.recipient, "someone-else.example");
     worker
         .request(person, request_id, WorkerOperation::Release)
         .unwrap();
+}
+
+#[test]
+fn delegated_model_dispatch_uses_the_same_owner_checks_as_root() {
+    use std::sync::Mutex;
+
+    use floe_agent_contract::ExpertModel;
+
+    // The delegated path runs the same canonical InferenceService with the
+    // same Access fence and the same vault-backed recipient authority as
+    // the root path: an unconsented remote-only expert dispatch blocks on
+    // the exact selected recipient before any agent post.
+    let person = PersonId::new();
+    let fixture = direct_endpoint_fixture_for(person);
+    let inventory = serde_json::json!({
+        "schema_version": 1,
+        "purposes": {
+            "everyday_assistance": {
+                "available": true,
+                "requires_external_consent": true,
+                "placement": "external",
+                "recipient": "expert-model.example"
+            }
+        }
+    });
+    let (mock, purposes, agent_posts, done, server) = observing_server(inventory, vec![]);
+    let connection = saved_server_connection(&mock, person, "mac-local");
+    let store =
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection));
+    let provider =
+        floe_provider_adapters::models::RootModelProvider::from_current_connection_scoped(
+            &store,
+            &person.to_string(),
+            "mac-local",
+            floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
+            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        )
+        .unwrap();
+    let admission = floe_provider_adapters::control::SavedConnectionAdmission::new(
+        store,
+        person.to_string(),
+        "mac-local".into(),
+    );
+    let authority = floe_access::ContextualRecipientAuthority::new(
+        std::sync::Arc::clone(&fixture.vault),
+        admission,
+        floe_access::SystemConsentClock,
+    );
+    let personal = crate::vault_host::personal_grants::PersonalDependencyResolver {
+        vault: &fixture.vault,
+        local_context: &fixture.local_context,
+        person_id: person,
+        device_id: "mac-local",
+    };
+    let service = floe_inference::InferenceService::new(provider, personal, authority);
+    let ledger = floe_execution::budget::BudgetLedger::new(
+        floe_execution::budget::BudgetConfig::new(50_000, 100_000),
+        Default::default(),
+    );
+    let scope = floe_execution::ExecutionScope::root(
+        floe_execution::Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+        ledger.work_lease(),
+        floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+    );
+    let captured = Mutex::new(Vec::new());
+    let stash = Mutex::new(None);
+    let host = crate::vault_host::conversation_turn::expert_host::ExpertModelHost {
+        executor: &service,
+        scope: &scope,
+        captured: &captured,
+        lineage: Some(
+            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                .unwrap(),
+        ),
+        model_blocked: &stash,
+    };
+    let call = floe_agent_contract::ExpertModelCall {
+        person_id: person,
+        invocation_id: Uuid::new_v4(),
+        prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
+        policy: floe_context::InferencePolicyDecision {
+            purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+            data_classes: vec![floe_agent_contract::DataClass::Personal],
+            allowed_placements: vec![
+                floe_agent_contract::ModelPlacement::DeviceLocal,
+                floe_agent_contract::ModelPlacement::Remote,
+            ],
+            performance_class: "interactive".into(),
+            projection_version: 1,
+            external_transfer_consent: floe_agent_contract::TransferConsent::NotGranted,
+            bounded_sensitive_projection: false,
+        },
+        context: floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        assignment: "Protect the current focus period.".into(),
+        requirement: floe_agent_contract::ExpertModelRequirement::RemoteOnly,
+        max_output_bytes: 8192,
+        max_tokens: 4096,
+        max_cost_micros: 1_000,
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(9),
+        cancellation: floe_execution::Cancellation::default(),
+    };
+    let outcome = fixture.runtime.block_on(ExpertModel::answer(&host, call));
+    done.store(true, Ordering::Release);
+    server.join().unwrap();
+    let floe_agent_contract::ExpertModelOutcome::Blocked(requirement) = outcome.unwrap() else {
+        panic!("unconsented delegated dispatch must block");
+    };
+    assert_eq!(requirement.recipient(), "expert-model.example");
+    assert_eq!(*stash.lock().unwrap(), Some(requirement));
+    assert!(purposes.load(Ordering::SeqCst) >= 1);
+    assert_eq!(agent_posts.load(Ordering::SeqCst), 0);
 }
 
 fn recording_answer_server(
@@ -2412,45 +2584,45 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     let repository =
         floe_vault::VaultConversationRepository::new(std::sync::Arc::clone(&fixture.vault));
     let session_id = fixture.runtime.block_on(async {
-            fixture
-                .vault
-                .activate_conversation_executor()
-                .await
-                .unwrap();
-            let started = floe_conversation::start_session(
-                &repository,
-                floe_conversation::SessionRequest {
-                    principal: person.to_string(),
-                },
-            )
+        fixture
+            .vault
+            .activate_conversation_executor()
             .await
             .unwrap();
-            let command_id = floe_agent_contract::CommandId::new();
-            floe_conversation::ConversationRepository::admit_turn(
-                &repository,
-                floe_conversation::TurnAdmissionRequest {
-                    run_id,
-                    command_id,
-                    session_id: started.session_id,
-                    expected_session_revision: 0,
-                    principal: person.to_string(),
-                    request_digest: [7; 32],
-                    mode: floe_conversation::TurnMode::New,
-                    retry_of: None,
-                    profile: floe_conversation::ProfileSelection::Auto,
-                    user_message: floe_agent_contract::AgentMessage {
-                        message_id: command_id.as_uuid(),
-                        role: floe_agent_contract::MessageRole::User,
-                        text: "Review today".into(),
-                        call_id: None,
-                        coverage: floe_agent_contract::DependencyCoverage::Independent,
-                    },
+        let started = floe_conversation::start_session(
+            &repository,
+            floe_conversation::SessionRequest {
+                principal: person.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let command_id = floe_agent_contract::CommandId::new();
+        floe_conversation::ConversationRepository::admit_turn(
+            &repository,
+            floe_conversation::TurnAdmissionRequest {
+                run_id,
+                command_id,
+                session_id: started.session_id,
+                expected_session_revision: 0,
+                principal: person.to_string(),
+                request_digest: [7; 32],
+                mode: floe_conversation::TurnMode::New,
+                retry_of: None,
+                profile: floe_conversation::ProfileSelection::Auto,
+                user_message: floe_agent_contract::AgentMessage {
+                    message_id: command_id.as_uuid(),
+                    role: floe_agent_contract::MessageRole::User,
+                    text: "Review today".into(),
+                    call_id: None,
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
                 },
-            )
-            .await
-            .unwrap();
-            started.session_id
-        });
+            },
+        )
+        .await
+        .unwrap();
+        started.session_id
+    });
     let (invocation, scope) = direct_invocation_in_session(
         &person.to_string(),
         run_id.as_uuid(),
@@ -2500,8 +2672,7 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
             _ => None,
         })
         .expect("blocked report must carry the safe ref, not a raw requirement");
-    let reference: floe_agent_contract::UserInteractionRef =
-        serde_json::from_str(&data).unwrap();
+    let reference: floe_agent_contract::UserInteractionRef = serde_json::from_str(&data).unwrap();
     assert_eq!(
         reference.kind,
         floe_agent_contract::UserInteractionKind::SourceAccess
@@ -2654,10 +2825,10 @@ fn common_schedule_review_requirement_completes_root_run() {
                 )))
     )));
     assert!(
-        session.messages.iter().any(|message| matches!(
-            message,
-            AgentMessage::Interaction { .. }
-        )),
+        session
+            .messages
+            .iter()
+            .any(|message| matches!(message, AgentMessage::Interaction { .. })),
         "completed turn must carry the Interaction message: {session:?}"
     );
     assert_eq!(server.join().unwrap().len(), 2);

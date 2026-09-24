@@ -12,6 +12,8 @@ pub use authorization::{
 };
 
 pub use recipient_authority::{
-    CurrentSavedConnectionStore, FixedSavedConnectionStore, SavedConnectionRecipientAuthority,
+    CurrentSavedConnectionStore, FixedSavedConnectionStore, SavedConnectionAdmission,
 };
-pub use server_connection::{PreparedServerSource, SavedServerConnectionStore, load_saved_connection};
+pub use server_connection::{
+    PreparedServerSource, SavedServerConnectionStore, load_saved_connection,
+};

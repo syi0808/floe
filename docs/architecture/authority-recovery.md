@@ -5,7 +5,7 @@ These are durable architectural safety properties, not a progress checklist.
 ## Authority is explicit and owner-scoped
 
 - A Connection describes source/account/execution-owner lifecycle; it does not itself authorize AI use.
-- Access owns grants, exact recipients, purposes, processing restrictions, revocation and admission/release fences.
+- Access owns grants, exact recipients, purposes, processing restrictions, revocation and admission/release fences, including the contextual recipient-consent store: an approval grants one exact reviewed dispatch, never a standing recipient allow.
 - Context may acquire/project only evidence authorized for the current Person, source, scope and freshness requirements.
 - Inference may choose an approved model route, but route selection cannot enlarge data authority.
 - Saved provider credentials remain private to credential/provider boundaries and are not product-wire or Conversation inputs. The narrow exception is newly issued approved-pairing output for secure persistence, never a subsequent request input; token-bearing Debug/diagnostics are redacted.

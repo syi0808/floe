@@ -3,10 +3,11 @@ use std::collections::{HashMap, HashSet};
 use floe_agent_contract::{
     AgentFailure, AllowedCatalog, AuthorizedModelProjection, BatchCursor, DelegationPort,
     DelegationRequest, DependencyCoverage, EngineRequest, EngineStep, ExecutionJournal,
-    InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT, ModelConversation,
-    ModelConversationEntry, ModelCorrection, ModelPort, ModelProjectionPort, ModelProjectionRequest,
-    ModelRequest, ModelResponse, ModelStep, ModelUsage, PinnedAgentRevision, PinnedToolRevision,
-    ReplayReceipt, TaskId, TaskReceipt, ToolCall, ToolPort, ToolResult, ValidatedModelBatch,
+    InvocationKey, JournalAck, JournalEvent, MODEL_CORRECTION_TEXT, ModelCallOutcome,
+    ModelConversation, ModelConversationEntry, ModelCorrection, ModelPort, ModelProjectionPort,
+    ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage,
+    PinnedAgentRevision, PinnedToolRevision, ReplayReceipt, TaskId, TaskReceipt, ToolCall,
+    ToolPort, ToolResult, ValidatedModelBatch,
 };
 use uuid::Uuid;
 
@@ -75,6 +76,32 @@ pub struct EngineReport {
     /// final answer, carried durably through that batch. `None` when no
     /// answer committed.
     pub answering_projection_coverage: Option<DependencyCoverage>,
+    pub iterations: u32,
+    pub attempt_ids: Vec<Uuid>,
+    pub execution_id: Uuid,
+}
+
+/// One typed drive outcome: either the drive completed (with output or
+/// exhausted), or one exact model dispatch needs contextual recipient
+/// consent before any transmission.
+///
+/// Blocked is a distinct typed expected completion, not a forged
+/// ModelResponse or a generic failure: the blocked attempt is journaled
+/// with zero usage (undispatched), settled steps and usage are preserved,
+/// and no model output is fabricated.
+#[derive(Clone, Debug)]
+pub enum EngineOutcome {
+    Completed(EngineReport),
+    Blocked(EngineBlocked),
+}
+
+/// A blocked model dispatch: the journaled attempt, the exact
+/// requirement, and the work settled before the blockage.
+#[derive(Clone, Debug)]
+pub struct EngineBlocked {
+    pub attempt_id: Uuid,
+    pub requirement: floe_agent_contract::ProcessingRequirement,
+    pub steps: Vec<EngineStep>,
     pub iterations: u32,
     pub attempt_ids: Vec<Uuid>,
     pub execution_id: Uuid,
@@ -154,7 +181,7 @@ impl Engine {
         &self,
         request: EngineRequest,
         ports: EnginePorts<'_>,
-    ) -> Result<EngineReport, AgentFailure> {
+    ) -> Result<EngineOutcome, AgentFailure> {
         request.validate()?;
         Drive {
             config: &self.config,
@@ -173,7 +200,7 @@ impl Engine {
         tools: &dyn ToolPort,
         delegation: &dyn DelegationPort,
         journal: &dyn ExecutionJournal,
-    ) -> Result<EngineReport, AgentFailure> {
+    ) -> Result<EngineOutcome, AgentFailure> {
         self.drive(
             request,
             EnginePorts {
@@ -196,7 +223,7 @@ struct Drive<'a> {
 }
 
 impl Drive<'_> {
-    async fn run(self) -> Result<EngineReport, AgentFailure> {
+    async fn run(self) -> Result<EngineOutcome, AgentFailure> {
         let mut drive = ActiveDrive {
             config: self.config,
             request: self.request,
@@ -251,7 +278,7 @@ impl Drive<'_> {
                 )
                 .await?
             {
-                return Ok(report);
+                return Ok(EngineOutcome::Completed(report));
             }
             drive.completed_iterations += 1;
             drive
@@ -266,22 +293,26 @@ impl Drive<'_> {
                     drive.request.scope.cancellation(),
                 ));
             }
-            let (batch, corrections) = drive.validated_batch().await?;
-            drive
-                .checkpoint(JournalEvent::ValidatedBatch {
-                    batch: batch.clone(),
-                })
-                .await?;
-            drive
-                .checkpoint(JournalEvent::BatchProgress {
-                    cursor: BatchCursor {
-                        batch_id: batch.batch_id,
-                        next_step_index: 0,
-                    },
-                })
-                .await?;
-            if let Some(report) = drive.execute_batch(&batch, 0, &corrections).await? {
-                return Ok(report);
+            match drive.validated_batch().await? {
+                BatchOutcome::Ready((batch, corrections)) => {
+                    drive
+                        .checkpoint(JournalEvent::ValidatedBatch {
+                            batch: batch.clone(),
+                        })
+                        .await?;
+                    drive
+                        .checkpoint(JournalEvent::BatchProgress {
+                            cursor: BatchCursor {
+                                batch_id: batch.batch_id,
+                                next_step_index: 0,
+                            },
+                        })
+                        .await?;
+                    if let Some(report) = drive.execute_batch(&batch, 0, &corrections).await? {
+                        return Ok(EngineOutcome::Completed(report));
+                    }
+                }
+                BatchOutcome::Blocked(blocked) => return Ok(EngineOutcome::Blocked(blocked)),
             }
             drive.completed_iterations += 1;
             drive
@@ -290,15 +321,26 @@ impl Drive<'_> {
                 })
                 .await?;
         }
-        Ok(EngineReport {
+        Ok(EngineOutcome::Completed(EngineReport {
             steps: drive.steps,
             output: None,
             answering_projection_coverage: None,
             iterations: drive.completed_iterations,
             attempt_ids: drive.attempts,
             execution_id: drive.execution_id,
-        })
+        }))
     }
+}
+
+/// One validated-batch outcome: a validated batch, or a blocked dispatch.
+///
+/// A blocked dispatch carries the journaled attempt, the exact
+/// requirement, and the work settled before the blockage. No batch is
+/// validated and no correction is attempted: consent, not output shape,
+/// is what is missing.
+enum BatchOutcome {
+    Ready((ValidatedModelBatch, Vec<Option<String>>)),
+    Blocked(EngineBlocked),
 }
 
 struct ActiveDrive<'a> {
@@ -334,7 +376,10 @@ impl ActiveDrive<'_> {
     }
 
     async fn checkpoint(&self, event: JournalEvent) -> Result<JournalAck, AgentFailure> {
-        self.request.scope.run(self.ports.journal.checkpoint(event)).await
+        self.request
+            .scope
+            .run(self.ports.journal.checkpoint(event))
+            .await
     }
 
     async fn record_model_result(
@@ -344,10 +389,11 @@ impl ActiveDrive<'_> {
     ) -> Result<(), AgentFailure> {
         self.request
             .scope
-            .run(self.ports.journal.record_result(JournalEvent::ModelResult {
-                attempt_id,
-                usage,
-            }))
+            .run(
+                self.ports
+                    .journal
+                    .record_result(JournalEvent::ModelResult { attempt_id, usage }),
+            )
             .await?;
         Ok(())
     }
@@ -355,9 +401,7 @@ impl ActiveDrive<'_> {
     /// One validated batch: project, attempt (plus at most one host correction
     /// on invalid structured output), then validate the whole batch before
     /// anything is dispatched.
-    async fn validated_batch(
-        &mut self,
-    ) -> Result<(ValidatedModelBatch, Vec<Option<String>>), AgentFailure> {
+    async fn validated_batch(&mut self) -> Result<BatchOutcome, AgentFailure> {
         let mut correction: Option<ModelCorrection> = None;
         loop {
             let projection_request = ModelProjectionRequest {
@@ -418,6 +462,7 @@ impl ActiveDrive<'_> {
                 consumer: self.request.consumer.clone(),
                 preferred_profile_id: self.request.preferred_profile_id.clone(),
                 replay: self.model_replay.clone(),
+                lineage: self.request.lineage,
             };
             let model_scope = self.request.scope.child_scope(
                 self.request.scope.deadline(),
@@ -430,7 +475,24 @@ impl ActiveDrive<'_> {
                 .run(self.ports.model.generate(model_request, &model_scope))
                 .await;
             let response = match response {
-                Ok(response) => response,
+                Ok(ModelCallOutcome::Ready(response)) => response,
+                Ok(ModelCallOutcome::NeedsUserAction(requirement)) => {
+                    // A blocked dispatch: journal the distinct undispatched
+                    // observation (zero usage — nothing was handed off) and
+                    // surface the exact requirement with the work settled so
+                    // far. No correction is attempted and no output is
+                    // fabricated; the blocked iteration counts as started.
+                    self.record_model_result(attempt_id, ModelUsage::default())
+                        .await?;
+                    return Ok(BatchOutcome::Blocked(EngineBlocked {
+                        attempt_id,
+                        requirement,
+                        steps: self.steps.clone(),
+                        iterations: self.completed_iterations + 1,
+                        attempt_ids: self.attempts.clone(),
+                        execution_id: self.execution_id,
+                    }));
+                }
                 Err(failure) => {
                     // Pair every intent with a result so recovery never sees a
                     // dangling attempt from a failed call. A dispatched failure
@@ -452,7 +514,7 @@ impl ActiveDrive<'_> {
             };
             self.record_model_result(attempt_id, response.usage).await?;
             match self.validated_response(attempt_id, &model_projection, &response) {
-                Ok(validated) => return Ok(validated),
+                Ok(validated) => return Ok(BatchOutcome::Ready(validated)),
                 Err(failure) => {
                     if is_correctable(&failure) && correction.is_none() {
                         correction = Some(ModelCorrection {
@@ -475,8 +537,8 @@ impl ActiveDrive<'_> {
         if response.attempt_id != attempt_id || response.steps.is_empty() {
             return Err(AgentFailure::InvalidModelOutput);
         }
-        let encoded_steps = serde_json::to_vec(&response.steps)
-            .map_err(|_| AgentFailure::InvalidModelOutput)?;
+        let encoded_steps =
+            serde_json::to_vec(&response.steps).map_err(|_| AgentFailure::InvalidModelOutput)?;
         if encoded_steps.len() > self.request.max_output_bytes {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -558,11 +620,7 @@ impl ActiveDrive<'_> {
                     })
                     .await?;
                     self.push_current(ModelConversationEntry::Preamble {
-                        message_id: stable_preamble_id(
-                            batch.execution_id,
-                            batch.batch_id,
-                            ordinal,
-                        ),
+                        message_id: stable_preamble_id(batch.execution_id, batch.batch_id, ordinal),
                         text: text.clone(),
                     })?;
                 }
@@ -652,8 +710,12 @@ impl ActiveDrive<'_> {
         // Stable identity first: a step that cannot dispatch still journals
         // its intent and host-generated result under the identity a dispatch
         // would use, so the observation survives a crash past a later step.
-        let invocation_key =
-            stable_invocation_key(self.execution_id, batch.batch_id, ordinal, InvocationKind::Tool);
+        let invocation_key = stable_invocation_key(
+            self.execution_id,
+            batch.batch_id,
+            ordinal,
+            InvocationKind::Tool,
+        );
         let call = ToolCall {
             call_id: stable_call_id(self.execution_id, batch.batch_id, ordinal),
             invocation_key,
@@ -697,12 +759,12 @@ impl ActiveDrive<'_> {
                 text: receipt.result.clone(),
                 artifacts: receipt.tool_artifacts.clone(),
                 coverage: receipt.tool_coverage.clone(),
-                issue: receipt.tool_issue.map(|failure| {
-                    floe_agent_contract::OutcomeIssue {
+                issue: receipt
+                    .tool_issue
+                    .map(|failure| floe_agent_contract::OutcomeIssue {
                         failure,
                         retryable: false,
-                    }
-                }),
+                    }),
             }
         } else if let Some(receipt) = find_tool_replay(&self.model_replay, &call) {
             // A settled result survived without its cursor ack: reuse it under
@@ -713,12 +775,12 @@ impl ActiveDrive<'_> {
                 text: receipt.result.clone(),
                 artifacts: receipt.tool_artifacts.clone(),
                 coverage: receipt.tool_coverage.clone(),
-                issue: receipt.tool_issue.map(|failure| {
-                    floe_agent_contract::OutcomeIssue {
+                issue: receipt
+                    .tool_issue
+                    .map(|failure| floe_agent_contract::OutcomeIssue {
                         failure,
                         retryable: false,
-                    }
-                }),
+                    }),
             }
         } else if let Some(reason) = soft_failure {
             // Host-generated observation without dispatch: the model erred,
@@ -766,13 +828,9 @@ impl ActiveDrive<'_> {
         result.validate(call.call_id, self.request.max_output_bytes)?;
         self.request
             .scope
-            .run(
-                self.ports
-                    .journal
-                    .record_result(JournalEvent::ToolResult {
-                        result: result.clone(),
-                    }),
-            )
+            .run(self.ports.journal.record_result(JournalEvent::ToolResult {
+                result: result.clone(),
+            }))
             .await?;
         self.checkpoint(JournalEvent::BatchProgress {
             cursor: BatchCursor {
@@ -849,9 +907,13 @@ impl ActiveDrive<'_> {
         let intent = self
             .request
             .scope
-            .run(self.ports.journal.record_intent(JournalEvent::DelegationIntent {
-                request: delegation.clone(),
-            }))
+            .run(
+                self.ports
+                    .journal
+                    .record_intent(JournalEvent::DelegationIntent {
+                        request: delegation.clone(),
+                    }),
+            )
             .await?;
         let child = self.request.scope.child_scope(
             self.request.scope.deadline(),
@@ -860,19 +922,12 @@ impl ActiveDrive<'_> {
             Some(delegation.task_id),
         );
         let receipt = if let JournalAck::Replayed(replay_receipt) = intent {
-            replay_task(
-                &delegation,
-                &replay_receipt,
-                self.request.max_output_bytes,
-            )?
+            replay_task(&delegation, &replay_receipt, self.request.max_output_bytes)?
         } else if let Some(replay_receipt) = find_task_replay(&self.model_replay, &delegation) {
             // Same-identity result replay: the receipt is re-issued under this
             // run so the new journal pairs; outcome and coverage are preserved.
-            let mut receipt = replay_resumed_task(
-                &delegation,
-                &replay_receipt,
-                self.request.max_output_bytes,
-            )?;
+            let mut receipt =
+                replay_resumed_task(&delegation, &replay_receipt, self.request.max_output_bytes)?;
             receipt.snapshot.parent_run_id = delegation.parent_run_id;
             receipt.snapshot.validate(self.request.max_output_bytes)?;
             receipt
@@ -897,10 +952,7 @@ impl ActiveDrive<'_> {
                 replay: None,
             }
         } else {
-            let delegated = self
-                .ports
-                .delegation
-                .delegate(delegation.clone(), &child);
+            let delegated = self.ports.delegation.delegate(delegation.clone(), &child);
             let receipt = child.run(delegated).await?;
             verify_receipt(&delegation, &receipt, self.request.max_output_bytes)?;
             if let Some(replayed) = receipt.replay.clone() {
@@ -910,9 +962,13 @@ impl ActiveDrive<'_> {
         };
         self.request
             .scope
-            .run(self.ports.journal.record_result(JournalEvent::DelegationResult {
-                receipt: Box::new(receipt.clone()),
-            }))
+            .run(
+                self.ports
+                    .journal
+                    .record_result(JournalEvent::DelegationResult {
+                        receipt: Box::new(receipt.clone()),
+                    }),
+            )
             .await?;
         self.checkpoint(JournalEvent::BatchProgress {
             cursor: BatchCursor {
@@ -993,9 +1049,10 @@ fn pin_revisions(
                 if catalog.tools.iter().any(|descriptor| {
                     descriptor.id == *tool_id
                         && descriptor.definition_revision == *definition_revision
-                }) && !tools.iter().any(|pinned: &PinnedToolRevision| {
-                    pinned.tool_id == *tool_id
-                }) {
+                }) && !tools
+                    .iter()
+                    .any(|pinned: &PinnedToolRevision| pinned.tool_id == *tool_id)
+                {
                     tools.push(PinnedToolRevision {
                         tool_id: tool_id.clone(),
                         definition_revision: *definition_revision,
@@ -1010,9 +1067,10 @@ fn pin_revisions(
                 if catalog.cards.iter().any(|definition| {
                     definition.card.id == *agent_id
                         && definition.definition_revision == *definition_revision
-                }) && !agents.iter().any(|pinned: &PinnedAgentRevision| {
-                    pinned.agent_id == *agent_id
-                }) {
+                }) && !agents
+                    .iter()
+                    .any(|pinned: &PinnedAgentRevision| pinned.agent_id == *agent_id)
+                {
                     agents.push(PinnedAgentRevision {
                         agent_id: agent_id.clone(),
                         definition_revision: *definition_revision,
@@ -1287,8 +1345,7 @@ fn verify_resumed_task_replay(
         && !matches!(
             receipt.task_state,
             Some(
-                floe_agent_contract::TaskState::Submitted
-                    | floe_agent_contract::TaskState::Working
+                floe_agent_contract::TaskState::Submitted | floe_agent_contract::TaskState::Working
             )
         )
         && receipt.tool_artifacts.is_empty()
@@ -1563,7 +1620,7 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
                 let steps = if has_tool_exchange(&request) {
                     vec![ModelStep::Answer {
@@ -1577,14 +1634,14 @@ mod tests {
                         input: "{}".into(),
                     }]
                 };
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps,
                     usage: ModelUsage {
                         tokens: 2,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -1595,9 +1652,9 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![
                         ModelStep::CallTool {
@@ -1614,7 +1671,7 @@ mod tests {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -1627,7 +1684,7 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 let steps = if call == 0 {
@@ -1641,14 +1698,14 @@ mod tests {
                         artifacts: vec![],
                     }]
                 };
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps,
                     usage: ModelUsage {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -1916,6 +1973,19 @@ mod tests {
             replay: vec![],
             resume: None,
             delegation_context: Some(delegation_context()),
+            lineage: None,
+        }
+    }
+
+    fn completed(outcome: EngineOutcome) -> EngineReport {
+        match outcome {
+            EngineOutcome::Completed(report) => report,
+            EngineOutcome::Blocked(blocked) => {
+                panic!(
+                    "expected Completed, got Blocked for {}",
+                    blocked.requirement.recipient()
+                )
+            }
         }
     }
 
@@ -1956,13 +2026,15 @@ mod tests {
             model_tokens: Arc::new(AtomicUsize::new(0)),
         };
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(&projection, &Model, &tools, &journal, &Validator),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(&projection, &Model, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
         assert_eq!(report.iterations, 2);
@@ -2006,7 +2078,13 @@ mod tests {
         let result = Engine::default()
             .drive(
                 request(scope()),
-                ports(&projection, &MalformedBatchModel, &tools, &journal, &Validator),
+                ports(
+                    &projection,
+                    &MalformedBatchModel,
+                    &tools,
+                    &journal,
+                    &Validator,
+                ),
             )
             .await;
         assert!(matches!(result, Err(AgentFailure::InvalidModelOutput)));
@@ -2025,22 +2103,24 @@ mod tests {
         engine_request.allowed_catalog.tools[0].input_schema =
             r#"{"type":"object","required":["value"]}"#.into();
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                ports(
-                    &projection,
-                    &Model,
-                    &tools,
-                    &Journal {
-                        reject_tool: false,
-                        model_tokens: Arc::new(AtomicUsize::new(0)),
-                    },
-                    &Validator,
-                ),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    ports(
+                        &projection,
+                        &Model,
+                        &tools,
+                        &Journal {
+                            reject_tool: false,
+                            model_tokens: Arc::new(AtomicUsize::new(0)),
+                        },
+                        &Validator,
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
     }
@@ -2163,12 +2243,10 @@ mod tests {
                 .iter()
                 .all(|event| !matches!(event, JournalEvent::Output { .. }))
         );
-        assert!(
-            events.iter().all(|event| !matches!(
-                event,
-                JournalEvent::ToolIntent { .. } | JournalEvent::DelegationIntent { .. }
-            ))
-        );
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            JournalEvent::ToolIntent { .. } | JournalEvent::DelegationIntent { .. }
+        )));
     }
 
     #[tokio::test]
@@ -2208,14 +2286,14 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 if has_tool_exchange(&request) {
                     self.saw_exchange.fetch_add(1, Ordering::SeqCst);
                 }
                 Box::pin(async move {
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps: vec![ModelStep::Answer {
                             text: "done".into(),
@@ -2225,7 +2303,7 @@ mod tests {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -2241,10 +2319,15 @@ mod tests {
                 next_step_index: 0,
             },
         });
-        let report = Engine::default()
-            .drive(engine_request, ports(&projection, &model, &tools, &journal, &Validator))
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    ports(&projection, &model, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(report.execution_id, execution_id);
         // The stored step dispatched fresh (no replay) under its stable identity,
@@ -2344,9 +2427,9 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![ModelStep::Answer {
                         text: "done".into(),
@@ -2356,7 +2439,7 @@ mod tests {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -2372,20 +2455,22 @@ mod tests {
             calls: Arc::new(AtomicUsize::new(0)),
         };
         let (journal, events) = RecordingJournal::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                EnginePorts {
-                    projection: &projection,
-                    model: &AnswerOnly,
-                    tools: &tools,
-                    delegation: &Delegations,
-                    journal: &journal,
-                    validator: &Validator,
-                },
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    EnginePorts {
+                        projection: &projection,
+                        model: &AnswerOnly,
+                        tools: &tools,
+                        delegation: &Delegations,
+                        journal: &journal,
+                        validator: &Validator,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(report.answering_projection_coverage, Some(coverage.clone()));
         let journaled = events
@@ -2427,7 +2512,7 @@ mod tests {
                 &'a self,
                 _: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 panic!("resumed answer must not recall the model")
             }
@@ -2445,13 +2530,15 @@ mod tests {
                 next_step_index: 0,
             },
         });
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                ports(&projection, &MustNotGenerate, &tools, &journal, &Validator),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    ports(&projection, &MustNotGenerate, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("resumed"));
         assert_eq!(report.answering_projection_coverage, Some(coverage));
         assert_eq!(report.execution_id, execution_id);
@@ -2517,16 +2604,12 @@ mod tests {
                 _ => None,
             })
             .and_then(|result| {
-                run_events
-                    .iter()
-                    .find_map(|event| match event {
-                        JournalEvent::ToolIntent { call }
-                            if call.call_id == result.call_id =>
-                        {
-                            Some((call.clone(), result.clone()))
-                        }
-                        _ => None,
-                    })
+                run_events.iter().find_map(|event| match event {
+                    JournalEvent::ToolIntent { call } if call.call_id == result.call_id => {
+                        Some((call.clone(), result.clone()))
+                    }
+                    _ => None,
+                })
             })
             .expect("intent and result are journaled before the lost cursor ack");
 
@@ -2563,10 +2646,10 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 Box::pin(async move {
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps: vec![ModelStep::Answer {
                             text: "done".into(),
@@ -2576,7 +2659,7 @@ mod tests {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -2589,13 +2672,15 @@ mod tests {
                 next_step_index: 0,
             },
         });
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                ports(&projection, &AnswerDone, &tools, &journal, &Validator),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    ports(&projection, &AnswerDone, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(report.execution_id, batch.execution_id);
         assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
@@ -2610,13 +2695,11 @@ mod tests {
             .expect("resumed step re-journals its intent in the new run");
         assert_eq!(replayed.call_id, call.call_id);
         assert_eq!(replayed.invocation_key, call.invocation_key);
-        assert!(
-            resumed_events.iter().any(|event| matches!(
-                event,
-                JournalEvent::BatchProgress { cursor }
-                    if cursor.batch_id == batch.batch_id && cursor.next_step_index == 1
-            ))
-        );
+        assert!(resumed_events.iter().any(|event| matches!(
+            event,
+            JournalEvent::BatchProgress { cursor }
+                if cursor.batch_id == batch.batch_id && cursor.next_step_index == 1
+        )));
     }
 
     #[tokio::test]
@@ -2628,22 +2711,24 @@ mod tests {
             calls: Arc::new(AtomicUsize::new(0)),
         };
         let (projection, corrections) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(
-                    &projection,
-                    &model,
-                    &tools,
-                    &Journal {
-                        reject_tool: false,
-                        model_tokens: Arc::new(AtomicUsize::new(0)),
-                    },
-                    &Validator,
-                ),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(
+                        &projection,
+                        &model,
+                        &tools,
+                        &Journal {
+                            reject_tool: false,
+                            model_tokens: Arc::new(AtomicUsize::new(0)),
+                        },
+                        &Validator,
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("fixed"));
         assert_eq!(model.calls.load(Ordering::SeqCst), 2);
         assert_eq!(report.attempt_ids.len(), 2);
@@ -2652,7 +2737,9 @@ mod tests {
         assert_eq!(corrections.len(), 2);
         assert!(corrections[0].is_none());
         assert_eq!(
-            corrections[1].as_ref().map(|correction| correction.text.as_str()),
+            corrections[1]
+                .as_ref()
+                .map(|correction| correction.text.as_str()),
             Some(MODEL_CORRECTION_TEXT)
         );
     }
@@ -2669,11 +2756,11 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps: vec![ModelStep::Answer {
                             text: String::new(),
@@ -2683,7 +2770,7 @@ mod tests {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -2723,18 +2810,18 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let steps = self.steps.clone();
             Box::pin(async move {
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps,
                     usage: ModelUsage {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -2778,7 +2865,7 @@ mod tests {
     }
 
     struct ShapeOutcome {
-        result: Result<EngineReport, AgentFailure>,
+        result: Result<EngineOutcome, AgentFailure>,
         model_calls: usize,
         tool_calls: usize,
         delegation_calls: usize,
@@ -2923,7 +3010,7 @@ mod tests {
             answer("done"),
         ])
         .await;
-        let report = outcome.result.unwrap();
+        let report = completed(outcome.result.unwrap());
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(outcome.tool_calls, 0);
         assert_eq!(outcome.delegation_calls, 0);
@@ -2960,7 +3047,7 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 Box::pin(async move {
                     let steps = if has_tool_exchange(&request) {
@@ -2973,14 +3060,14 @@ mod tests {
                             tool_call(),
                         ]
                     };
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps,
                         usage: ModelUsage {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -2989,19 +3076,15 @@ mod tests {
         };
         let (journal, events) = RecordingJournal::new();
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(
-                    &projection,
-                    &PreambleToolOnce,
-                    &tools,
-                    &journal,
-                    &Validator,
-                ),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(&projection, &PreambleToolOnce, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
         let events = events.lock().unwrap();
@@ -3012,7 +3095,10 @@ mod tests {
                 _ => None,
             })
             .expect("preamble batch is validated");
-        assert!(matches!(batch.steps.as_slice(), [ModelStep::Preamble { .. }, ModelStep::CallTool { .. }]));
+        assert!(matches!(
+            batch.steps.as_slice(),
+            [ModelStep::Preamble { .. }, ModelStep::CallTool { .. }]
+        ));
         let cursors = events
             .iter()
             .filter_map(|event| match event {
@@ -3026,10 +3112,7 @@ mod tests {
             cursors.contains(&1),
             "preamble consumes its step: {cursors:?}"
         );
-        assert!(
-            cursors.contains(&2),
-            "tool consumes its step: {cursors:?}"
-        );
+        assert!(cursors.contains(&2), "tool consumes its step: {cursors:?}");
         assert_eq!(
             stable_preamble_id(batch.execution_id, batch.batch_id, 0),
             stable_preamble_id(batch.execution_id, batch.batch_id, 0)
@@ -3048,7 +3131,7 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 Box::pin(async move {
                     let steps = if has_tool_exchange(&request) {
@@ -3061,14 +3144,14 @@ mod tests {
                             tool_call(),
                         ]
                     };
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps,
                         usage: ModelUsage {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -3076,22 +3159,24 @@ mod tests {
             calls: Arc::new(AtomicUsize::new(0)),
         };
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(
-                    &projection,
-                    &AnswerAfterTools,
-                    &tools,
-                    &Journal {
-                        reject_tool: false,
-                        model_tokens: Arc::new(AtomicUsize::new(0)),
-                    },
-                    &Validator,
-                ),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(
+                        &projection,
+                        &AnswerAfterTools,
+                        &tools,
+                        &Journal {
+                            reject_tool: false,
+                            model_tokens: Arc::new(AtomicUsize::new(0)),
+                        },
+                        &Validator,
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
     }
@@ -3112,7 +3197,7 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 Box::pin(async move {
                     let steps = if has_tool_exchange(&request) {
@@ -3120,14 +3205,14 @@ mod tests {
                     } else {
                         vec![unknown_tool_call()]
                     };
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps,
                         usage: ModelUsage {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -3136,19 +3221,15 @@ mod tests {
         };
         let (journal, events) = RecordingJournal::new();
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(
-                    &projection,
-                    &UnknownOnce,
-                    &tools,
-                    &journal,
-                    &Validator,
-                ),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(&projection, &UnknownOnce, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
         // The soft observation is a durable intent/result pair under the
@@ -3169,27 +3250,18 @@ mod tests {
                 _ => None,
             })
             .and_then(|result| {
-                events
-                    .iter()
-                    .find_map(|event| match event {
-                        JournalEvent::ToolIntent { call }
-                            if call.call_id == result.call_id =>
-                        {
-                            Some((call.clone(), result.clone()))
-                        }
-                        _ => None,
-                    })
+                events.iter().find_map(|event| match event {
+                    JournalEvent::ToolIntent { call } if call.call_id == result.call_id => {
+                        Some((call.clone(), result.clone()))
+                    }
+                    _ => None,
+                })
             })
             .expect("soft step journals an intent/result pair");
         assert_eq!(call.tool_id, "missing.tool");
         assert_eq!(
             call.invocation_key,
-            stable_invocation_key(
-                batch.execution_id,
-                batch.batch_id,
-                0,
-                InvocationKind::Tool
-            )
+            stable_invocation_key(batch.execution_id, batch.batch_id, 0, InvocationKind::Tool)
         );
         assert_eq!(
             call.call_id,
@@ -3253,9 +3325,7 @@ mod tests {
                 let call = run_events
                     .iter()
                     .find_map(|event| match event {
-                        JournalEvent::ToolIntent { call }
-                            if call.call_id == result.call_id =>
-                        {
+                        JournalEvent::ToolIntent { call } if call.call_id == result.call_id => {
                             Some(call.clone())
                         }
                         _ => None,
@@ -3308,7 +3378,7 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 let conversation = request.projection.envelope.conversation.clone();
                 let saw_soft = Arc::clone(&self.saw_soft);
@@ -3324,14 +3394,14 @@ mod tests {
                             }
                         }
                     }
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps: vec![answer("done")],
                         usage: ModelUsage {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -3354,13 +3424,15 @@ mod tests {
                 next_step_index: 1,
             },
         });
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                ports(&projection, &model, &tools, &journal, &Validator),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    ports(&projection, &model, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
         // The soft observation arrives exactly once, carried past the crash;
@@ -3420,7 +3492,7 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 let delegate = request
                     .projection
@@ -3437,31 +3509,33 @@ mod tests {
                     vec![delegation()]
                 };
                 Box::pin(async move {
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps,
                         usage: ModelUsage {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                EnginePorts {
-                    projection: &projection,
-                    model: &AnswerNext,
-                    tools: &tools,
-                    delegation: &delegations,
-                    journal: &journal,
-                    validator: &Validator,
-                },
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    EnginePorts {
+                        projection: &projection,
+                        model: &AnswerNext,
+                        tools: &tools,
+                        delegation: &delegations,
+                        journal: &journal,
+                        validator: &Validator,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(delegations.calls.load(Ordering::SeqCst), 0);
         // The soft rejection is a durable intent/result pair under the
@@ -3481,16 +3555,14 @@ mod tests {
                 _ => None,
             })
             .and_then(|receipt| {
-                events
-                    .iter()
-                    .find_map(|event| match event {
-                        JournalEvent::DelegationIntent { request }
-                            if request.task_id == receipt.task_id =>
-                        {
-                            Some((request.clone(), receipt.clone()))
-                        }
-                        _ => None,
-                    })
+                events.iter().find_map(|event| match event {
+                    JournalEvent::DelegationIntent { request }
+                        if request.task_id == receipt.task_id =>
+                    {
+                        Some((request.clone(), receipt.clone()))
+                    }
+                    _ => None,
+                })
             })
             .expect("soft step journals an intent/result pair");
         assert_eq!(delegated.selected_agent_id, "expert-a");
@@ -3499,16 +3571,16 @@ mod tests {
             delegated.task_id,
             stable_task_id(batch.execution_id, batch.batch_id, 0)
         );
-        assert_eq!(receipt.snapshot.state, floe_agent_contract::TaskState::Rejected);
+        assert_eq!(
+            receipt.snapshot.state,
+            floe_agent_contract::TaskState::Rejected
+        );
         assert_eq!(receipt.snapshot.result, None);
         assert_eq!(
             receipt.snapshot.issue,
             Some(AgentFailure::InvalidModelOutput)
         );
-        assert_eq!(
-            receipt.snapshot.coverage,
-            DependencyCoverage::Independent
-        );
+        assert_eq!(receipt.snapshot.coverage, DependencyCoverage::Independent);
         assert!(
             events.iter().any(|event| matches!(
                 event,
@@ -3525,7 +3597,7 @@ mod tests {
             &'a self,
             _: ModelRequest,
             scope: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
                 // Simulate the transitional bridge past its dispatch fence:
                 // reserve once, mark dispatched, then fail without settling so
@@ -3548,16 +3620,14 @@ mod tests {
             &'a self,
             _: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             // Preflight failure before any provider handoff: never touches
             // the scope budget, so no unknown charge may be journaled.
             Box::pin(async { Err(AgentFailure::Cancelled) })
         }
     }
 
-    fn continuation_scope(
-        ledger: &BudgetLedger,
-    ) -> ExecutionScope {
+    fn continuation_scope(ledger: &BudgetLedger) -> ExecutionScope {
         ExecutionScope::root(
             Cancellation::new(),
             tokio::time::Instant::now() + Duration::from_secs(5),
@@ -3696,11 +3766,11 @@ mod tests {
                 &'a self,
                 request: ModelRequest,
                 _: &'a ExecutionScope,
-            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>>
+            ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>>
             {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
-                    Ok(ModelResponse {
+                    Ok(ModelCallOutcome::Ready(ModelResponse {
                         attempt_id: request.attempt_id,
                         steps: vec![ModelStep::Answer {
                             text: "fresh".into(),
@@ -3710,7 +3780,7 @@ mod tests {
                             tokens: 1,
                             cost_micros: 1,
                         },
-                    })
+                    }))
                 })
             }
         }
@@ -3772,7 +3842,8 @@ mod tests {
                                 interaction_id: Uuid::new_v4(),
                                 kind: floe_agent_contract::UserInteractionKind::SourceAccess,
                                 status: floe_agent_contract::UserInteractionStatus::Pending,
-                            }).unwrap(),
+                            })
+                            .unwrap(),
                         }],
                         coverage: DependencyCoverage::Independent,
                     }],
@@ -3809,7 +3880,7 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 let steps = if has_tool_exchange(&request) || call > 0 {
@@ -3824,14 +3895,14 @@ mod tests {
                         input: "{}".into(),
                     }]
                 };
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps,
                     usage: ModelUsage {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -3848,13 +3919,15 @@ mod tests {
         };
         let (journal, events) = RecordingJournal::new();
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(&projection, &model, &tools, &journal, &Validator),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(&projection, &model, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         let result = events
             .lock()
@@ -3885,22 +3958,33 @@ mod tests {
         };
         let (journal, events) = RecordingJournal::new();
         let (projection, _) = Projector::new();
-        let report = Engine::default()
-            .drive(
-                request(scope()),
-                ports(&projection, &model, &tools, &journal, &Validator),
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    request(scope()),
+                    ports(&projection, &model, &tools, &journal, &Validator),
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(model.calls.load(Ordering::SeqCst), 2);
         assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
         let events = events.lock().unwrap();
-        assert_eq!(events.iter().filter(|event| matches!(event, JournalEvent::ToolIntent { .. })).count(), 1);
-        let results = events.iter().filter_map(|event| match event {
-            JournalEvent::ToolResult { result } => Some(result),
-            _ => None,
-        }).collect::<Vec<_>>();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, JournalEvent::ToolIntent { .. }))
+                .count(),
+            1
+        );
+        let results = events
+            .iter()
+            .filter_map(|event| match event {
+                JournalEvent::ToolResult { result } => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].coverage, DependencyCoverage::Unknown);
         assert_eq!(results[0].artifacts.len(), 1);
@@ -3913,9 +3997,9 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![ModelStep::CallTool {
                         tool_id: "lookup".into(),
@@ -3926,7 +4010,7 @@ mod tests {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -3991,16 +4075,16 @@ mod tests {
             &'a self,
             request: ModelRequest,
             _: &'a ExecutionScope,
-        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
             Box::pin(async move {
-                Ok(ModelResponse {
+                Ok(ModelCallOutcome::Ready(ModelResponse {
                     attempt_id: request.attempt_id,
                     steps: vec![answer("done")],
                     usage: ModelUsage {
                         tokens: 1,
                         cost_micros: 1,
                     },
-                })
+                }))
             })
         }
     }
@@ -4052,20 +4136,22 @@ mod tests {
         let mut engine_request = request(scope());
         engine_request.allowed_catalog.cards = expert_catalog();
         let bound = engine_request.delegation_context.clone().unwrap();
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                EnginePorts {
-                    projection: &projection,
-                    model: &model,
-                    tools: &tools,
-                    delegation: &delegations,
-                    journal: &journal,
-                    validator: &Validator,
-                },
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    EnginePorts {
+                        projection: &projection,
+                        model: &model,
+                        tools: &tools,
+                        delegation: &delegations,
+                        journal: &journal,
+                        validator: &Validator,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output, None);
         assert_eq!(delegations.calls.load(Ordering::SeqCst), 3);
         let events = events.lock().unwrap();
@@ -4170,20 +4256,22 @@ mod tests {
                 next_step_index: 0,
             },
         });
-        let report = Engine::default()
-            .drive(
-                engine_request,
-                EnginePorts {
-                    projection: &projection,
-                    model: &AnswerAlways,
-                    tools: &tools,
-                    delegation: &delegations,
-                    journal: &journal,
-                    validator: &Validator,
-                },
-            )
-            .await
-            .unwrap();
+        let report = completed(
+            Engine::default()
+                .drive(
+                    engine_request,
+                    EnginePorts {
+                        projection: &projection,
+                        model: &AnswerAlways,
+                        tools: &tools,
+                        delegation: &delegations,
+                        journal: &journal,
+                        validator: &Validator,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
         assert_eq!(report.output.as_deref(), Some("done"));
         assert_eq!(delegations.calls.load(Ordering::SeqCst), 1);
         let dispatched = delegations.requests.lock().unwrap();
@@ -4199,7 +4287,10 @@ mod tests {
             })
             .expect("resumed delegation journals its intent");
         assert_eq!(intent.execution_context, stored);
-        assert_eq!(intent.task_id, stable_task_id(batch.execution_id, batch.batch_id, 0));
+        assert_eq!(
+            intent.task_id,
+            stable_task_id(batch.execution_id, batch.batch_id, 0)
+        );
         assert_eq!(
             intent.invocation_key,
             stable_invocation_key(
@@ -4294,21 +4385,19 @@ mod tests {
                 (result, calls.load(Ordering::SeqCst))
             }
         };
-        let (result, calls) =
-            drive_with(vec![receipt_for(floe_agent_contract::delegation_request_digest(
-                &live_request,
-            ))])
-            .await;
-        assert_eq!(result.unwrap().output.as_deref(), Some("done"));
+        let (result, calls) = drive_with(vec![receipt_for(
+            floe_agent_contract::delegation_request_digest(&live_request),
+        )])
+        .await;
+        assert_eq!(completed(result.unwrap()).output.as_deref(), Some("done"));
         assert_eq!(calls, 0);
         let mut changed = live_request.clone();
         changed.execution_context.device_id = "changed-device".into();
         changed.execution_context.session_id = Uuid::new_v4();
-        let (result, calls) =
-            drive_with(vec![receipt_for(floe_agent_contract::delegation_request_digest(
-                &changed,
-            ))])
-            .await;
+        let (result, calls) = drive_with(vec![receipt_for(
+            floe_agent_contract::delegation_request_digest(&changed),
+        )])
+        .await;
         assert_eq!(result.err(), Some(AgentFailure::InvalidInput));
         assert_eq!(calls, 0);
     }
@@ -4317,11 +4406,12 @@ mod tests {
     fn stable_task_identity_derivation_is_unchanged() {
         // 2-C C2: TaskId/InvocationKey/call-id derivation is byte-identical;
         // the delegation convergence changes digests, never identity.
-        let execution_id =
-            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let execution_id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
         let batch_id = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
         assert_eq!(
-            stable_task_id(execution_id, batch_id, 0).as_uuid().to_string(),
+            stable_task_id(execution_id, batch_id, 0)
+                .as_uuid()
+                .to_string(),
             "f234d6b7-92e2-553d-ab9b-5cdec165c1ed"
         );
         assert_eq!(
@@ -4334,5 +4424,118 @@ mod tests {
             stable_call_id(execution_id, batch_id, 0).to_string(),
             "3b9e0781-3bce-5ee2-85d4-46f99865974f"
         );
+    }
+
+    fn blocked_requirement() -> floe_agent_contract::ProcessingRequirement {
+        floe_agent_contract::ProcessingRequirement::try_new(
+            "model.example",
+            "server-model",
+            "test-purpose",
+            "test-consumer",
+            vec![DataClass::Personal],
+            vec![],
+            Uuid::new_v4(),
+            1,
+            floe_agent_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    struct BlockingModel;
+    impl ModelPort for BlockingModel {
+        fn generate<'a>(
+            &'a self,
+            _request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
+            Box::pin(async move { Ok(ModelCallOutcome::NeedsUserAction(blocked_requirement())) })
+        }
+    }
+
+    struct ToolThenBlocking;
+    impl ModelPort for ToolThenBlocking {
+        fn generate<'a>(
+            &'a self,
+            request: ModelRequest,
+            _: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
+            Box::pin(async move {
+                if has_tool_exchange(&request) {
+                    return Ok(ModelCallOutcome::NeedsUserAction(blocked_requirement()));
+                }
+                Ok(ModelCallOutcome::Ready(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![ModelStep::CallTool {
+                        tool_id: "lookup".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }],
+                    usage: ModelUsage {
+                        tokens: 2,
+                        cost_micros: 1,
+                    },
+                }))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn model_blockage_returns_typed_blocked_with_zero_usage() {
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let journal = Journal {
+            reject_tool: false,
+            model_tokens: Arc::new(AtomicUsize::new(0)),
+        };
+        let (projection, _) = Projector::new();
+        let outcome = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &BlockingModel, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        let EngineOutcome::Blocked(blocked) = outcome else {
+            panic!("blockage must surface typed");
+        };
+        assert_eq!(blocked.requirement.recipient(), "model.example");
+        assert_eq!(blocked.requirement.profile_id(), "server-model");
+        assert!(blocked.steps.is_empty());
+        assert_eq!(blocked.iterations, 1);
+        assert_eq!(blocked.attempt_ids, vec![blocked.attempt_id]);
+        // The distinct undispatched observation: zero usage journaled, no
+        // tool dispatched, no output fabricated.
+        assert_eq!(journal.model_tokens.load(Ordering::SeqCst), 0);
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn model_blockage_preserves_settled_steps_and_usage() {
+        let tools = Tools {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let journal = Journal {
+            reject_tool: false,
+            model_tokens: Arc::new(AtomicUsize::new(0)),
+        };
+        let (projection, _) = Projector::new();
+        let outcome = Engine::default()
+            .drive(
+                request(scope()),
+                ports(&projection, &ToolThenBlocking, &tools, &journal, &Validator),
+            )
+            .await
+            .unwrap();
+        let EngineOutcome::Blocked(blocked) = outcome else {
+            panic!("blockage must surface typed");
+        };
+        assert_eq!(blocked.steps.len(), 1);
+        assert!(matches!(blocked.steps[0], EngineStep::Tool(_)));
+        assert_eq!(blocked.attempt_ids.len(), 2);
+        assert_eq!(blocked.attempt_ids[1], blocked.attempt_id);
+        // Prior dispatched usage preserved; the blocked call adds zero.
+        assert_eq!(journal.model_tokens.load(Ordering::SeqCst), 2);
+        assert_eq!(tools.calls.load(Ordering::SeqCst), 1);
     }
 }

@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_agent_contract::InferencePolicyDecision;
+use floe_agent_contract::{ExpertModel, ExpertModelRequirement};
 use floe_context_contract::{
     AttentionView, CalendarContextView, WorkContextView, personal_context_evidence,
     validate_attention_view, validate_work_context_view, work_context_evidence,
@@ -14,8 +14,8 @@ use floe_context_contract::{
 
 use crate::prompts::focus_expert_prompt;
 use crate::shared::{
-    PersonalExpertInvocation, add_schedule_views, ensure_unique_source, extend_unique_handles,
-    run_personal_model, validate_judgment,
+    ExpertJudgment, PersonalExpertInvocation, add_schedule_views, ensure_unique_source,
+    extend_unique_handles, run_personal_model, validate_judgment,
 };
 
 #[derive(Clone, Debug)]
@@ -62,7 +62,7 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
     policy: &InferencePolicyDecision,
     invocation: PersonalExpertInvocation,
     views: FocusContextViews,
-) -> Result<FocusExpertResult, AgentFailure> {
+) -> Result<ExpertJudgment<FocusExpertResult>, AgentFailure> {
     validate_attention_view(&views.attention, invocation.current_time_unix_ms)?;
     let mut evidence = vec![personal_context_evidence(&views.attention)?];
     let mut available = views.attention.evidence_handles.clone();
@@ -87,7 +87,7 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
         expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
         evidence.push(work_context_evidence(view)?);
     }
-    let output: FocusOutput = run_personal_model(
+    let output: FocusOutput = match run_personal_model(
         model,
         policy,
         ExpertModelRequirement::DeviceOnly,
@@ -95,7 +95,13 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
         evidence,
         focus_expert_prompt(),
     )
-    .await?;
+    .await?
+    {
+        ExpertJudgment::Decided(output) => output,
+        ExpertJudgment::Blocked(requirement) => {
+            return Ok(ExpertJudgment::Blocked(requirement));
+        }
+    };
     validate_judgment(
         &output.summary,
         &output.rationale,
@@ -103,7 +109,7 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
         &available,
         matches!(output.recommendation, FocusRecommendation::NoConclusion),
     )?;
-    Ok(FocusExpertResult {
+    Ok(ExpertJudgment::Decided(FocusExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
         source_handle: views.attention.source_handle,
@@ -113,5 +119,5 @@ pub async fn run_focus_expert_with_views<Model: ExpertModel>(
         recommendation: output.recommendation,
         rationale: output.rationale,
         evidence_handles: output.evidence_handles,
-    })
+    }))
 }
