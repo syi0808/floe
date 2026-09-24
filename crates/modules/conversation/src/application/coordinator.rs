@@ -348,6 +348,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                             steps,
                             coverage,
                             issue: None,
+                            interactions: vec![],
                         },
                         Err(failure) => RunTerminal::from_failure(failure),
                     },

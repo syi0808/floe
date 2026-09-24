@@ -155,6 +155,7 @@ pub(super) async fn finalize_exhausted_run<Repository: ConversationRepository>(
         steps,
         coverage,
         issue: Some(issue),
+        interactions: vec![],
     }))
 }
 

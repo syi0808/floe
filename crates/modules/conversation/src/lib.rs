@@ -11,7 +11,7 @@ mod turn;
 pub use api::{
     CONVERSATION_MODEL_CONSUMER, ConversationPorts, FINALIZATION_OUTPUT_CONTRACT,
     FINALIZATION_ROLE_ID, FINALIZATION_ROLE_PROMPT, MANAGER_OUTPUT_CONTRACT, ManagerConfig,
-    TurnRequest,
+    MODEL_CONSENT_LIMITATION, TurnRequest,
 };
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
@@ -32,11 +32,13 @@ pub use domain::{
     INTERACTION_PENDING_LIFETIME_MS, InlineObserveTarget, InteractionDecision,
     InteractionDecisionKind, InteractionOrigin, InteractionRequirement, InteractionRequirementKind,
     InteractionResolution, InteractionState, JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN,
-    MAX_COMPACTION_SUMMARY_BYTES, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
-    MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
-    MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget,
-    ProfileSelection, PublishAdmission, RecoveryReceipt, RecoveryRequest, ReviewedBundleMember,
-    ReviewedTarget, RunQuery, RunReceipt, RunState, RunTerminal, SessionReadRequest,
+    MAX_COMPACTION_SUMMARY_BYTES, MAX_RECIPIENT_CONSENT_TARGET_BYTES,
+    MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
+    MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
+    MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget,
+    ProfileSelection, PublishAdmission, RecipientConsentTarget, RecoveryReceipt, RecoveryRequest,
+    ReviewedBundleMember, ReviewedTarget, RunQuery, RunReceipt, RunState, RunTerminal,
+    SessionReadRequest,
     SessionReceipt, SessionRequest, StartTurn, SupersedeInteraction, TurnAdmission,
     TurnAdmissionRequest, TurnMode, canonical_requirement_digest, canonical_target_digest,
     decision_operation_id, interaction_publication_id, next_state_after_decision,

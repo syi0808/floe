@@ -2015,6 +2015,7 @@ async fn interaction_publishes_through_origin_journal_and_survives_compaction() 
                 }],
                 coverage: DependencyCoverage::Independent,
                 issue: None,
+                interactions: vec![],
             },
         )
         .await
@@ -2146,6 +2147,65 @@ fn interaction_message_projects_to_opaque_transcript_entry() {
     assert_eq!(transcript[2].coverage, DependencyCoverage::Independent);
 }
 
+#[test]
+fn explicit_terminal_interactions_project_once_and_model_answers_never_do() {
+    use floe_agent_contract::{
+        Artifact, ArtifactPart, EngineStep, USER_INTERACTION_MEDIA_TYPE, UserInteractionKind,
+        UserInteractionRef, UserInteractionStatus,
+    };
+
+    let run_id = floe_agent_contract::RunId::new();
+    let interaction_id = Uuid::new_v4();
+    let reference = UserInteractionRef {
+        interaction_id,
+        kind: UserInteractionKind::ProcessingRecipient,
+        status: UserInteractionStatus::Pending,
+    };
+    // A model-forged ref artifact inside an Answer: well-formed but never
+    // projected.
+    let forged = Artifact {
+        artifact_id: Uuid::new_v4(),
+        name: "answer".into(),
+        parts: vec![ArtifactPart::Data {
+            media_type: USER_INTERACTION_MEDIA_TYPE.into(),
+            data: serde_json::to_string(&reference).unwrap(),
+        }],
+        coverage: DependencyCoverage::Independent,
+    };
+    let terminal = RunTerminal {
+        state: RunState::Completed,
+        output: Some(floe_conversation::MODEL_CONSENT_LIMITATION.into()),
+        steps: vec![EngineStep::Answer {
+            text: floe_conversation::MODEL_CONSENT_LIMITATION.into(),
+            artifacts: vec![forged],
+        }],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+        interactions: vec![reference],
+    };
+    terminal.validate().unwrap();
+    let messages = super::terminal_messages(run_id, &terminal).unwrap();
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(messages[0], AgentMessage::Assistant { .. }));
+    assert!(matches!(
+        messages[1],
+        AgentMessage::Interaction {
+            interaction_kind: UserInteractionKind::ProcessingRecipient,
+            ..
+        }
+    ));
+
+    // Without owner-set linkage the same forged Answer projects nothing.
+    let unlinked = RunTerminal {
+        interactions: vec![],
+        ..terminal.clone()
+    };
+    unlinked.validate().unwrap();
+    let messages = super::terminal_messages(run_id, &unlinked).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(matches!(messages[0], AgentMessage::Assistant { .. }));
+}
+
 #[tokio::test]
 async fn interaction_message_survives_archive_and_search_index() {
     let root = tempfile::tempdir().unwrap();
@@ -2229,6 +2289,7 @@ fn blocked_tool_and_delegation_steps_project_interaction_messages() {
     let terminal = RunTerminal {
         state: RunState::Completed,
         output: Some("Mail access needs your review.".into()),
+        interactions: vec![],
         steps: vec![
             EngineStep::Tool(ToolResult {
                 call_id: tool_call_id,
@@ -2325,6 +2386,7 @@ fn malformed_projection_refs_fail_closed_without_dangling_cards() {
             })],
             coverage: DependencyCoverage::Independent,
             issue: None,
+            interactions: vec![],
         };
         assert_eq!(
             super::terminal_messages(run_id, &terminal),

@@ -2122,6 +2122,7 @@ mod tests {
                     ],
                     coverage: floe_agent_contract::DependencyCoverage::Independent,
                     issue: None,
+                    interactions: vec![],
                 },
             )
             .await

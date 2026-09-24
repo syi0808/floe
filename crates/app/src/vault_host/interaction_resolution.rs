@@ -353,6 +353,33 @@ pub(crate) trait InlineOwnerMutation: Send + Sync {
     ) -> BoxFuture<'a, Result<(), AgentFailure>>;
 }
 
+/// Grants the canonical Access consent for a reviewed recipient target.
+///
+/// Implementations bind the live pairing (person/device/client) at grant
+/// time and persist through the Access-owned consent store. Grants are
+/// idempotent by content-derived consent id: a rejoined decision command
+/// rejoins the same consent. The paired connection is ambient: a re-pairing
+/// never matches an old review.
+pub(crate) trait RecipientConsentOwner: Send + Sync {
+    fn grant_reviewed<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<floe_access::RecipientConsent, AgentFailure>>;
+
+    /// Whether a usable consent already covers the reviewed content under
+    /// the live pairing. Refresh-only: never grants.
+    fn usable_consent<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>>;
+}
+
 /// A person's decision on one interaction: stable command identity,
 /// Session/revision CAS, and the reviewed digest the decision binds.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -497,21 +524,23 @@ impl RefreshOutcome {
     }
 }
 
-/// Record the person's decision and drive an inline approval through the
+/// Record the person's decision and drive an approval through the
 /// canonical owner operation.
 ///
 /// Deny mutates no owner state. Dismiss cancels a Pending or Resolving
 /// card. Approve on an inline target claims Resolving durably, compares
 /// fresh owner truth with the reviewed target, mutates only on an exact
-/// precondition match, and records the semantic resolution. A rejoined
-/// command reconciles the already claimed operation instead of mutating
-/// again.
+/// precondition match, and records the semantic resolution. Approve on a
+/// recipient target grants the exact reviewed Access consent idempotently
+/// and records the resolution. A rejoined command reconciles the already
+/// claimed operation instead of mutating again.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn resolve_interaction<Runs, Interactions>(
     runs: &Runs,
     interactions: &Interactions,
     reader: &dyn ObserveStateReader,
     mutation: &dyn InlineOwnerMutation,
+    consents: &dyn RecipientConsentOwner,
     caller: &CallerContext,
     command: ResolveInteractionCommand,
     cancellation: &floe_execution::Cancellation,
@@ -607,47 +636,64 @@ where
         floe_conversation::InteractionState::Resolving {
             decision_id,
             owner_operation_id,
-        } => {
-            let floe_conversation::ReviewedTarget::InlineObserve(target) = current.target.clone()
-            else {
-                return Err(AgentFailure::StorageUnavailable);
-            };
-            if rejoined {
-                reconcile_resolving(
-                    runs,
+        } => match current.target.clone() {
+            floe_conversation::ReviewedTarget::InlineObserve(target) => {
+                if rejoined {
+                    reconcile_resolving(
+                        runs,
+                        interactions,
+                        reader,
+                        mutation,
+                        caller,
+                        person_id,
+                        &principal,
+                        &current,
+                        &target,
+                        decision_id,
+                        owner_operation_id,
+                        cancellation,
+                        now_unix_ms,
+                    )
+                    .await
+                } else {
+                    drive_fresh_approval(
+                        runs,
+                        interactions,
+                        reader,
+                        mutation,
+                        caller,
+                        person_id,
+                        &principal,
+                        &current,
+                        &target,
+                        decision_id,
+                        owner_operation_id,
+                        cancellation,
+                        now_unix_ms,
+                    )
+                    .await
+                }
+            }
+            // Consent grants are idempotent by content-derived id, so fresh
+            // and rejoined approvals share one path: grant, then resolve.
+            floe_conversation::ReviewedTarget::RecipientConsent(target) => {
+                drive_consent_approval(
                     interactions,
-                    reader,
-                    mutation,
-                    caller,
+                    consents,
                     person_id,
-                    &principal,
                     &current,
                     &target,
+                    caller.device_id(),
                     decision_id,
                     owner_operation_id,
-                    cancellation,
-                    now_unix_ms,
-                )
-                .await
-            } else {
-                drive_fresh_approval(
-                    runs,
-                    interactions,
-                    reader,
-                    mutation,
-                    caller,
-                    person_id,
-                    &principal,
-                    &current,
-                    &target,
-                    decision_id,
-                    owner_operation_id,
-                    cancellation,
                     now_unix_ms,
                 )
                 .await
             }
-        }
+            floe_conversation::ReviewedTarget::NavigationOnly(_) => {
+                Err(AgentFailure::StorageUnavailable)
+            }
+        },
         _ => Err(AgentFailure::StorageUnavailable),
     }
 }
@@ -664,6 +710,7 @@ pub(crate) async fn refresh_interaction<Runs, Interactions>(
     interactions: &Interactions,
     reader: &dyn ObserveStateReader,
     mutation: &dyn InlineOwnerMutation,
+    consents: &dyn RecipientConsentOwner,
     caller: &CallerContext,
     command: RefreshInteractionCommand,
     cancellation: &floe_execution::Cancellation,
@@ -788,54 +835,108 @@ where
                     })
                 }
             }
+            // A consent review is self-contained: no drift, no replacement.
+            // Refresh settles only when a usable consent already covers the
+            // reviewed content under the live pairing.
+            floe_conversation::ReviewedTarget::RecipientConsent(target) => {
+                if consents
+                    .usable_consent(
+                        &target,
+                        person_id,
+                        caller.device_id(),
+                        now_unix_ms,
+                    )
+                    .await?
+                {
+                    let resolved = settle_satisfied(
+                        interactions,
+                        person_id,
+                        &principal,
+                        &current,
+                        command.command_id,
+                        now_unix_ms,
+                    )
+                    .await?;
+                    Ok(RefreshOutcome::Resolved {
+                        interaction: resolved,
+                    })
+                } else {
+                    Ok(RefreshOutcome::StillPending {
+                        interaction: current,
+                    })
+                }
+            }
         },
         floe_conversation::InteractionState::Resolving {
             decision_id,
             owner_operation_id,
-        } => {
-            let floe_conversation::ReviewedTarget::InlineObserve(target) = current.target.clone()
-            else {
-                return Ok(RefreshOutcome::Terminal {
+        } => match current.target.clone() {
+            floe_conversation::ReviewedTarget::InlineObserve(target) => {
+                let outcome = reconcile_resolving(
+                    runs,
+                    interactions,
+                    reader,
+                    mutation,
+                    caller,
+                    person_id,
+                    &principal,
+                    &current,
+                    &target,
+                    decision_id,
+                    owner_operation_id,
+                    cancellation,
+                    now_unix_ms,
+                )
+                .await?;
+                Ok(match outcome {
+                    ResolveOutcome::Resolved { interaction } => {
+                        RefreshOutcome::Resolved { interaction }
+                    }
+                    ResolveOutcome::Resolving { interaction } => {
+                        RefreshOutcome::Terminal { interaction }
+                    }
+                    ResolveOutcome::Superseded {
+                        interaction,
+                        reason,
+                        replacement_id,
+                    } => RefreshOutcome::Superseded {
+                        interaction,
+                        reason,
+                        replacement_id,
+                    },
+                    other => RefreshOutcome::Terminal {
+                        interaction: other.interaction().clone(),
+                    },
+                })
+            }
+            floe_conversation::ReviewedTarget::RecipientConsent(target) => {
+                let outcome = drive_consent_approval(
+                    interactions,
+                    consents,
+                    person_id,
+                    &current,
+                    &target,
+                    caller.device_id(),
+                    decision_id,
+                    owner_operation_id,
+                    now_unix_ms,
+                )
+                .await?;
+                Ok(match outcome {
+                    ResolveOutcome::Resolved { interaction } => {
+                        RefreshOutcome::Resolved { interaction }
+                    }
+                    other => RefreshOutcome::Terminal {
+                        interaction: other.interaction().clone(),
+                    },
+                })
+            }
+            floe_conversation::ReviewedTarget::NavigationOnly(_) => {
+                Ok(RefreshOutcome::Terminal {
                     interaction: current,
-                });
-            };
-            let outcome = reconcile_resolving(
-                runs,
-                interactions,
-                reader,
-                mutation,
-                caller,
-                person_id,
-                &principal,
-                &current,
-                &target,
-                decision_id,
-                owner_operation_id,
-                cancellation,
-                now_unix_ms,
-            )
-            .await?;
-            Ok(match outcome {
-                ResolveOutcome::Resolved { interaction } => {
-                    RefreshOutcome::Resolved { interaction }
-                }
-                ResolveOutcome::Resolving { interaction } => {
-                    RefreshOutcome::Terminal { interaction }
-                }
-                ResolveOutcome::Superseded {
-                    interaction,
-                    reason,
-                    replacement_id,
-                } => RefreshOutcome::Superseded {
-                    interaction,
-                    reason,
-                    replacement_id,
-                },
-                other => RefreshOutcome::Terminal {
-                    interaction: other.interaction().clone(),
-                },
-            })
-        }
+                })
+            }
+        },
         _ => Ok(RefreshOutcome::Terminal {
             interaction: current,
         }),
@@ -849,6 +950,44 @@ where
 /// concurrent enable is a conflict for a fresh Allow, settled only
 /// through explicit reconciliation.
 #[allow(clippy::too_many_arguments)]
+/// Grant the exact reviewed consent and record the semantic resolution.
+///
+/// The grant binds the live pairing and is idempotent by content-derived
+/// consent id: fresh approvals, rejoined commands, and refresh
+/// reconciliation share this path. A grant failure fails the decision
+/// closed; it never records a resolution without the consent.
+#[allow(clippy::too_many_arguments)]
+async fn drive_consent_approval<Interactions>(
+    interactions: &Interactions,
+    consents: &dyn RecipientConsentOwner,
+    person_id: PersonId,
+    current: &floe_conversation::ConversationInteraction,
+    target: &floe_conversation::RecipientConsentTarget,
+    device_id: &str,
+    decision_id: Uuid,
+    owner_operation_id: Uuid,
+    now_unix_ms: i64,
+) -> Result<ResolveOutcome, AgentFailure>
+where
+    Interactions: floe_conversation::InteractionRepository,
+{
+    consents
+        .grant_reviewed(target, person_id, device_id, now_unix_ms)
+        .await?;
+    let resolved = record_resolution_owned(
+        interactions,
+        person_id,
+        current,
+        decision_id,
+        owner_operation_id,
+        now_unix_ms,
+    )
+    .await?;
+    Ok(ResolveOutcome::Resolved {
+        interaction: resolved,
+    })
+}
+
 async fn drive_fresh_approval<Runs, Interactions>(
     runs: &Runs,
     interactions: &Interactions,
@@ -1389,6 +1528,9 @@ fn device_mismatch(target: &floe_conversation::ReviewedTarget, device_id: &str) 
     match target {
         floe_conversation::ReviewedTarget::InlineObserve(target) => {
             target.device_id.as_deref() != Some(device_id)
+        }
+        floe_conversation::ReviewedTarget::RecipientConsent(target) => {
+            target.device_id != device_id
         }
         floe_conversation::ReviewedTarget::NavigationOnly(_) => false,
     }

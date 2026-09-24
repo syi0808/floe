@@ -18,7 +18,9 @@
 //! display labels. Model-safe artifacts carry only the opaque
 //! [`UserInteractionRef`].
 
-use floe_agent_contract::{AgentFailure, UserInteractionKind};
+use floe_agent_contract::{
+    AgentFailure, DataClass, ProcessingSourceScope, RecipientLineage, UserInteractionKind,
+};
 use floe_kernel::{PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,6 +37,7 @@ pub const MAX_REVIEWED_IDENTIFIER_BYTES: usize = 256;
 pub const MAX_REVIEWED_PURPOSE_BYTES: usize = 64;
 pub const MAX_TARGET_BUNDLE_MEMBERS: usize = 8;
 pub const MAX_REVIEWED_TARGET_BYTES: usize = 8 * 1024;
+pub const MAX_RECIPIENT_CONSENT_TARGET_BYTES: usize = 128 * 1024;
 
 /// Fixed namespace for deterministic interaction publication identity.
 pub const INTERACTION_ID_NAMESPACE: Uuid =
@@ -313,12 +316,72 @@ impl NavigationOnlyTarget {
     }
 }
 
+/// An exact-recipient consent target: the reviewed dispatch the person's
+/// decision binds.
+///
+/// Stores the canonical requirement values verbatim: exact recipient,
+/// route/profile identity, purpose/consumer, data classes, source scopes,
+/// lineage, and device, plus the audit-only original projection identity.
+/// The decision grants an Access consent for exactly this review; a
+/// different recipient, profile, scope, lineage, or device requires a new
+/// review. The paired-connection (client) binding is ambient: resolution
+/// binds the live pairing, and dispatch re-checks it, so a re-pairing never
+/// reuses an old review.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipientConsentTarget {
+    pub recipient: String,
+    pub profile_id: String,
+    pub purpose: String,
+    pub consumer: String,
+    pub input_data_classes: Vec<DataClass>,
+    pub source_scopes: Vec<ProcessingSourceScope>,
+    pub lineage: RecipientLineage,
+    pub device_id: String,
+    pub projection_ref: Uuid,
+    pub projection_revision: u64,
+}
+
+impl RecipientConsentTarget {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        floe_agent_contract::ProcessingRequirement::try_new(
+            self.recipient.clone(),
+            self.profile_id.clone(),
+            self.purpose.clone(),
+            self.consumer.clone(),
+            self.input_data_classes.clone(),
+            self.source_scopes.clone(),
+            self.projection_ref,
+            self.projection_revision,
+            self.lineage,
+        )
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+        // The stored order is canonical: the digest serializes members in
+        // place, so unsorted storage would fork card identity.
+        let mut sorted_classes = self.input_data_classes.clone();
+        sorted_classes.sort();
+        let mut sorted_scopes = self.source_scopes.clone();
+        sorted_scopes.sort_by_cached_key(|scope| serde_json::to_vec(scope).unwrap_or_default());
+        if sorted_classes != self.input_data_classes
+            || sorted_scopes != self.source_scopes
+            || validate_identifier(&self.device_id, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            || serde_json::to_vec(self)
+                .map(|encoded| encoded.len() > MAX_RECIPIENT_CONSENT_TARGET_BYTES)
+                .unwrap_or(true)
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(())
+    }
+}
+
 /// The immutable reviewed descriptor a decision binds.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ReviewedTarget {
     InlineObserve(InlineObserveTarget),
     NavigationOnly(NavigationOnlyTarget),
+    RecipientConsent(RecipientConsentTarget),
 }
 
 impl ReviewedTarget {
@@ -326,6 +389,7 @@ impl ReviewedTarget {
         match self {
             Self::InlineObserve(target) => target.validate(),
             Self::NavigationOnly(target) => target.validate(),
+            Self::RecipientConsent(target) => target.validate(),
         }
     }
 }
@@ -456,6 +520,8 @@ impl ConversationInteraction {
             || self.expires_at_unix_ms != self.created_at_unix_ms + INTERACTION_PENDING_LIFETIME_MS
             || (self.kind == UserInteractionKind::ProcessingRecipient)
                 != (self.requirement.kind == InteractionRequirementKind::ApproveProcessingRecipient)
+            || (self.kind == UserInteractionKind::ProcessingRecipient)
+                != matches!(self.target, ReviewedTarget::RecipientConsent(_))
             || self.requirement_digest == [0; 32]
             || self.target_digest == [0; 32]
         {
@@ -744,6 +810,30 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             append_str(&mut bytes, &target.consumer);
             append_str(&mut bytes, &target.purpose);
         }
+        ReviewedTarget::RecipientConsent(target) => {
+            bytes.push(3);
+            append_str(&mut bytes, &target.recipient);
+            append_str(&mut bytes, &target.profile_id);
+            append_str(&mut bytes, &target.purpose);
+            append_str(&mut bytes, &target.consumer);
+            let class_count = u64::try_from(target.input_data_classes.len()).unwrap_or(u64::MAX);
+            bytes.extend_from_slice(&class_count.to_be_bytes());
+            for class in &target.input_data_classes {
+                bytes.push(data_class_byte(class));
+            }
+            let scope_count = u64::try_from(target.source_scopes.len()).unwrap_or(u64::MAX);
+            bytes.extend_from_slice(&scope_count.to_be_bytes());
+            for scope in &target.source_scopes {
+                let encoded =
+                    serde_json::to_vec(scope).map_err(|_| AgentFailure::InvalidInput)?;
+                append_bytes(&mut bytes, &encoded);
+            }
+            bytes.extend_from_slice(target.lineage.session_id().as_bytes());
+            bytes.extend_from_slice(target.lineage.origin_run_id().as_bytes());
+            append_str(&mut bytes, &target.device_id);
+            bytes.extend_from_slice(target.projection_ref.as_bytes());
+            bytes.extend_from_slice(&target.projection_revision.to_be_bytes());
+        }
     }
     Ok(Sha256::digest(bytes).into())
 }
@@ -880,6 +970,17 @@ impl ExpireInteraction {
 fn append_authority(bytes: &mut Vec<u8>, revision: &AuthorityRevision) {
     bytes.extend_from_slice(revision.incarnation.as_bytes());
     bytes.extend_from_slice(&revision.epoch.to_be_bytes());
+}
+
+fn data_class_byte(class: &DataClass) -> u8 {
+    match class {
+        DataClass::Synthetic => 1,
+        DataClass::Personal => 2,
+        DataClass::TemporaryAiContext => 3,
+        DataClass::HighlySensitive => 4,
+        DataClass::DeviceOnlyRaw => 5,
+        DataClass::Credential => 6,
+    }
 }
 
 fn append_str(bytes: &mut Vec<u8>, value: &str) {
@@ -1039,19 +1140,108 @@ mod tests {
 
     #[test]
     fn kind_and_requirement_coherence_is_enforced() {
-        let mut record = record();
-        record.kind = UserInteractionKind::ProcessingRecipient;
-        assert_eq!(record.validate(), Err(AgentFailure::StorageUnavailable));
-        record.requirement.kind = InteractionRequirementKind::ApproveProcessingRecipient;
-        record.requirement_digest = canonical_requirement_digest(&record.requirement).unwrap();
-        record.id = interaction_publication_id(
-            record.origin_run_id,
-            &record.origin,
-            &record.requirement_digest,
-            &record.target_digest,
+        let mut processing = record();
+        processing.kind = UserInteractionKind::ProcessingRecipient;
+        assert_eq!(processing.validate(), Err(AgentFailure::StorageUnavailable));
+        processing.requirement.kind = InteractionRequirementKind::ApproveProcessingRecipient;
+        processing.requirement_digest =
+            canonical_requirement_digest(&processing.requirement).unwrap();
+        // A processing interaction with a source target is still incoherent.
+        assert_eq!(processing.validate(), Err(AgentFailure::StorageUnavailable));
+        processing.target = ReviewedTarget::RecipientConsent(consent_target());
+        processing.target_digest = canonical_target_digest(&processing.target).unwrap();
+        processing.id = interaction_publication_id(
+            processing.origin_run_id,
+            &processing.origin,
+            &processing.requirement_digest,
+            &processing.target_digest,
         )
         .unwrap();
-        assert!(record.validate().is_ok());
+        assert!(processing.validate().is_ok());
+        // A source interaction with a consent target is incoherent.
+        let mut mismatched = record();
+        mismatched.target = ReviewedTarget::RecipientConsent(consent_target());
+        mismatched.target_digest = canonical_target_digest(&mismatched.target).unwrap();
+        mismatched.id = interaction_publication_id(
+            mismatched.origin_run_id,
+            &mismatched.origin,
+            &mismatched.requirement_digest,
+            &mismatched.target_digest,
+        )
+        .unwrap();
+        assert_eq!(
+            mismatched.validate(),
+            Err(AgentFailure::StorageUnavailable)
+        );
+    }
+
+    pub(crate) fn consent_target() -> RecipientConsentTarget {
+        RecipientConsentTarget {
+            recipient: "model.example".into(),
+            profile_id: "server-model".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: "conversation.root".into(),
+            input_data_classes: vec![DataClass::Personal],
+            source_scopes: vec![],
+            lineage: RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap(),
+            device_id: "device".into(),
+            projection_ref: Uuid::new_v4(),
+            projection_revision: 1,
+        }
+    }
+
+    #[test]
+    fn consent_target_validates_digest_binds_and_round_trips() {
+        let target = consent_target();
+        assert!(target.validate().is_ok());
+        let digest = canonical_target_digest(&ReviewedTarget::RecipientConsent(target.clone()))
+            .unwrap();
+        assert_ne!(digest, [0; 32]);
+        let decoded: RecipientConsentTarget =
+            serde_json::from_str(&serde_json::to_string(&target).unwrap()).unwrap();
+        assert_eq!(decoded, target);
+        // Every reviewed field enters the digest.
+        let mut changed = target.clone();
+        changed.recipient = "other.example".into();
+        assert_ne!(
+            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
+            digest
+        );
+        let mut changed = target.clone();
+        changed.profile_id = "other-model".into();
+        assert_ne!(
+            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
+            digest
+        );
+        let mut changed = target.clone();
+        changed.device_id = "other-device".into();
+        assert_ne!(
+            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
+            digest
+        );
+        let mut changed = target.clone();
+        changed.lineage =
+            RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        assert_ne!(
+            canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
+            digest
+        );
+        // Blank, wildcard, unsorted, and oversized reviews are rejected.
+        let mut blank = target.clone();
+        blank.recipient = String::new();
+        assert!(blank.validate().is_err());
+        let mut wildcard = target.clone();
+        wildcard.recipient = "*".into();
+        assert!(wildcard.validate().is_err());
+        let mut blank_device = target.clone();
+        blank_device.device_id = String::new();
+        assert!(blank_device.validate().is_err());
+        let mut unsorted = target.clone();
+        unsorted.input_data_classes = vec![DataClass::Personal, DataClass::Synthetic];
+        assert!(unsorted.validate().is_err());
+        let mut oversized = target.clone();
+        oversized.device_id = "x".repeat(MAX_REVIEWED_IDENTIFIER_BYTES + 1);
+        assert!(oversized.validate().is_err());
     }
 
     #[test]

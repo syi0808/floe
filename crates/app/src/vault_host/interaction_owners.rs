@@ -19,11 +19,13 @@
 
 use floe_agent_contract::{AgentFailure, BoxFuture};
 use floe_context_contract::SourceAuthority;
+use floe_inference::SavedConnectionStore;
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
 use super::interaction_resolution::{
     InlineOwnerMutation, LiveGrant, LiveInlineState, LiveMember, ObserveStateReader,
+    RecipientConsentOwner,
 };
 
 /// The host's owner access for interaction decisions: core connections,
@@ -100,6 +102,40 @@ where
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
             self.enable(target, person_id, device_id, cancellation)
+                .await
+        })
+    }
+}
+
+impl<Keys, CalendarSubject, PersonalInspector> RecipientConsentOwner
+    for HostInteractionOwners<'_, Keys, CalendarSubject, PersonalInspector>
+where
+    Keys: VaultKeyProvider,
+    CalendarSubject: floe_context::NativeCalendarSubjectSource,
+    PersonalInspector: floe_access::PersonalSubjectInspector,
+{
+    fn grant_reviewed<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<floe_access::RecipientConsent, AgentFailure>> {
+        Box::pin(async move {
+            self.grant_consent(target, person_id, device_id, now_unix_ms)
+                .await
+        })
+    }
+
+    fn usable_consent<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            self.consent_usable(target, person_id, device_id, now_unix_ms)
                 .await
         })
     }
@@ -803,6 +839,96 @@ where
                 .await;
         }
         Err(AgentFailure::CapabilityUnavailable)
+    }
+
+    /// Grant the exact reviewed recipient consent, binding the live pairing.
+    ///
+    /// Admits the current saved connection against the verified caller for
+    /// the pairing identity only; recorded global consent flags are never
+    /// consulted. Without a live pairing there is no external dispatch to
+    /// authorize, so the grant fails closed.
+    async fn grant_consent(
+        &self,
+        target: &floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<floe_access::RecipientConsent, AgentFailure> {
+        if self.vault.person_id() != person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        target.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        let now = chrono::DateTime::from_timestamp_millis(now_unix_ms)
+            .ok_or(AgentFailure::InvalidInput)?;
+        let client_id = self.live_client_id(&person_id.to_string(), device_id)?;
+        let consent = floe_access::RecipientConsent::try_new(
+            person_id,
+            device_id.to_owned(),
+            client_id,
+            target.recipient.clone(),
+            target.profile_id.clone(),
+            target.purpose.clone(),
+            target.consumer.clone(),
+            target.input_data_classes.clone(),
+            target.source_scopes.clone(),
+            target.lineage,
+            target.projection_ref,
+            target.projection_revision,
+            now,
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?;
+        floe_access::grant_recipient_consent(self.vault, consent).await
+    }
+
+    /// Whether a usable consent already covers the reviewed content under
+    /// the live pairing. Refresh-only: never grants.
+    async fn consent_usable(
+        &self,
+        target: &floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &str,
+        now_unix_ms: i64,
+    ) -> Result<bool, AgentFailure> {
+        if self.vault.person_id() != person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        target.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        let now = chrono::DateTime::from_timestamp_millis(now_unix_ms)
+            .ok_or(AgentFailure::InvalidInput)?;
+        let Ok(client_id) = self.live_client_id(&person_id.to_string(), device_id) else {
+            return Ok(false);
+        };
+        let id = floe_access::recipient_consent_id(
+            person_id,
+            device_id,
+            &client_id,
+            &target.recipient,
+            &target.profile_id,
+            &target.purpose,
+            &target.consumer,
+            &target.input_data_classes,
+            &target.source_scopes,
+            target.lineage,
+        );
+        let usable = floe_access::RecipientConsentStore::find_consent(self.vault, id)
+            .await?
+            .is_some_and(|consent| consent.is_usable_at(now));
+        Ok(usable)
+    }
+
+    /// The live pairing identity for consent binding, admitted per call.
+    ///
+    /// Reloads the current saved connection and binds it to the verified
+    /// person/device. Recorded global consent flags are accepted as stored
+    /// shape but never consulted for authority.
+    fn live_client_id(&self, person_id: &str, device_id: &str) -> Result<String, AgentFailure> {
+        let stored = self.connections.load().map_err(|_| AgentFailure::PolicyDenied)?;
+        let Some(saved) = stored else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        let admitted = floe_inference::admit_saved_connection(saved, person_id, device_id)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        Ok(admitted.client_id)
     }
 
     /// Native enable through the canonical Calendar Review: the reviewed

@@ -59,8 +59,9 @@ pub use floe_context_contract::{
     EpistemicStatus, ExpertTimelineView, LearningEvidenceRef, MAX_CONTEXT_EVIDENCE,
     MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS,
-    MemoryContextSnapshot, ModelPlacement, PersonalMemoryKind, SourceAuthority, SourceGrant,
-    TimelineViewItem, TransferConsent,
+    MemoryContextSnapshot, ModelPlacement, PersonalMemoryKind, ProcessingRequirement,
+    ProcessingSourceScope, RecipientLineage, SourceAuthority, SourceGrant, TimelineViewItem,
+    TransferConsent,
 };
 pub use floe_execution::{CancelReason, Cancellation, ExecutionScope};
 pub use floe_kernel::{

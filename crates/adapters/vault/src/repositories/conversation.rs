@@ -851,6 +851,9 @@ fn terminal_messages(
         };
     for step in &terminal.steps {
         match step {
+            // Model-authored Answers never project refs: only the explicit
+            // owner-set terminal linkage below and trusted-port step
+            // artifacts become Interaction messages.
             EngineStep::Answer { text, .. } => messages.push(AgentMessage::Assistant {
                 turn_id: run_id.as_uuid(),
                 text: text.clone(),
@@ -867,6 +870,14 @@ fn terminal_messages(
             }
         }
     }
+    // Owner-set linkage for completions the model did not author
+    // (deterministic no-model limitation): deduplicated with step refs.
+    for reference in &terminal.interactions {
+        reference
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+    }
+    project_refs(&mut messages, terminal.interactions.clone())?;
     Ok(messages)
 }
 

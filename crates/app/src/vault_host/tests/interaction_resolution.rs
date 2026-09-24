@@ -9,8 +9,8 @@ use floe_kernel::RunId;
 use super::*;
 use crate::vault_host::interaction_resolution::{
     DriftReason, InlineOwnerMutation, LiveGrant, LiveInlineState, LiveMember, ObserveStateReader,
-    RefreshInteractionCommand, RefreshOutcome, ResolveInteractionCommand, ResolveOutcome,
-    refresh_interaction, resolve_interaction,
+    RecipientConsentOwner, RefreshInteractionCommand, RefreshOutcome, ResolveInteractionCommand,
+    ResolveOutcome, refresh_interaction, resolve_interaction,
 };
 
 const NOW: i64 = 1_700_000_000_000;
@@ -214,6 +214,67 @@ impl Fixture {
         }
     }
 
+    fn consent_target(&self) -> floe_conversation::RecipientConsentTarget {
+        floe_conversation::RecipientConsentTarget {
+            recipient: "model.example".into(),
+            profile_id: "server-model".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: "conversation.root".into(),
+            input_data_classes: vec![floe_agent_contract::DataClass::Personal],
+            source_scopes: vec![],
+            lineage: floe_agent_contract::RecipientLineage::try_new(
+                self.session_id,
+                self.run_id.as_uuid(),
+            )
+            .unwrap(),
+            device_id: DEVICE.into(),
+            projection_ref: Uuid::new_v4(),
+            projection_revision: 1,
+        }
+    }
+
+    async fn seed_consent(&self) -> floe_conversation::ConversationInteraction {
+        let attempt_id = Uuid::new_v4();
+        {
+            let mut journal = self.runs.journal.lock().unwrap();
+            let revision = journal.len() as u64 + 1;
+            journal.push(floe_conversation::JournalEntry {
+                revision,
+                event: JournalEvent::ModelIntent {
+                    attempt_id,
+                    projection_ref: floe_agent_contract::ProjectionRef::new(),
+                },
+            });
+        }
+        let admission = floe_conversation::publish_interaction(
+            &self.runs,
+            &self.repo,
+            floe_conversation::PublishInteractionRequest {
+                principal: self.principal(),
+                session_id: self.session_id,
+                origin_run_id: self.run_id,
+                origin: floe_conversation::InteractionOrigin::Model { attempt_id },
+                kind: floe_agent_contract::UserInteractionKind::ProcessingRecipient,
+                requirement: floe_conversation::InteractionRequirement {
+                    kind: floe_conversation::InteractionRequirementKind::ApproveProcessingRecipient,
+                    source_id: "model.example".into(),
+                    connection_id: None,
+                    consumer: "conversation.root".into(),
+                    purpose: "everyday_assistance".into(),
+                    inline: true,
+                },
+                target: floe_conversation::ReviewedTarget::RecipientConsent(self.consent_target()),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+        match admission {
+            floe_conversation::PublishAdmission::Created(record) => record,
+            floe_conversation::PublishAdmission::Existing(record) => record,
+        }
+    }
+
     fn resolve_command(
         &self,
         current: &floe_conversation::ConversationInteraction,
@@ -328,6 +389,11 @@ struct Script {
     mutations: usize,
     nav_usable: bool,
     nav_satisfied: bool,
+    consents: std::collections::HashMap<Uuid, floe_access::RecipientConsent>,
+    grant_failures: VecDeque<AgentFailure>,
+    consent_grants: usize,
+    consent_checks: usize,
+    consent_client: String,
 }
 
 #[derive(Clone)]
@@ -346,6 +412,11 @@ impl ScriptedOwners {
                 mutations: 0,
                 nav_usable: true,
                 nav_satisfied: false,
+                consents: std::collections::HashMap::new(),
+                grant_failures: VecDeque::new(),
+                consent_grants: 0,
+                consent_checks: 0,
+                consent_client: "client".into(),
             })),
         }
     }
@@ -401,6 +472,79 @@ impl InlineOwnerMutation for ScriptedOwners {
         script.mutations += 1;
         let result = script.mutation_results.pop_front().unwrap_or(Ok(()));
         Box::pin(async move { result })
+    }
+}
+
+impl RecipientConsentOwner for ScriptedOwners {
+    fn grant_reviewed<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<floe_access::RecipientConsent, AgentFailure>> {
+        let mut script = self.script.lock().unwrap();
+        script.consent_grants += 1;
+        if let Some(failure) = script.grant_failures.pop_front() {
+            return Box::pin(async move { Err(failure) });
+        }
+        let now = chrono::DateTime::from_timestamp_millis(now_unix_ms);
+        let client = script.consent_client.clone();
+        let result = match now {
+            Some(now) => floe_access::RecipientConsent::try_new(
+                person_id,
+                device_id.to_owned(),
+                client,
+                target.recipient.clone(),
+                target.profile_id.clone(),
+                target.purpose.clone(),
+                target.consumer.clone(),
+                target.input_data_classes.clone(),
+                target.source_scopes.clone(),
+                target.lineage,
+                target.projection_ref,
+                target.projection_revision,
+                now,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)
+            .map(|consent| {
+                script.consents.insert(consent.id(), consent.clone());
+                consent
+            }),
+            None => Err(AgentFailure::InvalidInput),
+        };
+        Box::pin(async move { result })
+    }
+
+    fn usable_consent<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        let mut script = self.script.lock().unwrap();
+        script.consent_checks += 1;
+        let Some(now) = chrono::DateTime::from_timestamp_millis(now_unix_ms) else {
+            return Box::pin(async move { Err(AgentFailure::InvalidInput) });
+        };
+        let id = floe_access::recipient_consent_id(
+            person_id,
+            device_id,
+            &script.consent_client,
+            &target.recipient,
+            &target.profile_id,
+            &target.purpose,
+            &target.consumer,
+            &target.input_data_classes,
+            &target.source_scopes,
+            target.lineage,
+        );
+        let usable = script
+            .consents
+            .get(&id)
+            .is_some_and(|consent| consent.is_usable_at(now));
+        Box::pin(async move { Ok(usable) })
     }
 }
 
@@ -491,6 +635,7 @@ async fn deny_records_denied_without_owner_contact() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.resolve_command(&current, floe_conversation::InteractionDecisionKind::Deny),
         &fixture.cancellation,
@@ -527,6 +672,7 @@ async fn dismiss_cancels_pending_without_owner_contact() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -571,6 +717,7 @@ async fn approve_precondition_mutates_once_with_stable_operation_id() {
             owners: owners.clone(),
             flip_to: live_satisfied(),
         },
+        &owners,
         &fixture.caller,
         command,
         &fixture.cancellation,
@@ -640,6 +787,7 @@ async fn double_allow_same_command_resolves_once() {
         &fixture.repo,
         &owners,
         &mutation,
+        &owners,
         &fixture.caller,
         command.clone(),
         &fixture.cancellation,
@@ -658,6 +806,7 @@ async fn double_allow_same_command_resolves_once() {
         &fixture.repo,
         &owners,
         &mutation,
+        &owners,
         &fixture.caller,
         command,
         &fixture.cancellation,
@@ -701,6 +850,7 @@ async fn same_command_different_digest_conflicts_without_mutation() {
         &fixture.repo,
         &owners,
         &mutation,
+        &owners,
         &fixture.caller,
         command.clone(),
         &fixture.cancellation,
@@ -719,6 +869,7 @@ async fn same_command_different_digest_conflicts_without_mutation() {
         &fixture.repo,
         &owners,
         &mutation,
+        &owners,
         &fixture.caller,
         command,
         &fixture.cancellation,
@@ -743,6 +894,7 @@ async fn fresh_approve_with_concurrent_grant_supersedes_with_replacement() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -831,6 +983,7 @@ async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.resolve_command(
             &current,
@@ -860,6 +1013,7 @@ async fn fresh_approve_with_drift_supersedes_without_mutation() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -906,6 +1060,7 @@ async fn foreign_person_session_and_device_are_rejected() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &foreign_person,
         fixture.resolve_command(
             &current,
@@ -926,6 +1081,7 @@ async fn foreign_person_session_and_device_are_rejected() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         command,
         &fixture.cancellation,
@@ -944,6 +1100,7 @@ async fn foreign_person_session_and_device_are_rejected() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &foreign_device,
@@ -980,6 +1137,7 @@ async fn stale_revision_conflicts_without_owner_contact() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         command,
         &fixture.cancellation,
@@ -1006,6 +1164,7 @@ async fn expired_interaction_persists_expired() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1042,6 +1201,7 @@ async fn approve_on_navigation_only_is_rejected() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.resolve_command(
             &current,
@@ -1075,6 +1235,7 @@ async fn refresh_settles_satisfaction_replaces_drift_and_keeps_precondition() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.refresh_command(&satisfied_card),
         &fixture.cancellation,
@@ -1099,6 +1260,7 @@ async fn refresh_settles_satisfaction_replaces_drift_and_keeps_precondition() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.refresh_command(&pending_card),
         &fixture.cancellation,
@@ -1120,6 +1282,7 @@ async fn refresh_settles_satisfaction_replaces_drift_and_keeps_precondition() {
     let outcome = refresh_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1167,6 +1330,7 @@ async fn refresh_reconciles_resolving_by_current_truth() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         command,
         &fixture.cancellation,
@@ -1183,6 +1347,7 @@ async fn refresh_reconciles_resolving_by_current_truth() {
     let outcome = refresh_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1237,6 +1402,7 @@ async fn owner_refusal_after_commit_resolves_and_other_failures_stay_resolving()
             flip,
             flip_to: satisfied,
         },
+        &owners,
         &fixture.caller,
         fixture.resolve_command(
             &current,
@@ -1266,6 +1432,7 @@ async fn owner_refusal_after_commit_resolves_and_other_failures_stay_resolving()
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1306,6 +1473,7 @@ async fn dismiss_cancels_resolving_without_revoking_owner_state() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         approve,
         &fixture.cancellation,
@@ -1328,6 +1496,7 @@ async fn dismiss_cancels_resolving_without_revoking_owner_state() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1357,6 +1526,7 @@ async fn refresh_navigation_settles_satisfaction_and_dead_connections() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.refresh_command(&current),
         &fixture.cancellation,
@@ -1376,6 +1546,7 @@ async fn refresh_navigation_settles_satisfaction_and_dead_connections() {
     let outcome = refresh_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1403,6 +1574,7 @@ async fn refresh_navigation_settles_satisfaction_and_dead_connections() {
     let outcome = refresh_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -1535,6 +1707,7 @@ async fn native_allow_creates_exact_grant_and_resolves() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -1603,6 +1776,7 @@ async fn native_concurrent_enable_conflicts_then_replacement_confirms_without_ne
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -1648,6 +1822,7 @@ async fn native_concurrent_enable_conflicts_then_replacement_confirms_without_ne
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &replacement_target,
@@ -1687,6 +1862,7 @@ async fn native_stale_subject_supersedes_without_mutation() {
     let outcome = resolve_interaction(
         &host.base.runs,
         &host.base.repo,
+        &owners,
         &owners,
         &owners,
         &host.base.caller,
@@ -1811,6 +1987,7 @@ async fn native_commit_then_crash_reopens_and_resolves_without_second_advance() 
         &repo,
         &owners,
         &owners,
+        &owners,
         &caller,
         RefreshInteractionCommand {
             interaction_id: resolving.id,
@@ -1866,6 +2043,7 @@ async fn native_external_enable_refresh_resolves_inspect_does_not() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.refresh_command(&inspected),
         &host.base.cancellation,
@@ -1918,6 +2096,7 @@ async fn native_os_denied_and_deselected_scope_never_falsely_resolve() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -1947,6 +2126,7 @@ async fn native_os_denied_and_deselected_scope_never_falsely_resolve() {
     let outcome = refresh_interaction(
         &host.base.runs,
         &host.base.repo,
+        &owners,
         &owners,
         &owners,
         &host.base.caller,
@@ -1997,6 +2177,7 @@ async fn native_deselected_scope_supersedes_without_mutation() {
     let outcome = resolve_interaction(
         &host.base.runs,
         &host.base.repo,
+        &owners,
         &owners,
         &owners,
         &host.base.caller,
@@ -2060,6 +2241,7 @@ async fn personal_attention_allow_resolves() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -2108,6 +2290,7 @@ async fn sibling_grant_revoked_out_of_band_supersedes_with_absent_replacement() 
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.refresh_command(&current),
         &host.base.cancellation,
@@ -2151,6 +2334,7 @@ async fn sibling_grant_revoked_out_of_band_supersedes_with_absent_replacement() 
     let outcome = resolve_interaction(
         &host.base.runs,
         &host.base.repo,
+        &owners,
         &owners,
         &owners,
         &host.base.caller,
@@ -2492,6 +2676,36 @@ impl ObserveStateReader for RemoteTestOwners<'_> {
     }
 }
 
+impl RecipientConsentOwner for RemoteTestOwners<'_> {
+    fn grant_reviewed<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<floe_access::RecipientConsent, AgentFailure>> {
+        Box::pin(async move {
+            self.host()
+                .grant_reviewed(target, person_id, device_id, now_unix_ms)
+                .await
+        })
+    }
+
+    fn usable_consent<'a>(
+        &'a self,
+        target: &'a floe_conversation::RecipientConsentTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        now_unix_ms: i64,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            self.host()
+                .usable_consent(target, person_id, device_id, now_unix_ms)
+                .await
+        })
+    }
+}
+
 impl InlineOwnerMutation for RemoteTestOwners<'_> {
     fn enable_reviewed<'a>(
         &'a self,
@@ -2567,6 +2781,7 @@ async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -2621,6 +2836,7 @@ async fn gmail_authority_rotation_after_review_supersedes_without_mutation() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -2660,6 +2876,7 @@ async fn gmail_bad_signature_never_mutates_nor_resolves() {
     let outcome = resolve_interaction(
         &host.base.runs,
         &host.base.repo,
+        &owners,
         &owners,
         &owners,
         &host.base.caller,
@@ -2742,6 +2959,7 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base.resolve_command(
             &current,
@@ -2788,6 +3006,7 @@ async fn gmail_reviewed_subset_supersedes_on_canonical_extras() {
     let outcome = resolve_interaction(
         &host.base.runs,
         &host.base.repo,
+        &owners,
         &owners,
         &owners,
         &host.base.caller,
@@ -2853,6 +3072,7 @@ async fn native_grant_paused_out_of_band_supersedes() {
         &host.base.repo,
         &owners,
         &owners,
+        &owners,
         &host.base.caller,
         host.base
             .resolve_command(&paused, floe_conversation::InteractionDecisionKind::Approve),
@@ -2887,6 +3107,7 @@ async fn same_command_different_kind_conflicts() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         command.clone(),
         &fixture.cancellation,
@@ -2905,6 +3126,7 @@ async fn same_command_different_kind_conflicts() {
     let outcome = resolve_interaction(
         &fixture.runs,
         &fixture.repo,
+        &owners,
         &owners,
         &owners,
         &fixture.caller,
@@ -3018,6 +3240,7 @@ async fn gmail_commit_then_crash_reopens_and_resolves_without_second_mutation() 
         &repo,
         &owners,
         &owners,
+        &owners,
         &caller,
         RefreshInteractionCommand {
             interaction_id: resolving.id,
@@ -3067,6 +3290,7 @@ async fn observer_cancellation_never_revokes_a_recorded_decision() {
         &fixture.repo,
         &owners,
         &mutation,
+        &owners,
         &fixture.caller,
         fixture.resolve_command(
             &current,
@@ -3104,6 +3328,7 @@ async fn owner_refusal_on_matching_precondition_supersedes() {
         &fixture.repo,
         &owners,
         &owners,
+        &owners,
         &fixture.caller,
         fixture.resolve_command(
             &current,
@@ -3120,4 +3345,257 @@ async fn owner_refusal_on_matching_precondition_supersedes() {
         }
         other => panic!("must supersede: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn consent_approve_grants_exact_review_and_resolves() {
+    let fixture = Fixture::open().await;
+    let owners = ScriptedOwners::new(live_precondition());
+    let current = fixture.seed_consent().await;
+    let command = fixture.resolve_command(
+        &current,
+        floe_conversation::InteractionDecisionKind::Approve,
+    );
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &owners,
+        &fixture.caller,
+        command,
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let resolved = match outcome {
+        ResolveOutcome::Resolved { interaction } => interaction,
+        other => panic!("must resolve: {other:?}"),
+    };
+    assert!(matches!(
+        resolved.state,
+        floe_conversation::InteractionState::Resolved { .. }
+    ));
+    let script = owners.script.lock().unwrap();
+    assert_eq!(script.consent_grants, 1);
+    assert_eq!(script.consents.len(), 1);
+    let granted = script.consents.values().next().unwrap();
+    let floe_conversation::ReviewedTarget::RecipientConsent(target) = &current.target else {
+        panic!("seeded consent target");
+    };
+    assert_eq!(granted.person_id(), fixture.person);
+    assert_eq!(granted.device_id(), DEVICE);
+    assert_eq!(granted.recipient(), target.recipient);
+    assert_eq!(granted.profile_id(), target.profile_id);
+    assert_eq!(granted.purpose(), target.purpose);
+    assert_eq!(granted.consumer(), target.consumer);
+    assert_eq!(granted.input_data_classes(), target.input_data_classes);
+    assert_eq!(granted.lineage(), target.lineage);
+    assert_eq!(granted.revision(), 1);
+}
+
+#[tokio::test]
+async fn consent_rejoined_command_rejoins_same_consent() {
+    let fixture = Fixture::open().await;
+    let owners = ScriptedOwners::new(live_precondition());
+    let current = fixture.seed_consent().await;
+    // A crash between decision and grant leaves Resolving; the same command
+    // rejoins the claimed operation instead of granting twice.
+    let decision = floe_conversation::DecideInteractionCommand {
+        command_id: Uuid::new_v4(),
+        interaction_id: current.id,
+        principal: fixture.principal(),
+        expected_revision: current.revision,
+        kind: floe_conversation::InteractionDecisionKind::Approve,
+        target_digest: current.target_digest,
+    };
+    let floe_conversation::DecisionAdmission::Applied(_) =
+        floe_conversation::decide_interaction(&fixture.repo, decision.clone(), NOW)
+            .await
+            .unwrap()
+    else {
+        panic!("decision must apply");
+    };
+    let command = ResolveInteractionCommand {
+        interaction_id: current.id,
+        command_id: decision.command_id,
+        session_id: fixture.session_id,
+        expected_revision: current.revision,
+        kind: floe_conversation::InteractionDecisionKind::Approve,
+        target_digest: current.target_digest,
+    };
+    for _ in 0..2 {
+        let outcome = resolve_interaction(
+            &fixture.runs,
+            &fixture.repo,
+            &owners,
+            &owners,
+            &owners,
+            &fixture.caller,
+            command.clone(),
+            &fixture.cancellation,
+            NOW,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, ResolveOutcome::Resolved { .. }));
+    }
+    let script = owners.script.lock().unwrap();
+    assert_eq!(script.consent_grants, 1);
+    assert_eq!(script.consents.len(), 1);
+}
+
+#[tokio::test]
+async fn consent_deny_and_dismiss_mutate_nothing() {
+    for kind in [
+        floe_conversation::InteractionDecisionKind::Deny,
+        floe_conversation::InteractionDecisionKind::Dismiss,
+    ] {
+        let fixture = Fixture::open().await;
+        let owners = ScriptedOwners::new(live_precondition());
+        let current = fixture.seed_consent().await;
+        let outcome = resolve_interaction(
+            &fixture.runs,
+            &fixture.repo,
+            &owners,
+            &owners,
+            &owners,
+            &fixture.caller,
+            fixture.resolve_command(&current, kind),
+            &fixture.cancellation,
+            NOW,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            ResolveOutcome::Denied { .. } | ResolveOutcome::Cancelled { .. }
+        ));
+        let script = owners.script.lock().unwrap();
+        assert_eq!(script.consent_grants, 0);
+        assert!(script.consents.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn consent_grant_failure_fails_closed_and_refresh_reconciles() {
+    let fixture = Fixture::open().await;
+    let owners = ScriptedOwners::new(live_precondition());
+    owners
+        .script
+        .lock()
+        .unwrap()
+        .grant_failures
+        .push_back(AgentFailure::PolicyDenied);
+    let current = fixture.seed_consent().await;
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &owners,
+        &fixture.caller,
+        fixture.resolve_command(&current, floe_conversation::InteractionDecisionKind::Approve),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await;
+    assert!(matches!(outcome, Err(AgentFailure::PolicyDenied)));
+    // No resolution without the consent: the card stays Resolving.
+    let stored = floe_conversation::InteractionRepository::get_interaction(
+        &fixture.repo,
+        fixture.person,
+        current.id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        stored.state,
+        floe_conversation::InteractionState::Resolving { .. }
+    ));
+    // Once the owner succeeds, refresh reconciles the claimed operation.
+    let outcome = refresh_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &owners,
+        &fixture.caller,
+        fixture.refresh_command(&stored),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, RefreshOutcome::Resolved { .. }));
+    let script = owners.script.lock().unwrap();
+    assert_eq!(script.consent_grants, 2);
+    assert_eq!(script.consents.len(), 1);
+}
+
+#[tokio::test]
+async fn consent_refresh_settles_existing_usable_consent_without_new_grant() {
+    let fixture = Fixture::open().await;
+    let owners = ScriptedOwners::new(live_precondition());
+    let current = fixture.seed_consent().await;
+    // An identical parallel review granted first: refresh settles without
+    // granting again.
+    let floe_conversation::ReviewedTarget::RecipientConsent(target) = &current.target else {
+        panic!("seeded consent target");
+    };
+    owners
+        .grant_reviewed(target, fixture.person, DEVICE, NOW)
+        .await
+        .unwrap();
+    let outcome = refresh_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &owners,
+        &fixture.caller,
+        fixture.refresh_command(&current),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, RefreshOutcome::Resolved { .. }));
+    let script = owners.script.lock().unwrap();
+    assert_eq!(script.consent_grants, 1);
+    assert!(script.consent_checks >= 1);
+}
+
+#[tokio::test]
+async fn consent_wrong_device_never_grants() {
+    let fixture = Fixture::open().await;
+    let owners = ScriptedOwners::new(live_precondition());
+    let current = fixture.seed_consent().await;
+    let foreign_device = crate::CallerContext::verified(
+        crate::LocalIdentityClaim {
+            person_id: fixture.person.0,
+            device_id: "foreign-device".into(),
+        },
+        1,
+    )
+    .unwrap();
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &owners,
+        &foreign_device,
+        fixture.resolve_command(&current, floe_conversation::InteractionDecisionKind::Approve),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, ResolveOutcome::WrongDevice { .. }));
+    let script = owners.script.lock().unwrap();
+    assert_eq!(script.consent_grants, 0);
+    assert!(script.consents.is_empty());
 }

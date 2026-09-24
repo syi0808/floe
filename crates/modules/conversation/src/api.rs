@@ -17,6 +17,13 @@ pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing a
 pub const MANAGER_OUTPUT_CONTRACT: &str =
     "Return one user-facing answer or one registered delegation.";
 pub const CONVERSATION_MODEL_CONSUMER: &str = "conversation.root";
+/// Deterministic source-independent limitation for a blocked model dispatch.
+///
+/// A Manager cannot explain a denial by calling the very unapproved model,
+/// so Conversation completes the original Run with this controlled copy plus
+/// the durable interaction. Fixed text: no source names, no recipient
+/// interpolation, no model output. The card discloses the exact review.
+pub const MODEL_CONSENT_LIMITATION: &str = "The selected model needs your approval before it can process this request. No data has been sent. Review the pending request to continue.";
 
 #[derive(Clone, Debug)]
 pub struct ManagerConfig {

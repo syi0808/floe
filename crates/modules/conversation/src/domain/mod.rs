@@ -17,9 +17,10 @@ pub use interaction::{
     ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InlineObserveTarget,
     InteractionDecision, InteractionDecisionKind, InteractionOrigin, InteractionRequirement,
     InteractionRequirementKind, InteractionResolution, InteractionState,
-    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
-    MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
-    MAX_TARGET_BUNDLE_MEMBERS, NavigationDestination, NavigationOnlyTarget, PublishAdmission,
+    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RECIPIENT_CONSENT_TARGET_BYTES,
+    MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
+    MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
+    NavigationDestination, NavigationOnlyTarget, PublishAdmission, RecipientConsentTarget,
     ReviewedBundleMember, ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
     canonical_target_digest, decision_operation_id, interaction_publication_id,
     next_state_after_decision, state_after_resolution,
@@ -489,6 +490,15 @@ pub struct RunTerminal {
     pub steps: Vec<EngineStep>,
     pub coverage: DependencyCoverage,
     pub issue: Option<AgentFailure>,
+    /// Interactions this completion references beyond settled step artifacts.
+    ///
+    /// Set explicitly by Conversation for completions the model did not
+    /// author (deterministic no-model limitation): the repository projects
+    /// one immutable Interaction message per ref. Model-authored Answers
+    /// never project refs, so model output cannot inject interaction
+    /// messages; only this owner-set linkage and trusted-port step
+    /// artifacts do.
+    pub interactions: Vec<floe_agent_contract::UserInteractionRef>,
 }
 
 impl RunTerminal {
@@ -500,6 +510,16 @@ impl RunTerminal {
                 .as_ref()
                 .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
             || self.steps.len() > floe_agent_contract::MAX_AGENT_MESSAGES
+            || self.interactions.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
+            || self.interactions.iter().any(|reference| reference.validate().is_err())
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut seen = std::collections::HashSet::new();
+        if self
+            .interactions
+            .iter()
+            .any(|reference| !seen.insert(reference.interaction_id))
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -555,6 +575,7 @@ impl RunTerminal {
             steps: vec![],
             coverage: DependencyCoverage::Unknown,
             issue: Some(failure),
+            interactions: vec![],
         }
     }
 }
