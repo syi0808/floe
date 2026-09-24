@@ -180,58 +180,25 @@ void main() {
     expect(find.text('Available'), findsOneWidget);
   });
 
-  testWidgets('connection grants stay bound to the displayed connection', (
+  testWidgets('Use with Floe stays bound to the displayed connection', (
     tester,
   ) async {
     final actions = <Map<String, Object?>>[];
     final gateway = NativeRemoteAccessGateway((request) async {
       final operation = Map<String, Object?>.from(request['operation']! as Map);
-      if (operation['kind'] == 'read_result') return _grantSuccess(request);
-      final action = operation;
-      actions.add(action);
-      final kind = action['kind'];
-      final payload = kind == 'calendar_grant_preview'
-          ? {
-              'calendar_preview': {
-                'schema_version': 1,
-                'person_id': _connection.personId,
-                'connector_id': 'calendar.google',
-                'connection_id': action['connection_id'],
-                'resource': 'primary',
-                'source_authority': <String, Object?>{},
-                'provider_identity': 'google:fixture',
-                'execution_owner': 'server-owner',
-                'producer': _producer,
-                'consumers': <String>['floe.builtin.schedule'],
-                'purpose': 'everyday_assistance',
-                'recipient': 'local_only',
-                'grant_id': '00000000-0000-4000-8000-000000000010',
-                'grant_authority': {
-                  'incarnation': 'fixture',
-                  'access_epoch': 1,
-                },
-                'consumer_policy': {'incarnation': 'policy', 'epoch': 1},
-              },
-            }
-          : {
-              'calendar_grant': {
-                'schema_version': 1,
-                'person_id': _connection.personId,
-                'grant_id': '00000000-0000-4000-8000-000000000010',
-                'grant_authority': {'incarnation': 'fixture', 'epoch': 1},
-                'connector_id': 'calendar.google',
-                'connection_id': action['connection_id'],
-                'resource': 'primary',
-                'source_authority': <String, Object?>{},
-                'execution_owner': 'server-owner',
-                'state': 'active',
-                'review_required': false,
-                'consumers': <String>['floe.builtin.schedule'],
-                'purpose': 'everyday_assistance',
-                'recipient': 'local_only',
-              },
-            };
-      return _grantSuccess(request, payload);
+      if (operation['kind'] == 'read_result') {
+        return _grantSuccess(request, {
+          'connection_observe_status': actions.last['enabled'] == false
+              ? 'paused'
+              : 'active',
+        });
+      }
+      actions.add(operation);
+      return _grantSuccess(request, {
+        'connection_observe_status': operation['enabled'] == false
+            ? 'paused'
+            : 'active',
+      });
     });
     final first = _calendarConnector('00000000-0000-4000-8000-000000000011');
     await tester.pumpWidget(
@@ -250,40 +217,18 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('connection-calendar-preview')),
+      find.byKey(const ValueKey('connection-use-with-floe')),
       findsOneWidget,
     );
-    expect(
-      tester
-          .widget<FloeButton>(
-            find.byKey(const ValueKey('connection-calendar-preview')),
-          )
-          .onPressed,
-      isNotNull,
-    );
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('connection-calendar-preview')),
-    );
-    await tester.tap(find.byKey(const ValueKey('connection-calendar-preview')));
-    await tester.pumpAndSettle();
     expect(actions.single['connection_id'], first.connectionId);
-    await tester.tap(find.byKey(const ValueKey('connection-calendar-review')));
+    expect(actions.single['enabled'], isNull);
+
+    await tester.tap(find.byKey(const ValueKey('connection-use-with-floe')));
     await tester.pumpAndSettle();
     expect(actions[1]['connection_id'], first.connectionId);
-    expect(
-      actions[1]['expected_grant_id'],
-      '00000000-0000-4000-8000-000000000010',
-    );
-    expect(
-      actions[1]['expected_grant_authority'],
-      {'incarnation': 'fixture', 'access_epoch': 1},
-    );
-    expect(
-      actions[1]['expected_consumer_policy'],
-      {'incarnation': 'policy', 'epoch': 1},
-    );
-    expect(actions[1]['expected_source_authority'], <String, Object?>{});
+    expect(actions[1]['enabled'], false);
 
     final second = _calendarConnector('00000000-0000-4000-8000-000000000012');
     await tester.pumpWidget(
@@ -302,15 +247,9 @@ void main() {
         ),
       ),
     );
-    expect(
-      find.byKey(const ValueKey('connection-calendar-preview')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('connection-calendar-review')),
-      findsNothing,
-    );
-    expect(actions, hasLength(2));
+    await tester.pumpAndSettle();
+    expect(actions.last['connection_id'], second.connectionId);
+    expect(actions.last['enabled'], isNull);
   });
 
   testWidgets('non-calendar connector does not expose calendar grants', (

@@ -191,6 +191,29 @@ where
         })
     }
 
+    fn result_bound(
+        call: &ToolCall,
+        payload: &serde_json::Value,
+        bindings: &[floe_context_contract::AuthorizedSourceBinding],
+    ) -> Result<ToolResult, AgentFailure> {
+        let mut coverage = DependencyCoverage::Independent;
+        for binding in bindings {
+            coverage = coverage
+                .merge(
+                    &DependencyCoverage::dependent(binding.dependency.clone())
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+        }
+        Ok(ToolResult {
+            call_id: call.call_id,
+            text: serde_json::to_string(payload).map_err(|_| AgentFailure::InvalidInput)?,
+            artifacts: vec![],
+            coverage,
+            issue: None,
+        })
+    }
+
     async fn read_remote(
         &self,
         source_id: &str,
@@ -205,8 +228,7 @@ where
         let prepared: PreparedContext<'_> = service.prepare(self.person_id)?;
         let request = prepared.source_request(
             source_id,
-            GrantConsumer::builtin(ASSISTANT_CONSUMER)
-                .map_err(|_| AgentFailure::InvalidInput)?,
+            GrantConsumer::builtin(ASSISTANT_CONSUMER).map_err(|_| AgentFailure::InvalidInput)?,
             GrantPurpose::Assistant,
             query,
             scope.deadline(),
@@ -323,7 +345,7 @@ where
                             scope,
                         )
                         .await?;
-                    Self::result(&call, source_view.payload(), source_view.dependency().clone())
+                    Self::result_bound(&call, source_view.payload(), source_view.bindings())
                 }
                 WORK_CONTEXT_READ => {
                     Self::empty_input(&call)?;
@@ -336,7 +358,7 @@ where
                             scope,
                         )
                         .await?;
-                    Self::result(&call, source_view.payload(), source_view.dependency().clone())
+                    Self::result_bound(&call, source_view.payload(), source_view.bindings())
                 }
                 LIFE_LOGISTICS_READ => {
                     Self::empty_input(&call)?;
@@ -349,7 +371,7 @@ where
                             scope,
                         )
                         .await?;
-                    Self::result(&call, source_view.payload(), source_view.dependency().clone())
+                    Self::result_bound(&call, source_view.payload(), source_view.bindings())
                 }
                 _ => Err(AgentFailure::CapabilityDenied),
             }
@@ -367,9 +389,7 @@ mod tests {
         ConsumerPolicyAuthority, DataAccessGrant, FeasibilityGrantQuery, GrantDataCategory,
         GrantId, GrantOperation, GrantPurpose, GrantScope, ResourceHandle, SourceAuthority,
     };
-    use floe_agent_contract::{
-        AGENT_VERSION, AgentFailure, BoxFuture, InvocationKey, ToolCall,
-    };
+    use floe_agent_contract::{AGENT_VERSION, AgentFailure, BoxFuture, InvocationKey, ToolCall};
     use floe_context_contract::{
         ConnectionId, ConnectorId, ContextDependency, ExecutionOwnerId, GrantAuthority,
         GrantConsumer, GrantSourceBinding, ProcessingRestriction,
@@ -385,8 +405,7 @@ mod tests {
     use crate::ports::source_reader::{SourceKey, SourceRead, SourceReadRequest};
 
     const DEVICE: &str = "device";
-    const SUBJECT: &str =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SUBJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn scope_fixture(resource: &str) -> GrantScope {
         GrantScope::try_new(
@@ -402,9 +421,13 @@ mod tests {
 
     fn active_grant(source: floe_access::GrantSourceBinding, resource: &str) -> DataAccessGrant {
         let scope = scope_fixture(resource);
-        let mut grant =
-            DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source.clone(), scope.clone())
-                .unwrap();
+        let mut grant = DataAccessGrant::new(
+            GrantId::new(),
+            Uuid::new_v4(),
+            source.clone(),
+            scope.clone(),
+        )
+        .unwrap();
         grant
             .activate_review(grant.authority(), source, scope)
             .unwrap();
@@ -876,7 +899,10 @@ mod tests {
     #[tokio::test]
     async fn mail_input_bounds_remain_enforced() {
         let person_id = PersonId::new();
-        let remote = StaticRemote::new(vec![("mail.communication", serde_json::json!({"hits": []}))]);
+        let remote = StaticRemote::new(vec![(
+            "mail.communication",
+            serde_json::json!({"hits": []}),
+        )]);
         let service = service(person_id, Some(remote));
         let scope = scope();
         for input in [
@@ -901,7 +927,10 @@ mod tests {
         assert_eq!(
             service
                 .invoke(
-                    call(MAIL_COMMUNICATION_READ, &format!(r#"{{"query": "{long}"}}"#)),
+                    call(
+                        MAIL_COMMUNICATION_READ,
+                        &format!(r#"{{"query": "{long}"}}"#)
+                    ),
                     &scope,
                 )
                 .await
@@ -917,7 +946,10 @@ mod tests {
             LIFE_LOGISTICS_READ,
         ] {
             assert_eq!(
-                service.invoke(call(tool, r#"{"extra": true}"#), &scope).await.err(),
+                service
+                    .invoke(call(tool, r#"{"extra": true}"#), &scope)
+                    .await
+                    .err(),
                 Some(AgentFailure::InvalidInput),
                 "{tool} takes an empty object only"
             );
@@ -960,7 +992,10 @@ mod tests {
         let scope = scope();
         let mail = service
             .invoke(
-                call(MAIL_COMMUNICATION_READ, r#"{"query": "invoice", "limit": 5}"#),
+                call(
+                    MAIL_COMMUNICATION_READ,
+                    r#"{"query": "invoice", "limit": 5}"#,
+                ),
                 &scope,
             )
             .await
@@ -989,7 +1024,10 @@ mod tests {
     #[tokio::test]
     async fn mail_defaults_apply_when_fields_are_absent() {
         let person_id = PersonId::new();
-        let remote = StaticRemote::new(vec![("mail.communication", serde_json::json!({"hits": []}))]);
+        let remote = StaticRemote::new(vec![(
+            "mail.communication",
+            serde_json::json!({"hits": []}),
+        )]);
         let seen = remote.seen_handle();
         let service = ContextToolService::new(
             person_id,
@@ -1019,7 +1057,11 @@ mod tests {
         let person_id = PersonId::new();
         let service = service(person_id, None);
         let scope = scope();
-        for tool_id in [MAIL_COMMUNICATION_READ, WORK_CONTEXT_READ, LIFE_LOGISTICS_READ] {
+        for tool_id in [
+            MAIL_COMMUNICATION_READ,
+            WORK_CONTEXT_READ,
+            LIFE_LOGISTICS_READ,
+        ] {
             let input = if tool_id == MAIL_COMMUNICATION_READ {
                 r#"{"query": "x"}"#
             } else {

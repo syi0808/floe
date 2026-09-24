@@ -1,7 +1,9 @@
 use std::io::{self, Write};
 
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{ContextDependency, GrantScope, validate_stored_dependency};
+use floe_context_contract::{
+    AuthorizedSourceBinding, ContextDependency, GrantScope, validate_stored_dependency,
+};
 use serde::Serialize;
 use tokio::time::Instant;
 
@@ -60,8 +62,7 @@ impl Write for BoundedByteCounter {
 }
 
 pub struct SourceView<Payload: Serialize> {
-    dependency: ContextDependency,
-    scope: GrantScope,
+    bindings: Vec<AuthorizedSourceBinding>,
     payload: Payload,
     deadline: Instant,
     _reservation: SourceLeaseReservation,
@@ -75,32 +76,53 @@ impl<Payload: Serialize> SourceView<Payload> {
         deadline: Instant,
         reservation: SourceLeaseReservation,
     ) -> Result<Self, AgentFailure> {
-        validate_stored_dependency(&dependency).map_err(|_| AgentFailure::InvalidInput)?;
-        validate_source_scope(&dependency, &scope)?;
+        Self::try_new_bound(
+            vec![AuthorizedSourceBinding { dependency, scope }],
+            payload,
+            deadline,
+            reservation,
+        )
+    }
+
+    pub fn try_new_bound(
+        bindings: Vec<AuthorizedSourceBinding>,
+        payload: Payload,
+        deadline: Instant,
+        reservation: SourceLeaseReservation,
+    ) -> Result<Self, AgentFailure> {
+        if bindings.is_empty() || bindings.len() > floe_context_contract::MAX_CONTEXT_DEPENDENCIES {
+            return Err(AgentFailure::InvalidInput);
+        }
+        for binding in &bindings {
+            validate_stored_dependency(&binding.dependency)
+                .map_err(|_| AgentFailure::InvalidInput)?;
+            validate_source_scope(&binding.dependency, &binding.scope)?;
+        }
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
         }
-        reservation
-            .validate_binding(dependency.person_id(), dependency.process_incarnation_id())?;
+        let first = &bindings[0].dependency;
+        if bindings.iter().any(|binding| {
+            binding.dependency.person_id() != first.person_id()
+                || binding.dependency.process_incarnation_id() != first.process_incarnation_id()
+        }) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        reservation.validate_binding(first.person_id(), first.process_incarnation_id())?;
         bounded_serialized_size(&payload, reservation.byte_allowance())?;
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
         }
         Ok(Self {
-            dependency,
-            scope,
+            bindings,
             payload,
             deadline,
             _reservation: reservation,
         })
     }
 
-    pub fn dependency(&self) -> &ContextDependency {
-        &self.dependency
-    }
-
-    pub fn scope(&self) -> &GrantScope {
-        &self.scope
+    pub fn bindings(&self) -> &[AuthorizedSourceBinding] {
+        &self.bindings
     }
 
     pub fn payload(&self) -> &Payload {
@@ -270,8 +292,8 @@ mod tests {
             reservation,
         )
         .unwrap();
-        assert_eq!(view.dependency(), &dependency);
-        assert_eq!(view.scope(), &scope);
+        assert_eq!(view.bindings()[0].dependency, dependency);
+        assert_eq!(view.bindings()[0].scope, scope);
         assert_eq!(view.payload(), "payload");
         assert!(view.is_fresh());
     }
@@ -446,12 +468,8 @@ mod tests {
 
 /// What any held read was admitted under, whatever it carries.
 impl<Payload: Serialize> floe_context_contract::HeldGrant for SourceView<Payload> {
-    fn scope(&self) -> &GrantScope {
-        &self.scope
-    }
-
-    fn dependency(&self) -> &ContextDependency {
-        &self.dependency
+    fn bindings(&self) -> &[AuthorizedSourceBinding] {
+        &self.bindings
     }
 }
 

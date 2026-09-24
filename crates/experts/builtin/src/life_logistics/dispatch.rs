@@ -20,11 +20,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             serde_json::json!({ "schema_version": AGENT_VERSION }),
         )
         .await?;
-    host.record_dependency(
-        request.task_id,
-        request.task_id,
-        source_view.dependency().clone(),
-    )?;
+    for binding in source_view.bindings() {
+        host.record_dependency(request.task_id, request.task_id, binding.dependency.clone())?;
+    }
     let view: LogisticsView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let model = host.model();

@@ -81,41 +81,44 @@ impl PreparedContext<'_> {
             observation = reader.read(request) => observation?,
         };
         check_window(request)?;
-        let dependency = source_read.dependency();
-        validate_dependency_freshness(dependency, chrono::Utc::now()).map_err(
-            |error| match error {
-                ContextDependencyError::Expired => AgentFailure::StaleContext,
-                ContextDependencyError::Unauthorized => AgentFailure::PolicyDenied,
-                _ => AgentFailure::VaultUnavailable,
-            },
-        )?;
-        super::source_view::validate_source_scope(dependency, source_read.scope())
-            .map_err(|_| AgentFailure::PolicyDenied)?;
-        if source_read.source() != request.source()
-            || dependency.person_id() != self.person_id
-            || dependency.operation() != GrantOperation::Read
-            || dependency.purpose() != request.purpose()
-            || dependency.consumer() != request.consumer()
-            || dependency.process_incarnation_id() != request.process_incarnation_id()
-            || dependency.query_fingerprint() != request.query_fingerprint()
-        {
+        if source_read.source() != request.source() || source_read.bindings().is_empty() {
             return Err(AgentFailure::PolicyDenied);
         }
         let now = chrono::Utc::now();
-        let wall_remaining = dependency
-            .expires_at()
-            .signed_duration_since(now)
-            .to_std()
-            .map_err(|_| AgentFailure::StaleContext)?;
-        let effective_deadline = request.deadline().min(
-            tokio::time::Instant::now()
-                .checked_add(wall_remaining)
-                .ok_or(AgentFailure::StaleContext)?,
-        );
-        let (payload, dependency, scope) = source_read.into_parts();
+        let mut effective_deadline = request.deadline();
+        for binding in source_read.bindings() {
+            let dependency = &binding.dependency;
+            validate_dependency_freshness(dependency, now).map_err(|error| match error {
+                ContextDependencyError::Expired => AgentFailure::StaleContext,
+                ContextDependencyError::Unauthorized => AgentFailure::PolicyDenied,
+                _ => AgentFailure::VaultUnavailable,
+            })?;
+            super::source_view::validate_source_scope(dependency, &binding.scope)
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+            if dependency.person_id() != self.person_id
+                || dependency.operation() != GrantOperation::Read
+                || dependency.purpose() != request.purpose()
+                || dependency.consumer() != request.consumer()
+                || dependency.process_incarnation_id() != request.process_incarnation_id()
+                || dependency.query_fingerprint() != request.query_fingerprint()
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let wall_remaining = dependency
+                .expires_at()
+                .signed_duration_since(now)
+                .to_std()
+                .map_err(|_| AgentFailure::StaleContext)?;
+            effective_deadline = effective_deadline.min(
+                tokio::time::Instant::now()
+                    .checked_add(wall_remaining)
+                    .ok_or(AgentFailure::StaleContext)?,
+            );
+        }
+        let (payload, bindings) = source_read.into_parts();
         let payload_size = super::source_view::bounded_serialized_size(&payload, MAX_LEASE_BYTES)?;
         let reservation = self.leases.reserve(self.person_id, payload_size)?;
-        SourceView::try_new(dependency, scope, payload, effective_deadline, reservation)
+        SourceView::try_new_bound(bindings, payload, effective_deadline, reservation)
     }
 }
 

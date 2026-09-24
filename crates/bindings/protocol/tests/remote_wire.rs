@@ -87,57 +87,13 @@ fn pairing_contract_roundtrips_only_setup_intent_and_signed_evidence() {
 #[test]
 fn remote_access_rejects_all_transport_and_identity_fields() {
     let connection = Uuid::new_v4();
-    let source = json!({"connector_id": "google", "connection_id": connection, "resource": "calendar.timeline:test"});
-    let mut commands = vec![
+    let commands = vec![
         json!({"kind": "inspect_producer"}),
         json!({"kind": "review_and_enroll", "producer": producer()}),
         json!({"kind": "enrollment_status", "enrollment_id": Uuid::new_v4()}),
+        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": connection, "resource": "primary", "enabled": true}),
         json!({"kind": "read_result", "operation_id": Uuid::new_v4(), "release": true}),
     ];
-    for kind in [
-        "calendar_grant_preview",
-        "calendar_grant_review",
-        "view_grant_preview",
-        "view_grant_review",
-    ] {
-        let mut command = source.clone();
-        command["kind"] = json!(kind);
-        if kind.starts_with("view") {
-            command["view_id"] = json!("mail.communication");
-            command["consumer"] = json!("communication");
-        }
-        if kind.ends_with("_review") {
-            command["expected_producer_fingerprint"] = json!("fingerprint");
-        }
-        if kind == "view_grant_review" {
-            command["expected_source_authority"] =
-                json!({"incarnation": Uuid::new_v4(), "epoch": 1});
-            command["expected_connection_revision"] = json!(2);
-            command["expected_provider_identity"] = json!("provider");
-            command["expected_recipient"] = json!("recipient");
-        }
-        if kind == "calendar_grant_review" {
-            command["expected_source_authority"] =
-                json!({"incarnation": Uuid::new_v4(), "epoch": 1});
-            command["expected_grant_id"] = Value::Null;
-            command["expected_grant_authority"] = Value::Null;
-            command["expected_consumer_policy"] = Value::Null;
-        }
-        commands.push(command);
-    }
-    for kind in [
-        "calendar_grant_status",
-        "calendar_grant_pause",
-        "view_grant_status",
-        "view_grant_pause",
-    ] {
-        let mut command = json!({"kind": kind, "grant_id": Uuid::new_v4()});
-        if kind.ends_with("pause") {
-            command["expected_authority"] =
-                json!({"incarnation": Uuid::new_v4(), "access_epoch": 1});
-        }
-        commands.push(command);
-    }
     for command in commands {
         let request = envelope(command);
         let decoded: RemoteAccessRequestDto = serde_json::from_value(request.clone()).unwrap();
@@ -209,11 +165,9 @@ fn remote_requests_reject_invalid_versions_ids_and_bounds() {
     );
     for operation in [
         json!({"kind": "enrollment_status", "enrollment_id": "invalid"}),
-        json!({"kind": "calendar_grant_preview", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "x".repeat(2049)}),
+        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": Uuid::new_v4(), "resource": "x".repeat(2049), "enabled": true}),
         json!({"kind": "read_result", "operation_id": Uuid::nil(), "release": false}),
-        json!({"kind": "calendar_grant_review", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "primary", "expected_producer_fingerprint": "fingerprint", "expected_source_authority": {"incarnation": Uuid::nil(), "epoch": 1}, "expected_grant_id": Value::Null, "expected_grant_authority": Value::Null, "expected_consumer_policy": Value::Null}),
-        json!({"kind": "calendar_grant_review", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "primary", "expected_producer_fingerprint": "fingerprint", "expected_source_authority": {"incarnation": Uuid::new_v4(), "epoch": 1}, "expected_grant_id": Uuid::new_v4(), "expected_grant_authority": Value::Null, "expected_consumer_policy": Value::Null}),
-        json!({"kind": "calendar_grant_review", "connector_id": "google", "connection_id": Uuid::new_v4(), "resource": "primary", "expected_producer_fingerprint": "fingerprint", "expected_source_authority": {"incarnation": Uuid::new_v4(), "epoch": 1}, "expected_grant_id": Uuid::new_v4(), "expected_grant_authority": {"incarnation": Uuid::new_v4(), "access_epoch": 1}, "expected_consumer_policy": Value::Null}),
+        json!({"kind": "connection_observe", "connector_id": "calendar.google", "connection_id": "invalid", "resource": "primary", "enabled": true}),
     ] {
         assert!(
             serde_json::from_value::<RemoteAccessRequestDto>(envelope(operation))

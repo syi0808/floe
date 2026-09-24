@@ -15,8 +15,8 @@ use floe_context_contract::{
 };
 use floe_kernel::{AgentFailure, PersonId};
 
-use crate::application::grants::validate_grant_expectation;
 use crate::GrantState;
+use crate::application::grants::validate_grant_expectation;
 use crate::application::remote_authority::admit_enrollment_pairing;
 use crate::application::remote_view::RemoteViewSourceReference;
 use crate::application::remote_view::{RemoteProducerIdentity, producer_is_pinned};
@@ -242,18 +242,12 @@ pub async fn preview_remote_calendar_grant(
         .await?;
     source_matches_producer(&reference, &producer)?;
     let source = remote_calendar_source(request.person_id, &reference)?;
-    let current = store
-        .find_calendar_grant(&source, request.resource)
-        .await?;
+    let current = store.find_calendar_grant(&source, request.resource).await?;
     let (grant_id, grant_authority, consumer_policy) = match current {
         None => (None, None, None),
         Some(grant) => {
             let policy = store.calendar_grant_policy(grant.id()).await?;
-            (
-                Some(grant.id()),
-                Some(grant.authority()),
-                Some(policy),
-            )
+            (Some(grant.id()), Some(grant.authority()), Some(policy))
         }
     };
     Ok(RemoteCalendarGrantPreview {
@@ -350,17 +344,15 @@ pub async fn pause_remote_calendar_grant(
 mod tests {
     use std::sync::Mutex;
 
-    use floe_context_contract::{
-        ConnectionId, ConnectorId, ExecutionOwnerId,
-    };
+    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId};
     use floe_execution::Cancellation;
 
     use super::*;
+    use crate::application::remote_view::RemoteViewSourceReference;
     use crate::ports::remote_grants::{
         BoxFuture, RemoteGrantBinding, RemoteSourceQuery, SignedCalendarPreview,
         SignedSourcePreview,
     };
-    use crate::application::remote_view::RemoteViewSourceReference;
 
     struct Fixture {
         person_id: PersonId,
@@ -369,7 +361,13 @@ mod tests {
         calendars: Vec<String>,
         current: Option<DataAccessGrant>,
         policy: Option<ConsumerPolicyAuthority>,
-        activated: Mutex<Vec<(GrantId, Option<GrantAuthority>, Option<ConsumerPolicyAuthority>)>>,
+        activated: Mutex<
+            Vec<(
+                GrantId,
+                Option<GrantAuthority>,
+                Option<ConsumerPolicyAuthority>,
+            )>,
+        >,
     }
 
     impl Fixture {
@@ -423,9 +421,10 @@ mod tests {
             .unwrap();
             let mut grant =
                 DataAccessGrant::new(GrantId::new(), uuid::Uuid::new_v4(), source, scope).unwrap();
-            let (source, scope) =
-                (grant.source().clone(), grant.scope().clone());
-            grant.activate_review(grant.authority(), source, scope).unwrap();
+            let (source, scope) = (grant.source().clone(), grant.scope().clone());
+            grant
+                .activate_review(grant.authority(), source, scope)
+                .unwrap();
             grant
         }
 
@@ -566,7 +565,10 @@ mod tests {
             expected_policy: Option<ConsumerPolicyAuthority>,
         ) -> BoxFuture<'a, Result<DataAccessGrant, AgentFailure>> {
             Box::pin(async move {
-                self.activated.lock().unwrap().push((grant_id, expected, expected_policy));
+                self.activated
+                    .lock()
+                    .unwrap()
+                    .push((grant_id, expected, expected_policy));
                 match (&self.current, expected) {
                     (Some(current), Some(authority)) if current.authority() == authority => {
                         Ok(current.clone())

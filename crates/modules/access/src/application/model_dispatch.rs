@@ -262,8 +262,7 @@ mod tests {
             &'a self,
             _dependency: &'a ContextDependency,
             _request: &'a DependencyAuthorization,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
             Box::pin(async move {
                 if !self.live.load(Ordering::SeqCst) {
                     return Err(AgentFailure::PolicyDenied);
@@ -511,10 +510,7 @@ mod tests {
                 recipient: "gateway-local".into(),
                 categories: vec![GrantDataCategory::Metadata],
             },
-            vec![
-                GrantDataCategory::Metadata,
-                GrantDataCategory::Content,
-            ],
+            vec![GrantDataCategory::Metadata, GrantDataCategory::Content],
         ))
         .unwrap();
         assert_eq!(

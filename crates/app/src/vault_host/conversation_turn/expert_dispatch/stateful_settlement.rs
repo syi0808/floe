@@ -10,7 +10,9 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-pub(in crate::vault_host::conversation_turn) trait StatefulExpertSettlement: Sync {
+pub(in crate::vault_host::conversation_turn) trait StatefulExpertSettlement:
+    Sync
+{
     fn settle<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
@@ -75,7 +77,9 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                     <= u64::try_from(chrono::Utc::now().timestamp_millis())
                         .map_err(|_| AgentFailure::StaleContext)?
                 || dependencies.is_empty()
-                || dependencies.iter().any(|dependency| dependency.person_id() != request.person_id)
+                || dependencies
+                    .iter()
+                    .any(|dependency| dependency.person_id() != request.person_id)
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
@@ -238,10 +242,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
-        let vault =
-            EncryptedAgentVault::create(root.path(), person_id, SettlementKeys::default())
-                .await
-                .unwrap();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, SettlementKeys::default())
+            .await
+            .unwrap();
         vault
             .install_builtin_experts_enabled(
                 BuiltinExpertSetup {
@@ -268,8 +271,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let consumer =
-            GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id()).unwrap();
+        let consumer = GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id()).unwrap();
         let admission = vault
             .authorize_current_native_calendar_grant(
                 "eventkit-connection",
@@ -356,17 +358,13 @@ mod tests {
             view_calls: 1,
         };
         let settlement = VaultStatefulExpertSettlement { vault: &vault };
-        let output = StatefulExpertSettlement::settle(&settlement, &request, draft, vec![
-            dependency,
-        ])
-        .await
-        .unwrap();
+        let output =
+            StatefulExpertSettlement::settle(&settlement, &request, draft, vec![dependency])
+                .await
+                .unwrap();
         let result: ExpertResult = serde_json::from_str(&output.data).unwrap();
         assert_eq!(result.evidence_id, observation_id);
-        assert_eq!(
-            result.package.id,
-            BuiltinExpertKind::Schedule.package_id()
-        );
+        assert_eq!(result.package.id, BuiltinExpertKind::Schedule.package_id());
         assert_eq!(result.action_proposals.len(), 1);
         assert_eq!(result.action_proposals[0].evidence_id, observation_id);
     }

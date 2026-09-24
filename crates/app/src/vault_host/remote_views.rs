@@ -69,7 +69,7 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_,
     ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
     {
         Box::pin(async move {
-            let (payload, dependency, scope) = floe_context::read_remote_view(
+            let (payload, bindings) = floe_context::read_remote_view(
                 self.vault,
                 &self.transport(),
                 self.person_id,
@@ -85,11 +85,10 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_,
                 request.query_fingerprint(),
             )
             .await?;
-            Ok(floe_context::SourceRead::new(
+            Ok(floe_context::SourceRead::with_bindings(
                 request.source().clone(),
                 payload,
-                dependency,
-                scope,
+                bindings,
             ))
         })
     }

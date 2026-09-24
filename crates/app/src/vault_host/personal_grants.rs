@@ -7,9 +7,9 @@
 
 use std::{future::Future, pin::Pin};
 
-use floe_access::{DependencyAuthorization, DependencyResolver};
 #[cfg(test)]
 use floe_access::DependencyLiveness;
+use floe_access::{DependencyAuthorization, DependencyResolver};
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::ContextDependency;
 use floe_kernel::PersonId;

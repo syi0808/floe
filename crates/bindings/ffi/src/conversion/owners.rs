@@ -131,7 +131,7 @@ pub(crate) fn remote_view_grant_preview(
             public_key: preview.producer.public_key.clone(),
             fingerprint: preview.producer.fingerprint.clone(),
         },
-        consumer: preview.consumer.clone(),
+        consumer: preview.consumers.first().cloned().unwrap_or_default(),
         purpose: "everyday_assistance".into(),
         recipient: preview.producer.audience.clone(),
     }

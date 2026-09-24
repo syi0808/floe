@@ -37,7 +37,8 @@ pub use personal_grants::{
 };
 pub use personal_read::{
     FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant,
-    grant_unchanged, people_read_grant, subject_unchanged, valid_subject_fingerprint,
+    active_resource_grants, grant_unchanged, people_read_grant, subject_unchanged,
+    valid_subject_fingerprint,
 };
 pub use personal_sources::{
     ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,

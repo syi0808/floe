@@ -31,7 +31,8 @@ use crate::local_context::LocalContextHost;
 /// How long the device is given to answer for its own calendar subject.
 const SUBJECT_DEADLINE: Duration = Duration::from_secs(30);
 
-pub(super) fn calendar_first_party_consumers() -> Result<Vec<floe_access::GrantConsumer>, AgentFailure> {
+pub(super) fn calendar_first_party_consumers()
+-> Result<Vec<floe_access::GrantConsumer>, AgentFailure> {
     Ok(crate::first_party_observe::calendar_policy()?.consumers)
 }
 
@@ -750,36 +751,36 @@ async fn overview<Keys: VaultKeyProvider>(
 ) -> Result<CalendarAccessOverview, AgentFailure> {
     let (state, review_required, grant_id, grant_authority, consumer_policy, granted) = match grant
     {
-            None => (
-                CalendarAccessState::NeedsReview,
-                true,
-                None,
-                None,
-                None,
-                Vec::new(),
-            ),
-            Some(grant) => {
-                let policy = vault.calendar_grant_policy_authority(grant.id()).await?;
-                let state = match grant.state() {
-                    floe_access::GrantState::Active => CalendarAccessState::Active,
-                    floe_access::GrantState::Paused => CalendarAccessState::Paused,
-                    floe_access::GrantState::Revoked => CalendarAccessState::Revoked,
-                };
-                (
-                    state,
-                    grant.review_required(),
-                    Some(grant.id()),
-                    Some(grant.authority()),
-                    Some(policy),
-                    grant
-                        .scope()
-                        .resources()
-                        .iter()
-                        .map(|resource| resource.as_str().to_owned())
-                        .collect(),
-                )
-            }
-        };
+        None => (
+            CalendarAccessState::NeedsReview,
+            true,
+            None,
+            None,
+            None,
+            Vec::new(),
+        ),
+        Some(grant) => {
+            let policy = vault.calendar_grant_policy_authority(grant.id()).await?;
+            let state = match grant.state() {
+                floe_access::GrantState::Active => CalendarAccessState::Active,
+                floe_access::GrantState::Paused => CalendarAccessState::Paused,
+                floe_access::GrantState::Revoked => CalendarAccessState::Revoked,
+            };
+            (
+                state,
+                grant.review_required(),
+                Some(grant.id()),
+                Some(grant.authority()),
+                Some(policy),
+                grant
+                    .scope()
+                    .resources()
+                    .iter()
+                    .map(|resource| resource.as_str().to_owned())
+                    .collect(),
+            )
+        }
+    };
     Ok(CalendarAccessOverview {
         person_id,
         provider: connection.provider,

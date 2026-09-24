@@ -6,7 +6,9 @@
 
 use floe_agent_contract::AgentFailure;
 use floe_execution::Cancellation;
-use floe_experts::{BoxFuture, BuiltinExpertSetup, BuiltinExpertSetupResult, BuiltinExpertStore, ExpertSetupSpec};
+use floe_experts::{
+    BoxFuture, BuiltinExpertSetup, BuiltinExpertSetupResult, BuiltinExpertStore, ExpertSetupSpec,
+};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use uuid::Uuid;
 

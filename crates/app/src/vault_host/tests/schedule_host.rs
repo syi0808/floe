@@ -79,12 +79,8 @@ impl TestScheduleHost {
         )?;
         let tool_installation = registry.install(registry.revision(), &tool)?;
         let expert_installation = registry.install(registry.revision(), &expert)?;
-        let tool_assignment = registry.assign(
-            registry.revision(),
-            person_id,
-            tool_installation,
-            vec![],
-        )?;
+        let tool_assignment =
+            registry.assign(registry.revision(), person_id, tool_installation, vec![])?;
         let assignment_id = registry.assign(
             registry.revision(),
             person_id,

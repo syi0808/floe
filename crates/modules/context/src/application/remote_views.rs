@@ -16,6 +16,7 @@ use floe_context_contract::{
     MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, WorkContextView,
     validate_communication_view, validate_logistics_view, validate_work_context_view,
 };
+use sha2::{Digest, Sha256};
 
 pub const MAIL_VIEW: &str = "mail.communication";
 pub const WORK_VIEW: &str = "work.context";
@@ -148,6 +149,183 @@ pub fn validate_remote_view(
     }
 }
 
+pub fn merge_remote_views(
+    view_id: &str,
+    values: Vec<Value>,
+    now: i64,
+    max_items: usize,
+    max_bytes: usize,
+) -> Result<Value, AgentFailure> {
+    if values.is_empty() {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    if values.len() == 1 {
+        return validate_remote_view(
+            view_id,
+            values.into_iter().next().unwrap(),
+            now,
+            max_items,
+            max_bytes,
+        )
+        .map(|result| result.0);
+    }
+    let mut source_handles = values
+        .iter()
+        .filter_map(|value| value.get("source_handle").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    source_handles.sort_unstable();
+    let digest = Sha256::digest(source_handles.join("\n").as_bytes());
+    let fingerprint = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let source_handle = format!("multi:{view_id}:{fingerprint}");
+    match view_id {
+        MAIL_VIEW => {
+            let mut views = values
+                .into_iter()
+                .map(serde_json::from_value::<CommunicationView>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            let observed_at_unix_ms = views
+                .iter()
+                .map(|view| view.observed_at_unix_ms)
+                .max()
+                .unwrap();
+            let expires_at_unix_ms = views
+                .iter()
+                .map(|view| view.expires_at_unix_ms)
+                .min()
+                .unwrap();
+            let complete = views.iter().all(|view| view.coverage_complete);
+            let mut items = views
+                .drain(..)
+                .flat_map(|view| view.items)
+                .collect::<Vec<_>>();
+            items.sort_by(|left, right| {
+                right
+                    .received_unix_ms
+                    .cmp(&left.received_unix_ms)
+                    .then_with(|| left.evidence_handle.cmp(&right.evidence_handle))
+            });
+            items.dedup_by(|left, right| left.evidence_handle == right.evidence_handle);
+            let truncated = items.len() > max_items;
+            items.truncate(max_items);
+            let view = CommunicationView {
+                schema_version: AGENT_VERSION,
+                view_id: MAIL_VIEW.into(),
+                source_handle,
+                observed_at_unix_ms,
+                expires_at_unix_ms,
+                coverage_complete: complete && !truncated,
+                next_cursor: None,
+                items,
+            };
+            validate_communication_view(&view, now, max_items, max_bytes)?;
+            serde_json::to_value(view).map_err(|_| AgentFailure::InvalidModelOutput)
+        }
+        WORK_VIEW => {
+            let views = values
+                .into_iter()
+                .map(serde_json::from_value::<WorkContextView>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            let observed_at_unix_ms = views
+                .iter()
+                .map(|view| view.observed_at_unix_ms)
+                .max()
+                .unwrap();
+            let expires_at_unix_ms = views
+                .iter()
+                .map(|view| view.expires_at_unix_ms)
+                .min()
+                .unwrap();
+            let complete = views.iter().all(|view| view.coverage_complete);
+            let mut items = views
+                .into_iter()
+                .flat_map(|view| view.items)
+                .collect::<Vec<_>>();
+            items.sort_by(|left, right| {
+                right
+                    .observed_at_unix_ms
+                    .cmp(&left.observed_at_unix_ms)
+                    .then_with(|| left.evidence_handle.cmp(&right.evidence_handle))
+            });
+            items.dedup_by(|left, right| left.evidence_handle == right.evidence_handle);
+            let truncated = items.len() > 64;
+            items.truncate(64);
+            let view = WorkContextView {
+                schema_version: AGENT_VERSION,
+                view_id: WORK_VIEW.into(),
+                source_handle,
+                observed_at_unix_ms,
+                expires_at_unix_ms,
+                coverage_complete: complete && !truncated,
+                scope_handle: "multi:work.context".into(),
+                items,
+            };
+            validate_work_context_view(&view, now)?;
+            if serde_json::to_vec(&view)
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .len()
+                > max_bytes
+            {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            serde_json::to_value(view).map_err(|_| AgentFailure::InvalidModelOutput)
+        }
+        LOGISTICS_VIEW => {
+            let views = values
+                .into_iter()
+                .map(serde_json::from_value::<LogisticsView>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            let observed_at_unix_ms = views
+                .iter()
+                .map(|view| view.observed_at_unix_ms)
+                .max()
+                .unwrap();
+            let expires_at_unix_ms = views
+                .iter()
+                .map(|view| view.expires_at_unix_ms)
+                .min()
+                .unwrap();
+            let complete = views.iter().all(|view| view.coverage_complete);
+            let mut items = views
+                .into_iter()
+                .flat_map(|view| view.items)
+                .collect::<Vec<_>>();
+            items.sort_by(|left, right| {
+                left.occurs_at_unix_ms
+                    .cmp(&right.occurs_at_unix_ms)
+                    .then_with(|| left.evidence_handle.cmp(&right.evidence_handle))
+            });
+            items.dedup_by(|left, right| left.evidence_handle == right.evidence_handle);
+            let truncated = items.len() > 64;
+            items.truncate(64);
+            let view = LogisticsView {
+                schema_version: AGENT_VERSION,
+                view_id: LOGISTICS_VIEW.into(),
+                source_handle,
+                observed_at_unix_ms,
+                expires_at_unix_ms,
+                coverage_complete: complete && !truncated,
+                items,
+            };
+            validate_logistics_view(&view, now)?;
+            if serde_json::to_vec(&view)
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .len()
+                > max_bytes
+            {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            serde_json::to_value(view).map_err(|_| AgentFailure::InvalidModelOutput)
+        }
+        _ => Err(AgentFailure::InvalidInput),
+    }
+}
+
 /// What one remote view read owes its provenance to.
 ///
 /// The categories, the processing restriction and the consumer policy come from
@@ -194,4 +372,50 @@ pub fn remote_view_dependency(
         expires,
     )
     .map_err(|_| AgentFailure::InvalidInput)
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn mail(source: &str, evidence: &str, received: i64, complete: bool) -> Value {
+        serde_json::json!({
+            "schema_version": AGENT_VERSION,
+            "view_id": MAIL_VIEW,
+            "source_handle": source,
+            "observed_at_unix_ms": 1_000,
+            "expires_at_unix_ms": 10_000,
+            "coverage_complete": complete,
+            "items": [{
+                "evidence_handle": evidence,
+                "thread_handle": format!("thread:{evidence}"),
+                "received_unix_ms": received,
+                "from": "sender",
+                "to": "person",
+                "subject": "subject",
+                "snippet": "snippet",
+                "labels": []
+            }]
+        })
+    }
+
+    #[test]
+    fn communication_merge_is_bounded_deterministic_and_partial() {
+        let merged = merge_remote_views(
+            MAIL_VIEW,
+            vec![
+                mail("gmail:one", "gmail:message", 20, true),
+                mail("microsoft:one", "microsoft:message", 30, false),
+            ],
+            2_000,
+            8,
+            MAX_COMMUNICATION_BYTES,
+        )
+        .unwrap();
+        let view: CommunicationView = serde_json::from_value(merged).unwrap();
+        assert_eq!(view.items.len(), 2);
+        assert_eq!(view.items[0].evidence_handle, "microsoft:message");
+        assert!(!view.coverage_complete);
+        assert!(view.source_handle.starts_with("multi:mail.communication:"));
+    }
 }

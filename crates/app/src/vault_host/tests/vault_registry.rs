@@ -291,7 +291,9 @@ impl Fixture {
 
     async fn stage(&self, call_id: Uuid) -> (AgentSession, AgentSession, RegistrySnapshot) {
         let mut previous = self.vault.create_session().await.unwrap();
-        previous.data_classes.push(floe_agent_contract::DataClass::Synthetic);
+        previous
+            .data_classes
+            .push(floe_agent_contract::DataClass::Synthetic);
         let turn_id = Uuid::new_v4();
         previous.active_turn = Some(turn_id);
         previous.messages.push(AgentMessage::User {

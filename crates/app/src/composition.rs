@@ -336,10 +336,7 @@ fn access_result(result: crate::WorkerResult) -> crate::RemoteAccessResult {
         producer: result.remote_producer,
         owner: result.remote_owner,
         enrollment: result.remote_enrollment,
-        calendar_grant: result.remote_calendar_grant,
-        calendar_preview: result.remote_calendar_preview,
-        view_grant: result.remote_view_grant,
-        view_preview: result.remote_view_preview,
+        connection_observe_status: result.connection_observe_status,
         failure: result.failure,
     }
 }

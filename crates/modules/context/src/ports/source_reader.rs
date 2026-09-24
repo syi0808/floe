@@ -1,7 +1,9 @@
 use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::{AgentFailure, Cancellation};
-use floe_context_contract::{ContextDependency, GrantConsumer, GrantPurpose, GrantScope, PersonId};
+use floe_context_contract::{
+    AuthorizedSourceBinding, ContextDependency, GrantConsumer, GrantPurpose, GrantScope, PersonId,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
@@ -113,8 +115,7 @@ impl SourceReadRequest {
 pub struct SourceRead {
     source: SourceKey,
     payload: Value,
-    dependency: ContextDependency,
-    scope: GrantScope,
+    bindings: Vec<AuthorizedSourceBinding>,
 }
 
 impl SourceRead {
@@ -127,8 +128,19 @@ impl SourceRead {
         Self {
             source,
             payload,
-            dependency,
-            scope,
+            bindings: vec![AuthorizedSourceBinding { dependency, scope }],
+        }
+    }
+
+    pub fn with_bindings(
+        source: SourceKey,
+        payload: Value,
+        bindings: Vec<AuthorizedSourceBinding>,
+    ) -> Self {
+        Self {
+            source,
+            payload,
+            bindings,
         }
     }
 
@@ -140,16 +152,12 @@ impl SourceRead {
         &self.source
     }
 
-    pub fn into_parts(self) -> (Value, ContextDependency, GrantScope) {
-        (self.payload, self.dependency, self.scope)
+    pub fn into_parts(self) -> (Value, Vec<AuthorizedSourceBinding>) {
+        (self.payload, self.bindings)
     }
 
-    pub fn dependency(&self) -> &ContextDependency {
-        &self.dependency
-    }
-
-    pub fn scope(&self) -> &GrantScope {
-        &self.scope
+    pub fn bindings(&self) -> &[AuthorizedSourceBinding] {
+        &self.bindings
     }
 }
 

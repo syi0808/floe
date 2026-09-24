@@ -16,7 +16,6 @@ mod connection_observe;
 mod connection_services;
 #[cfg(unix)]
 mod context_services;
-mod first_party_observe;
 mod core;
 #[cfg(unix)]
 mod day_services;
@@ -25,6 +24,7 @@ mod error;
 mod events;
 #[cfg(unix)]
 mod expert_services;
+mod first_party_observe;
 mod host;
 #[cfg(unix)]
 mod knowledge_services;
@@ -69,7 +69,7 @@ pub use floe_access::{
     ContactsAccessChange, ContactsAccessConfiguration, DataAccessGrant, FeasibilityGrantQuery,
     GrantAuthority, GrantId, GrantState, PersonalAccessChange, PersonalAccessConfiguration,
     PersonalAccessOverview, PersonalAccessState, ProcessingRestriction, RemoteEnrollmentStatus,
-    RemoteOwnerPublicKey, RemoteProducerIdentity, RemoteViewGrantPreview,
+    RemoteOwnerPublicKey, RemoteProducerIdentity,
 };
 pub use floe_actions::{ActionAuthorityMode, CalendarAction, CalendarActionState};
 pub use floe_connections::{CalendarConnectionRef, PairingIssuer, PairingStatus};
@@ -83,15 +83,15 @@ pub use action_services::{ActionCommands, ActionInspection, ActionOperationResul
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{AppComposition, AppOpenError, open};
+pub use connection_observe::{
+    ConnectionObserveMember, ConnectionObserveOverview, ConnectionObserveStatus,
+};
 #[cfg(unix)]
 pub use connection_services::{ConnectionsQueries, ConnectionsResult};
 #[cfg(unix)]
 pub use context_services::{
     AttentionCompletion, CalendarCompletion, ContextCommand, ContextQuery, LocalContextCommands,
     LocalContextQueries, PersonalCompletion,
-};
-pub use connection_observe::{
-    ConnectionObserveMember, ConnectionObserveOverview, ConnectionObserveStatus,
 };
 pub use core::{Classification, FloeCore};
 #[cfg(unix)]
@@ -153,7 +153,6 @@ pub(crate) use worker::WorkerOperation;
 pub use worker::{
     CalendarActionOperation, CalendarActionProposal, CalendarProposalInspection,
     CalendarSubjectPreview, CalendarSubjectRequest, ConversationSessionOperation,
-    MemoryReviewDecision, MemoryReviewResult, RemoteCalendarGrantPreview, RemoteGrantOverview,
-    RemotePairingChallenge, VaultState,
+    MemoryReviewDecision, MemoryReviewResult, RemotePairingChallenge, VaultState,
 };
 pub(crate) use worker::{WorkerAction, WorkerResult};

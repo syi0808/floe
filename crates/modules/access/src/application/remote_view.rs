@@ -133,19 +133,19 @@ pub fn remote_view_source(
 pub fn remote_view_scope(
     resource: &str,
     category: GrantDataCategory,
-    consumer: GrantConsumer,
+    consumers: Vec<GrantConsumer>,
     recipient: String,
 ) -> Result<GrantScope, AgentFailure> {
+    if recipient.is_empty() {
+        return Err(AgentFailure::InvalidInput);
+    }
     GrantScope::try_new(
         vec![ResourceHandle::try_new(resource).map_err(|_| AgentFailure::InvalidInput)?],
         vec![category.clone()],
         vec![GrantOperation::Read],
         vec![GrantPurpose::Assistant],
-        vec![consumer],
-        ProcessingRestriction::ApprovedRecipient {
-            recipient,
-            categories: vec![category],
-        },
+        consumers,
+        ProcessingRestriction::LocalOnly,
     )
     .map_err(|_| AgentFailure::InvalidInput)
 }
@@ -172,12 +172,9 @@ pub fn review_remote_view_grant(
 ) -> Result<RemoteViewGrantReview, AgentFailure> {
     if let Some(grant) = existing
         && grant.state() == GrantState::Active
+        && grant.scope() == scope
     {
-        return if grant.scope() == scope {
-            Ok(RemoteViewGrantReview::AlreadyGranted)
-        } else {
-            Err(AgentFailure::PolicyDenied)
-        };
+        return Ok(RemoteViewGrantReview::AlreadyGranted);
     }
     Ok(RemoteViewGrantReview::Activate {
         grant_id: existing

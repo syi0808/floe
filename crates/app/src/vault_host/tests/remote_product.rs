@@ -114,53 +114,11 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
         RemoteAccessCommand::EnrollmentStatus {
             enrollment_id: Uuid::new_v4().to_string(),
         },
-        RemoteAccessCommand::CalendarGrantPreview {
-            connector_id: "google".into(),
+        RemoteAccessCommand::ConnectionObserve {
+            connector_id: "gmail".into(),
             connection_id: Uuid::new_v4().to_string(),
-            resource: "calendar".into(),
-        },
-        RemoteAccessCommand::CalendarGrantReview {
-            connector_id: "google".into(),
-            connection_id: Uuid::new_v4().to_string(),
-            resource: "calendar".into(),
-            expected_producer_fingerprint: "fingerprint".into(),
-            expected_source_authority: floe_context_contract::SourceAuthority::new(),
-            expected_grant_id: None,
-            expected_grant_authority: None,
-            expected_consumer_policy: None,
-        },
-        RemoteAccessCommand::CalendarGrantStatus {
-            grant_id: floe_access::GrantId::new(),
-        },
-        RemoteAccessCommand::CalendarGrantPause {
-            grant_id: floe_access::GrantId::new(),
-            expected_authority: floe_access::GrantAuthority::new(),
-        },
-        RemoteAccessCommand::ViewGrantPreview {
-            view_id: "mail.communication".into(),
-            connector_id: "google".into(),
-            connection_id: Uuid::new_v4().to_string(),
-            resource: "mail".into(),
-            consumer: "communication".into(),
-        },
-        RemoteAccessCommand::ViewGrantReview {
-            view_id: "mail.communication".into(),
-            connector_id: "google".into(),
-            connection_id: Uuid::new_v4().to_string(),
-            resource: "mail".into(),
-            consumer: "communication".into(),
-            expected_producer_fingerprint: "fingerprint".into(),
-            expected_source_authority: floe_context_contract::SourceAuthority::new(),
-            expected_connection_revision: 1,
-            expected_provider_identity: "provider".into(),
-            expected_recipient: "recipient".into(),
-        },
-        RemoteAccessCommand::ViewGrantStatus {
-            grant_id: floe_access::GrantId::new(),
-        },
-        RemoteAccessCommand::ViewGrantPause {
-            grant_id: floe_access::GrantId::new(),
-            expected_authority: floe_access::GrantAuthority::new(),
+            resource: None,
+            enabled: None,
         },
     ];
     for saved in [
@@ -186,12 +144,17 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
                     command,
                 },
             );
-            assert_eq!(
-                result.failure,
-                Some(AgentFailure::PolicyDenied),
-                "{}",
-                result.stage
-            );
+            if result.stage == "remote_connection_observe_inspect" {
+                assert_eq!(result.failure, None);
+                assert_eq!(result.connection_observe_status.as_deref(), Some("needs_review"));
+            } else {
+                assert_eq!(
+                    result.failure,
+                    Some(AgentFailure::PolicyDenied),
+                    "{}",
+                    result.stage
+                );
+            }
         }
     }
 }

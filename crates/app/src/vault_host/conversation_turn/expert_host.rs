@@ -622,11 +622,13 @@ impl PersonalViewSource<'_> {
         {
             Ok(source_view) => {
                 if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
-                    recorder.record(
-                        self.dependency_turn_id,
-                        self.dependency_turn_id,
-                        source_view.dependency().clone(),
-                    )?;
+                    for binding in source_view.bindings() {
+                        recorder.record(
+                            self.dependency_turn_id,
+                            self.dependency_turn_id,
+                            binding.dependency.clone(),
+                        )?;
+                    }
                 }
                 let view = serde_json::from_value(source_view.payload().clone())
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?;

@@ -17,7 +17,7 @@ mod source_access;
 pub mod views;
 
 pub use assembly::{OptionalSource, acquire_optional_source, record_source_issue};
-pub use authorized_read::{AuthorizedRead, HeldGrant};
+pub use authorized_read::{AuthorizedRead, AuthorizedSourceBinding, HeldGrant};
 pub use calendar::{CalendarProvider, CalendarReadAccessStamp, CalendarScope};
 pub use evidence::{ContextEvidence, MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_BYTES};
 pub use floe_kernel::PersonId;

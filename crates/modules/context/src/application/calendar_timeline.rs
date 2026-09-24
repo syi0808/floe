@@ -605,7 +605,9 @@ impl<
                 return Err(AgentFailure::StaleContext);
             };
             if admission_matches(admission, lease.as_ref()) {
-                if !lease.is_fresh() || lease.dependency().expires_at() <= (self.clock)() {
+                if !lease.is_fresh()
+                    || lease.bindings()[0].dependency.expires_at() <= (self.clock)()
+                {
                     return Err(AgentFailure::StaleContext);
                 }
                 return Ok(lease.payload().clone());

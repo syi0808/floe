@@ -7,16 +7,19 @@
 
 use crate::{ContextDependency, GrantScope};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedSourceBinding {
+    pub dependency: ContextDependency,
+    pub scope: GrantScope,
+}
+
 /// A read that is held open under a grant.
 ///
 /// What it carries is its reader's business; what it was admitted under is
 /// whoever admitted it.
 pub trait HeldGrant {
-    /// The scope the read was admitted under.
-    fn scope(&self) -> &GrantScope;
-
-    /// What the result of reading this owes its provenance to.
-    fn dependency(&self) -> &ContextDependency;
+    /// Every exact source authority the held payload was admitted under.
+    fn bindings(&self) -> &[AuthorizedSourceBinding];
 }
 
 pub trait AuthorizedRead: HeldGrant + Send {

@@ -1126,7 +1126,7 @@ fn install_builtin_mail_setup(
         instance_id: vault.registry_instance_id(),
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        };
+    };
     runtime
         .block_on(vault.install_builtin_experts_enabled(
             setup,
@@ -1158,7 +1158,7 @@ fn install_builtin_calendar_setup(
                 instance_id: vault.registry_instance_id(),
                 expected_revision: 0,
                 setup_id: Uuid::new_v4(),
-                },
+            },
             &crate::vault_host::builtin_setup_specs(),
             floe_execution::Cancellation::default(),
         ))
@@ -2309,7 +2309,7 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
                     instance_id: fixture.vault.registry_instance_id(),
                     expected_revision: 0,
                     setup_id: Uuid::new_v4(),
-                    },
+                },
                 &crate::vault_host::builtin_setup_specs(),
                 floe_execution::Cancellation::default(),
             )
@@ -2381,9 +2381,13 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         .unwrap()
         .unwrap();
     assert_eq!(after.revision, before.revision);
-    assert!(after.builtin_setups.iter().any(|setup| setup.person_id == person
-        && setup.assignments.iter().any(|assignment| assignment.expert.as_str()
-            == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id())));
+    assert!(after.builtin_setups.iter().any(|setup| {
+        setup.person_id == person
+            && setup.assignments.iter().any(|assignment| {
+                assignment.expert.as_str()
+                    == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
+            })
+    }));
 }
 
 #[test]
@@ -2661,7 +2665,7 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
             instance_id: fixture.vault.registry_instance_id(),
             expected_revision: 0,
             setup_id: Uuid::new_v4(),
-            };
+        };
         fixture
             .vault
             .install_builtin_experts_enabled(

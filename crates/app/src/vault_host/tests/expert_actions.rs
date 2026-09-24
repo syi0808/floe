@@ -1229,10 +1229,9 @@ impl GovernedFocus {
             )
             .await
             .unwrap();
-        let consumer = GrantConsumer::builtin(
-            floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
-        )
-        .unwrap();
+        let consumer =
+            GrantConsumer::builtin(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id())
+                .unwrap();
         let admission = vault
             .authorize_current_native_calendar_grant(
                 "eventkit-connection",

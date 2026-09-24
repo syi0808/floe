@@ -120,34 +120,6 @@ pub struct CalendarProposalInspection {
     pub action: Option<floe_actions::CalendarAction>,
 }
 
-/// One remote grant, with the connection revision it was last previewed at.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteGrantOverview {
-    pub grant: floe_access::DataAccessGrant,
-    pub connection_revision: Option<u64>,
-}
-
-/// What the Person is shown before they grant a remote calendar source.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RemoteCalendarGrantPreview {
-    pub person_id: PersonId,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub resource: String,
-    pub source_authority: floe_context_contract::SourceAuthority,
-    pub provider_identity: String,
-    pub execution_owner: String,
-    pub producer: floe_access::RemoteProducerIdentity,
-    pub consumers: Vec<String>,
-    /// Where the source's contents may be processed.
-    pub recipient: String,
-    /// The exact current grant for this source and resource, if any. All
-    /// three are present or all three are absent; the review echoes them.
-    pub grant_id: Option<floe_access::GrantId>,
-    pub grant_authority: Option<floe_access::GrantAuthority>,
-    pub consumer_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
-}
-
 /// One command the worker runs against this Person's vault.
 ///
 /// Every variant names an owner's own request; none of them carries a wire.
@@ -288,10 +260,7 @@ pub struct WorkerResult {
     pub remote_enrollment: Option<floe_access::RemoteEnrollmentStatus>,
     pub remote_pairing: Option<floe_connections::PairingStatus>,
     pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
-    pub remote_calendar_grant: Option<RemoteGrantOverview>,
-    pub remote_calendar_preview: Option<RemoteCalendarGrantPreview>,
-    pub remote_view_grant: Option<RemoteGrantOverview>,
-    pub remote_view_preview: Option<floe_access::RemoteViewGrantPreview>,
+    pub connection_observe_status: Option<String>,
     pub personal_access: Option<floe_access::PersonalAccessOverview>,
     pub calendar_access: Option<crate::CalendarAccessOverview>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,

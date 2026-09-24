@@ -152,7 +152,10 @@ fn connection_projection_inspection_never_creates_a_grant() {
     for _ in 0..2 {
         let raw = fixture.apply(CalendarAccessChange::Inspect).unwrap();
         let projected = crate::ConnectionObserveOverview::from_calendar(raw);
-        assert_eq!(projected.status, crate::ConnectionObserveStatus::NeedsReview);
+        assert_eq!(
+            projected.status,
+            crate::ConnectionObserveStatus::NeedsReview
+        );
         assert!(projected.members.is_empty());
     }
     assert!(

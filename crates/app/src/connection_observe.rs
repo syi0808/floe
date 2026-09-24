@@ -58,13 +58,13 @@ impl ConnectionObserveOverview {
                     == 1
             });
         let all_active = exact_members
-            && members.iter().all(|member| {
-                member.state == GrantState::Active && !member.review_required
-            });
+            && members
+                .iter()
+                .all(|member| member.state == GrantState::Active && !member.review_required);
         let all_paused = exact_members
-            && members.iter().all(|member| {
-                member.state == GrantState::Paused && !member.review_required
-            });
+            && members
+                .iter()
+                .all(|member| member.state == GrantState::Paused && !member.review_required);
         let status = if all_active {
             ConnectionObserveStatus::Active
         } else if all_paused {
@@ -90,11 +90,7 @@ impl ConnectionObserveOverview {
     }
 
     pub(crate) fn from_calendar(value: crate::CalendarAccessOverview) -> Self {
-        let members = match (
-            value.grant_id,
-            value.grant_authority,
-            value.consumer_policy,
-        ) {
+        let members = match (value.grant_id, value.grant_authority, value.consumer_policy) {
             (Some(grant_id), Some(grant_authority), Some(consumer_policy)) => {
                 vec![ConnectionObserveMember {
                     view_id: "calendar.timeline".into(),

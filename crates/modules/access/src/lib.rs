@@ -28,7 +28,7 @@ pub use application::{
     ReadAuthorityEvidence, ReadAuthorityIdentity, ReleasePermit, ReleaseRecipient,
     RemoteProducerIdentity, RemoteViewApproval, RemoteViewGrantExpectation, RemoteViewGrantPreview,
     RemoteViewGrantRequest, RemoteViewGrantReview, RemoteViewSourceReference, ReplayRequest,
-    ReplayTrust, active_read_grant, active_resource_grant, admit_release,
+    ReplayTrust, active_read_grant, active_resource_grant, active_resource_grants, admit_release,
     admit_remote_view_binding, admit_remote_view_source, admit_replay, apply_grant_mutation,
     authorize_grant, consume_release, create_grant, grant_unchanged, matches_review,
     people_read_grant, preview_remote_view_grant, producer_is_pinned,

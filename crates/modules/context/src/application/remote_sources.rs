@@ -9,23 +9,24 @@
 use chrono::Utc;
 use floe_access::{
     DependencyAuthorization, RemoteCallWindow, RemoteGrantStore, RemoteGrantTransport,
-    RemotePairingIdentity, RemoteSourceQuery, active_resource_grant, admit_remote_view_binding,
-    admit_remote_view_source, remote_calendar_dependency_source_admits,
+    RemotePairingIdentity, RemoteSourceQuery, active_resource_grant, active_resource_grants,
+    admit_remote_view_binding, admit_remote_view_source, remote_calendar_dependency_source_admits,
     remote_dependency_binding_matches, remote_dependency_live, remote_dependency_resource,
     remote_dependency_source_admits, remote_view_source, source_matches_producer,
 };
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_context_contract::{
-    CALENDAR_CONTEXT_VIEW_ID, CalendarContextView, CalendarViewQuery, ContextDependency,
-    GrantConsumer, GrantScope, GrantSourceBinding, MAX_CALENDAR_CONTEXT_BYTES,
+    AuthorizedSourceBinding, CALENDAR_CONTEXT_VIEW_ID, CalendarContextView, CalendarViewQuery,
+    ContextDependency, GrantConsumer, GrantScope, GrantSourceBinding, MAX_CALENDAR_CONTEXT_BYTES,
     ProcessingRestriction, validate_calendar_context_view_for_query,
 };
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::application::remote_views::{
-    is_remote_view, remote_view_connector_admissible, remote_view_dependency, remote_view_resource,
-    split_remote_view_resource, validate_remote_view, validate_remote_view_query,
+    is_remote_view, merge_remote_views, remote_view_connector_admissible, remote_view_dependency,
+    remote_view_resource, split_remote_view_resource, validate_remote_view,
+    validate_remote_view_query,
 };
 
 /// The read a remote transport performs once the grant has admitted it.
@@ -232,71 +233,84 @@ pub async fn read_remote_view(
     window: &RemoteCallWindow,
     process_incarnation_id: Uuid,
     query_fingerprint: &[u8],
-) -> Result<(Value, ContextDependency, GrantScope), AgentFailure> {
+) -> Result<(Value, Vec<AuthorizedSourceBinding>), AgentFailure> {
     check_window(window)?;
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
     let (max_items, max_bytes) = validate_remote_view_query(view_id, &query)?;
     let grants = store.grants(128).await?;
-    let grant = active_resource_grant(&grants, person_id, &consumer, |source| {
+    let grants = active_resource_grants(&grants, person_id, &consumer, |source| {
         remote_view_grant_resource(view_id, source)
     })?;
-    let source = grant.source();
-    let connection_id = source.connection_id();
-    let connection_id_text = connection_id.as_str();
-    let resource = remote_view_resource(view_id, connection_id_text);
-    let source_query = RemoteSourceQuery {
-        view_id,
-        connector_id: source.connector().as_str(),
-        connection_id: connection_id_text,
-        resource: &resource,
-    };
-    let preview = transport.view_source_preview(source_query, window).await?;
-    let reference = store
-        .verify_view_source_preview(&preview, pairing, source_query)
-        .await?;
-    admit_remote_view_source(&reference, source)?;
-    let binding = store
-        .view_grant_binding(
-            view_id,
-            source.connector().as_str(),
-            connection_id_text,
-            reference.source_authority,
-        )
-        .await?;
-    admit_remote_view_binding(&binding.grant, &grant, source, &resource)?;
-    let value = transport
-        .read_admitted_view(
-            AdmittedRemoteRead {
-                view_id,
-                binding: &binding,
-                consumer: consumer_name,
-                resource: &resource,
-                connection_revision: reference.connection_revision,
-                max_items,
-                max_bytes,
-                query,
-                pairing,
-            },
-            window,
-        )
-        .await?;
     let now = Utc::now().timestamp_millis();
-    let (value, observed, expires) =
-        validate_remote_view(view_id, value, now, max_items, max_bytes)?;
-    let dependency = remote_view_dependency(
-        person_id,
-        &binding.grant,
-        binding.consumer_policy,
-        remote_view_source(&reference)?,
-        &resource,
-        consumer,
-        query_fingerprint.to_vec(),
-        Uuid::new_v4(),
-        process_incarnation_id,
-        observed,
-        expires,
-    )?;
-    Ok((value, dependency, binding.grant.scope().clone()))
+    let mut values = Vec::with_capacity(grants.len());
+    let mut bindings = Vec::with_capacity(grants.len());
+    for grant in grants {
+        check_window(window)?;
+        let source = grant.source();
+        let connection_id = source.connection_id();
+        let connection_id_text = connection_id.as_str();
+        let resource = remote_view_resource(view_id, connection_id_text);
+        let source_query = RemoteSourceQuery {
+            view_id,
+            connector_id: source.connector().as_str(),
+            connection_id: connection_id_text,
+            resource: &resource,
+        };
+        let preview = transport.view_source_preview(source_query, window).await?;
+        let reference = store
+            .verify_view_source_preview(&preview, pairing, source_query)
+            .await?;
+        admit_remote_view_source(&reference, source)?;
+        let binding = store
+            .view_grant_binding(
+                view_id,
+                source.connector().as_str(),
+                connection_id_text,
+                reference.source_authority,
+            )
+            .await?;
+        admit_remote_view_binding(&binding.grant, &grant, source, &resource)?;
+        let raw = transport
+            .read_admitted_view(
+                AdmittedRemoteRead {
+                    view_id,
+                    binding: &binding,
+                    consumer: consumer_name,
+                    resource: &resource,
+                    connection_revision: reference.connection_revision,
+                    max_items,
+                    max_bytes,
+                    query: query.clone(),
+                    pairing,
+                },
+                window,
+            )
+            .await?;
+        let (value, observed, expires) =
+            validate_remote_view(view_id, raw, now, max_items, max_bytes)?;
+        let dependency = remote_view_dependency(
+            person_id,
+            &binding.grant,
+            binding.consumer_policy,
+            remote_view_source(&reference)?,
+            &resource,
+            consumer.clone(),
+            query_fingerprint.to_vec(),
+            Uuid::new_v4(),
+            process_incarnation_id,
+            observed,
+            expires,
+        )?;
+        values.push(value);
+        bindings.push(AuthorizedSourceBinding {
+            dependency,
+            scope: binding.grant.scope().clone(),
+        });
+    }
+    Ok((
+        merge_remote_views(view_id, values, now, max_items, max_bytes)?,
+        bindings,
+    ))
 }
 
 /// Whether a recorded remote dependency may still be relied on.
@@ -412,7 +426,11 @@ mod calendar_tests {
         reads: AtomicUsize,
         read_resources: std::sync::Mutex<Vec<String>>,
         source_changes_after_read: bool,
-        sibling: Option<(DataAccessGrant, ConsumerPolicyAuthority, CalendarContextView)>,
+        sibling: Option<(
+            DataAccessGrant,
+            ConsumerPolicyAuthority,
+            CalendarContextView,
+        )>,
     }
 
     impl CalendarFixture {
@@ -501,10 +519,7 @@ mod calendar_tests {
                 self.grant.source().person_id(),
                 ConnectionId::try_new(self.grant.source().connection_id().as_str()).unwrap(),
                 ConnectorId::try_new(self.grant.source().connector().as_str()).unwrap(),
-                ExecutionOwnerId::try_new(
-                    self.grant.source().execution_owner().as_str(),
-                )
-                .unwrap(),
+                ExecutionOwnerId::try_new(self.grant.source().execution_owner().as_str()).unwrap(),
                 self.grant.source().source_authority(),
             )
             .unwrap();
@@ -918,13 +933,13 @@ mod calendar_tests {
                 .await
                 .unwrap();
         assert_eq!(primary_view.items[0].evidence_handle, "event:one");
-        assert_eq!(
-            secondary_view.items[0].evidence_handle,
-            "event:secondary"
-        );
+        assert_eq!(secondary_view.items[0].evidence_handle, "event:secondary");
         assert_eq!(primary_dependency.resources()[0].as_str(), "primary");
         assert_eq!(secondary_dependency.resources()[0].as_str(), "secondary");
-        assert_ne!(primary_dependency.grant_id(), secondary_dependency.grant_id());
+        assert_ne!(
+            primary_dependency.grant_id(),
+            secondary_dependency.grant_id()
+        );
         assert_ne!(
             primary_dependency.consumer_policy(),
             secondary_dependency.consumer_policy()
@@ -1026,13 +1041,10 @@ mod calendar_tests {
             read_remote_calendar_view(&fixture, &fixture, read("floe.builtin.schedule"))
                 .await
                 .unwrap();
-        let (_, focus_dependency, _) = read_remote_calendar_view(
-            &fixture,
-            &fixture,
-            read("floe.builtin.focus-attention"),
-        )
-        .await
-        .unwrap();
+        let (_, focus_dependency, _) =
+            read_remote_calendar_view(&fixture, &fixture, read("floe.builtin.focus-attention"))
+                .await
+                .unwrap();
         assert_eq!(
             schedule_dependency.consumer().identifier(),
             "floe.builtin.schedule"
@@ -1041,10 +1053,7 @@ mod calendar_tests {
             focus_dependency.consumer().identifier(),
             "floe.builtin.focus-attention"
         );
-        assert_eq!(
-            schedule_dependency.grant_id(),
-            focus_dependency.grant_id()
-        );
+        assert_eq!(schedule_dependency.grant_id(), focus_dependency.grant_id());
         assert_eq!(fixture.reads.load(Ordering::SeqCst), 2);
     }
 

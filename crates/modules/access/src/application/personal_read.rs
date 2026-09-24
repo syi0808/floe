@@ -151,6 +151,50 @@ pub fn active_resource_grant(
     Ok(grant.clone())
 }
 
+pub fn active_resource_grants(
+    grants: &[DataAccessGrant],
+    person_id: floe_kernel::PersonId,
+    consumer: &GrantConsumer,
+    required_resource: impl Fn(&GrantSourceBinding) -> Option<String>,
+) -> Result<Vec<DataAccessGrant>, AgentFailure> {
+    let mut admitted = grants
+        .iter()
+        .filter(|grant| {
+            grant.source().person_id() == person_id
+                && grant.state() == GrantState::Active
+                && !grant.review_required()
+                && grant.scope().operations().contains(&GrantOperation::Read)
+                && grant.scope().purposes().contains(&GrantPurpose::Assistant)
+                && grant.scope().consumers().contains(consumer)
+                && grant.scope().resources().len() == 1
+                && required_resource(grant.source())
+                    .is_some_and(|resource| grant.scope().resources()[0].as_str() == resource)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    admitted.sort_by(|left, right| {
+        left.source()
+            .connector()
+            .cmp(right.source().connector())
+            .then_with(|| {
+                left.source()
+                    .connection_id()
+                    .cmp(&right.source().connection_id())
+            })
+            .then_with(|| left.id().cmp(&right.id()))
+    });
+    if admitted.is_empty() {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    if admitted
+        .windows(2)
+        .any(|pair| pair[0].source() == pair[1].source())
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(admitted)
+}
+
 #[cfg(test)]
 mod tests {
     use floe_context_contract::{
@@ -345,6 +389,48 @@ mod tests {
                 |_| None
             ),
             Err(AgentFailure::AccessReviewRequired)
+        );
+    }
+
+    #[test]
+    fn overlapping_remote_sources_are_all_admitted_but_duplicate_source_conflicts() {
+        let person_id = PersonId::new();
+        let consumer = consumer();
+        let make_source = |connector: &str, connection: &str| {
+            GrantSourceBinding::try_new(
+                person_id,
+                ConnectionId::try_new(connection).unwrap(),
+                ConnectorId::try_new(connector).unwrap(),
+                ExecutionOwnerId::try_new("server-owner").unwrap(),
+                SourceAuthority::new(),
+            )
+            .unwrap()
+        };
+        let gmail = make_source("gmail", "gmail-connection");
+        let microsoft = make_source("microsoft.mail", "microsoft-connection");
+        let grants = [
+            active(gmail.clone(), "mail.communication:gmail-connection"),
+            active(microsoft.clone(), "mail.communication:microsoft-connection"),
+        ];
+        let admitted = active_resource_grants(&grants, person_id, &consumer, |source| {
+            Some(format!(
+                "mail.communication:{}",
+                source.connection_id().as_str()
+            ))
+        })
+        .unwrap();
+        assert_eq!(admitted.len(), 2);
+
+        let duplicate = [
+            grants[0].clone(),
+            active(gmail, "mail.communication:gmail-connection"),
+        ];
+        assert_eq!(
+            active_resource_grants(&duplicate, person_id, &consumer, |source| Some(format!(
+                "mail.communication:{}",
+                source.connection_id().as_str()
+            ))),
+            Err(AgentFailure::Conflict)
         );
     }
 }

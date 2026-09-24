@@ -1,5 +1,4 @@
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
-import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
 
 import 'dart:async';
 
@@ -193,6 +192,12 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
             );
           }
           await widget.onChanged();
+          if (state == 'connected') {
+            await _setConnectionObserve(
+              true,
+              connectionId: attempt?.connectionId,
+            );
+          }
           return;
       }
       if (!mounted) return;
@@ -251,6 +256,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     if (connectionId == null || connectionRevision == null) {
       throw const ServerConnectionException('connection_changed');
     }
+    final observeStatus = await _connectionObserveStatus();
     await widget.client.updateConnectorScope(
       connection: widget.connection,
       connectorId: widget.connector.id,
@@ -259,6 +265,9 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
       scope: _scopeValue(),
     );
     await widget.onChanged();
+    if (observeStatus == 'active') {
+      await _setConnectionObserve(true);
+    }
   });
 
   Future<void> _disconnect() => _run(() async {
@@ -287,6 +296,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     if (connectionId == null || connectionRevision == null) {
       throw const ServerConnectionException('connection_changed');
     }
+    await _setConnectionObserve(false);
     await widget.client.disconnectConnector(
       connection: widget.connection,
       connectorId: widget.connector.id,
@@ -295,6 +305,43 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     );
     await widget.onChanged();
   });
+
+  String? get _observeResource {
+    if (widget.connector.id != 'calendar.google' &&
+        widget.connector.id != 'calendar.microsoft') {
+      return null;
+    }
+    final selected = scope['calendar_id']?.text.trim();
+    if (selected != null && selected.isNotEmpty) return selected;
+    final value = widget.connector.scope['calendar_id'];
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
+  Future<String?> _connectionObserveStatus() async {
+    final gateway = widget.remoteAccessGateway;
+    final connectionId = widget.connector.connectionId;
+    if (gateway == null || connectionId == null) return null;
+    return gateway.connectionObserve(
+      connectorId: widget.connector.id,
+      connectionId: connectionId,
+      resource: _observeResource,
+    );
+  }
+
+  Future<void> _setConnectionObserve(
+    bool enabled, {
+    String? connectionId,
+  }) async {
+    final gateway = widget.remoteAccessGateway;
+    connectionId ??= widget.connector.connectionId;
+    if (gateway == null || connectionId == null) return;
+    await gateway.connectionObserve(
+      connectorId: widget.connector.id,
+      connectionId: connectionId,
+      resource: _observeResource,
+      enabled: enabled,
+    );
+  }
 
   ServerConnectorStatus get displayStatus =>
       attempt?.status ?? widget.connector.status;
@@ -340,12 +387,10 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                   height: 1.6,
                 ),
               ),
-              if (_showConnectionGrants) ...[
+              if (_showConnectionObserve) ...[
                 SizedBox(height: FloeSpace.lg),
-                _ServerConnectionGrants(
+                _ConnectionObserveControl(
                   connector: widget.connector,
-                  connection: widget.connection,
-                  client: widget.client,
                   gateway: widget.remoteAccessGateway!,
                 ),
               ],
@@ -464,76 +509,107 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     ],
   );
 
-  bool get _showConnectionGrants =>
+  bool get _showConnectionObserve =>
       widget.remoteAccessGateway != null &&
       widget.connector.status == ServerConnectorStatus.connected &&
       widget.connector.connectionId != null &&
-      (widget.connector.id == 'calendar.google' ||
-          widget.connector.id == 'calendar.microsoft' ||
-          _remoteViewsFor(widget.connector.id).isNotEmpty);
+      const {
+        'gmail',
+        'microsoft.mail',
+        'slack.conversations',
+        'microsoft.teams',
+        'github.issues',
+        'google_drive.files',
+        'home_assistant.states',
+        'calendar.google',
+        'calendar.microsoft',
+      }.contains(widget.connector.id);
 }
 
-final class _ServerConnectionGrants extends StatefulWidget {
-  const _ServerConnectionGrants({
+final class _ConnectionObserveControl extends StatefulWidget {
+  const _ConnectionObserveControl({
     required this.connector,
-    required this.connection,
-    required this.client,
     required this.gateway,
   });
 
   final ServerConnector connector;
-  final ServerConnection connection;
-  final LocalServerClient client;
   final RemoteAccessGateway gateway;
 
   @override
-  State<_ServerConnectionGrants> createState() =>
-      _ServerConnectionGrantsState();
+  State<_ConnectionObserveControl> createState() =>
+      _ConnectionObserveControlState();
 }
 
-final class _ServerConnectionGrantsState
-    extends State<_ServerConnectionGrants> {
-  RemoteCalendarGrantPreview? calendarPreview;
-  RemoteCalendarGrantOverview? calendarOverview;
-  RemoteViewGrantPreview? viewPreview;
-  RemoteViewGrantOverview? viewOverview;
-  String? selectedView;
-  String consumer = 'assistant';
+final class _ConnectionObserveControlState
+    extends State<_ConnectionObserveControl> {
+  String status = 'needs_review';
+  bool busy = true;
   String? error;
-  bool busy = false;
 
-  @override
-  void didUpdateWidget(_ServerConnectionGrants oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.connector.id != widget.connector.id ||
-        oldWidget.connector.connectionId != widget.connector.connectionId) {
-      calendarPreview = null;
-      calendarOverview = null;
-      viewPreview = null;
-      viewOverview = null;
-      selectedView = null;
-      error = null;
+  String? get resource {
+    if (widget.connector.id != 'calendar.google' &&
+        widget.connector.id != 'calendar.microsoft') {
+      return null;
     }
-  }
-
-  String get connectionId => widget.connector.connectionId!;
-  List<String> get views => _remoteViewsFor(widget.connector.id);
-  bool get isCalendar =>
-      widget.connector.id == 'calendar.google' ||
-      widget.connector.id == 'calendar.microsoft';
-  String? get calendarResource {
     final value = widget.connector.scope['calendar_id'];
     return value is String && value.isNotEmpty ? value : null;
   }
 
-  Future<void> _run(Future<void> Function() operation) async {
-    if (busy) return;
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_inspect());
+  }
+
+  @override
+  void didUpdateWidget(_ConnectionObserveControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.connector.connectionId != widget.connector.connectionId ||
+        oldWidget.connector.connectionRevision !=
+            widget.connector.connectionRevision) {
+      unawaited(_inspect());
+    }
+  }
+
+  Future<void> _inspect() async {
+    final connectionId = widget.connector.connectionId;
+    if (connectionId == null) return;
+    try {
+      final next = await widget.gateway.connectionObserve(
+        connectorId: widget.connector.id,
+        connectionId: connectionId,
+        resource: resource,
+      );
+      if (mounted && connectionId == widget.connector.connectionId) {
+        setState(() {
+          status = next;
+          error = null;
+        });
+      }
+    } on Object {
+      if (mounted) setState(() => error = 'Observe status is unavailable.');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _setEnabled(bool enabled) async {
+    final connectionId = widget.connector.connectionId;
+    if (connectionId == null || busy) return;
     setState(() {
       busy = true;
       error = null;
     });
     try {
-      await operation();
+      final next = await widget.gateway.connectionObserve(
+        connectorId: widget.connector.id,
+        connectionId: connectionId,
+        resource: resource,
+        enabled: enabled,
+      );
+      if (mounted && connectionId == widget.connector.connectionId) {
+        setState(() => status = next);
+      }
     } on AgentVaultException catch (failure) {
       if (mounted) setState(() => error = _grantError(failure.failure));
     } on Object {
@@ -547,282 +623,22 @@ final class _ServerConnectionGrantsState
     }
   }
 
-  bool _stable(String expected) => expected == connectionId;
-
-  Future<void> _previewCalendar() => _run(() async {
-    final resource = calendarResource;
-    if (resource == null || !_stable(connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    final preview = await widget.gateway.previewRemoteCalendarGrant(
-      connectorId: widget.connector.id,
-      connectionId: connectionId,
-      resource: resource,
-    );
-    if (!_stable(preview.connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    if (mounted) setState(() => calendarPreview = preview);
-  });
-
-  Future<void> _reviewCalendar() => _run(() async {
-    final preview = calendarPreview;
-    if (preview == null || !_stable(preview.connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    final overview = await widget.gateway.reviewRemoteCalendarGrant(
-      connectorId: widget.connector.id,
-      connectionId: connectionId,
-      resource: preview.resource,
-      expectedProducerFingerprint: preview.producer.fingerprint,
-      expectedSourceAuthority: preview.sourceAuthority,
-      expectedGrantId: preview.grantId,
-      expectedGrantAuthority: preview.grantAuthority,
-      expectedConsumerPolicy: preview.consumerPolicy,
-    );
-    if (overview.connectionId != null && !_stable(overview.connectionId!)) {
-      throw const FormatException('connection_changed');
-    }
-    if (mounted) setState(() => calendarOverview = overview);
-  });
-
-  Future<void> _pauseCalendar() => _run(() async {
-    final overview = calendarOverview;
-    if (overview == null ||
-        calendarPreview?.connectionId != connectionId ||
-        overview.connectionId != null && !_stable(overview.connectionId!)) {
-      throw const FormatException('connection_changed');
-    }
-    final paused = await widget.gateway.pauseRemoteCalendarGrant(
-      grantId: overview.grantId,
-      expectedAuthority: overview.grantAuthority,
-    );
-    if (paused.grantId != overview.grantId ||
-        paused.connectionId != connectionId ||
-        overview.connectionId != connectionId) {
-      throw const FormatException('connection_changed');
-    }
-    if (mounted) setState(() => calendarOverview = paused);
-  });
-
-  Future<void> _previewView() => _run(() async {
-    final viewId = selectedView;
-    if (viewId == null || !_stable(connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    final preview = await widget.gateway.previewRemoteViewGrant(
-      viewId: viewId,
-      connectorId: widget.connector.id,
-      connectionId: connectionId,
-      resource: '$viewId:$connectionId',
-      consumer: consumer,
-    );
-    if (!_stable(preview.connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    if (mounted) setState(() => viewPreview = preview);
-  });
-
-  Future<void> _reviewView() => _run(() async {
-    final preview = viewPreview;
-    if (preview == null || !_stable(preview.connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    final overview = await widget.gateway.reviewRemoteViewGrant(
-      viewId: preview.viewId,
-      connectorId: widget.connector.id,
-      connectionId: connectionId,
-      resource: preview.resource,
-      consumer: preview.consumer,
-      expectedProducerFingerprint: preview.producer.fingerprint,
-      expectedSourceAuthority: preview.sourceAuthority,
-      expectedConnectionRevision: preview.connectionRevision,
-      expectedProviderIdentity: preview.providerIdentity,
-      expectedRecipient: preview.recipient,
-    );
-    if (!_stable(overview.connectionId) ||
-        overview.connectionRevision != preview.connectionRevision) {
-      throw const FormatException('connection_changed');
-    }
-    if (mounted) setState(() => viewOverview = overview);
-  });
-
-  Future<void> _pauseView() => _run(() async {
-    final overview = viewOverview;
-    if (overview == null ||
-        viewPreview?.connectionId != connectionId ||
-        !_stable(overview.connectionId)) {
-      throw const FormatException('connection_changed');
-    }
-    final paused = await widget.gateway.pauseRemoteViewGrant(
-      grantId: overview.grantId,
-      expectedAuthority: overview.grantAuthority,
-    );
-    if (paused.grantId != overview.grantId ||
-        !_stable(paused.connectionId) ||
-        !_stable(overview.connectionId) ||
-        paused.connectionRevision != overview.connectionRevision) {
-      throw const FormatException('connection_changed');
-    }
-    if (mounted) setState(() => viewOverview = paused);
-  });
-
   @override
-  Widget build(BuildContext context) => FloeSquircle(
-    fill: FloePalette.neutral50,
-    borderWidth: 0,
-    padding: const EdgeInsets.all(FloeSpace.base),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Text('Feature permissions', style: FloeType.controlLabel),
-        const SizedBox(height: FloeSpace.xs),
-        Text(
-          'Permissions are scoped to this exact server connection. Preview is read-only; review creates the selected grant.',
-          style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
-        ),
-        if (isCalendar) ...[
-          const SizedBox(height: FloeSpace.md),
-          const Text('Calendar access', style: FloeType.controlLabel),
-          Text('Resource: ${calendarResource ?? 'Unavailable'}'),
-          _grantButtons(
-            previewKey: const ValueKey('connection-calendar-preview'),
-            previewLabel: 'Preview calendar permission',
-            reviewKey: const ValueKey('connection-calendar-review'),
-            reviewLabel: 'Review calendar permission',
-            pauseKey: const ValueKey('connection-calendar-pause'),
-            pauseLabel: 'Pause calendar permission',
-            canPreview: calendarResource != null,
-            hasPreview: calendarPreview != null,
-            hasActive: calendarOverview?.state == 'active',
-            preview: _previewCalendar,
-            review: _reviewCalendar,
-            pause: _pauseCalendar,
-          ),
-          if (calendarPreview != null)
-            Text('Verified source: ${calendarPreview!.resource}'),
-          if (calendarOverview != null)
-            Text('Grant status: ${calendarOverview!.state}'),
-        ],
-        if (views.isNotEmpty) ...[
-          const SizedBox(height: FloeSpace.md),
-          const Text('Remote views', style: FloeType.controlLabel),
-          DropdownButtonFormField<String>(
-            key: const ValueKey('connection-view-selection'),
-            initialValue: selectedView,
-            items: [
-              for (final view in views)
-                DropdownMenuItem(value: view, child: Text(view)),
-            ],
-            onChanged: busy
-                ? null
-                : (value) => setState(() {
-                    selectedView = value;
-                    viewPreview = null;
-                    viewOverview = null;
-                  }),
-            decoration: const InputDecoration(labelText: 'View'),
-          ),
-          DropdownButtonFormField<String>(
-            key: const ValueKey('connection-view-consumer'),
-            initialValue: consumer,
-            items: const [
-              DropdownMenuItem(value: 'assistant', child: Text('assistant')),
-              DropdownMenuItem(
-                value: 'floe.builtin.work-context',
-                child: Text('work-context'),
-              ),
-              DropdownMenuItem(
-                value: 'floe.builtin.communication',
-                child: Text('communication'),
-              ),
-              DropdownMenuItem(
-                value: 'floe.builtin.life-logistics',
-                child: Text('life-logistics'),
-              ),
-            ],
-            onChanged: busy
-                ? null
-                : (value) => setState(() {
-                    consumer = value!;
-                    viewPreview = null;
-                    viewOverview = null;
-                  }),
-            decoration: const InputDecoration(labelText: 'Consumer'),
-          ),
-          _grantButtons(
-            previewKey: const ValueKey('connection-view-preview'),
-            previewLabel: 'Preview remote permission',
-            reviewKey: const ValueKey('connection-view-review'),
-            reviewLabel: 'Review remote permission',
-            pauseKey: const ValueKey('connection-view-pause'),
-            pauseLabel: 'Pause remote permission',
-            canPreview: selectedView != null,
-            hasPreview: viewPreview != null,
-            hasActive: viewOverview?.state == 'active',
-            preview: _previewView,
-            review: _reviewView,
-            pause: _pauseView,
-          ),
-          if (viewPreview != null)
-            Text('Verified source: ${viewPreview!.resource}'),
-          if (viewOverview != null)
-            Text('Grant status: ${viewOverview!.state}'),
-        ],
-        if (error != null) ...[
-          const SizedBox(height: FloeSpace.xs),
-          Text(
-            error!,
-            style: FloeType.bodySmall.copyWith(color: FloePalette.error600),
-          ),
-        ],
-      ],
-    ),
-  );
-
-  Widget _grantButtons({
-    required Key previewKey,
-    required String previewLabel,
-    required Key reviewKey,
-    required String reviewLabel,
-    required Key pauseKey,
-    required String pauseLabel,
-    required bool canPreview,
-    required bool hasPreview,
-    required bool hasActive,
-    required Future<void> Function() preview,
-    required Future<void> Function() review,
-    required Future<void> Function() pause,
-  }) => Wrap(
-    spacing: FloeSpace.sm,
-    children: [
-      FloeButton.text(
-        key: previewKey,
-        onPressed: busy || !canPreview ? null : preview,
-        child: Text(previewLabel),
-      ),
-      if (hasPreview)
-        FloeButton.filled(
-          key: reviewKey,
-          onPressed: busy ? null : review,
-          child: Text(reviewLabel),
-        ),
-      if (hasActive)
-        FloeButton.text(
-          key: pauseKey,
-          onPressed: busy ? null : pause,
-          child: Text(pauseLabel),
-        ),
-    ],
+  Widget build(BuildContext context) => FloeSwitchTile(
+    key: const ValueKey('connection-use-with-floe'),
+    title: 'Use with Floe',
+    subtitle:
+        error ??
+        switch (status) {
+          'active' => 'Floe can read this connection for supported features.',
+          'paused' =>
+            'The connection remains connected, but Floe will not read it.',
+          _ => 'Review is required before Floe can read this connection.',
+        },
+    value: status == 'active',
+    onChanged: busy ? null : _setEnabled,
   );
 }
-
-List<String> _remoteViewsFor(String connectorId) => switch (connectorId) {
-  'gmail' || 'microsoft.mail' => ['mail.communication'],
-  'slack' || 'microsoft.teams' || 'github.repository' => ['work.context'],
-  'home_assistant.selected' => ['life.logistics'],
-  _ => const [],
-};
 
 String _grantError(String code) => switch (code) {
   'policy_denied' =>

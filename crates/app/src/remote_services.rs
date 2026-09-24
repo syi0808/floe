@@ -139,53 +139,11 @@ pub enum RemoteAccessCommand {
     EnrollmentStatus {
         enrollment_id: String,
     },
-    CalendarGrantPreview {
+    ConnectionObserve {
         connector_id: String,
         connection_id: String,
-        resource: String,
-    },
-    CalendarGrantReview {
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        expected_producer_fingerprint: String,
-        expected_source_authority: floe_context_contract::SourceAuthority,
-        expected_grant_id: Option<floe_access::GrantId>,
-        expected_grant_authority: Option<floe_access::GrantAuthority>,
-        expected_consumer_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
-    },
-    CalendarGrantStatus {
-        grant_id: floe_access::GrantId,
-    },
-    CalendarGrantPause {
-        grant_id: floe_access::GrantId,
-        expected_authority: floe_access::GrantAuthority,
-    },
-    ViewGrantPreview {
-        view_id: String,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        consumer: String,
-    },
-    ViewGrantReview {
-        view_id: String,
-        connector_id: String,
-        connection_id: String,
-        resource: String,
-        consumer: String,
-        expected_producer_fingerprint: String,
-        expected_source_authority: floe_context_contract::SourceAuthority,
-        expected_connection_revision: u64,
-        expected_provider_identity: String,
-        expected_recipient: String,
-    },
-    ViewGrantStatus {
-        grant_id: floe_access::GrantId,
-    },
-    ViewGrantPause {
-        grant_id: floe_access::GrantId,
-        expected_authority: floe_access::GrantAuthority,
+        resource: Option<String>,
+        enabled: Option<bool>,
     },
 }
 
@@ -195,14 +153,11 @@ impl RemoteAccessCommand {
             Self::InspectProducer => "remote_authority_inspect_producer",
             Self::ReviewAndEnroll { .. } => "remote_authority_review_and_enroll",
             Self::EnrollmentStatus { .. } => "remote_authority_enrollment_status",
-            Self::CalendarGrantPreview { .. } => "remote_calendar_grant_preview",
-            Self::CalendarGrantReview { .. } => "remote_calendar_grant_review",
-            Self::CalendarGrantStatus { .. } => "remote_calendar_grant_status",
-            Self::CalendarGrantPause { .. } => "remote_calendar_grant_pause",
-            Self::ViewGrantPreview { .. } => "remote_view_grant_preview",
-            Self::ViewGrantReview { .. } => "remote_view_grant_review",
-            Self::ViewGrantStatus { .. } => "remote_view_grant_status",
-            Self::ViewGrantPause { .. } => "remote_view_grant_pause",
+            Self::ConnectionObserve { enabled, .. } => match enabled {
+                None => "remote_connection_observe_inspect",
+                Some(true) => "remote_connection_observe_enable",
+                Some(false) => "remote_connection_observe_disable",
+            },
         }
     }
 }
@@ -216,10 +171,7 @@ pub struct RemoteAccessResult {
     pub producer: Option<crate::RemoteProducerIdentity>,
     pub owner: Option<crate::RemoteOwnerPublicKey>,
     pub enrollment: Option<crate::RemoteEnrollmentStatus>,
-    pub calendar_grant: Option<crate::RemoteGrantOverview>,
-    pub calendar_preview: Option<crate::RemoteCalendarGrantPreview>,
-    pub view_grant: Option<crate::RemoteGrantOverview>,
-    pub view_preview: Option<crate::RemoteViewGrantPreview>,
+    pub connection_observe_status: Option<String>,
     pub failure: Option<crate::AgentFailure>,
 }
 

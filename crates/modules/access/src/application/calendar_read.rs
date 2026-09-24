@@ -260,7 +260,10 @@ pub fn admission_matches(
     admission: &CalendarReadAccessAdmission,
     view: &impl floe_context_contract::HeldGrant,
 ) -> bool {
-    admission.scope == *view.scope() && admission_matches_dependency(admission, view.dependency())
+    let [binding] = view.bindings() else {
+        return false;
+    };
+    admission.scope == binding.scope && admission_matches_dependency(admission, &binding.dependency)
 }
 
 pub fn admission_matches_dependency(

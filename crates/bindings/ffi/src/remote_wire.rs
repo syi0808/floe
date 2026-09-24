@@ -181,89 +181,16 @@ fn access_with_host<Services: floe_app::HostServices + floe_app::RemoteAccessCom
         RemoteAccessOperationDto::EnrollmentStatus { enrollment_id } => {
             floe_app::RemoteAccessCommand::EnrollmentStatus { enrollment_id }
         }
-        RemoteAccessOperationDto::CalendarGrantPreview {
+        RemoteAccessOperationDto::ConnectionObserve {
             connector_id,
             connection_id,
             resource,
-        } => floe_app::RemoteAccessCommand::CalendarGrantPreview {
+            enabled,
+        } => floe_app::RemoteAccessCommand::ConnectionObserve {
             connector_id,
             connection_id,
             resource,
-        },
-        RemoteAccessOperationDto::CalendarGrantReview {
-            connector_id,
-            connection_id,
-            resource,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_grant_id,
-            expected_grant_authority,
-            expected_consumer_policy,
-        } => floe_app::RemoteAccessCommand::CalendarGrantReview {
-            connector_id,
-            connection_id,
-            resource,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_grant_id,
-            expected_grant_authority,
-            expected_consumer_policy,
-        },
-        RemoteAccessOperationDto::CalendarGrantStatus { grant_id } => {
-            floe_app::RemoteAccessCommand::CalendarGrantStatus { grant_id }
-        }
-        RemoteAccessOperationDto::CalendarGrantPause {
-            grant_id,
-            expected_authority,
-        } => floe_app::RemoteAccessCommand::CalendarGrantPause {
-            grant_id,
-            expected_authority,
-        },
-        RemoteAccessOperationDto::ViewGrantPreview {
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-        } => floe_app::RemoteAccessCommand::ViewGrantPreview {
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-        },
-        RemoteAccessOperationDto::ViewGrantReview {
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_connection_revision,
-            expected_provider_identity,
-            expected_recipient,
-        } => floe_app::RemoteAccessCommand::ViewGrantReview {
-            view_id,
-            connector_id,
-            connection_id,
-            resource,
-            consumer,
-            expected_producer_fingerprint,
-            expected_source_authority,
-            expected_connection_revision,
-            expected_provider_identity,
-            expected_recipient,
-        },
-        RemoteAccessOperationDto::ViewGrantStatus { grant_id } => {
-            floe_app::RemoteAccessCommand::ViewGrantStatus { grant_id }
-        }
-        RemoteAccessOperationDto::ViewGrantPause {
-            grant_id,
-            expected_authority,
-        } => floe_app::RemoteAccessCommand::ViewGrantPause {
-            grant_id,
-            expected_authority,
+            enabled,
         },
         RemoteAccessOperationDto::ReadResult { .. } => unreachable!(),
     };
@@ -281,27 +208,7 @@ fn access_result(result: floe_app::RemoteAccessResult) -> AppWireResult<RemoteAc
         producer: result.producer.as_ref().map(producer_identity_dto),
         owner: result.owner.as_ref().map(owner_key_dto),
         enrollment: result.enrollment.map(enrollment_status_dto),
-        calendar_grant: result
-            .calendar_grant
-            .as_ref()
-            .map(|overview| remote_calendar_grant_overview(&overview.grant))
-            .transpose()
-            .map_err(|_| internal_error())?,
-        calendar_preview: result
-            .calendar_preview
-            .map(|preview| remote_calendar_preview_dto(result.person_id, preview)),
-        view_grant: result
-            .view_grant
-            .as_ref()
-            .map(|overview| {
-                remote_view_grant_overview(&overview.grant, overview.connection_revision)
-            })
-            .transpose()
-            .map_err(|_| internal_error())?,
-        view_preview: result
-            .view_preview
-            .as_ref()
-            .map(|preview| remote_view_grant_preview(result.person_id, preview)),
+        connection_observe_status: result.connection_observe_status,
         failure: result.failure.as_ref().map(|failure| {
             failure_envelope(failure, &result.stage, &result.operation_id.to_string())
         }),

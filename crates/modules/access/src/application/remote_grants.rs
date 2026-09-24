@@ -29,7 +29,7 @@ pub struct RemoteViewGrantRequest<'a> {
     pub connector_id: &'a str,
     pub connection_id: &'a str,
     pub resource: &'a str,
-    pub consumer_name: &'a str,
+    pub consumers: &'a [GrantConsumer],
     /// The data category this view's contents fall under.
     pub data_category: floe_context_contract::GrantDataCategory,
 }
@@ -40,7 +40,7 @@ pub struct RemoteViewGrantPreview {
     pub reference: RemoteViewSourceReference,
     pub producer: RemoteProducerIdentity,
     pub connection_revision: u64,
-    pub consumer: String,
+    pub consumers: Vec<String>,
 }
 
 /// What the Person says they already reviewed.
@@ -58,7 +58,7 @@ fn admissible(request: &RemoteViewGrantRequest<'_>, resource_matches: bool) -> b
         && !request.pairing.client_id.is_empty()
         && !request.pairing.device_id.is_empty()
         && resource_matches
-        && !request.consumer_name.trim().is_empty()
+        && !request.consumers.is_empty()
 }
 
 /// Show the Person what they would be granting.
@@ -77,7 +77,11 @@ pub async fn preview_remote_view_grant(
         return Err(AgentFailure::PolicyDenied);
     }
     // The consumer name has to be one the product may name at all.
-    GrantConsumer::builtin(request.consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    if request.consumers.iter().any(|consumer| {
+        !matches!(consumer, GrantConsumer::Builtin(identifier) if !identifier.is_empty())
+    }) {
+        return Err(AgentFailure::InvalidInput);
+    }
     let producer = transport.producer_identity(window).await?;
     producer_is_pinned(&store.pinned_producer().await?, &producer)?;
     let query = RemoteSourceQuery {
@@ -95,7 +99,11 @@ pub async fn preview_remote_view_grant(
         reference,
         producer,
         connection_revision: preview.connection_revision,
-        consumer: request.consumer_name.to_owned(),
+        consumers: request
+            .consumers
+            .iter()
+            .map(|consumer| consumer.identifier().to_owned())
+            .collect(),
     })
 }
 
@@ -137,12 +145,12 @@ pub async fn review_and_activate_remote_view_grant(
     let scope = remote_view_scope(
         request.resource,
         request.data_category,
-        GrantConsumer::builtin(request.consumer_name).map_err(|_| AgentFailure::InvalidInput)?,
+        request.consumers.to_vec(),
         preview.producer.audience.clone(),
     )?;
     let source = remote_view_source(&preview.reference)?;
     let existing = store
-        .find_view_grant(request.view_id, &source, request.consumer_name)
+        .find_view_grant(request.view_id, &source, request.consumers[0].identifier())
         .await?;
     match review_remote_view_grant(existing.as_ref(), &scope)? {
         RemoteViewGrantReview::AlreadyGranted => existing.ok_or(AgentFailure::PolicyDenied),

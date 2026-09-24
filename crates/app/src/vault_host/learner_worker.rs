@@ -39,9 +39,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         LearnerDependencyResolver,
         LearnerRecipientAuthority,
     );
-    let model = LearnerModelHost {
-        executor: &service,
-    };
+    let model = LearnerModelHost { executor: &service };
     LearnerService {
         model: &model,
         repository: vault,
@@ -100,8 +98,8 @@ impl LearnerModel for LearnerModelHost<'_> {
             tools: vec![],
             revision: 1,
         };
-        let projection = floe_context::assemble_context_projection(
-            floe_context::ContextProjectionInput {
+        let projection =
+            floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
                 role: floe_context::ContextProjectionRole::Learner,
                 purpose: LEARNER_INFERENCE_PURPOSE,
                 response_contract: "One structured memory review answer.",
@@ -114,8 +112,7 @@ impl LearnerModel for LearnerModelHost<'_> {
                 authorized_history_dependencies: &[],
                 input_data_classes: vec![DataClass::Personal],
                 max_output_bytes: request.max_output_bytes,
-            },
-        )?;
+            })?;
         // Background root scope: the Learner is not a child of the foreground
         // turn. The Learner budget becomes the scope allowance under the
         // stable Learner run identity; Inference settles the attempt against
@@ -201,9 +198,8 @@ impl floe_access::DependencyResolver for LearnerDependencyResolver {
         &'a self,
         _dependency: &'a floe_context_contract::ContextDependency,
         _request: &'a floe_access::DependencyAuthorization,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
         Box::pin(async move { Err(AgentFailure::PolicyDenied) })
     }
 }
@@ -230,7 +226,7 @@ mod tests {
     use chrono::Utc;
     use floe_agent_contract::{ModelResponse, ModelUsage as ContractUsage};
     use floe_kernel::PersonId;
-    use floe_knowledge::{KNOWLEDGE_VERSION, LearningOutcome, LearnerReviewInput};
+    use floe_knowledge::{KNOWLEDGE_VERSION, LearnerReviewInput, LearningOutcome};
     use tokio::time::{Duration, Instant};
 
     use super::*;
@@ -251,10 +247,14 @@ mod tests {
 
     impl FakeExecutor {
         fn answering(text: &str, tokens: u64, cost_micros: u64) -> Self {
-            Self::responding(vec![ModelStep::Answer {
-                text: text.into(),
-                artifacts: vec![],
-            }], tokens, cost_micros)
+            Self::responding(
+                vec![ModelStep::Answer {
+                    text: text.into(),
+                    artifacts: vec![],
+                }],
+                tokens,
+                cost_micros,
+            )
         }
 
         fn responding(steps: Vec<ModelStep>, tokens: u64, cost_micros: u64) -> Self {
@@ -282,10 +282,7 @@ mod tests {
             constraint: InferenceExecutionConstraint,
         ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            self.seen
-                .lock()
-                .unwrap()
-                .push((request, constraint));
+            self.seen.lock().unwrap().push((request, constraint));
             self.seen_scopes.lock().unwrap().push(ScopeFacts {
                 max_tokens: scope.budget().max_tokens(),
                 max_cost_micros: scope.budget().max_cost_micros(),
@@ -344,19 +341,12 @@ mod tests {
         assert_eq!(*constraint, InferenceExecutionConstraint::DeviceOnly);
         assert_eq!(dispatched.purpose, LEARNER_INFERENCE_PURPOSE);
         assert_eq!(dispatched.consumer, LEARNER_INFERENCE_CONSUMER);
-        assert_eq!(
-            dispatched.principal,
-            request.input.person_id.to_string()
-        );
+        assert_eq!(dispatched.principal, request.input.person_id.to_string());
         assert!(dispatched.preferred_profile_id.is_none());
         assert!(dispatched.catalog.tools.is_empty());
         assert!(dispatched.catalog.cards.is_empty());
         assert_eq!(
-            dispatched
-                .projection
-                .envelope
-                .scoped_instructions
-                .purpose,
+            dispatched.projection.envelope.scoped_instructions.purpose,
             LEARNER_INFERENCE_PURPOSE
         );
         assert!(
@@ -377,11 +367,7 @@ mod tests {
             [ModelConversationEntry::User { text, .. }] if text == &request.input.digest
         ));
         assert_eq!(
-            dispatched
-                .projection
-                .envelope
-                .contextual_data
-                .memories,
+            dispatched.projection.envelope.contextual_data.memories,
             request.input.current_memories
         );
         let scopes = executor.seen_scopes.lock().unwrap();
@@ -389,7 +375,10 @@ mod tests {
         assert_eq!(scopes[0].max_tokens, request.remaining_tokens);
         assert_eq!(scopes[0].max_cost_micros, request.remaining_cost_micros);
         assert_eq!(scopes[0].deadline, request.deadline);
-        assert_eq!(scopes[0].run_id.map(RunId::as_uuid), Some(request.input.run_id));
+        assert_eq!(
+            scopes[0].run_id.map(RunId::as_uuid),
+            Some(request.input.run_id)
+        );
     }
 
     #[tokio::test]
