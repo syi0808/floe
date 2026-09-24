@@ -49,6 +49,7 @@ mod learner_worker;
 mod personal_grants;
 mod product_actions;
 mod remote_authority;
+mod remote_observe;
 mod remote_views;
 mod review_snapshot;
 
@@ -436,6 +437,7 @@ struct Progress {
     remote_pairing: Option<floe_connections::PairingStatus>,
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe_status: Option<String>,
+    reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
     calendar_access: Option<crate::CalendarAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
@@ -975,6 +977,7 @@ impl Worker {
             remote_enrollment: progress.remote_enrollment.clone(),
             remote_pairing: progress.remote_pairing.clone(),
             connection_observe_status: progress.connection_observe_status.clone(),
+            reviewed_observe_bundle: progress.reviewed_observe_bundle.clone(),
             personal_access: progress.personal_access.clone(),
             calendar_access: progress.calendar_access.clone(),
             calendar_actions: progress.calendar_actions.clone(),
@@ -1243,6 +1246,7 @@ struct VaultExecutionResult {
     remote_pairing: Option<floe_connections::PairingStatus>,
     remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     connection_observe_status: Option<String>,
+    reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
     personal_access: Option<floe_access::PersonalAccessOverview>,
     calendar_access: Option<crate::CalendarAccessOverview>,
     calendar_actions: Option<crate::CalendarActionsResult>,
@@ -1306,6 +1310,7 @@ fn finish_job(
                 progress.remote_pairing = result.remote_pairing;
                 progress.remote_owner = result.remote_owner;
                 progress.connection_observe_status = result.connection_observe_status;
+                progress.reviewed_observe_bundle = result.reviewed_observe_bundle;
                 progress.personal_access = result.personal_access;
                 progress.calendar_access = result.calendar_access;
                 progress.calendar_actions = result.calendar_actions;
@@ -1982,232 +1987,216 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     resource,
                     enabled,
                     disconnecting,
+                    expected,
                 } => {
                     let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
                     let vault = vault.vault.as_ref();
+                    remote_observe::validate_observe_identity(
+                        connector_id,
+                        connection_id,
+                        resource.as_deref(),
+                    )?;
+                    match enabled {
+                        None => {
+                            let status = remote_observe::observe_status(
+                                vault,
+                                job.person,
+                                connector_id,
+                                connection_id,
+                                resource.as_deref(),
+                            )
+                            .await?;
+                            Ok(VaultExecutionResult {
+                                connection_observe_status: Some(status),
+                                ..VaultExecutionResult::ready()
+                            })
+                        }
+                        Some(true) => {
+                            if *disconnecting {
+                                return Err(AgentFailure::InvalidInput);
+                            }
+                            let expected = expected.as_ref().ok_or(AgentFailure::InvalidInput)?;
+                            let policies =
+                                crate::first_party_observe::remote_policies(connector_id)?;
+                            if policies.is_empty() {
+                                return Err(AgentFailure::InvalidInput);
+                            }
+                            let calendar = policies.len() == 1
+                                && policies[0].view_id == "calendar.timeline";
+                            if calendar {
+                                let transport =
+                                    RemoteAuthorityEndpoint::from_current_connection(
+                                        connections,
+                                        &person_text,
+                                        caller.device_id(),
+                                        Some(vault),
+                                    )?;
+                                let window =
+                                    remote_authority::authority_window(job.cancellation.clone());
+                                let pairing = floe_access::RemotePairingIdentity {
+                                    person_id: &person_text,
+                                    device_id: caller.device_id(),
+                                    client_id: transport.client_id(),
+                                };
+                                let ctx = remote_observe::RemoteObserveContext {
+                                    core,
+                                    vault,
+                                    person_id: job.person,
+                                    pairing,
+                                    connector_id,
+                                    connection_id,
+                                    resource: resource.as_deref(),
+                                    window: &window,
+                                };
+                                remote_observe::enable_bundle(&ctx, &transport, expected).await?;
+                            } else {
+                                let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                                    connections, &person_text, caller.device_id(),
+                                )?
+                                .ok_or(AgentFailure::PolicyDenied)?;
+                                let transport =
+                                    floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                                        &source_client,
+                                        vault,
+                                    );
+                                let window = floe_access::RemoteCallWindow {
+                                    deadline: tokio::time::Instant::now()
+                                        + Duration::from_secs(30),
+                                    cancellation: job.cancellation.clone(),
+                                };
+                                let pairing = floe_access::RemotePairingIdentity {
+                                    person_id: &person_text,
+                                    client_id: source_client.source().client_id(),
+                                    device_id: caller.device_id(),
+                                };
+                                let ctx = remote_observe::RemoteObserveContext {
+                                    core,
+                                    vault,
+                                    person_id: job.person,
+                                    pairing,
+                                    connector_id,
+                                    connection_id,
+                                    resource: resource.as_deref(),
+                                    window: &window,
+                                };
+                                remote_observe::enable_bundle(&ctx, &transport, expected).await?;
+                            }
+                            let status = remote_observe::observe_status(
+                                vault,
+                                job.person,
+                                connector_id,
+                                connection_id,
+                                resource.as_deref(),
+                            )
+                            .await?;
+                            Ok(VaultExecutionResult {
+                                connection_observe_status: Some(status),
+                                ..VaultExecutionResult::ready()
+                            })
+                        }
+                        Some(false) => {
+                            if expected.is_some() {
+                                return Err(AgentFailure::InvalidInput);
+                            }
+                            remote_observe::disable_bundle(
+                                vault,
+                                job.person,
+                                connector_id,
+                                connection_id,
+                                resource.as_deref(),
+                                *disconnecting,
+                            )
+                            .await?;
+                            let status = remote_observe::observe_status(
+                                vault,
+                                job.person,
+                                connector_id,
+                                connection_id,
+                                resource.as_deref(),
+                            )
+                            .await?;
+                            Ok(VaultExecutionResult {
+                                connection_observe_status: Some(status),
+                                ..VaultExecutionResult::ready()
+                            })
+                        }
+                    }
+                }
+                crate::RemoteAccessCommand::ConnectionObserveReview {
+                    connector_id,
+                    connection_id,
+                    resource,
+                } => {
+                    let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+                    let vault = vault.vault.as_ref();
+                    remote_observe::validate_observe_identity(
+                        connector_id,
+                        connection_id,
+                        resource.as_deref(),
+                    )?;
                     let policies = crate::first_party_observe::remote_policies(connector_id)?;
                     if policies.is_empty() {
                         return Err(AgentFailure::InvalidInput);
                     }
-                    let expected_views = policies
-                        .iter()
-                        .map(|policy| policy.view_id)
-                        .collect::<Vec<_>>();
-                    if *enabled == Some(false) {
-                        for grant in vault.list_data_access_grants(128).await? {
-                            if grant.source().connector().as_str() == connector_id
-                                && grant.source().connection_id().as_str() == connection_id
-                                && grant.state() == floe_access::GrantState::Active
-                                && (grant.scope().resources().iter().any(|value| {
-                                    expected_views.iter().any(|view| {
-                                        value.as_str()
-                                            == floe_context::remote_view_resource(
-                                                view,
-                                                connection_id,
-                                            )
-                                    })
-                                }) || expected_views == ["calendar.timeline"])
-                            {
-                                if *disconnecting {
-                                    vault
-                                        .revoke_data_access_grant(grant.id(), grant.authority())
-                                        .await?;
-                                } else if expected_views == ["calendar.timeline"] {
-                                    vault
-                                        .pause_remote_calendar_grant(grant.id(), grant.authority())
-                                        .await?;
-                                } else {
-                                    vault
-                                        .pause_remote_view_grant(grant.id(), grant.authority())
-                                        .await?;
-                                }
-                            }
-                        }
-                    } else if *enabled == Some(true) {
-                        let mut current_grants = Vec::with_capacity(policies.len());
-                        if expected_views == ["calendar.timeline"] {
-                            let resource = resource.as_deref().ok_or(AgentFailure::InvalidInput)?;
-                            let transport = RemoteAuthorityEndpoint::from_current_connection(
-                                connections,
-                                &person_text,
-                                caller.device_id(),
-                                Some(vault),
-                            )?;
-                            let evidence =
-                                calendar_access::remote_calendar_evidence(core, job.person).await?;
-                            let consumers = &policies[0].consumers;
-                            let request = floe_access::RemoteCalendarGrantRequest {
-                                person_id: job.person,
-                                pairing: floe_access::RemotePairingIdentity {
-                                    person_id: &person_text,
-                                    device_id: caller.device_id(),
-                                    client_id: transport.client_id(),
-                                },
-                                connector_id,
-                                connection_id,
-                                resource,
-                            };
-                            let window =
-                                remote_authority::authority_window(job.cancellation.clone());
-                            let preview = floe_access::preview_remote_calendar_grant(
-                                vault,
-                                &transport,
-                                request.clone(),
-                                evidence.as_access(),
-                                consumers,
-                                &window,
-                            )
-                            .await?;
-                            let grant = floe_access::review_and_activate_remote_calendar_grant(
-                                vault,
-                                &transport,
-                                request,
-                                evidence.as_access(),
-                                consumers,
-                                floe_access::RemoteCalendarGrantReviewExpectation {
-                                    producer_fingerprint: &preview.producer.fingerprint,
-                                    source_authority: preview.reference.source_authority,
-                                    grant_id: preview.grant_id,
-                                    grant_authority: preview.grant_authority,
-                                    consumer_policy: preview.consumer_policy,
-                                },
-                                &window,
-                            )
-                            .await?;
-                            current_grants.push(grant.id());
-                        } else {
-                            let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
-                                connections, &person_text, caller.device_id(),
-                            )?.ok_or(AgentFailure::PolicyDenied)?;
-                            let transport =
-                                floe_provider_adapters::sources::AuthorizedSourceClient::new(
-                                    &source_client,
-                                    vault,
-                                );
-                            let window = floe_access::RemoteCallWindow {
-                                deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-                                cancellation: job.cancellation.clone(),
-                            };
-                            let mut activations = Vec::with_capacity(policies.len());
-                            for policy in &policies {
-                                let grant_resource = floe_context::remote_view_resource(
-                                    policy.view_id,
-                                    connection_id,
-                                );
-                                let request = floe_access::RemoteViewGrantRequest {
-                                    person_id: job.person,
-                                    pairing: floe_access::RemotePairingIdentity {
-                                        person_id: &person_text,
-                                        client_id: source_client.source().client_id(),
-                                        device_id: caller.device_id(),
-                                    },
-                                    view_id: policy.view_id,
-                                    connector_id,
-                                    connection_id,
-                                    resource: &grant_resource,
-                                    consumers: &policy.consumers,
-                                    data_category: policy.categories[0].clone(),
-                                };
-                                let preview = floe_access::preview_remote_view_grant(
-                                    vault, &transport, request, true, true, &window,
-                                )
-                                .await?;
-                                let preparation =
-                                    floe_access::prepare_remote_view_grant_activation(
-                                        vault,
-                                        &transport,
-                                        request,
-                                        floe_access::RemoteViewGrantExpectation {
-                                            producer_fingerprint: &preview.producer.fingerprint,
-                                            source_authority: preview.reference.source_authority,
-                                            connection_revision: preview.connection_revision,
-                                            provider_identity: &preview.reference.provider_identity,
-                                            recipient: &preview.producer.audience,
-                                        },
-                                        true,
-                                        true,
-                                        &window,
-                                    )
-                                    .await?;
-                                match preparation {
-                                    floe_access::RemoteViewGrantPreparation::Current(grant) => {
-                                        current_grants.push(grant.id());
-                                    }
-                                    floe_access::RemoteViewGrantPreparation::Activate(
-                                        activation,
-                                    ) => activations.push(activation),
-                                }
-                            }
-                            for grant in vault.activate_remote_view_grants(activations).await? {
-                                current_grants.push(grant.id());
-                            }
-                        }
-                        for grant in vault.list_data_access_grants(128).await? {
-                            let product_grant = expected_views == ["calendar.timeline"]
-                                || grant.scope().resources().iter().any(|value| {
-                                    expected_views.iter().any(|view| {
-                                        value.as_str()
-                                            == floe_context::remote_view_resource(
-                                                view,
-                                                connection_id,
-                                            )
-                                    })
-                                });
-                            if grant.source().connector().as_str() == connector_id
-                                && grant.source().connection_id().as_str() == connection_id
-                                && product_grant
-                                && grant.state() != floe_access::GrantState::Revoked
-                                && !current_grants.contains(&grant.id())
-                            {
-                                vault
-                                    .revoke_data_access_grant(grant.id(), grant.authority())
-                                    .await?;
-                            }
-                        }
-                    }
-                    let grants = vault.list_data_access_grants(128).await?;
-                    let relevant = grants
-                        .iter()
-                        .filter(|grant| {
-                            grant.source().connector().as_str() == connector_id
-                                && grant.source().connection_id().as_str() == connection_id
-                                && grant.state() != floe_access::GrantState::Revoked
-                                && (expected_views == ["calendar.timeline"]
-                                    || grant.scope().resources().iter().any(|value| {
-                                        expected_views.iter().any(|view| {
-                                            value.as_str()
-                                                == floe_context::remote_view_resource(
-                                                    view,
-                                                    connection_id,
-                                                )
-                                        })
-                                    }))
-                        })
-                        .collect::<Vec<_>>();
-                    let status = if relevant.len() != policies.len() {
-                        "needs_review"
-                    } else if relevant.iter().all(|grant| {
-                        grant.state() == floe_access::GrantState::Active
-                            && !grant.review_required()
-                            && policies.iter().any(|policy| {
-                                let mut expected = policy.consumers.clone();
-                                expected.sort();
-                                let mut actual = grant.scope().consumers().to_vec();
-                                actual.sort();
-                                expected == actual
-                            })
-                    }) {
-                        "active"
-                    } else if relevant
-                        .iter()
-                        .all(|grant| grant.state() == floe_access::GrantState::Paused)
-                    {
-                        "paused"
+                    let calendar =
+                        policies.len() == 1 && policies[0].view_id == "calendar.timeline";
+                    let bundle = if calendar {
+                        let transport = RemoteAuthorityEndpoint::from_current_connection(
+                            connections,
+                            &person_text,
+                            caller.device_id(),
+                            Some(vault),
+                        )?;
+                        let window = remote_authority::authority_window(job.cancellation.clone());
+                        let pairing = floe_access::RemotePairingIdentity {
+                            person_id: &person_text,
+                            device_id: caller.device_id(),
+                            client_id: transport.client_id(),
+                        };
+                        let ctx = remote_observe::RemoteObserveContext {
+                            core,
+                            vault,
+                            person_id: job.person,
+                            pairing,
+                            connector_id,
+                            connection_id,
+                            resource: resource.as_deref(),
+                            window: &window,
+                        };
+                        remote_observe::review_bundle(&ctx, &transport).await?
                     } else {
-                        "needs_review"
+                        let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
+                            connections, &person_text, caller.device_id(),
+                        )?
+                        .ok_or(AgentFailure::PolicyDenied)?;
+                        let transport =
+                            floe_provider_adapters::sources::AuthorizedSourceClient::new(
+                                &source_client,
+                                vault,
+                            );
+                        let window = floe_access::RemoteCallWindow {
+                            deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                            cancellation: job.cancellation.clone(),
+                        };
+                        let pairing = floe_access::RemotePairingIdentity {
+                            person_id: &person_text,
+                            client_id: source_client.source().client_id(),
+                            device_id: caller.device_id(),
+                        };
+                        let ctx = remote_observe::RemoteObserveContext {
+                            core,
+                            vault,
+                            person_id: job.person,
+                            pairing,
+                            connector_id,
+                            connection_id,
+                            resource: resource.as_deref(),
+                            window: &window,
+                        };
+                        remote_observe::review_bundle(&ctx, &transport).await?
                     };
                     Ok(VaultExecutionResult {
-                        connection_observe_status: Some(status.into()),
+                        reviewed_observe_bundle: Some(bundle),
                         ..VaultExecutionResult::ready()
                     })
                 }

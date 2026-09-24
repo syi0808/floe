@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::{CallerContext, ServiceError};
+use crate::{CallerContext, GrantAuthority, GrantId, ServiceError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PairingTarget {
@@ -130,6 +130,34 @@ pub trait RemotePairingCommands {
     ) -> Result<RemotePairingResult, ServiceError>;
 }
 
+/// One reviewed grant of a remote Observe bundle: the exact member the
+/// Person reviewed, with the live descriptor fields, the grant expectation
+/// (or reviewed absence) and the recorded policy the enable binds. The
+/// owner re-probes live and compares every field; a fresh read never
+/// substitutes for these values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteObserveMemberExpectation {
+    pub view_id: String,
+    pub resource: String,
+    pub producer_fingerprint: String,
+    pub source_authority: crate::SourceAuthority,
+    pub connection_revision: Option<u64>,
+    pub provider_identity: String,
+    pub recipient: String,
+    pub expected_grant_id: Option<GrantId>,
+    pub expected_grant_authority: Option<GrantAuthority>,
+    pub expected_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
+}
+
+/// The whole reviewed bundle a remote Observe enable binds: exactly the
+/// canonical policy views, in canonical view order. A live member outside
+/// this set, or a changed per-member expectation, refuses the enable
+/// instead of widening it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteConnectionObserveExpectation {
+    pub members: Vec<RemoteObserveMemberExpectation>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RemoteAccessCommand {
     InspectProducer,
@@ -145,6 +173,16 @@ pub enum RemoteAccessCommand {
         resource: Option<String>,
         enabled: Option<bool>,
         disconnecting: bool,
+        /// The reviewed bundle the enable binds. Required when `enabled` is
+        /// `Some(true)`; any other shape rejects before touching owners.
+        expected: Option<RemoteConnectionObserveExpectation>,
+    },
+    /// Read the reviewable Observe bundle without mutating: the snapshot an
+    /// enable must echo back. Nothing is stored.
+    ConnectionObserveReview {
+        connector_id: String,
+        connection_id: String,
+        resource: Option<String>,
     },
 }
 
@@ -159,6 +197,7 @@ impl RemoteAccessCommand {
                 Some(true) => "remote_connection_observe_enable",
                 Some(false) => "remote_connection_observe_disable",
             },
+            Self::ConnectionObserveReview { .. } => "remote_connection_observe_review",
         }
     }
 }
@@ -173,6 +212,9 @@ pub struct RemoteAccessResult {
     pub owner: Option<crate::RemoteOwnerPublicKey>,
     pub enrollment: Option<crate::RemoteEnrollmentStatus>,
     pub connection_observe_status: Option<String>,
+    /// The reviewable bundle a `ConnectionObserveReview` read. `None` for
+    /// every other command; an enable echoes this snapshot back.
+    pub reviewed_bundle: Option<RemoteConnectionObserveExpectation>,
     pub failure: Option<crate::AgentFailure>,
 }
 

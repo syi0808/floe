@@ -338,20 +338,23 @@ where
             .map(|resource| resource.as_str().to_owned())
             .collect();
         let mut members = Vec::with_capacity(policies.len());
+        let mut connection_revision = None;
         for policy in &policies {
             let resource = if policy.view_id == "calendar.timeline" {
                 if connector == "calendar.google" || connector == "calendar.microsoft" {
                     if requested.len() != 1 {
                         return Err(AgentFailure::CapabilityUnavailable);
                     }
-                    self.verified_remote_calendar_resource(
-                        person_id,
-                        connector,
-                        connection,
-                        requirement,
-                        &requested[0],
-                    )
-                    .await?;
+                    connection_revision = Some(
+                        self.verified_remote_calendar_resource(
+                            person_id,
+                            connector,
+                            connection,
+                            requirement,
+                            &requested[0],
+                        )
+                        .await?,
+                    );
                     requested[0].clone()
                 } else {
                     return Err(AgentFailure::InvalidInput);
@@ -401,7 +404,7 @@ where
         });
         Ok(InlineReviewSnapshot {
             members,
-            connection_revision: None,
+            connection_revision,
             producer_fingerprint: Some(producer.fingerprint),
             native_subject: None,
         })
@@ -506,9 +509,9 @@ where
     }
 
     /// The reviewed remote calendar still names the reviewed connection and
-    /// calendar. The authoritative connection revision is server-owned, so
-    /// the review binds the signed descriptor, pinned producer and source
-    /// authority instead of a local revision.
+    /// calendar. The authoritative descriptor revision is server-owned, so
+    /// the review also binds the local connection revision: a scope update
+    /// between capture and decision fails the enable instead of widening it.
     async fn verified_remote_calendar_resource(
         &self,
         person_id: PersonId,
@@ -516,7 +519,7 @@ where
         connection: &str,
         requirement: &SourceAccessRequirement,
         resource: &str,
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<u64, AgentFailure> {
         let live = self
             .core
             .calendar_connection(person_id)
@@ -536,7 +539,7 @@ where
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
-        Ok(())
+        Ok(live.revision)
     }
 
     async fn calendar_policy(

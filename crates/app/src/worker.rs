@@ -261,6 +261,7 @@ pub struct WorkerResult {
     pub remote_pairing: Option<floe_connections::PairingStatus>,
     pub remote_owner: Option<floe_access::RemoteOwnerPublicKey>,
     pub connection_observe_status: Option<String>,
+    pub reviewed_observe_bundle: Option<crate::RemoteConnectionObserveExpectation>,
     pub personal_access: Option<floe_access::PersonalAccessOverview>,
     pub calendar_access: Option<crate::CalendarAccessOverview>,
     pub calendar_actions: Option<crate::CalendarActionsResult>,

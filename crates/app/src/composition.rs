@@ -337,6 +337,7 @@ fn access_result(result: crate::WorkerResult) -> crate::RemoteAccessResult {
         owner: result.remote_owner,
         enrollment: result.remote_enrollment,
         connection_observe_status: result.connection_observe_status,
+        reviewed_bundle: result.reviewed_observe_bundle,
         failure: result.failure,
     }
 }
