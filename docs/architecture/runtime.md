@@ -49,14 +49,14 @@ Canonical ownership:
 
 ```text
 Agent Runtime Engine
-  -> ToolPort
-  -> ContextToolService
+  -> ToolPort (App trusted publication)
+  -> ContextToolService : typed source outcomes
   -> Context + Access
   -> authorized source adapter
-  -> ToolResult { coverage, artifacts, issue }
+  -> ToolResult { coverage, artifacts, issue } + durable UserInteractionRef
 ```
 
-Tool availability is a source/authority property, not a model-route property. The Tool result carries its own evidence/coverage rather than relying on an App-side side channel.
+Tool availability is a source/authority property, not a model-route property. The Tool result carries its own evidence/coverage rather than relying on an App-side side channel. Context returns owner-produced outcomes (ready, temporarily unavailable, or review-required blockers); only the App boundary publishes requirements as durable interactions under the admitted Tool origin and settles the blocked result with safe refs. Experts follow the same shape through the common delegation endpoint: host-captured blockers publish under the Task origin, and a deterministic blocked-domain report completes the Task with no conclusion and no model-proposed requirement.
 
 The production Context Tool path is canonical, alongside the canonical Delegation path through `TaskCoordinator : DelegationPort`.
 

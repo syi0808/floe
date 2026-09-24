@@ -1,6 +1,6 @@
 # 05-B — source outcomes and trusted publication
 
-- **Status:** planned; depends on 05-A.
+- **Status:** implemented on top of 05-A; exit gate satisfied (direct-tool and delegated blockers complete usable turns with durable refs; all eight fixtures covered by app-composed tests; residual audit clean).
 - **Baseline windows:** those in the 05 index, plus re-find named symbols before editing.
 - **Exit:** direct tool and delegated source blockers produce usable completed turns with durable refs and no fabricated evidence.
 
