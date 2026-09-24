@@ -66,10 +66,19 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_,
     fn read<'a>(
         &'a self,
         request: &'a floe_context::SourceReadRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
-            let (payload, bindings) = floe_context::read_remote_view(
+            match floe_context::read_remote_view(
                 self.vault,
                 &self.transport(),
                 self.person_id,
@@ -84,12 +93,24 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_,
                 request.process_incarnation_id(),
                 request.query_fingerprint(),
             )
-            .await?;
-            Ok(floe_context::SourceRead::with_bindings(
-                request.source().clone(),
-                payload,
-                bindings,
-            ))
+            .await?
+            {
+                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
+                    Ok(floe_context_contract::SourceReadOutcome::Ready(
+                        floe_context::SourceRead::with_bindings(
+                            request.source().clone(),
+                            payload,
+                            bindings,
+                        ),
+                    ))
+                }
+                floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                    Ok(floe_context_contract::SourceReadOutcome::Unavailable(reason))
+                }
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                    Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers))
+                }
+            }
         })
     }
 }
@@ -98,8 +119,17 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for &RemoteViewReader<'_
     fn read<'a>(
         &'a self,
         request: &'a floe_context::SourceReadRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
         <RemoteViewReader<'_, Keys> as floe_context::SourceReader>::read(*self, request)
     }
 }

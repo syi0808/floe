@@ -660,7 +660,18 @@ pub(super) async fn read_context_source(
         deadline,
         cancellation.clone(),
     )?;
-    prepared.read_source(&source_request).await
+    // Interim: the delegated host moves to typed outcomes with trusted
+    // capture next; until then a blocked read keeps the exact failure the
+    // untyped read raised for the same condition.
+    match prepared.read_source(&source_request).await? {
+        floe_context_contract::SourceReadOutcome::Ready(view) => Ok(view),
+        floe_context_contract::SourceReadOutcome::Unavailable(_) => {
+            Err(AgentFailure::CapabilityUnavailable)
+        }
+        floe_context_contract::SourceReadOutcome::NeedsUserAction(_) => {
+            Err(AgentFailure::AccessReviewRequired)
+        }
+    }
 }
 
 pub(super) trait ResultRecorder: Send + Sync {

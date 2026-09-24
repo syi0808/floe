@@ -2,7 +2,8 @@ use std::sync::{Arc, OnceLock};
 
 use floe_agent_contract::{AgentFailure, CancelReason};
 use floe_context_contract::{
-    ContextDependencyError, GrantOperation, PersonId, validate_dependency_freshness,
+    ContextDependencyError, GrantOperation, PersonId, SourceReadOutcome,
+    validate_dependency_freshness,
 };
 
 use crate::ports::source_reader::SourceReadRequestParts;
@@ -66,7 +67,7 @@ impl PreparedContext<'_> {
     pub async fn read_source(
         &self,
         request: &SourceReadRequest,
-    ) -> Result<SourceView<serde_json::Value>, AgentFailure> {
+    ) -> Result<SourceReadOutcome<SourceView<serde_json::Value>>, AgentFailure> {
         if request.person_id() != self.person_id {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -74,13 +75,31 @@ impl PreparedContext<'_> {
         let reader = self
             .source_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        let source_read = tokio::select! {
+        let outcome = tokio::select! {
             biased;
             _ = request.cancellation().cancelled() => return Err(cancelled(request)),
             _ = tokio::time::sleep_until(request.deadline()) => return Err(AgentFailure::DeadlineExceeded),
             observation = reader.read(request) => observation?,
         };
         check_window(request)?;
+        let source_read = match outcome {
+            SourceReadOutcome::Ready(read) => read,
+            SourceReadOutcome::Unavailable(reason) => {
+                return Ok(SourceReadOutcome::Unavailable(reason));
+            }
+            SourceReadOutcome::NeedsUserAction(blockers) => {
+                blockers.validate().map_err(|_| AgentFailure::PolicyDenied)?;
+                for blocker in blockers.blockers() {
+                    // A reader reports only what this consumer asked to read.
+                    if blocker.consumer() != request.consumer()
+                        || blocker.purpose() != request.purpose()
+                    {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                }
+                return Ok(SourceReadOutcome::NeedsUserAction(blockers));
+            }
+        };
         if source_read.source() != request.source() || source_read.bindings().is_empty() {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -119,6 +138,7 @@ impl PreparedContext<'_> {
         let payload_size = super::source_view::bounded_serialized_size(&payload, MAX_LEASE_BYTES)?;
         let reservation = self.leases.reserve(self.person_id, payload_size)?;
         SourceView::try_new_bound(bindings, payload, effective_deadline, reservation)
+            .map(SourceReadOutcome::Ready)
     }
 }
 
@@ -162,30 +182,62 @@ mod tests {
         wrong_binding: bool,
     }
 
+    struct BlockedReader {
+        blockers: floe_context_contract::SourceAccessBlockers,
+    }
+
     impl SourceReader for FixtureReader {
         fn read<'a>(
             &'a self,
             request: &'a SourceReadRequest,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = Result<crate::SourceRead, AgentFailure>>
-                    + Send
+                dyn std::future::Future<
+                        Output = Result<
+                            floe_context_contract::SourceReadOutcome<crate::SourceRead>,
+                            AgentFailure,
+                        >,
+                    > + Send
                     + 'a,
             >,
         > {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::Relaxed);
-                Ok(crate::SourceRead::new(
-                    if self.wrong_binding {
-                        crate::SourceKey::try_new("other.view").unwrap()
-                    } else {
-                        request.source().clone()
-                    },
-                    serde_json::json!({"items": []}),
-                    dependency(request, self.wrong_binding),
-                    scope(request.consumer().clone()),
+                Ok(floe_context_contract::SourceReadOutcome::Ready(
+                    crate::SourceRead::new(
+                        if self.wrong_binding {
+                            crate::SourceKey::try_new("other.view").unwrap()
+                        } else {
+                            request.source().clone()
+                        },
+                        serde_json::json!({"items": []}),
+                        dependency(request, self.wrong_binding),
+                        scope(request.consumer().clone()),
+                    ),
                 ))
             })
+        }
+    }
+
+    impl SourceReader for BlockedReader {
+        fn read<'a>(
+            &'a self,
+            _: &'a SourceReadRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            floe_context_contract::SourceReadOutcome<crate::SourceRead>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let blockers = self.blockers.clone();
+            Box::pin(
+                async move { Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers)) },
+            )
         }
     }
 
@@ -270,10 +322,13 @@ mod tests {
             .unwrap();
         assert_eq!(calls.load(Ordering::Relaxed), 0);
 
-        let observation = prepared
+        let outcome = prepared
             .read_source(&request(&prepared, consumer))
             .await
             .unwrap();
+        let floe_context_contract::SourceReadOutcome::Ready(observation) = outcome else {
+            panic!("ready read must stay ready");
+        };
         assert_eq!(observation.payload(), &serde_json::json!({"items": []}));
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
@@ -297,6 +352,12 @@ mod tests {
             .read_source(&request(&prepared, consumer))
             .await
             .unwrap();
+        let floe_context_contract::SourceReadOutcome::Ready(first) = first else {
+            panic!("ready read must stay ready");
+        };
+        let floe_context_contract::SourceReadOutcome::Ready(second) = second else {
+            panic!("ready read must stay ready");
+        };
         assert_eq!(first.payload(), second.payload());
     }
 
@@ -345,6 +406,64 @@ mod tests {
         assert_eq!(
             prepared
                 .read_source(&request(&prepared, consumer))
+                .await
+                .err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+    }
+
+    fn blocked_fixture(
+        consumer: GrantConsumer,
+    ) -> floe_context_contract::SourceAccessBlockers {
+        let requirement = floe_context_contract::SourceAccessRequirement::try_new(
+            "floe.source.mail",
+            None,
+            None,
+            floe_context_contract::GrantOperation::Read,
+            consumer,
+            GrantPurpose::Assistant,
+            vec![],
+            None,
+            floe_context_contract::SourceAccessRequirementKind::SelectResource,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        floe_context_contract::SourceAccessBlockers::try_new(vec![requirement]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn typed_blockers_pass_through_but_never_for_another_consumer() {
+        let person_id = PersonId::new();
+        let consumer = GrantConsumer::builtin("fixture.expert").unwrap();
+        let reader = BlockedReader {
+            blockers: blocked_fixture(consumer.clone()),
+        };
+        let prepared = ContextService::new(Some(&reader))
+            .prepare(person_id)
+            .unwrap();
+        let outcome = prepared
+            .read_source(&request(&prepared, consumer))
+            .await
+            .unwrap();
+        let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+            panic!("typed blockers must pass through");
+        };
+        assert_eq!(blockers, blocked_fixture(GrantConsumer::builtin("fixture.expert").unwrap()));
+
+        let foreign = BlockedReader {
+            blockers: blocked_fixture(GrantConsumer::builtin("fixture.other").unwrap()),
+        };
+        let prepared = ContextService::new(Some(&foreign))
+            .prepare(person_id)
+            .unwrap();
+        assert_eq!(
+            prepared
+                .read_source(&request(
+                    &prepared,
+                    GrantConsumer::builtin("fixture.expert").unwrap()
+                ))
                 .await
                 .err(),
             Some(AgentFailure::PolicyDenied)

@@ -3,6 +3,7 @@ use std::{future::Future, pin::Pin};
 use floe_agent_contract::{AgentFailure, Cancellation};
 use floe_context_contract::{
     AuthorizedSourceBinding, ContextDependency, GrantConsumer, GrantPurpose, GrantScope, PersonId,
+    SourceReadOutcome,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -162,8 +163,13 @@ impl SourceRead {
 }
 
 pub trait SourceReader: Send + Sync {
+    /// Read one source view, or report why it cannot be read without the
+    /// Person. A recoverable blocker keeps its typed requirement (and, for a
+    /// Ready read, every authorizing binding); only hard failures raise.
     fn read<'a>(
         &'a self,
         request: &'a SourceReadRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<SourceRead, AgentFailure>> + Send + 'a>>;
+    ) -> Pin<
+        Box<dyn Future<Output = Result<SourceReadOutcome<SourceRead>, AgentFailure>> + Send + 'a>,
+    >;
 }

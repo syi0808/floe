@@ -443,8 +443,17 @@ mod tests {
         fn read<'a>(
             &'a self,
             request: &'a floe_context::SourceReadRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
-        {
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
             Box::pin(async move {
                 let view_id = request.source().as_str();
                 let consumer = request.consumer().identifier();
@@ -560,11 +569,13 @@ mod tests {
                     now + chrono::Duration::minutes(5),
                 )
                 .map_err(|_| AgentFailure::InvalidInput)?;
-                Ok(floe_context::SourceRead::new(
-                    request.source().clone(),
-                    value,
-                    dependency,
-                    scope,
+                Ok(floe_context_contract::SourceReadOutcome::Ready(
+                    floe_context::SourceRead::new(
+                        request.source().clone(),
+                        value,
+                        dependency,
+                        scope,
+                    ),
                 ))
             })
         }
@@ -1847,40 +1858,56 @@ mod tests {
             "attention.coarse.read",
             "wellbeing.derived.read",
         ] {
-            let result = floe_agent_contract::ToolPort::invoke(
-                &tools,
-                floe_agent_contract::ToolCall {
-                    call_id: uuid::Uuid::new_v4(),
-                    invocation_key: floe_agent_contract::InvocationKey::new(),
-                    tool_id: tool_id.into(),
-                    definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                    input: "{}".into(),
-                },
-                &scope,
-            )
-            .await;
-            assert_eq!(result, Err(AgentFailure::AccessReviewRequired), "{tool_id}");
+            let outcome = tools
+                .invoke_outcome(
+                    &floe_agent_contract::ToolCall {
+                        call_id: uuid::Uuid::new_v4(),
+                        invocation_key: floe_agent_contract::InvocationKey::new(),
+                        tool_id: tool_id.into(),
+                        definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                        input: "{}".into(),
+                    },
+                    &scope,
+                )
+                .await
+                .unwrap();
+            let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome
+            else {
+                panic!("{tool_id} without grants must block, not fail");
+            };
+            assert_eq!(blockers.blockers().len(), 1, "{tool_id}");
+            assert_eq!(
+                blockers.blockers()[0].reason(),
+                floe_context_contract::SourceAccessRequirementKind::EnableObserve,
+                "{tool_id}"
+            );
         }
         for (tool_id, input) in [
             ("mail.communication.read", r#"{"query":"x"}"#),
             ("work.context.read", "{}"),
             ("life.logistics.read", "{}"),
         ] {
-            let result = floe_agent_contract::ToolPort::invoke(
-                &tools,
-                floe_agent_contract::ToolCall {
-                    call_id: uuid::Uuid::new_v4(),
-                    invocation_key: floe_agent_contract::InvocationKey::new(),
-                    tool_id: tool_id.into(),
-                    definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
-                    input: input.into(),
-                },
-                &scope,
-            )
-            .await;
+            let outcome = tools
+                .invoke_outcome(
+                    &floe_agent_contract::ToolCall {
+                        call_id: uuid::Uuid::new_v4(),
+                        invocation_key: floe_agent_contract::InvocationKey::new(),
+                        tool_id: tool_id.into(),
+                        definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                        input: input.into(),
+                    },
+                    &scope,
+                )
+                .await
+                .unwrap();
+            let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome
+            else {
+                panic!("{tool_id} without a reader must block, not fail");
+            };
+            assert_eq!(blockers.blockers().len(), 1, "{tool_id}");
             assert_eq!(
-                result,
-                Err(AgentFailure::CapabilityUnavailable),
+                blockers.blockers()[0].reason(),
+                floe_context_contract::SourceAccessRequirementKind::SelectResource,
                 "{tool_id}"
             );
         }
@@ -1894,8 +1921,17 @@ mod tests {
         fn read<'a>(
             &'a self,
             request: &'a floe_context::SourceReadRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<floe_context::SourceRead, AgentFailure>> + Send + 'a>>
-        {
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
             Box::pin(async move {
                 let person_id = request.person_id();
                 let source = floe_context_contract::GrantSourceBinding::try_new(
@@ -1941,11 +1977,13 @@ mod tests {
                     processing,
                 )
                 .unwrap();
-                Ok(floe_context::SourceRead::new(
-                    request.source().clone(),
-                    self.payload.clone(),
-                    dependency,
-                    scope,
+                Ok(floe_context_contract::SourceReadOutcome::Ready(
+                    floe_context::SourceRead::new(
+                        request.source().clone(),
+                        self.payload.clone(),
+                        dependency,
+                        scope,
+                    ),
                 ))
             })
         }
