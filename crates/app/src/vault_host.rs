@@ -45,6 +45,7 @@ use crate::{FloeCore, diagnostics};
 mod calendar_access;
 mod conversation_turn;
 mod expert_setup;
+mod interaction_resolution;
 mod learner_worker;
 mod personal_grants;
 mod product_actions;
@@ -2388,6 +2389,7 @@ mod tests {
     mod conversation_flows;
     mod expert_actions;
     pub(in crate::vault_host) mod expert_evidence;
+    mod interaction_resolution;
     mod learner_worker;
     mod local_product;
     mod memory_review;
