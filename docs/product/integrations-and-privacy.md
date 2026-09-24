@@ -20,6 +20,8 @@ Pairing a server by itself grants no connector Observe access. Existing connecti
 
 Observe does not authorize write/send/create actions and does not approve a new external model recipient. Actions remain separately authorized, and source-backed data may leave its approved processing boundary only under exact-recipient authority. Third-party Experts are never added to a connection's default first-party reader set.
 
+Recoverable blocks surface as durable review cards bound to the blocked work, never as silent failures or implied approvals. A card offers only the safe actions the backend projects for its current state: approve what was reviewed, deny it, or choose Not now, which cancels the pending review without touching owner state. Returning from OS settings or OAuth never resolves a card by itself; an explicit refresh re-validates live owner evidence first, and anything that drifted is superseded rather than approved. When a model call is blocked, the person gets a deterministic explanation of what is missing and why, produced without issuing the unauthorized generation.
+
 Credentials never become domain data or Expert input.
 
 ## Retention by domain

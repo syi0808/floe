@@ -1,6 +1,6 @@
 # 05-E — linked fresh Run admission and recovery
 
-- **Status:** planned; depends on 05-A through 05-D.
+- **Status:** complete at `23cef7bd100f02c39e5c534729d364c8ae90bc1b`.
 - **Exit:** a resolved origin admits at most one automatic child Run, with fresh authorization and no repeated external effects.
 
 ## 1. Edit map

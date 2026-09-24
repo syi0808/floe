@@ -1,6 +1,6 @@
 # 05-F — protocol, snapshots and Flutter interaction UI
 
-- **Status:** planned; depends on backend 05-A through 05-E.
+- **Status:** complete at `27299093263fb4998e59f800f663c5e604f22ac3`.
 - **Exit:** the real App/protocol/FFI/Flutter path renders, resolves and resumes without frontend authority.
 
 ## 1. Existing integration points

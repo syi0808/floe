@@ -1,9 +1,11 @@
 # Checkpoint 05 — Conversation-owned interaction and linked resume
 
-- **Status:** active execution plan; no implementation completion claimed.
+- **Status:** complete.
 - **Source baseline:** `00017e668e71e34be3d3ea5772aa1612b15c5d6c`.
+- **Verified code baseline:** `27299093263fb4998e59f800f663c5e604f22ac3` (05-F tip; 05-G adds no code).
 - **Prerequisite:** Checkpoints 01–04 complete, including 03-E CAS and 04 atomic multi-view grants.
-- **Next execution:** 05-A. Checkpoint 06 is blocked until 05-G passes.
+- **Implementation SHAs:** 05-A `af28fee`, 05-B `c6e09b3`, 05-C `890c620`, 05-D `4e82bd4`, 05-E `23cef7b`, 05-F `2729909`; 05-G verification, no code delta.
+- **Next execution:** Checkpoint 06. Checkpoint 05 is complete.
 
 This index replaces the earlier single-file sketch. Child plans are the authoritative execution sequence. Anchors below refer to the source baseline, not the planning commit that contains these files. Line ranges are inspected reading windows; symbols are authoritative as lines move.
 

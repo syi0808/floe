@@ -1,6 +1,6 @@
 # 05-A — contracts and durable Conversation interactions
 
-- **Status:** next; not implemented by this plan.
+- **Status:** complete at `af28fee72b0ed66614d4dfc880516857d0e0efd`.
 - **Baseline:** `00017e668e71e34be3d3ea5772aa1612b15c5d6c`.
 - **Depends on:** 05 index and completed CP4.
 - **Exit:** durable origin/review/decision semantics proven without UI or provider mutation.

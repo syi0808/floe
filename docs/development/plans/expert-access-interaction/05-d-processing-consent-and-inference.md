@@ -1,6 +1,6 @@
 # 05-D — exact-recipient consent and blocked model dispatch
 
-- **Status:** planned; depends on 05-A through 05-C.
+- **Status:** complete at `4e82bd47c95f21fbbe3099d3f7b764ea88f9213c`.
 - **Exit:** eligible contextual consent can unblock an exact approved dispatch; unapproved or prohibited data never leaves via a fallback/explanation call.
 
 ## 1. Baseline and missing contract

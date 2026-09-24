@@ -1,9 +1,9 @@
 # Expert access and conversation interaction convergence
 
-- **Status:** execution plan; Checkpoint 05 active, 05-A next.
+- **Status:** execution plan; Checkpoint 05 complete, Checkpoint 06 next.
 - **Original baseline:** `0615b343bb752da85487a1a728927f0e3affdf5b` (historical).
 - **Current planning baseline:** `main` at `00017e668e71e34be3d3ea5772aa1612b15c5d6c`.
-- **Completed code baseline:** Checkpoint 04 including atomic multi-view closure at `0bd102f4087584246e453293df51217054798131`; documentation closure at `00017e66`.
+- **Completed code baseline:** Checkpoint 05 including durable interaction and linked resume at `27299093263fb4998e59f800f663c5e604f22ac3`; prior Checkpoint 04 closure at `0bd102f4087584246e453293df51217054798131`, documentation closure at `00017e66`.
 - **Scope:** Expert runtime, source access, connection permission UX, Conversation-owned interaction, linked resume, and final deletion/document convergence.
 - **Product priority:** macOS/Apple. iOS device validation is deferred to active iOS development; Android parity is not part of this work.
 
@@ -11,7 +11,7 @@ This directory is the one temporary execution plan for this refactor. Current ar
 
 ## 1. Current state and reading order
 
-Checkpoints 01 through 04 are complete. Do not reimplement them to start Checkpoint 05.
+Checkpoints 01 through 05 are complete. Do not reimplement them to start Checkpoint 06.
 
 | Checkpoint | State | Entry document |
 |---|---|---|
@@ -19,18 +19,12 @@ Checkpoints 01 through 04 are complete. Do not reimplement them to start Checkpo
 | 02 — ordinary built-in Schedule runtime | Complete | [02](02-calendar-source-and-schedule-convergence.md) |
 | 03 — Registry/Access separation, including 03-E | Complete | [03](03-expert-registry-and-access-authority.md) |
 | 04 — connection permission product model | Complete | [04](04-connector-permission-product-model.md) |
-| 05 — durable interaction and linked resume | Active plan; implementation not yet certified | [05 index](05-conversation-and-flutter-interaction.md) |
-| 06 — final deletion, archive and documentation convergence | Blocked on 05 | [06](06-deletion-verification-and-doc-convergence.md) |
+| 05 — durable interaction and linked resume | Complete | [05 index](05-conversation-and-flutter-interaction.md) |
+| 06 — final deletion, archive and documentation convergence | Next | [06](06-deletion-verification-and-doc-convergence.md) |
 
-For current implementation, read `AGENTS.md`, the architecture-change skill, the [05 index](05-conversation-and-flutter-interaction.md), and the next child only:
+For current implementation, read `AGENTS.md`, the architecture-change skill, the current architecture documents, and the next plan only:
 
-1. [05-A — contracts and durable Conversation ownership](05-a-contracts-and-durable-interactions.md) — **next**.
-2. [05-B — source outcomes and trusted publication](05-b-source-outcomes-and-publication.md).
-3. [05-C — reviewed resolution and owner-operation recovery](05-c-reviewed-resolution-and-owner-operations.md).
-4. [05-D — exact-recipient consent and blocked model dispatch](05-d-processing-consent-and-inference.md).
-5. [05-E — linked fresh Run admission and recovery](05-e-linked-resume-and-recovery.md).
-6. [05-F — protocol, snapshots and Flutter interaction UI](05-f-protocol-and-flutter.md).
-7. [05-G — failure matrix, verification and documentation convergence](05-g-verification-and-convergence.md).
+- [06 — final deletion, archive and documentation convergence](06-deletion-verification-and-doc-convergence.md) — **next**.
 
 Historical detail remains in the completed checkpoint documents. The Checkpoint 03 index links 03-A through 03-E; the Checkpoint 04 index links 04-A through 04-F and their completion SHAs. No parallel status ledger is needed.
 

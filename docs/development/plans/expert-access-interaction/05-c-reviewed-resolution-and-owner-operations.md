@@ -1,6 +1,6 @@
 # 05-C — reviewed resolution and owner-operation recovery
 
-- **Status:** planned; depends on 05-A/B.
+- **Status:** complete at `890c6207aa7a3c14c1a0921b6dfc0e588f418c4c`.
 - **Exit:** delayed/duplicate/foreign decisions cannot widen authority or repeat owner mutations.
 
 ## 1. Reuse these boundaries
