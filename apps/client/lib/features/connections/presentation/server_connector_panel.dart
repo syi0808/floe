@@ -15,6 +15,7 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
+import 'package:floe_client/features/connections/domain/remote_owner_models.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connector_status_presentation.dart';
@@ -336,12 +337,23 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     final gateway = widget.remoteAccessGateway;
     connectionId ??= widget.connector.connectionId;
     if (gateway == null || connectionId == null) return;
+    // Programmatic enables continue the gesture the user just completed
+    // (authorization or scope update): the reviewed snapshot is still
+    // fetched and echoed so the enable binds it, without a second dialog.
+    final expected = enabled && !disconnecting
+        ? await gateway.connectionObserveReview(
+            connectorId: widget.connector.id,
+            connectionId: connectionId,
+            resource: _observeResource,
+          )
+        : null;
     await gateway.connectionObserve(
       connectorId: widget.connector.id,
       connectionId: connectionId,
       resource: _observeResource,
       enabled: enabled,
       disconnecting: disconnecting,
+      expected: expected,
     );
   }
 
@@ -603,11 +615,31 @@ final class _ConnectionObserveControlState
       error = null;
     });
     try {
+      // Enabling reviews the whole bundle first and echoes the reviewed
+      // snapshot back; a connection that changed in between refuses.
+      final expected = enabled
+          ? await widget.gateway.connectionObserveReview(
+              connectorId: widget.connector.id,
+              connectionId: connectionId,
+              resource: resource,
+            )
+          : null;
+      if (enabled && expected != null && mounted) {
+        final confirmed = await showFloeDialog<bool>(
+          context,
+          (context) => _ObserveReviewDialog(
+            connectorName: widget.connector.name,
+            bundle: expected,
+          ),
+        );
+        if (confirmed != true) return;
+      }
       final next = await widget.gateway.connectionObserve(
         connectorId: widget.connector.id,
         connectionId: connectionId,
         resource: resource,
         enabled: enabled,
+        expected: expected,
       );
       if (mounted && connectionId == widget.connector.connectionId) {
         setState(() => status = next);
@@ -639,6 +671,60 @@ final class _ConnectionObserveControlState
         },
     value: status == 'active',
     onChanged: busy ? null : _setEnabled,
+  );
+}
+
+final class _ObserveReviewDialog extends StatelessWidget {
+  const _ObserveReviewDialog({
+    required this.connectorName,
+    required this.bundle,
+  });
+
+  final String connectorName;
+  final ConnectionObserveBundle bundle;
+
+  @override
+  Widget build(BuildContext context) => FloeDialog(
+    title: Text('Allow Floe to read $connectorName?'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Floe will enable reading for every source below. '
+          'If the connection changes before you confirm, '
+          'the enable is refused instead of widened.',
+        ),
+        const SizedBox(height: FloeSpace.sm),
+        for (final member in bundle.members)
+          Padding(
+            padding: const EdgeInsets.only(bottom: FloeSpace.xs),
+            child: Row(
+              children: [
+                const Icon(LucideIcons.database, size: 16),
+                const SizedBox(width: FloeSpace.xs),
+                Expanded(
+                  child: Text(
+                    member.expectedGrantId == null
+                        ? '${member.viewId} (new permission)'
+                        : '${member.viewId} (re-enable)',
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+    actions: [
+      FloeButton.text(
+        onPressed: () => Navigator.pop(context, false),
+        child: const Text('Cancel'),
+      ),
+      FloeButton.filled(
+        onPressed: () => Navigator.pop(context, true),
+        child: const Text('Allow'),
+      ),
+    ],
   );
 }
 

@@ -1,5 +1,6 @@
 import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/connections/presentation/server_connector_panel.dart';
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
@@ -251,6 +252,131 @@ void main() {
     expect(actions.last['enabled'], isNull);
   });
 
+  testWidgets('enabling reviews the bundle and echoes it back', (tester) async {
+    final actions = <Map<String, Object?>>[];
+    Map<String, Object?> bundle() => {
+      'members': [
+        {
+          'view_id': 'calendar.timeline',
+          'resource': 'primary',
+          'producer_fingerprint': 'fp',
+          'source_authority': {
+            'incarnation': '00000000-0000-4000-8000-0000000000a1',
+            'epoch': 3,
+          },
+          'connection_revision': 1,
+          'provider_identity': 'google:subject-a',
+          'recipient': 'local_only',
+          'expected_grant_id': null,
+          'expected_grant_authority': null,
+          'expected_policy': null,
+        },
+      ],
+    };
+    final gateway = NativeRemoteAccessGateway((request) async {
+      final operation = Map<String, Object?>.from(request['operation']! as Map);
+      if (operation['kind'] == 'read_result') {
+        return _grantSuccess(request, {'connection_observe_status': 'paused'});
+      }
+      actions.add(operation);
+      if (operation['kind'] == 'connection_observe_review') {
+        return _grantSuccess(request, {'reviewed_bundle': bundle()});
+      }
+      return _grantSuccess(request, {
+        'connection_observe_status': operation['enabled'] == true
+            ? 'active'
+            : 'paused',
+      });
+    });
+    await tester.pumpWidget(
+      _host(
+        ServerConnectorPanel(
+          authorization: _Authorization(),
+          connector: _calendarConnector('00000000-0000-4000-8000-000000000011'),
+          connection: _connection,
+          client: LocalServerClient(
+            store: MemoryServerCredentials(),
+            deviceId: _connection.deviceId,
+          ),
+          remoteAccessGateway: gateway,
+          onBack: () {},
+          onChanged: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(actions.single['enabled'], isNull);
+
+    await tester.tap(find.byKey(const ValueKey('connection-use-with-floe')));
+    await tester.pumpAndSettle();
+    expect(find.text('Allow Floe to read Google Calendar?'), findsOneWidget);
+    expect(find.text('calendar.timeline (new permission)'), findsOneWidget);
+
+    await tester.tap(find.text('Allow'));
+    await tester.pumpAndSettle();
+    expect(actions.length, 3);
+    expect(actions[1]['kind'], 'connection_observe_review');
+    expect(actions[2]['kind'], 'connection_observe');
+    expect(actions[2]['enabled'], true);
+    final echoed = (actions[2]['expected'] as Map)['members'] as List;
+    expect(echoed.single['view_id'], 'calendar.timeline');
+  });
+
+  testWidgets('dismissing the review enables nothing', (tester) async {
+    final actions = <Map<String, Object?>>[];
+    final gateway = NativeRemoteAccessGateway((request) async {
+      final operation = Map<String, Object?>.from(request['operation']! as Map);
+      if (operation['kind'] == 'read_result') {
+        return _grantSuccess(request, {'connection_observe_status': 'paused'});
+      }
+      actions.add(operation);
+      if (operation['kind'] == 'connection_observe_review') {
+        return _grantSuccess(request, {
+          'reviewed_bundle': {
+            'members': [
+              {
+                'view_id': 'calendar.timeline',
+                'resource': 'primary',
+                'producer_fingerprint': 'fp',
+                'source_authority': {
+                  'incarnation': '00000000-0000-4000-8000-0000000000a1',
+                  'epoch': 3,
+                },
+                'connection_revision': 1,
+                'provider_identity': 'google:subject-a',
+                'recipient': 'local_only',
+              },
+            ],
+          },
+        });
+      }
+      return _grantSuccess(request, {'connection_observe_status': 'paused'});
+    });
+    await tester.pumpWidget(
+      _host(
+        ServerConnectorPanel(
+          authorization: _Authorization(),
+          connector: _calendarConnector('00000000-0000-4000-8000-000000000011'),
+          connection: _connection,
+          client: LocalServerClient(
+            store: MemoryServerCredentials(),
+            deviceId: _connection.deviceId,
+          ),
+          remoteAccessGateway: gateway,
+          onBack: () {},
+          onChanged: () async {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('connection-use-with-floe')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(actions.where((action) => action['enabled'] == true), isEmpty);
+  });
+
   testWidgets('non-calendar connector does not expose calendar grants', (
     tester,
   ) async {
@@ -315,6 +441,8 @@ Map<String, dynamic> _grantSuccess(
 
 Widget _host(Widget child) => MaterialApp(
   theme: FloeTheme.light,
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
   home: Scaffold(body: SingleChildScrollView(child: child)),
 );
 

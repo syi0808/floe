@@ -63,6 +63,7 @@ final class RemoteProducerIdentity {
     'fingerprint': fingerprint,
   };
 }
+
 final class RemoteOwnerPublicKey {
   const RemoteOwnerPublicKey({
     required this.keyId,
@@ -347,4 +348,203 @@ final class RemoteProducerInspection {
 
   final RemoteProducerIdentity producer;
   final String? ownerFingerprint;
+}
+
+final class ObserveAuthority {
+  const ObserveAuthority({required this.incarnation, required this.epoch});
+
+  final String incarnation;
+  final int epoch;
+
+  factory ObserveAuthority.fromJson(Object? raw, String field) {
+    if (raw is! Map) throw const FormatException('Invalid observe bundle');
+    final value = Map<String, Object?>.from(raw);
+    if (value.keys.any((key) => !{'incarnation', 'epoch'}.contains(key))) {
+      throw const FormatException('Invalid observe bundle');
+    }
+    return ObserveAuthority(
+      incarnation: _uuid(value['incarnation'], field),
+      epoch: _epoch(value['epoch'], field),
+    );
+  }
+
+  Map<String, Object> toJson() => {'incarnation': incarnation, 'epoch': epoch};
+}
+
+final class ObserveGrantAuthority {
+  const ObserveGrantAuthority({
+    required this.incarnation,
+    required this.accessEpoch,
+  });
+
+  final String incarnation;
+  final int accessEpoch;
+
+  factory ObserveGrantAuthority.fromJson(Object? raw, String field) {
+    if (raw is! Map) throw const FormatException('Invalid observe bundle');
+    final value = Map<String, Object?>.from(raw);
+    if (value.keys.any(
+      (key) => !{'incarnation', 'access_epoch'}.contains(key),
+    )) {
+      throw const FormatException('Invalid observe bundle');
+    }
+    return ObserveGrantAuthority(
+      incarnation: _uuid(value['incarnation'], field),
+      accessEpoch: _epoch(value['access_epoch'], field),
+    );
+  }
+
+  Map<String, Object> toJson() => {
+    'incarnation': incarnation,
+    'access_epoch': accessEpoch,
+  };
+}
+
+String _uuid(Object? raw, String field) {
+  if (raw is! String || !_uuidPattern.hasMatch(raw)) {
+    throw FormatException('Invalid observe bundle: $field');
+  }
+  return raw;
+}
+
+int _epoch(Object? raw, String field) {
+  if (raw is! int || raw <= 0) {
+    throw FormatException('Invalid observe bundle: $field');
+  }
+  return raw;
+}
+
+final _uuidPattern = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+);
+
+final class ConnectionObserveMember {
+  const ConnectionObserveMember({
+    required this.viewId,
+    required this.resource,
+    required this.producerFingerprint,
+    required this.sourceAuthority,
+    this.connectionRevision,
+    required this.providerIdentity,
+    required this.recipient,
+    this.expectedGrantId,
+    this.expectedGrantAuthority,
+    this.expectedPolicy,
+  });
+
+  final String viewId;
+  final String resource;
+  final String producerFingerprint;
+  final ObserveAuthority sourceAuthority;
+  final int? connectionRevision;
+  final String providerIdentity;
+  final String recipient;
+  final String? expectedGrantId;
+  final ObserveGrantAuthority? expectedGrantAuthority;
+  final ObserveAuthority? expectedPolicy;
+
+  factory ConnectionObserveMember.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid observe member');
+    final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'view_id',
+      'resource',
+      'producer_fingerprint',
+      'source_authority',
+      'connection_revision',
+      'provider_identity',
+      'recipient',
+      'expected_grant_id',
+      'expected_grant_authority',
+      'expected_policy',
+    };
+    if (value.keys.any((key) => !fields.contains(key))) {
+      throw const FormatException('Invalid observe member');
+    }
+    String text(String key) {
+      final item = value[key];
+      if (item is! String || item.isEmpty || item.length > 256) {
+        throw const FormatException('Invalid observe member');
+      }
+      return item;
+    }
+
+    final revision = value['connection_revision'];
+    if (revision != null && (revision is! int || revision <= 0)) {
+      throw const FormatException('Invalid observe member');
+    }
+    final grantId = value['expected_grant_id'];
+    final grantAuthority = value['expected_grant_authority'];
+    final policy = value['expected_policy'];
+    final coherent =
+        (grantId == null && grantAuthority == null && policy == null) ||
+        (grantId != null && grantAuthority != null && policy != null);
+    if (!coherent) throw const FormatException('Invalid observe member');
+    return ConnectionObserveMember(
+      viewId: text('view_id'),
+      resource: text('resource'),
+      producerFingerprint: text('producer_fingerprint'),
+      sourceAuthority: ObserveAuthority.fromJson(
+        value['source_authority'],
+        'source_authority',
+      ),
+      connectionRevision: revision as int?,
+      providerIdentity: text('provider_identity'),
+      recipient: text('recipient'),
+      expectedGrantId: grantId == null
+          ? null
+          : _uuid(grantId, 'expected_grant_id'),
+      expectedGrantAuthority: grantAuthority == null
+          ? null
+          : ObserveGrantAuthority.fromJson(
+              grantAuthority,
+              'expected_grant_authority',
+            ),
+      expectedPolicy: policy == null
+          ? null
+          : ObserveAuthority.fromJson(policy, 'expected_policy'),
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    'view_id': viewId,
+    'resource': resource,
+    'producer_fingerprint': producerFingerprint,
+    'source_authority': sourceAuthority.toJson(),
+    'connection_revision': connectionRevision,
+    'provider_identity': providerIdentity,
+    'recipient': recipient,
+    'expected_grant_id': expectedGrantId,
+    'expected_grant_authority': expectedGrantAuthority?.toJson(),
+    'expected_policy': expectedPolicy?.toJson(),
+  };
+}
+
+final class ConnectionObserveBundle {
+  const ConnectionObserveBundle({required this.members});
+
+  final List<ConnectionObserveMember> members;
+
+  factory ConnectionObserveBundle.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid observe bundle');
+    final value = Map<String, Object?>.from(raw);
+    if (value.keys.any((key) => key != 'members')) {
+      throw const FormatException('Invalid observe bundle');
+    }
+    final members = value['members'];
+    if (members is! List || members.isEmpty || members.length > 8) {
+      throw const FormatException('Invalid observe bundle');
+    }
+    final parsed = members.map(ConnectionObserveMember.fromJson).toList();
+    for (var index = 1; index < parsed.length; index++) {
+      if (parsed[index - 1].viewId.compareTo(parsed[index].viewId) >= 0) {
+        throw const FormatException('Invalid observe bundle');
+      }
+    }
+    return ConnectionObserveBundle(members: List.unmodifiable(parsed));
+  }
+
+  Map<String, Object> toJson() => {
+    'members': members.map((member) => member.toJson()).toList(),
+  };
 }

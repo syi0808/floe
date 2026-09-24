@@ -129,7 +129,8 @@ pub use local_context::{
 };
 pub use remote_services::{
     PairingTarget, RemoteAccessCommand, RemoteAccessCommands, RemoteAccessResult,
-    RemotePairingCommand, RemotePairingCommands, RemotePairingResult,
+    RemoteConnectionObserveExpectation, RemoteObserveMemberExpectation, RemotePairingCommand,
+    RemotePairingCommands, RemotePairingResult,
 };
 pub use services::CalendarActionsResult;
 pub use services::{

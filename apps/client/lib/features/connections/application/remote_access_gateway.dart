@@ -15,6 +15,12 @@ abstract interface class RemoteAccessGateway {
     String? resource,
     bool? enabled,
     bool disconnecting = false,
+    ConnectionObserveBundle? expected,
+  });
+  Future<ConnectionObserveBundle> connectionObserveReview({
+    required String connectorId,
+    required String connectionId,
+    String? resource,
   });
 }
 
@@ -27,6 +33,7 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
           'owner',
           'enrollment',
           'connection_observe_status',
+          'reviewed_bundle',
         },
       );
 
@@ -68,6 +75,7 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
     String? resource,
     bool? enabled,
     bool disconnecting = false,
+    ConnectionObserveBundle? expected,
   }) => _operations.perform({
     'kind': 'connection_observe',
     'connector_id': connectorId,
@@ -75,5 +83,25 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
     'resource': resource,
     'enabled': enabled,
     'disconnecting': disconnecting,
+    'expected': expected?.toJson(),
   }, (result) => result['connection_observe_status']! as String);
+
+  @override
+  Future<ConnectionObserveBundle> connectionObserveReview({
+    required String connectorId,
+    required String connectionId,
+    String? resource,
+  }) => _operations.perform(
+    {
+      'kind': 'connection_observe_review',
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'resource': resource,
+    },
+    (result) {
+      final bundle = result['reviewed_bundle'];
+      if (bundle == null) throw const FormatException('Missing observe bundle');
+      return ConnectionObserveBundle.fromJson(bundle);
+    },
+  );
 }
