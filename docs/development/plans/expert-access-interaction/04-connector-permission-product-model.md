@@ -25,8 +25,10 @@ Completion commits:
 - 04-C: `755081d9fd6d28b66a83ec4022c20e7f3b4c309e`
 - 04-D: `64f5adc2cd361f49880ec1c70331d601ef954ac9`
 - 04-E: `d4ac4b78d3bc7bcbc584d2bc62a97268f96f0fef`
-- 04-F: `7422edfa393872e2a6a2f68a02f672197adf1633`, followed by the atomic
-  multi-view grant-set gate fix in the next commit; Checkpoint 05 is next and has not started.
+- 04-F: `7422edfa393872e2a6a2f68a02f672197adf1633`
+- 04-F atomic multi-view grant-set exit-gate fix: `0bd102f4087584246e453293df51217054798131`
+
+Checkpoint 04 is complete. Checkpoint 05 is next and has not started.
 
 ---
 
