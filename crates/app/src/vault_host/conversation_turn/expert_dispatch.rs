@@ -84,6 +84,30 @@ pub(super) fn registered_experts<'turn, 'host, 'msg>() -> floe_experts::ExpertDi
     table
 }
 
+/// Raw requirement proposals are never authority: no legitimate dispatch
+/// emits one, so any such artifact in an Expert output is forged.
+const SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE: &str =
+    "application/vnd.floe.source-access-requirement+json;version=1";
+
+/// Reject model-produced requirement JSON outright: only host-captured
+/// requirements publish, never output artifacts with this media type.
+fn reject_raw_requirement_artifacts(
+    artifacts: &[floe_agent_contract::Artifact],
+) -> Result<(), AgentFailure> {
+    for artifact in artifacts {
+        for part in &artifact.parts {
+            if matches!(
+                part,
+                floe_agent_contract::ArtifactPart::Data { media_type, .. }
+                    if media_type == SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE
+            ) {
+                return Err(AgentFailure::InvalidModelOutput);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The endpoint the delegating Run invokes for every registered builtin Expert
 /// that answers in process.
 ///
@@ -227,6 +251,8 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
             };
+            let repository =
+                floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
             let experts = ConversationExperts {
                 executor: &service,
                 scope,
@@ -247,6 +273,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 cards,
                 stateful_settlement: &stateful_settlement,
                 task_runners: &[],
+                runs: Some(&repository),
+                interactions: Some(&repository),
+                device_id: Some(context.device_id.as_str()),
             };
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
@@ -330,21 +359,57 @@ pub(crate) struct ConversationExperts<'model> {
     /// Experts that answer on the Task path, by the agent id they are registered
     /// under.
     pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
+    /// The validated origin bindings trusted publication requires. A blocked
+    /// source without them fails closed rather than completing ref-less.
+    pub(super) runs: Option<&'model dyn floe_conversation::ConversationRepository>,
+    pub(super) interactions: Option<&'model dyn floe_conversation::InteractionRepository>,
+    pub(super) device_id: Option<&'model str>,
 }
 
 /// One delegated message's Expert host.
 ///
 /// Everything an Expert may read belongs to the turn and comes straight from
 /// the turn's host. What belongs to the message alone is the bounded child of
-/// the Task scope its model attempts settle against, and the captured source
-/// dependencies that make its dispatch coverage exact.
+/// the Task scope its model attempts settle against, the captured source
+/// dependencies that make its dispatch coverage exact, and the trusted source
+/// blockers this invocation observed for publication under the Task origin.
 pub(super) struct DelegatedMessageExperts<'turn, 'model, 'msg> {
     experts: &'turn ConversationExperts<'model>,
     recorder: CapturingRecorder<'msg>,
     model: ExpertModelHost<'msg>,
+    captured: Mutex<Vec<floe_context_contract::SourceAccessRequirement>>,
 }
 
 impl<'turn, 'model, 'msg> DelegatedMessageExperts<'turn, 'model, 'msg> {
+    /// Keep one invocation's trusted blockers, deduplicated, for the common
+    /// endpoint to publish. Explicit invocation-scoped state: nothing global,
+    /// nothing keyed by run id, nothing Schedule-only.
+    fn capture(
+        &self,
+        blockers: &floe_context_contract::SourceAccessBlockers,
+    ) -> Result<(), AgentFailure> {
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        for blocker in blockers.blockers() {
+            if !captured.contains(blocker) {
+                captured.push(blocker.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn take_captured(
+        &self,
+    ) -> Result<Vec<floe_context_contract::SourceAccessRequirement>, AgentFailure> {
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        Ok(std::mem::take(&mut captured))
+    }
+
     /// The injected readers, bound to the consumer identity the Expert reads as.
     ///
     /// Reads record through the capturing recorder so the dependencies behind
@@ -386,9 +451,12 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         request: &'a BuiltinExpertRequest,
         view_id: &'a str,
         query: serde_json::Value,
-    ) -> floe_experts_builtin::Acquiring<'a, floe_context::SourceView<serde_json::Value>> {
+    ) -> floe_experts_builtin::Acquiring<
+        'a,
+        floe_context_contract::SourceReadOutcome<floe_context::SourceView<serde_json::Value>>,
+    > {
         Box::pin(async move {
-            read_context_source(
+            let outcome = read_context_source(
                 self.experts
                     .remote_reader
                     .ok_or(AgentFailure::CapabilityUnavailable)?,
@@ -399,7 +467,11 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
                 request.deadline,
                 &request.cancellation,
             )
-            .await
+            .await?;
+            if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
+                self.capture(blockers)?;
+            }
+            Ok(outcome)
         })
     }
 
@@ -424,9 +496,14 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         floe_context_contract::SourceReadOutcome<Vec<floe_context::CalendarContextView>>,
     > {
         Box::pin(async move {
-            self.personal_views(request, &request.agent_id)
+            let outcome = self
+                .personal_views(request, &request.agent_id)
                 .calendar_views(&query, request.deadline, &request.cancellation)
-                .await
+                .await?;
+            if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
+                self.capture(blockers)?;
+            }
+            Ok(outcome)
         })
     }
 
@@ -452,22 +529,38 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
     fn work_context_views<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-    ) -> floe_experts_builtin::Acquiring<'a, Vec<floe_context::WorkContextView>> {
+    ) -> floe_experts_builtin::Acquiring<
+        'a,
+        floe_context_contract::SourceReadOutcome<Vec<floe_context::WorkContextView>>,
+    > {
         Box::pin(async move {
-            self.personal_views(request, ASSISTANT_CONSUMER)
+            let outcome = self
+                .personal_views(request, ASSISTANT_CONSUMER)
                 .work_context_views(request.deadline, &request.cancellation)
-                .await
+                .await?;
+            if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
+                self.capture(blockers)?;
+            }
+            Ok(outcome)
         })
     }
 
     fn people_view<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-    ) -> floe_experts_builtin::Acquiring<'a, floe_context::PeopleView> {
+    ) -> floe_experts_builtin::Acquiring<
+        'a,
+        floe_context_contract::SourceReadOutcome<floe_context::PeopleView>,
+    > {
         Box::pin(async move {
-            self.personal_views(request, floe_experts_builtin::relationships::CONSUMER)
+            let outcome = self
+                .personal_views(request, floe_experts_builtin::relationships::CONSUMER)
                 .people_view(request.deadline, &request.cancellation)
-                .await
+                .await?;
+            if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
+                self.capture(blockers)?;
+            }
+            Ok(outcome)
         })
     }
 
@@ -486,11 +579,19 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
     fn wellbeing_view<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-    ) -> floe_experts_builtin::Acquiring<'a, floe_context::WellbeingView> {
+    ) -> floe_experts_builtin::Acquiring<
+        'a,
+        floe_context_contract::SourceReadOutcome<floe_context::WellbeingView>,
+    > {
         Box::pin(async move {
-            self.personal_views(request, ASSISTANT_CONSUMER)
+            let outcome = self
+                .personal_views(request, ASSISTANT_CONSUMER)
                 .wellbeing_view(request.deadline, &request.cancellation)
-                .await
+                .await?;
+            if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
+                self.capture(blockers)?;
+            }
+            Ok(outcome)
         })
     }
 
@@ -499,13 +600,14 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         request: &'a BuiltinExpertRequest,
     ) -> floe_experts_builtin::Acquiring<
         'a,
-        (
+        floe_context_contract::SourceReadOutcome<(
             floe_context::AttentionView,
             floe_context_contract::ContextDependency,
-        ),
+        )>,
     > {
         Box::pin(async move {
-            self.experts
+            let outcome = self
+                .experts
                 .attention
                 .ok_or(AgentFailure::CapabilityUnavailable)?
                 .read(
@@ -516,7 +618,11 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
                     request.deadline,
                     &request.cancellation,
                 )
-                .await
+                .await?;
+            if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
+                self.capture(blockers)?;
+            }
+            Ok(outcome)
         })
     }
 
@@ -617,10 +723,43 @@ impl InProcessAgent for ConversationExperts<'_> {
                 scope: self.scope,
                 captured: &captured,
             },
+            captured: Mutex::new(Vec::new()),
         };
-        let output = registered_experts()
+        let mut output = registered_experts()
             .run(&request.agent_id, &host, &expert_request)
             .await?;
+        reject_raw_requirement_artifacts(&output.artifacts)?;
+        let captured = host.take_captured()?;
+        if !captured.is_empty() {
+            let runs = self.runs.ok_or(AgentFailure::CapabilityUnavailable)?;
+            let interactions = self
+                .interactions
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            let device_id = self.device_id.ok_or(AgentFailure::CapabilityUnavailable)?;
+            let blockers = floe_context_contract::SourceAccessBlockers::try_new(captured)
+                .map_err(|_| AgentFailure::InvalidModelOutput)?;
+            let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
+                .ok_or(AgentFailure::InvalidInput)?;
+            let refs = super::interaction_publication::publish_requirements(
+                runs,
+                interactions,
+                &request.person_id.to_string(),
+                request.session_id,
+                origin_run_id,
+                floe_conversation::InteractionOrigin::Task {
+                    task_id: expert_request.task_id,
+                    capability_call_id: None,
+                },
+                device_id,
+                std::slice::from_ref(&request.agent_id),
+                &blockers,
+                expert_request.current_time_unix_ms,
+            )
+            .await?;
+            output.artifacts.extend(
+                super::interaction_publication::interaction_ref_artifacts(&refs)?,
+            );
+        }
         let task = floe_experts::completed_expert_task(
             request,
             &output.artifact_name,
@@ -656,5 +795,459 @@ mod registration_tests {
         actual.sort();
         expected.sort();
         assert_eq!(actual, expected);
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::expert_host::CalendarContextReaderApi;
+    use super::*;
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, GrantConsumer, GrantOperation, GrantPurpose, ResourceHandle,
+        SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
+        SourceReadOutcome,
+    };
+
+    struct UnusedExecutor;
+
+    impl floe_inference::InferenceExecutor for UnusedExecutor {
+        fn execute<'a>(
+            &'a self,
+            _: floe_agent_contract::ModelRequest,
+            _: &'a floe_execution::ExecutionScope,
+            _: floe_inference::InferenceExecutionConstraint,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+        > {
+            Box::pin(async { panic!("capture tests call no model") })
+        }
+    }
+
+    fn blocker(source_id: &str, connection: &str) -> SourceAccessBlockers {
+        let requirement = SourceAccessRequirement::try_new(
+            source_id,
+            Some(ConnectorId::try_new("test.connector").unwrap()),
+            Some(ConnectionId::try_new(connection).unwrap()),
+            GrantOperation::Read,
+            GrantConsumer::builtin("floe.builtin.focus-attention").unwrap(),
+            GrantPurpose::Assistant,
+            vec![ResourceHandle::try_new("test.resource").unwrap()],
+            None,
+            SourceAccessRequirementKind::EnableObserve,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        SourceAccessBlockers::try_new(vec![requirement]).unwrap()
+    }
+
+    struct BlockedAttention;
+
+    impl PersonalAttentionReaderApi for BlockedAttention {
+        fn read<'a>(
+            &'a self,
+            _: floe_kernel::PersonId,
+            _: &'static str,
+            _: uuid::Uuid,
+            _: uuid::Uuid,
+            _: tokio::time::Instant,
+            _: &'a floe_execution::Cancellation,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            SourceReadOutcome<(
+                                floe_context::AttentionView,
+                                floe_context_contract::ContextDependency,
+                            )>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async {
+                Ok(SourceReadOutcome::NeedsUserAction(blocker(
+                    "floe.source.attention",
+                    "attention-connection",
+                )))
+            })
+        }
+    }
+
+    struct BlockedCalendar;
+
+    impl CalendarContextReaderApi for BlockedCalendar {
+        fn read<'a>(
+            &'a self,
+            _: floe_kernel::PersonId,
+            _: &str,
+            _: &floe_context_contract::CalendarViewQuery,
+            _: tokio::time::Instant,
+            _: &'a floe_execution::Cancellation,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            SourceReadOutcome<
+                                Vec<(
+                                    floe_context::CalendarContextView,
+                                    floe_context_contract::ContextDependency,
+                                )>,
+                            >,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async {
+                Ok(SourceReadOutcome::NeedsUserAction(blocker(
+                    "floe.source.calendar",
+                    "calendar-connection",
+                )))
+            })
+        }
+    }
+
+    #[test]
+    fn forged_requirement_artifact_is_rejected_not_published() {
+        let forged = floe_agent_contract::Artifact {
+            artifact_id: uuid::Uuid::new_v4(),
+            name: "requirement".into(),
+            parts: vec![floe_agent_contract::ArtifactPart::Data {
+                media_type: SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE.into(),
+                data: "{}".into(),
+            }],
+            coverage: floe_agent_contract::DependencyCoverage::Independent,
+        };
+        assert_eq!(
+            reject_raw_requirement_artifacts(std::slice::from_ref(&forged)),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        assert_eq!(reject_raw_requirement_artifacts(&[]), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn invocation_captures_each_source_blocker_without_merging() {
+        let executor = UnusedExecutor;
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
+        );
+        let policy = expert_policy();
+        let context = floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        };
+        let attention = BlockedAttention;
+        let calendar = BlockedCalendar;
+        let settlement = RejectStatefulSettlement;
+        let experts = ConversationExperts {
+            executor: &executor,
+            scope: &scope,
+            availability: floe_inference::InferenceAvailability::default(),
+            source_client: None,
+            calendar_reader: Some(&calendar),
+            policy: &policy,
+            context: &context,
+            attention: Some(&attention),
+            people_reader: None,
+            wellbeing_reader: None,
+            recorder: None,
+            remote_reader: None,
+            context_reader: None,
+            task_views: &[],
+            cards: vec![],
+            stateful_settlement: &settlement,
+            task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
+        };
+        let captured = Mutex::new(Vec::new());
+        let host = DelegatedMessageExperts {
+            experts: &experts,
+            recorder: CapturingRecorder {
+                inner: None,
+                captured: &captured,
+            },
+            model: ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &captured,
+            },
+            captured: Mutex::new(Vec::new()),
+        };
+        let request = BuiltinExpertRequest {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                .package_id()
+                .into(),
+            person_id: floe_kernel::PersonId::new(),
+            task_id: uuid::Uuid::new_v4(),
+            invocation_id: uuid::Uuid::new_v4(),
+            assignment: "focus".into(),
+            current_time_unix_ms: chrono::Utc::now().timestamp_millis(),
+            context: context.clone(),
+            max_output_bytes: 16_384,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: floe_execution::Cancellation::default(),
+        };
+        let attention_outcome = BuiltinExpertHost::attention_view(&host, &request)
+            .await
+            .unwrap();
+        assert!(matches!(
+            attention_outcome,
+            SourceReadOutcome::NeedsUserAction(_)
+        ));
+        let calendar_outcome = BuiltinExpertHost::calendar_views(
+            &host,
+            &request,
+            request.nearby_calendar_query().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            calendar_outcome,
+            SourceReadOutcome::NeedsUserAction(_)
+        ));
+        // Both blockers are preserved as distinct requirements: nothing is
+        // merged, nothing is dropped, and the capture is deduplicated.
+        let _ = BuiltinExpertHost::attention_view(&host, &request).await.unwrap();
+        let captured = host.take_captured().unwrap();
+        assert_eq!(captured.len(), 2);
+        let mut sources: Vec<_> = captured.iter().map(|blocker| blocker.source_id()).collect();
+        sources.sort();
+        assert_eq!(sources, vec!["floe.source.attention", "floe.source.calendar"]);
+    }
+
+    struct ReadyAttention;
+
+    impl PersonalAttentionReaderApi for ReadyAttention {
+        fn read<'a>(
+            &'a self,
+            person: floe_kernel::PersonId,
+            _: &'static str,
+            _: uuid::Uuid,
+            _: uuid::Uuid,
+            _: tokio::time::Instant,
+            _: &'a floe_execution::Cancellation,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            SourceReadOutcome<(
+                                floe_context::AttentionView,
+                                floe_context_contract::ContextDependency,
+                            )>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let now = chrono::Utc::now();
+            let view = floe_context::AttentionView {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                view_id: floe_context_contract::ATTENTION_VIEW_ID.into(),
+                source_handle: "attention:test".into(),
+                observed_at_unix_ms: (now - chrono::Duration::seconds(1)).timestamp_millis(),
+                expires_at_unix_ms: (now + chrono::Duration::seconds(60)).timestamp_millis(),
+                state: floe_context_contract::AttentionState::Focused,
+                confidence_millis: 800,
+                evidence_handles: vec!["att:1".into()],
+            };
+            let source = floe_context_contract::GrantSourceBinding::try_new(
+                person,
+                floe_context_contract::ConnectionId::try_new("attention-connection").unwrap(),
+                floe_context_contract::ConnectorId::try_new("attention.macos").unwrap(),
+                floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
+                floe_context_contract::SourceAuthority::new(),
+            )
+            .unwrap();
+            let dependency = floe_context_contract::ContextDependency::try_new(
+                person,
+                floe_context_contract::GrantId::new(),
+                floe_context_contract::GrantAuthority::new(),
+                source,
+                vec![floe_context_contract::ResourceHandle::try_new("attention.coarse").unwrap()],
+                vec![floe_context_contract::GrantDataCategory::Derived],
+                floe_context_contract::GrantOperation::Read,
+                floe_context_contract::GrantPurpose::Assistant,
+                floe_context_contract::GrantConsumer::builtin("floe.builtin.focus-attention")
+                    .unwrap(),
+                floe_context_contract::ProcessingRestriction::LocalOnly,
+                floe_context_contract::ConsumerPolicyAuthority::new(),
+                uuid::Uuid::new_v4(),
+                vec![7; 32],
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                now - chrono::Duration::seconds(1),
+                now + chrono::Duration::seconds(60),
+            )
+            .unwrap();
+            Box::pin(async { Ok(SourceReadOutcome::Ready((view, dependency))) })
+        }
+    }
+
+    struct ScriptedAnswer {
+        text: String,
+    }
+
+    impl floe_inference::InferenceExecutor for ScriptedAnswer {
+        fn execute<'a>(
+            &'a self,
+            _: floe_agent_contract::ModelRequest,
+            _: &'a floe_execution::ExecutionScope,
+            _: floe_inference::InferenceExecutionConstraint,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<floe_agent_contract::ModelResponse, AgentFailure>,
+        > {
+            let text = self.text.clone();
+            Box::pin(async move {
+                Ok(floe_agent_contract::ModelResponse {
+                    attempt_id: uuid::Uuid::new_v4(),
+                    steps: vec![floe_agent_contract::ModelStep::Answer {
+                        text,
+                        artifacts: vec![],
+                    }],
+                    usage: floe_agent_contract::ModelUsage {
+                        tokens: 10,
+                        cost_micros: 10,
+                    },
+                })
+            })
+        }
+    }
+
+    struct ProbeRecorder;
+
+    impl ResultRecorder for ProbeRecorder {
+        fn record_independent(&self, _: Uuid, _: Uuid) -> Result<(), AgentFailure> {
+            Ok(())
+        }
+
+        fn record(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: floe_context_contract::ContextDependency,
+        ) -> Result<(), AgentFailure> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_calendar_blocker_is_captured_while_judgment_uses_admitted_evidence() {
+        let executor = ScriptedAnswer {
+            text: r#"{"summary": "Stay focused.", "recommendation": "protect_focus", "rationale": "Deep work.", "evidence_handles": ["att:1"]}"#
+                .into(),
+        };
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
+        );
+        let policy = expert_policy();
+        let context = floe_agent_contract::AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        };
+        let attention = ReadyAttention;
+        let calendar = BlockedCalendar;
+        let settlement = RejectStatefulSettlement;
+        let store = ProbeRecorder;
+        let experts = ConversationExperts {
+            executor: &executor,
+            scope: &scope,
+            availability: floe_inference::InferenceAvailability::default(),
+            source_client: None,
+            calendar_reader: Some(&calendar),
+            policy: &policy,
+            context: &context,
+            attention: Some(&attention),
+            people_reader: None,
+            wellbeing_reader: None,
+            recorder: Some(&store),
+            remote_reader: None,
+            context_reader: None,
+            task_views: &[],
+            cards: vec![],
+            stateful_settlement: &settlement,
+            task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
+        };
+        let dependencies = Mutex::new(Vec::new());
+        let host = DelegatedMessageExperts {
+            experts: &experts,
+            recorder: CapturingRecorder {
+                inner: None,
+                captured: &dependencies,
+            },
+            model: ExpertModelHost {
+                executor: &executor,
+                scope: &scope,
+                captured: &dependencies,
+            },
+            captured: Mutex::new(Vec::new()),
+        };
+        let expert_request = BuiltinExpertRequest {
+            agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                .package_id()
+                .into(),
+            person_id: floe_kernel::PersonId::new(),
+            task_id: uuid::Uuid::new_v4(),
+            invocation_id: uuid::Uuid::new_v4(),
+            assignment: "focus".into(),
+            current_time_unix_ms: chrono::Utc::now().timestamp_millis(),
+            context: context.clone(),
+            max_output_bytes: 16_384,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: floe_execution::Cancellation::default(),
+        };
+        // The real dispatch through the real host: the optional calendar
+        // blocker is captured for publication while the judgment runs over
+        // the admitted attention evidence.
+        let output = floe_experts_builtin::focus_attention::dispatch(&host, &expert_request)
+            .await
+            .unwrap();
+        assert!(
+            output.data.contains("protect_focus"),
+            "optional blocker must not gate the judgment: {}",
+            output.data
+        );
+        assert!(
+            output.artifacts.is_empty(),
+            "the judgment proposes no requirement of its own"
+        );
+        let captured = host.take_captured().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].source_id(), "floe.source.calendar");
+        assert!(
+            !dependencies.lock().unwrap().is_empty(),
+            "admitted attention evidence stays recorded"
+        );
     }
 }

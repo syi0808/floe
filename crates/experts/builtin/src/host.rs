@@ -141,6 +141,23 @@ pub struct StatefulExpertDraft {
     pub view_calls: u32,
 }
 
+/// Why a mandatory source left an Expert with no judgment to make.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockedExpertStatus {
+    NeedsUserAction,
+    Unavailable,
+}
+
+/// A deterministic blocked-domain report: the status the Manager explains,
+/// and no conclusion, no evidence and no model call behind it.
+#[derive(serde::Serialize)]
+pub struct BlockedExpertResult {
+    pub schema_version: u32,
+    pub status: BlockedExpertStatus,
+    pub summary: String,
+}
+
 impl BuiltinExpertOutput {
     /// A serialized Expert result and the summary the Task carries beside it.
     pub fn from_result<Result_: serde::Serialize>(
@@ -155,6 +172,29 @@ impl BuiltinExpertOutput {
             artifacts: vec![],
             settlement: None,
         })
+    }
+
+    /// A blocked-domain report for a mandatory source that could not be
+    /// read: deterministic, evidence-free, and Task Completed. The trusted
+    /// host attaches the durable refs from its own capture; the report
+    /// itself proposes no requirement.
+    pub fn from_blocked(
+        artifact_name: &str,
+        status: BlockedExpertStatus,
+        summary: String,
+    ) -> Result<Self, AgentFailure> {
+        if summary.trim().is_empty() || summary.len() > 512 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Self::from_result(
+            artifact_name,
+            summary.clone(),
+            &BlockedExpertResult {
+                schema_version: floe_agent_contract::AGENT_VERSION,
+                status,
+                summary,
+            },
+        )
     }
 
     pub fn with_artifacts(mut self, artifacts: Vec<Artifact>) -> Self {
@@ -182,13 +222,14 @@ pub trait BuiltinExpertHost: Sync {
 
     fn policy(&self) -> &InferencePolicyDecision;
 
-    /// Read one authorized remote source view for this Expert.
+    /// Read one authorized remote source view for this Expert. A
+    /// recoverable blocker arrives typed; only hard failures raise.
     fn read_source_view<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
         view_id: &'a str,
         query: serde_json::Value,
-    ) -> Acquiring<'a, Self::SourceRead>;
+    ) -> Acquiring<'a, SourceReadOutcome<Self::SourceRead>>;
 
     /// Record that this Expert's result depends on a source it read.
     fn record_dependency(
@@ -213,9 +254,12 @@ pub trait BuiltinExpertHost: Sync {
     fn work_context_views<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, Vec<WorkContextView>>;
+    ) -> Acquiring<'a, SourceReadOutcome<Vec<WorkContextView>>>;
 
-    fn people_view<'a>(&'a self, request: &'a BuiltinExpertRequest) -> Acquiring<'a, PeopleView>;
+    fn people_view<'a>(
+        &'a self,
+        request: &'a BuiltinExpertRequest,
+    ) -> Acquiring<'a, SourceReadOutcome<PeopleView>>;
 
     fn confirmed_interaction_views<'a>(
         &'a self,
@@ -226,12 +270,12 @@ pub trait BuiltinExpertHost: Sync {
     fn wellbeing_view<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, WellbeingView>;
+    ) -> Acquiring<'a, SourceReadOutcome<WellbeingView>>;
 
     fn attention_view<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, (AttentionView, ContextDependency)>;
+    ) -> Acquiring<'a, SourceReadOutcome<(AttentionView, ContextDependency)>>;
 
     /// Whether this turn can read the Person's own conversation context at all.
     ///

@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, HashSet};
 
 use chrono::{Local, TimeZone, Utc};
-use floe_agent_contract::{AgentFailure, Artifact, ArtifactPart, DependencyCoverage};
+use floe_agent_contract::{AgentFailure, Artifact};
 use floe_context_contract::{
     CalendarContextView, CalendarViewQuery, MAX_CALENDAR_CONTEXT_ITEMS, MAX_CONTEXT_EVIDENCE_BYTES,
     SourceReadOutcome, SourceUnavailable, validate_calendar_context_view_for_query,
 };
 use serde::Serialize;
-use uuid::Uuid;
 
 use crate::{BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest};
 
@@ -16,8 +15,6 @@ use super::{expert, plan_request};
 const MAX_PAGES: usize = 8;
 const MAX_TOTAL_ITEMS: usize = 4 * MAX_CALENDAR_CONTEXT_ITEMS;
 const MAX_TOTAL_BYTES: usize = MAX_CONTEXT_EVIDENCE_BYTES;
-pub const SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE: &str =
-    "application/vnd.floe.source-access-requirement+json;version=1";
 
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -60,21 +57,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             }
             SourceReadOutcome::NeedsUserAction(blockers) => {
                 blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
-                let requirement = blockers
-                    .blockers()
-                    .first()
-                    .ok_or(AgentFailure::StaleContext)?;
-                let artifact = Artifact {
-                    artifact_id: Uuid::new_v4(),
-                    name: "Calendar access requirement".into(),
-                    parts: vec![ArtifactPart::Data {
-                        media_type: SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE.into(),
-                        data: serde_json::to_string(requirement)
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                    }],
-                    coverage: DependencyCoverage::Independent,
-                };
-                return blocked(BlockedResult::NeedsUserAction, vec![artifact]);
+                // The host publishes the requirement it captured; the report
+                // proposes no requirement of its own.
+                return blocked(BlockedResult::NeedsUserAction, vec![]);
             }
         };
         if views.is_empty() {
@@ -191,6 +176,7 @@ mod tests {
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
+    use uuid::Uuid;
 
     use super::*;
     use crate::Acquiring;
@@ -276,7 +262,7 @@ mod tests {
             _: &'a BuiltinExpertRequest,
             _: &'a str,
             _: serde_json::Value,
-        ) -> Acquiring<'a, Self::SourceRead> {
+        ) -> Acquiring<'a, SourceReadOutcome<Self::SourceRead>> {
             panic!("Schedule must use Calendar Context")
         }
 
@@ -370,11 +356,14 @@ mod tests {
         fn work_context_views<'a>(
             &'a self,
             _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, Vec<WorkContextView>> {
+        ) -> Acquiring<'a, SourceReadOutcome<Vec<WorkContextView>>> {
             panic!("unused")
         }
 
-        fn people_view<'a>(&'a self, _: &'a BuiltinExpertRequest) -> Acquiring<'a, PeopleView> {
+        fn people_view<'a>(
+            &'a self,
+            _: &'a BuiltinExpertRequest,
+        ) -> Acquiring<'a, SourceReadOutcome<PeopleView>> {
             panic!("unused")
         }
 
@@ -389,14 +378,14 @@ mod tests {
         fn wellbeing_view<'a>(
             &'a self,
             _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, WellbeingView> {
+        ) -> Acquiring<'a, SourceReadOutcome<WellbeingView>> {
             panic!("unused")
         }
 
         fn attention_view<'a>(
             &'a self,
             _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, (AttentionView, ContextDependency)> {
+        ) -> Acquiring<'a, SourceReadOutcome<(AttentionView, ContextDependency)>> {
             panic!("unused")
         }
 
@@ -468,8 +457,11 @@ mod tests {
                 Scenario::Unavailable => assert!(result.unwrap().data.contains("unavailable")),
                 Scenario::NeedsUserAction => {
                     let output = result.unwrap();
-                    assert_eq!(output.artifacts.len(), 1);
-                    assert!(output.artifacts[0].parts.iter().any(|part| matches!(part, ArtifactPart::Data { media_type, .. } if media_type == SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE)));
+                    assert!(output.data.contains("needs_user_action"));
+                    assert!(
+                        output.artifacts.is_empty(),
+                        "blocked reports propose no requirement of their own"
+                    );
                 }
                 _ => assert!(result.is_err()),
             }

@@ -24,7 +24,9 @@ pub use catalog::{
     builtin_setup_declarations,
 };
 pub use host::{
-    Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft,
-    StatefulFocusProposal, granted_context,
+    Acquiring, BlockedExpertResult, BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput,
+    BuiltinExpertRequest, StatefulExpertDraft, StatefulFocusProposal, granted_context,
 };
+#[cfg(test)]
+mod test_host;
 pub use shared::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};

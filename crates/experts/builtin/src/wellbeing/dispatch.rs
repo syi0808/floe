@@ -1,17 +1,39 @@
 //! The Wellbeing Expert's own execution.
 
 use floe_agent_contract::AgentFailure;
+use floe_context_contract::SourceReadOutcome;
 
 use crate::wellbeing::{
     WellbeingContextViews, WellbeingExpertResult, run_wellbeing_expert_with_views,
 };
-use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
+use crate::{
+    BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
+    granted_context,
+};
 
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    let wellbeing = host.wellbeing_view(request).await?;
+    let wellbeing = match host.wellbeing_view(request).await? {
+        SourceReadOutcome::Ready(view) => view,
+        SourceReadOutcome::Unavailable(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                BlockedExpertStatus::Unavailable,
+                "Wellbeing is temporarily unavailable, so there is no wellbeing assessment."
+                    .into(),
+            );
+        }
+        SourceReadOutcome::NeedsUserAction(blockers) => {
+            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Wellbeing access needs your review, so there is no wellbeing assessment.".into(),
+            );
+        }
+    };
     let mut context = granted_context(host, request);
     let calendars = crate::shared::optional_calendar_views(
         &mut context,

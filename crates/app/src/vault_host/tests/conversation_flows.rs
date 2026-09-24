@@ -1029,7 +1029,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
 }
 
 #[test]
-fn production_builtin_expert_persists_access_denial_through_registered_task() {
+fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     let keys = Keys::default();
@@ -1073,6 +1073,8 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
     );
     assert_eq!(result.failure, None, "result: {result:?}");
     let session = result.session.unwrap();
+    // The blocked mandatory source completes the task with a
+    // needs_user_action report and a durable safe ref — never a failure.
     let task_id = session
         .messages
         .iter()
@@ -1080,14 +1082,40 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
             AgentMessage::Delegation { task, .. }
                 if task.agent_id
                     == floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()
-                    && task.state == floe_experts::A2ATaskState::Failed
-                    && task.failure == Some(AgentFailure::AccessReviewRequired) =>
+                    && task.state == floe_experts::A2ATaskState::Completed
+                    && task.failure.is_none()
+                    && task.artifacts.iter().any(|artifact| {
+                        artifact.parts.iter().any(|part| {
+                            matches!(
+                                part,
+                                floe_experts::A2APart::Data { data, .. }
+                                    if data.contains("needs_user_action")
+                            )
+                        })
+                    })
+                    && task.artifacts.iter().any(|artifact| {
+                        artifact.parts.iter().any(|part| {
+                            matches!(
+                                part,
+                                floe_experts::A2APart::Data { media_type, .. }
+                                    if media_type
+                                        == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE
+                            )
+                        })
+                    }) =>
             {
                 Some(task.id)
             }
             _ => None,
         })
-        .unwrap_or_else(|| panic!("durable Commitments denial: {session:?}"));
+        .unwrap_or_else(|| panic!("durable Commitments blocker: {session:?}"));
+    assert!(
+        session.messages.iter().any(|message| matches!(
+            message,
+            AgentMessage::Interaction { .. }
+        )),
+        "completed turn must carry the Interaction message: {session:?}"
+    );
     assert_eq!(server.join().unwrap().len(), 2);
     assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1101,10 +1129,43 @@ fn production_builtin_expert_persists_access_denial_through_registered_task() {
         .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(task_id).unwrap()))
         .unwrap()
         .unwrap();
-    assert_eq!(task.snapshot.state, floe_agent_contract::TaskState::Failed);
+    assert_eq!(task.snapshot.state, floe_agent_contract::TaskState::Completed);
+    assert_eq!(task.snapshot.issue, None);
+    let reference = task
+        .snapshot
+        .artifacts
+        .iter()
+        .find_map(|artifact| {
+            artifact.parts.iter().find_map(|part| match part {
+                floe_agent_contract::ArtifactPart::Data { media_type, data }
+                    if media_type == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE =>
+                {
+                    serde_json::from_str::<floe_agent_contract::UserInteractionRef>(data).ok()
+                }
+                _ => None,
+            })
+        })
+        .expect("blocked task must carry the durable ref");
     assert_eq!(
-        task.snapshot.issue,
-        Some(AgentFailure::AccessReviewRequired)
+        reference.kind,
+        floe_agent_contract::UserInteractionKind::SourceAccess
+    );
+    let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::new(reopened));
+    let stored = runtime
+        .block_on(floe_conversation::InteractionRepository::get_interaction(
+            &repository,
+            person,
+            reference.interaction_id,
+        ))
+        .unwrap()
+        .expect("blocked task must publish a durable interaction");
+    assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
+    assert_eq!(
+        stored.origin,
+        floe_conversation::InteractionOrigin::Task {
+            task_id,
+            capability_call_id: None,
+        }
     );
 }
 
@@ -2344,18 +2405,75 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
     );
-    let (invocation, scope) = direct_invocation(
+    // The direct invocation still needs the validated origin the common
+    // endpoint publishes under: an admitted run with the DelegationIntent
+    // this exact request journals.
+    let run_id = floe_kernel::RunId::new();
+    let repository =
+        floe_vault::VaultConversationRepository::new(std::sync::Arc::clone(&fixture.vault));
+    let session_id = fixture.runtime.block_on(async {
+            fixture
+                .vault
+                .activate_conversation_executor()
+                .await
+                .unwrap();
+            let started = floe_conversation::start_session(
+                &repository,
+                floe_conversation::SessionRequest {
+                    principal: person.to_string(),
+                },
+            )
+            .await
+            .unwrap();
+            let command_id = floe_agent_contract::CommandId::new();
+            floe_conversation::ConversationRepository::admit_turn(
+                &repository,
+                floe_conversation::TurnAdmissionRequest {
+                    run_id,
+                    command_id,
+                    session_id: started.session_id,
+                    expected_session_revision: 0,
+                    principal: person.to_string(),
+                    request_digest: [7; 32],
+                    mode: floe_conversation::TurnMode::New,
+                    retry_of: None,
+                    profile: floe_conversation::ProfileSelection::Auto,
+                    user_message: floe_agent_contract::AgentMessage {
+                        message_id: command_id.as_uuid(),
+                        role: floe_agent_contract::MessageRole::User,
+                        text: "Review today".into(),
+                        call_id: None,
+                        coverage: floe_agent_contract::DependencyCoverage::Independent,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            started.session_id
+        });
+    let (invocation, scope) = direct_invocation_in_session(
         &person.to_string(),
-        Uuid::new_v4(),
+        run_id.as_uuid(),
+        session_id,
         floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
         "mac-local",
         "Review today",
     );
+    fixture.runtime.block_on(async {
+        floe_conversation::ConversationRepository::journal(&repository, run_id)
+            .unwrap()
+            .record_intent(floe_agent_contract::JournalEvent::DelegationIntent {
+                request: invocation.request.clone(),
+            })
+            .await
+            .unwrap();
+    });
     let before = fixture
         .runtime
         .block_on(fixture.vault.expert_registry())
         .unwrap()
         .unwrap();
+    let task_uuid = invocation.request.task_id.as_uuid();
     let report = fixture
         .runtime
         .block_on(floe_agent_contract::AgentEndpoint::execute(
@@ -2370,11 +2488,41 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     );
     assert!(report.settlement.is_none());
     assert_eq!(report.artifacts.len(), 1);
-    assert!(report.artifacts[0].parts.iter().any(|part| matches!(
-        part,
-        floe_agent_contract::ArtifactPart::Data { media_type, .. }
-            if media_type == floe_experts_builtin::schedule::dispatch::SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE
-    )));
+    let data = report.artifacts[0]
+        .parts
+        .iter()
+        .find_map(|part| match part {
+            floe_agent_contract::ArtifactPart::Data { media_type, data }
+                if media_type == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE =>
+            {
+                Some(data.clone())
+            }
+            _ => None,
+        })
+        .expect("blocked report must carry the safe ref, not a raw requirement");
+    let reference: floe_agent_contract::UserInteractionRef =
+        serde_json::from_str(&data).unwrap();
+    assert_eq!(
+        reference.kind,
+        floe_agent_contract::UserInteractionKind::SourceAccess
+    );
+    let stored = fixture
+        .runtime
+        .block_on(floe_conversation::InteractionRepository::get_interaction(
+            &repository,
+            person,
+            reference.interaction_id,
+        ))
+        .unwrap()
+        .expect("blocked report must publish a durable interaction");
+    assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
+    assert_eq!(
+        stored.origin,
+        floe_conversation::InteractionOrigin::Task {
+            task_id: task_uuid,
+            capability_call_id: None,
+        }
+    );
     let after = fixture
         .runtime
         .block_on(fixture.vault.expert_registry())
@@ -2502,15 +2650,139 @@ fn common_schedule_review_requirement_completes_root_run() {
                 && task.artifacts.iter().any(|artifact| artifact.parts.iter().any(|part| matches!(
                     part,
                     floe_experts::A2APart::Data { media_type, .. }
-                        if media_type == floe_experts_builtin::schedule::dispatch::SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE
+                        if media_type == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE
                 )))
     )));
+    assert!(
+        session.messages.iter().any(|message| matches!(
+            message,
+            AgentMessage::Interaction { .. }
+        )),
+        "completed turn must carry the Interaction message: {session:?}"
+    );
     assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
+fn direct_attention_tool_blocked_completes_turn_with_one_durable_ref() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let keys = Keys::default();
+    let person = PersonId::new();
+    // The Manager calls the direct tool first, then explains the blocked
+    // state it observed: two model iterations, one durable interaction.
+    let (mock, server) = answer_server(vec![
+        floe_inference::ModelStep::Call {
+            capability_id: "attention.coarse.read".into(),
+            input: "{}".into(),
+        },
+        floe_inference::ModelStep::Answer {
+            text: "Attention access needs your review before I can read it.".into(),
+        },
+    ]);
+    let worker = Worker::new_with_connection_store(
+        root.clone(),
+        keys.clone(),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
+            saved_server_connection(&mock, person, "mac-local"),
+        )),
+    )
+    .unwrap();
+    assert_eq!(perform(&worker, person, WorkerAction::Create).failure, None);
+    let session = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationSession {
+            operation: ConversationSessionOperation::Start,
+        },
+    )
+    .session
+    .unwrap();
+    let result = perform(
+        &worker,
+        person,
+        WorkerAction::ConversationTurn {
+            request: Box::new(ConversationTurnRequest::new(
+                session.id,
+                session.revision,
+                "Am I focused right now?".into(),
+                "mac-local".into(),
+                ProfileSelection::Explicit("server-model".into()),
+                false,
+                None,
+            )),
+        },
+    );
+    assert_eq!(result.failure, None, "result: {result:?}");
+    let session = result.session.unwrap();
+    assert_eq!(
+        session.last_outcome,
+        Some(floe_conversation::AgentOutcome::Completed),
+        "session: {session:?}"
+    );
+    let interactions: Vec<_> = session
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Interaction { interaction_id, .. } => Some(*interaction_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(interactions.len(), 1, "session: {session:?}");
+    assert_eq!(server.join().unwrap().len(), 2);
+    // The single ref resolves to a durable pending Tool-origin interaction.
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let reopened = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::new(reopened));
+    let stored = runtime
+        .block_on(floe_conversation::InteractionRepository::get_interaction(
+            &repository,
+            person,
+            interactions[0],
+        ))
+        .unwrap()
+        .expect("blocked tool must publish a durable interaction");
+    assert_eq!(stored.state, floe_conversation::InteractionState::Pending);
+    assert!(
+        matches!(
+            stored.origin,
+            floe_conversation::InteractionOrigin::Tool { .. }
+        ),
+        "direct blocker publishes under the Tool origin: {:?}",
+        stored.origin
+    );
 }
 
 fn direct_invocation(
     principal: &str,
     parent_run_id: Uuid,
+    agent_id: &str,
+    device_id: &str,
+    message: &str,
+) -> (
+    floe_agent_contract::EndpointInvocation,
+    floe_execution::ExecutionScope,
+) {
+    direct_invocation_in_session(
+        principal,
+        parent_run_id,
+        Uuid::new_v4(),
+        agent_id,
+        device_id,
+        message,
+    )
+}
+
+fn direct_invocation_in_session(
+    principal: &str,
+    parent_run_id: Uuid,
+    session_id: Uuid,
     agent_id: &str,
     device_id: &str,
     message: &str,
@@ -2533,7 +2805,7 @@ fn direct_invocation(
         message: message.into(),
         context_refs: vec![],
         execution_context: DelegationExecutionContext {
-            session_id: Uuid::new_v4(),
+            session_id,
             device_id: device_id.into(),
             agent_context: floe_agent_contract::AgentContext {
                 projection_version: 1,

@@ -237,8 +237,8 @@ pub(crate) async fn publish_requirements<Runs, Interactions>(
     now_unix_ms: i64,
 ) -> Result<Vec<UserInteractionRef>, AgentFailure>
 where
-    Runs: floe_conversation::ConversationRepository,
-    Interactions: floe_conversation::InteractionRepository,
+    Runs: floe_conversation::ConversationRepository + ?Sized,
+    Interactions: floe_conversation::InteractionRepository + ?Sized,
 {
     blockers.validate().map_err(|_| AgentFailure::InvalidInput)?;
     let mut refs = Vec::with_capacity(blockers.blockers().len());
@@ -299,14 +299,12 @@ pub(crate) fn blocked_text(blockers: &SourceAccessBlockers) -> Result<String, Ag
     ))
 }
 
-/// Settle a blocked call: no source evidence, safe refs only, and a
-/// non-retryable blocked signal the Manager loop explains and continues past.
-pub(crate) fn blocked_tool_result(
-    call_id: Uuid,
+/// One safe-ref artifact per durable interaction: opaque id plus kind
+/// label only, source-independent.
+pub(crate) fn interaction_ref_artifacts(
     refs: &[UserInteractionRef],
-    text: String,
-) -> Result<ToolResult, AgentFailure> {
-    if call_id.is_nil() || refs.is_empty() {
+) -> Result<Vec<Artifact>, AgentFailure> {
+    if refs.is_empty() {
         return Err(AgentFailure::InvalidInput);
     }
     let mut artifacts = Vec::with_capacity(refs.len());
@@ -323,10 +321,23 @@ pub(crate) fn blocked_tool_result(
             coverage: DependencyCoverage::Independent,
         });
     }
+    Ok(artifacts)
+}
+
+/// Settle a blocked call: no source evidence, safe refs only, and a
+/// non-retryable blocked signal the Manager loop explains and continues past.
+pub(crate) fn blocked_tool_result(
+    call_id: Uuid,
+    refs: &[UserInteractionRef],
+    text: String,
+) -> Result<ToolResult, AgentFailure> {
+    if call_id.is_nil() {
+        return Err(AgentFailure::InvalidInput);
+    }
     let result = ToolResult {
         call_id,
         text,
-        artifacts,
+        artifacts: interaction_ref_artifacts(refs)?,
         coverage: DependencyCoverage::Independent,
         issue: Some(OutcomeIssue {
             failure: AgentFailure::CapabilityUnavailable,

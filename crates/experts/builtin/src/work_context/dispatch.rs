@@ -2,24 +2,45 @@
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{AuthorizedRead, HeldGrant};
+use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
 
 use floe_context_contract::WorkContextView;
 
 use crate::work_context::{WorkContextExpertResult, run_work_context_expert};
-use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
+use crate::{
+    BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
+    granted_context,
+};
 
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    let source_view = host
+    let source_view = match host
         .read_source_view(
             request,
             "work.context",
             serde_json::json!({ "schema_version": AGENT_VERSION }),
         )
-        .await?;
+        .await?
+    {
+        SourceReadOutcome::Ready(view) => view,
+        SourceReadOutcome::Unavailable(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::WorkContext.result_artifact_name(),
+                BlockedExpertStatus::Unavailable,
+                "Work context is temporarily unavailable, so there is no work assessment.".into(),
+            );
+        }
+        SourceReadOutcome::NeedsUserAction(blockers) => {
+            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::WorkContext.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Work context access needs your review, so there is no work assessment.".into(),
+            );
+        }
+    };
     for binding in source_view.bindings() {
         host.record_dependency(request.task_id, request.task_id, binding.dependency.clone())?;
     }

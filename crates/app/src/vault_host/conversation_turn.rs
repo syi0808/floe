@@ -433,7 +433,6 @@ mod tests {
     use super::interaction_publication::PublishingToolPort;
     use floe_agent_contract::ModelPlacement;
     use floe_agent_contract::{ModelRequest, ModelResponse};
-    use floe_agent_contract::ExecutionJournal;
     use floe_context::AttentionView;
     use floe_conversation::AgentMessage;
     use floe_conversation::{ConversationRepository, InteractionRepository};
@@ -1282,6 +1281,9 @@ mod tests {
                 floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
                 &runner,
             )],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let task_id = Uuid::new_v4();
         let task = experts
@@ -1499,7 +1501,7 @@ mod tests {
         let recorder = StoreResultRecorder { store: &store };
         let turn_id = Uuid::new_v4();
         let call_id = Uuid::new_v4();
-        let (attention_view, attention_dependency) = reader
+        let outcome = reader
             .read(
                 person_id,
                 floe_access::ATTENTION_ASSISTANT_CONSUMER,
@@ -1510,6 +1512,13 @@ mod tests {
             )
             .await
             .unwrap();
+        let floe_context_contract::SourceReadOutcome::Ready((
+            attention_view,
+            attention_dependency,
+        )) = outcome
+        else {
+            panic!("admitted attention read must stay ready");
+        };
         recorder
             .record(turn_id, call_id, attention_dependency)
             .unwrap();
@@ -1652,6 +1661,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -1740,6 +1752,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1783,6 +1798,9 @@ mod tests {
             cards: vec![],
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2486,6 +2504,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -2722,6 +2743,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -2896,6 +2920,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -3169,6 +3196,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -3231,6 +3261,9 @@ mod tests {
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
             task_runners: &[],
+            runs: None,
+            interactions: None,
+            device_id: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

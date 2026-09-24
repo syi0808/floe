@@ -102,8 +102,8 @@ pub async fn publish_interaction<Runs, Interactions>(
     now_unix_ms: i64,
 ) -> Result<PublishAdmission, AgentFailure>
 where
-    Runs: ConversationRepository,
-    Interactions: InteractionRepository,
+    Runs: ConversationRepository + ?Sized,
+    Interactions: InteractionRepository + ?Sized,
 {
     request.validate()?;
     if now_unix_ms < 0 {

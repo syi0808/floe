@@ -6,14 +6,17 @@
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{AgentFailure, ContextSource};
-use floe_context_contract::{AuthorizedRead, HeldGrant};
+use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
 
 use floe_context_contract::CommunicationView;
 
 use crate::commitments::{
     CommitmentsContextViews, CommitmentsExpertResult, run_commitments_expert_with_views,
 };
-use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
+use crate::{
+    BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
+    granted_context,
+};
 
 /// How much communication this Expert reads in one invocation.
 const COMMUNICATION_LIMIT: usize = 25;
@@ -45,7 +48,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         );
         task_views = acquired.value.into_iter().collect();
     }
-    let source_view = host
+    let source_view = match host
         .read_source_view(
             request,
             "mail.communication",
@@ -56,7 +59,25 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 "limit": COMMUNICATION_LIMIT,
             }),
         )
-        .await?;
+        .await?
+    {
+        SourceReadOutcome::Ready(view) => view,
+        SourceReadOutcome::Unavailable(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Commitments.result_artifact_name(),
+                BlockedExpertStatus::Unavailable,
+                "Mail is temporarily unavailable, so there are no commitment findings.".into(),
+            );
+        }
+        SourceReadOutcome::NeedsUserAction(blockers) => {
+            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Commitments.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Mail access needs your review, so there are no commitment findings.".into(),
+            );
+        }
+    };
     for binding in source_view.bindings() {
         host.record_dependency(request.task_id, request.task_id, binding.dependency.clone())?;
     }

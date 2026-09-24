@@ -478,34 +478,50 @@ impl PersonalViewSource<'_> {
         &self,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<PeopleView, AgentFailure> {
+    ) -> Result<floe_context_contract::SourceReadOutcome<PeopleView>, AgentFailure> {
         self.record_result_independent()?;
         let reader = self
             .people_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        let (view, dependency) = reader
+        match reader
             .read(self.person_id, self.consumer_name, deadline, cancellation)
-            .await?;
-        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
-            recorder.record(
-                self.dependency_turn_id,
-                self.dependency_result_id,
-                dependency,
-            )?;
+            .await?
+        {
+            floe_context_contract::SourceReadOutcome::Ready((view, dependency)) => {
+                if let (Some(recorder), false) =
+                    (self.recorder, self.dependency_turn_id.is_nil())
+                {
+                    recorder.record(
+                        self.dependency_turn_id,
+                        self.dependency_result_id,
+                        dependency,
+                    )?;
+                }
+                Ok(floe_context_contract::SourceReadOutcome::Ready(view))
+            }
+            floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                    reason,
+                ))
+            }
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                    blockers,
+                ))
+            }
         }
-        Ok(view)
     }
 
     pub(super) async fn wellbeing_view(
         &self,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<WellbeingView, AgentFailure> {
+    ) -> Result<floe_context_contract::SourceReadOutcome<WellbeingView>, AgentFailure> {
         self.record_result_independent()?;
         let reader = self
             .wellbeing_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        let (view, dependency) = reader
+        match reader
             .read(
                 self.person_id,
                 self.consumer_name,
@@ -513,15 +529,31 @@ impl PersonalViewSource<'_> {
                 deadline,
                 cancellation,
             )
-            .await?;
-        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
-            recorder.record(
-                self.dependency_turn_id,
-                self.dependency_result_id,
-                dependency,
-            )?;
+            .await?
+        {
+            floe_context_contract::SourceReadOutcome::Ready((view, dependency)) => {
+                if let (Some(recorder), false) =
+                    (self.recorder, self.dependency_turn_id.is_nil())
+                {
+                    recorder.record(
+                        self.dependency_turn_id,
+                        self.dependency_result_id,
+                        dependency,
+                    )?;
+                }
+                Ok(floe_context_contract::SourceReadOutcome::Ready(view))
+            }
+            floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                    reason,
+                ))
+            }
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                    blockers,
+                ))
+            }
         }
-        Ok(view)
     }
 
     pub(super) async fn calendar_views(
@@ -603,9 +635,12 @@ impl PersonalViewSource<'_> {
         &self,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
-    ) -> Result<Vec<floe_context::WorkContextView>, AgentFailure> {
+    ) -> Result<
+        floe_context_contract::SourceReadOutcome<Vec<floe_context::WorkContextView>>,
+        AgentFailure,
+    > {
         if self.source_client.is_none() {
-            return Ok(vec![]);
+            return Ok(floe_context_contract::SourceReadOutcome::Ready(vec![]));
         }
         let Some(reader) = self.remote_reader else {
             return Err(AgentFailure::CapabilityUnavailable);
@@ -619,9 +654,9 @@ impl PersonalViewSource<'_> {
             deadline,
             cancellation,
         )
-        .await
+        .await?
         {
-            Ok(source_view) => {
+            floe_context_contract::SourceReadOutcome::Ready(source_view) => {
                 if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
                     for binding in source_view.bindings() {
                         recorder.record(
@@ -633,10 +668,18 @@ impl PersonalViewSource<'_> {
                 }
                 let view = serde_json::from_value(source_view.payload().clone())
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-                Ok(vec![view])
+                Ok(floe_context_contract::SourceReadOutcome::Ready(vec![view]))
             }
-            Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
-            Err(error) => Err(error),
+            // Unavailable paired state reads as absent, as before; only a
+            // concrete blocker propagates for review.
+            floe_context_contract::SourceReadOutcome::Unavailable(_) => {
+                Ok(floe_context_contract::SourceReadOutcome::Ready(vec![]))
+            }
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                    blockers,
+                ))
+            }
         }
     }
 }
@@ -649,7 +692,10 @@ pub(super) async fn read_context_source(
     query: serde_json::Value,
     deadline: tokio::time::Instant,
     cancellation: &floe_execution::Cancellation,
-) -> Result<floe_context::SourceView<serde_json::Value>, AgentFailure> {
+) -> Result<
+    floe_context_contract::SourceReadOutcome<floe_context::SourceView<serde_json::Value>>,
+    AgentFailure,
+> {
     let prepared = floe_context::ContextService::new(Some(reader)).prepare(person_id)?;
     let source_request = prepared.source_request(
         source_id,
@@ -660,18 +706,7 @@ pub(super) async fn read_context_source(
         deadline,
         cancellation.clone(),
     )?;
-    // Interim: the delegated host moves to typed outcomes with trusted
-    // capture next; until then a blocked read keeps the exact failure the
-    // untyped read raised for the same condition.
-    match prepared.read_source(&source_request).await? {
-        floe_context_contract::SourceReadOutcome::Ready(view) => Ok(view),
-        floe_context_contract::SourceReadOutcome::Unavailable(_) => {
-            Err(AgentFailure::CapabilityUnavailable)
-        }
-        floe_context_contract::SourceReadOutcome::NeedsUserAction(_) => {
-            Err(AgentFailure::AccessReviewRequired)
-        }
-    }
+    prepared.read_source(&source_request).await
 }
 
 pub(super) trait ResultRecorder: Send + Sync {
@@ -734,7 +769,10 @@ pub(super) trait PersonalAttentionReaderApi: Send + Sync {
         Box<
             dyn Future<
                     Output = Result<
-                        (AttentionView, floe_context_contract::ContextDependency),
+                        floe_context_contract::SourceReadOutcome<(
+                            AttentionView,
+                            floe_context_contract::ContextDependency,
+                        )>,
                         AgentFailure,
                     >,
                 > + Send
@@ -754,7 +792,10 @@ pub(super) trait PersonalPeopleReaderApi: Send + Sync {
         Box<
             dyn Future<
                     Output = Result<
-                        (PeopleView, floe_context_contract::ContextDependency),
+                        floe_context_contract::SourceReadOutcome<(
+                            PeopleView,
+                            floe_context_contract::ContextDependency,
+                        )>,
                         AgentFailure,
                     >,
                 > + Send
@@ -775,7 +816,10 @@ pub(super) trait PersonalWellbeingReaderApi: Send + Sync {
         Box<
             dyn Future<
                     Output = Result<
-                        (WellbeingView, floe_context_contract::ContextDependency),
+                        floe_context_contract::SourceReadOutcome<(
+                            WellbeingView,
+                            floe_context_contract::ContextDependency,
+                        )>,
                         AgentFailure,
                     >,
                 > + Send
@@ -1207,7 +1251,10 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
         Box<
             dyn Future<
                     Output = Result<
-                        (AttentionView, floe_context_contract::ContextDependency),
+                        floe_context_contract::SourceReadOutcome<(
+                            AttentionView,
+                            floe_context_contract::ContextDependency,
+                        )>,
                         AgentFailure,
                     >,
                 > + Send
@@ -1222,7 +1269,8 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
                     AgentFailure::DeadlineExceeded
                 });
             }
-            let (view, dependency) = floe_context::admit_attention(
+            let _ = turn_id;
+            floe_context::admit_attention_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
                 person_id,
@@ -1232,9 +1280,7 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
                 deadline,
                 cancellation,
             )
-            .await?;
-            let _ = turn_id;
-            Ok((view, dependency))
+            .await
         })
     }
 }
@@ -1263,7 +1309,10 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         Box<
             dyn Future<
                     Output = Result<
-                        (WellbeingView, floe_context_contract::ContextDependency),
+                        floe_context_contract::SourceReadOutcome<(
+                            WellbeingView,
+                            floe_context_contract::ContextDependency,
+                        )>,
                         AgentFailure,
                     >,
                 > + Send
@@ -1271,12 +1320,16 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         >,
     > {
         Box::pin(async move {
-            floe_context::read_wellbeing(
+            let grant_consumer =
+                floe_context_contract::GrantConsumer::builtin(consumer)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+            floe_context::read_wellbeing_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
                 consumer,
+                grant_consumer,
                 call_id,
                 deadline,
                 cancellation,
@@ -1297,7 +1350,10 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         Box<
             dyn Future<
                     Output = Result<
-                        (PeopleView, floe_context_contract::ContextDependency),
+                        floe_context_contract::SourceReadOutcome<(
+                            PeopleView,
+                            floe_context_contract::ContextDependency,
+                        )>,
                         AgentFailure,
                     >,
                 > + Send
@@ -1305,29 +1361,16 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         >,
     > {
         Box::pin(async move {
-            let grants = self.vault.list_data_access_grants(128).await?;
-            let grant =
-                floe_access::people_read_grant(&grants, person_id, self.device_id, consumer)?;
-            let selected_handles = self
-                .vault
-                .personal_grant_selected_handles(grant.id())
-                .await?;
-            if selected_handles.is_empty() {
-                return Err(AgentFailure::AccessReviewRequired);
-            }
-            let subject = self
-                .vault
-                .personal_grant_subject_fingerprint(grant.id())
-                .await?;
-            floe_context::read_people(
+            let grant_consumer =
+                floe_context_contract::GrantConsumer::builtin(consumer)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+            floe_context::read_manager_people_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),
                 person_id,
                 self.device_id,
-                grant.source().clone(),
-                &selected_handles,
-                &subject,
                 consumer,
+                grant_consumer,
                 deadline,
                 cancellation,
             )

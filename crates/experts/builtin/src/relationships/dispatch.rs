@@ -4,11 +4,15 @@
 //! confirmed interactions only when they were granted.
 
 use floe_agent_contract::AgentFailure;
+use floe_context_contract::SourceReadOutcome;
 
 use crate::relationships::{
     RelationshipsContextViews, RelationshipsExpertResult, run_relationships_expert_with_views,
 };
-use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, granted_context};
+use crate::{
+    BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
+    granted_context,
+};
 
 /// This Expert reads people context as itself, not as the assistant.
 pub const CONSUMER: &str = "contacts.expert";
@@ -17,7 +21,26 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    let people = host.people_view(request).await?;
+    let people = match host.people_view(request).await? {
+        SourceReadOutcome::Ready(view) => view,
+        SourceReadOutcome::Unavailable(_) => {
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                BlockedExpertStatus::Unavailable,
+                "Contacts are temporarily unavailable, so there is no relationship assessment."
+                    .into(),
+            );
+        }
+        SourceReadOutcome::NeedsUserAction(blockers) => {
+            blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+            return BuiltinExpertOutput::from_blocked(
+                crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                BlockedExpertStatus::NeedsUserAction,
+                "Contacts access needs your review, so there is no relationship assessment."
+                    .into(),
+            );
+        }
+    };
     let confirmed_interactions = host.confirmed_interaction_views(request, &people).await?;
     let result: RelationshipsExpertResult = run_relationships_expert_with_views(
         host.model(),
