@@ -34,11 +34,13 @@ use uuid::Uuid;
 
 use crate::CallerContext;
 
-/// One live non-revoked grant covering a reviewed member resource.
+/// One live non-revoked grant covering a reviewed member resource,
+/// with the source authority its record binds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LiveGrant {
     pub id: GrantId,
     pub authority: GrantAuthority,
+    pub source_authority: SourceAuthority,
 }
 
 /// Current owner truth for one reviewed bundle member, re-read at decision
@@ -90,14 +92,29 @@ pub(crate) enum DriftReason {
     /// this; a fresh Allow treats it as a conflict because the reviewed
     /// card no longer describes reality.
     ConcurrentEnablement,
+    /// The owner operation refused on evidence fresher than the local
+    /// re-read (remote source rotation the local read cannot observe, a
+    /// provider change). The review is stale by the owner's own judgment.
+    OwnerObservedDrift,
 }
 
-/// The live state matches the reviewed precondition (mutation still needed)
-/// or already satisfies the requirement (no mutation needed).
+/// How the live state relates to the reviewed target.
+///
+/// - `Precondition`: the mutation is still needed; live matches every
+///   reviewed expectation including still-absent grants.
+/// - `SatisfiedUnchanged`: every member matches its reviewed expectation
+///   and no member needs a mutation (all reviewed grants live and
+///   unchanged). A fresh confirmation runs the canonical operation, which
+///   re-reviews without widening.
+/// - `SatisfiedChanged`: the requirement is satisfied, but only through
+///   out-of-band enablement the reviewed card never described. A fresh
+///   Allow treats this as a conflict; only explicit reconciliation settles
+///   it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReviewMatch {
     Precondition,
-    Satisfied,
+    SatisfiedUnchanged,
+    SatisfiedChanged,
 }
 
 /// Compare the immutable reviewed target with freshly read owner truth.
@@ -113,6 +130,101 @@ pub(crate) fn compare_reviewed_live(
     reviewed: &floe_conversation::InlineObserveTarget,
     live: &LiveInlineState,
 ) -> Result<ReviewMatch, DriftReason> {
+    compare_identity(reviewed, live)?;
+    let mut needs_mutation = false;
+    let mut out_of_band = false;
+    for member in &reviewed.members {
+        let current = find_live_member(live, member)?;
+        // A locally unobservable source (personal, remote) skips the
+        // provider-level check: the grant record, the mutation-time fresh
+        // compare, and resume re-authorization are the fences there.
+        if let (Some(expected), Some(actual)) = (reviewed_source(member), current.source_revision)
+            && source_key(Some(actual)) != source_key(Some(expected))
+        {
+            return Err(DriftReason::SourceRevision {
+                member_id: member.member_id.clone(),
+                resource: member.resource.clone(),
+            });
+        }
+        // Grant state classifies before policy: a vanished grant reports
+        // the missing grant, not the policy of nothing.
+        let grant_match = match (&member.expected_grant, current.live_grants.as_slice()) {
+            (floe_conversation::ExpectedGrantState::Absent, []) => MemberGrantMatch::Missing,
+            (floe_conversation::ExpectedGrantState::Absent, [_]) => MemberGrantMatch::OutOfBand,
+            (
+                floe_conversation::ExpectedGrantState::Active {
+                    grant_id,
+                    authority_incarnation,
+                    authority_epoch,
+                },
+                [grant],
+            ) if grant.id.as_uuid() == *grant_id
+                && grant.authority.incarnation() == *authority_incarnation
+                && grant.authority.access_epoch().get() == *authority_epoch
+                && reviewed_source(member)
+                    .is_none_or(|expected| grant.source_authority == expected) =>
+            {
+                MemberGrantMatch::Unchanged
+            }
+            _ => {
+                return Err(DriftReason::GrantState {
+                    member_id: member.member_id.clone(),
+                    resource: member.resource.clone(),
+                });
+            }
+        };
+        if member.policy_authority.is_some()
+            && policy_key(current.policy_authority) != policy_key(reviewed_policy(member))
+        {
+            return Err(DriftReason::PolicyAuthority {
+                member_id: member.member_id.clone(),
+                resource: member.resource.clone(),
+            });
+        }
+        match grant_match {
+            MemberGrantMatch::Missing => needs_mutation = true,
+            MemberGrantMatch::OutOfBand => out_of_band = true,
+            MemberGrantMatch::Unchanged => {}
+        }
+    }
+    if needs_mutation && out_of_band {
+        return Err(DriftReason::PartialMutation);
+    }
+    if needs_mutation {
+        Ok(ReviewMatch::Precondition)
+    } else if out_of_band {
+        Ok(ReviewMatch::SatisfiedChanged)
+    } else {
+        Ok(ReviewMatch::SatisfiedUnchanged)
+    }
+}
+
+/// Verify the owner mutation produced the expected shape: identity still
+/// bound, exactly one live grant per reviewed member. Grant
+/// id/authority/policy are the owner operation's own guarantee (it
+/// verified the reviewed expectations internally before committing), so a
+/// re-review that advances authority still verifies here.
+pub(crate) fn verify_post_mutation(
+    reviewed: &floe_conversation::InlineObserveTarget,
+    live: &LiveInlineState,
+) -> Result<(), DriftReason> {
+    compare_identity(reviewed, live)?;
+    for member in &reviewed.members {
+        let current = find_live_member(live, member)?;
+        if current.live_grants.len() != 1 {
+            return Err(DriftReason::GrantState {
+                member_id: member.member_id.clone(),
+                resource: member.resource.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn compare_identity(
+    reviewed: &floe_conversation::InlineObserveTarget,
+    live: &LiveInlineState,
+) -> Result<(), DriftReason> {
     if !live.connection_usable {
         return Err(DriftReason::ConnectionUnusable);
     }
@@ -138,66 +250,26 @@ pub(crate) fn compare_reviewed_live(
     }) {
         return Err(DriftReason::MemberSet);
     }
-    let mut needs_mutation = false;
-    let mut out_of_band = false;
-    for member in &reviewed.members {
-        let Some(current) = live.members.iter().find(|candidate| {
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MemberGrantMatch {
+    Missing,
+    OutOfBand,
+    Unchanged,
+}
+
+fn find_live_member<'a>(
+    live: &'a LiveInlineState,
+    member: &floe_conversation::ReviewedBundleMember,
+) -> Result<&'a LiveMember, DriftReason> {
+    live.members
+        .iter()
+        .find(|candidate| {
             candidate.member_id == member.member_id && candidate.resource == member.resource
-        }) else {
-            return Err(DriftReason::MemberSet);
-        };
-        if member.source_revision.is_some()
-            && source_key(current.source_revision) != source_key(reviewed_source(&member))
-        {
-            return Err(DriftReason::SourceRevision {
-                member_id: member.member_id.clone(),
-                resource: member.resource.clone(),
-            });
-        }
-        if member.policy_authority.is_some()
-            && policy_key(current.policy_authority) != policy_key(reviewed_policy(&member))
-        {
-            return Err(DriftReason::PolicyAuthority {
-                member_id: member.member_id.clone(),
-                resource: member.resource.clone(),
-            });
-        }
-        match (&member.expected_grant, current.live_grants.as_slice()) {
-            (floe_conversation::ExpectedGrantState::Absent, []) => {
-                needs_mutation = true;
-            }
-            (floe_conversation::ExpectedGrantState::Absent, [_]) => {
-                out_of_band = true;
-            }
-            (
-                floe_conversation::ExpectedGrantState::Active {
-                    grant_id,
-                    authority_incarnation,
-                    authority_epoch,
-                },
-                [grant],
-            ) if grant.id.as_uuid() == *grant_id
-                && grant.authority.incarnation() == *authority_incarnation
-                && grant.authority.access_epoch().get() == *authority_epoch =>
-            {
-                // Reviewed live grant, unchanged: no mutation for this member.
-            }
-            _ => {
-                return Err(DriftReason::GrantState {
-                    member_id: member.member_id.clone(),
-                    resource: member.resource.clone(),
-                });
-            }
-        }
-    }
-    if needs_mutation && out_of_band {
-        return Err(DriftReason::PartialMutation);
-    }
-    if needs_mutation {
-        Ok(ReviewMatch::Precondition)
-    } else {
-        Ok(ReviewMatch::Satisfied)
-    }
+        })
+        .ok_or(DriftReason::MemberSet)
 }
 
 fn source_key(authority: Option<SourceAuthority>) -> Option<(Uuid, u64)> {
@@ -266,13 +338,17 @@ pub(crate) trait ObserveStateReader: Send + Sync {
 /// `CalendarAccessChange::Review`, personal `PersonalAccessChange::Review`,
 /// or remote `ConnectionObserve` enable. The operation re-verifies live
 /// before committing; this trait never widens or fabricates expectations.
+///
+/// The stable owner-operation identity lives in the claimed Resolving
+/// state and resolution receipt, not in the owner call: retries rejoin by
+/// command id and re-verify live before any attempt, so the owner mutation
+/// itself needs no idempotency key.
 pub(crate) trait InlineOwnerMutation: Send + Sync {
     fn enable_reviewed<'a>(
         &'a self,
         target: &'a floe_conversation::InlineObserveTarget,
         person_id: PersonId,
         device_id: &'a str,
-        operation_id: Uuid,
         cancellation: &'a floe_execution::Cancellation,
     ) -> BoxFuture<'a, Result<(), AgentFailure>>;
 }
@@ -582,6 +658,7 @@ where
 /// the person's explicit refresh. A stale review is replaced with a freshly
 /// captured card. A Resolving card reconciles its claimed owner operation
 /// by stable identity and current owner truth.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn refresh_interaction<Runs, Interactions>(
     runs: &Runs,
     interactions: &Interactions,
@@ -630,7 +707,7 @@ where
                     .read_live_inline(&target, person_id, caller.device_id(), cancellation)
                     .await?;
                 match compare_reviewed_live(&target, &live) {
-                    Ok(ReviewMatch::Satisfied) => {
+                    Ok(ReviewMatch::SatisfiedUnchanged) | Ok(ReviewMatch::SatisfiedChanged) => {
                         let resolved = settle_satisfied(
                             interactions,
                             person_id,
@@ -765,10 +842,12 @@ where
     }
 }
 
-/// Fresh approval: the live state must match the reviewed precondition
-/// exactly, including still-absent grants. Anything else supersedes the
-/// review; a concurrent out-of-band enable is a conflict for a fresh
-/// Allow, settled only through explicit reconciliation.
+/// Fresh approval: the live state must match the reviewed target
+/// exactly. A still-absent grant is created; an already reviewed live
+/// grant is re-reviewed without widening. Drift, and satisfaction that
+/// only appeared out-of-band after the review, supersede the card: a
+/// concurrent enable is a conflict for a fresh Allow, settled only
+/// through explicit reconciliation.
 #[allow(clippy::too_many_arguments)]
 async fn drive_fresh_approval<Runs, Interactions>(
     runs: &Runs,
@@ -793,23 +872,17 @@ where
         .read_live_inline(target, person_id, caller.device_id(), cancellation)
         .await?;
     match compare_reviewed_live(target, &live) {
-        Ok(ReviewMatch::Precondition) => {
+        Ok(ReviewMatch::Precondition) | Ok(ReviewMatch::SatisfiedUnchanged) => {
             let mutation_result = mutation
-                .enable_reviewed(
-                    target,
-                    person_id,
-                    caller.device_id(),
-                    owner_operation_id,
-                    cancellation,
-                )
+                .enable_reviewed(target, person_id, caller.device_id(), cancellation)
                 .await;
             match mutation_result {
                 Ok(()) => {
                     let post = reader
                         .read_live_inline(target, person_id, caller.device_id(), cancellation)
                         .await?;
-                    match compare_reviewed_live(target, &post) {
-                        Ok(ReviewMatch::Satisfied) => {
+                    match verify_post_mutation(target, &post) {
+                        Ok(()) => {
                             let resolved = record_resolution_owned(
                                 interactions,
                                 person_id,
@@ -850,7 +923,7 @@ where
         }
         // A fresh Allow never adopts an out-of-band enable: the card no
         // longer describes reality, so it is replaced, not resolved.
-        Ok(ReviewMatch::Satisfied) => {
+        Ok(ReviewMatch::SatisfiedChanged) => {
             let (superseded, replacement) = supersede_with_replacement(
                 runs,
                 interactions,
@@ -917,7 +990,7 @@ where
         .read_live_inline(target, person_id, caller.device_id(), cancellation)
         .await?;
     match compare_reviewed_live(target, &live) {
-        Ok(ReviewMatch::Satisfied) => {
+        Ok(ReviewMatch::SatisfiedUnchanged) | Ok(ReviewMatch::SatisfiedChanged) => {
             let resolved = record_resolution_owned(
                 interactions,
                 person_id,
@@ -933,21 +1006,15 @@ where
         }
         Ok(ReviewMatch::Precondition) => {
             match mutation
-                .enable_reviewed(
-                    target,
-                    person_id,
-                    caller.device_id(),
-                    owner_operation_id,
-                    cancellation,
-                )
+                .enable_reviewed(target, person_id, caller.device_id(), cancellation)
                 .await
             {
                 Ok(()) => {
                     let post = reader
                         .read_live_inline(target, person_id, caller.device_id(), cancellation)
                         .await?;
-                    match compare_reviewed_live(target, &post) {
-                        Ok(ReviewMatch::Satisfied) => {
+                    match verify_post_mutation(target, &post) {
+                        Ok(()) => {
                             let resolved = record_resolution_owned(
                                 interactions,
                                 person_id,
@@ -1009,7 +1076,11 @@ where
 
 /// Settle a mutation outcome that did not prove success: response loss may
 /// hide a commit, and the owner op may have refused on fresher evidence.
-/// Re-read once and classify; never retry blindly here.
+/// Re-read once: a satisfied requirement settles, anything else supersedes.
+/// An authoritative refusal (`AccessReviewRequired`/`StaleContext`) always
+/// outranks a local pre-read, because the owner judged fresher evidence
+/// than the decision compared — for remote families the local read cannot
+/// even observe source rotation. Never retry blindly here.
 #[allow(clippy::too_many_arguments)]
 async fn reconcile_after_mutation_outcome<Runs, Interactions>(
     runs: &Runs,
@@ -1036,7 +1107,7 @@ where
                 .read_live_inline(target, person_id, device_id, cancellation)
                 .await?;
             match compare_reviewed_live(target, &live) {
-                Ok(ReviewMatch::Satisfied) => {
+                Ok(ReviewMatch::SatisfiedUnchanged) | Ok(ReviewMatch::SatisfiedChanged) => {
                     let resolved = record_resolution_owned(
                         interactions,
                         person_id,
@@ -1050,9 +1121,28 @@ where
                         interaction: resolved,
                     })
                 }
-                Ok(ReviewMatch::Precondition) => Ok(ResolveOutcome::Resolving {
-                    interaction: current.clone(),
-                }),
+                Ok(ReviewMatch::Precondition) => {
+                    // The owner refused a locally matching precondition, so
+                    // it observed drift the local read cannot see (remote
+                    // source rotation, provider change). Supersede; the
+                    // replacement re-binds whatever is observable now.
+                    let (superseded, replacement) = supersede_with_replacement(
+                        runs,
+                        interactions,
+                        person_id,
+                        principal,
+                        current,
+                        Some(&live),
+                        device_id,
+                        now_unix_ms,
+                    )
+                    .await?;
+                    Ok(ResolveOutcome::Superseded {
+                        interaction: superseded,
+                        reason: DriftReason::OwnerObservedDrift,
+                        replacement_id: replacement,
+                    })
+                }
                 Err(reason) => {
                     let (superseded, replacement) = supersede_with_replacement(
                         runs,
@@ -1460,7 +1550,11 @@ mod tests {
             source_revision: Some(source),
             live_grants: grants
                 .into_iter()
-                .map(|(id, authority)| LiveGrant { id, authority })
+                .map(|(id, authority)| LiveGrant {
+                    id,
+                    authority,
+                    source_authority: source,
+                })
                 .collect(),
             policy_authority: policy,
         }
@@ -1503,7 +1597,7 @@ mod tests {
         let live = live_state(vec![live_member(vec![(id, grant_authority)], source, None)]);
         assert_eq!(
             compare_reviewed_live(&target, &live),
-            Ok(ReviewMatch::Satisfied)
+            Ok(ReviewMatch::SatisfiedChanged)
         );
     }
 
@@ -1523,7 +1617,7 @@ mod tests {
         let same = live_state(vec![live_member(vec![(id, grant_authority)], source, None)]);
         assert_eq!(
             compare_reviewed_live(&target, &same),
-            Ok(ReviewMatch::Satisfied)
+            Ok(ReviewMatch::SatisfiedUnchanged)
         );
         let advanced = grant_authority.advance().unwrap();
         let rotated = live_state(vec![live_member(vec![(id, advanced)], source, None)]);
@@ -1590,6 +1684,58 @@ mod tests {
         assert_eq!(
             compare_reviewed_live(&target, &live),
             Err(DriftReason::MemberSet)
+        );
+    }
+
+    #[test]
+    fn post_mutation_verifies_shape_not_reviewed_authority() {
+        let source = authority();
+        let (id, grant_authority) = grant();
+        let target = reviewed_target(vec![reviewed_member(
+            floe_conversation::ExpectedGrantState::Absent,
+            source,
+            None,
+        )]);
+        // The committed grant verifies even though no reviewed authority
+        // bound it.
+        let created = live_state(vec![live_member(vec![(id, grant_authority)], source, None)]);
+        assert_eq!(verify_post_mutation(&target, &created), Ok(()));
+        // A re-review that advances authority still verifies: the owner
+        // operation owned that transition.
+        let advanced = grant_authority.advance().unwrap();
+        let re_reviewed = live_state(vec![live_member(vec![(id, advanced)], source, None)]);
+        assert_eq!(verify_post_mutation(&target, &re_reviewed), Ok(()));
+        // Missing, duplicated or unbound members never verify.
+        let missing = live_state(vec![live_member(vec![], source, None)]);
+        assert!(verify_post_mutation(&target, &missing).is_err());
+        let (other_id, other_authority) = grant();
+        let duplicated = live_state(vec![live_member(
+            vec![(id, grant_authority), (other_id, other_authority)],
+            source,
+            None,
+        )]);
+        assert!(verify_post_mutation(&target, &duplicated).is_err());
+        let mut unusable = created;
+        unusable.connection_usable = false;
+        assert!(verify_post_mutation(&target, &unusable).is_err());
+    }
+
+    #[test]
+    fn unobserved_live_source_skips_provider_check() {
+        // Personal and remote families have no locally readable current
+        // source authority: the reviewed value binds audit, not the
+        // decision-time compare.
+        let source = authority();
+        let target = reviewed_target(vec![reviewed_member(
+            floe_conversation::ExpectedGrantState::Absent,
+            source,
+            None,
+        )]);
+        let mut live = live_state(vec![live_member(vec![], source, None)]);
+        live.members[0].source_revision = None;
+        assert_eq!(
+            compare_reviewed_live(&target, &live),
+            Ok(ReviewMatch::Precondition)
         );
     }
 

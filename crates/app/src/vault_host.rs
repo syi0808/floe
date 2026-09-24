@@ -45,6 +45,7 @@ use crate::{FloeCore, diagnostics};
 mod calendar_access;
 mod conversation_turn;
 mod expert_setup;
+mod interaction_owners;
 mod interaction_resolution;
 mod learner_worker;
 mod personal_grants;

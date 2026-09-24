@@ -18,6 +18,8 @@ const DEVICE: &str = "device";
 
 struct Fixture {
     runs: FakeRuns,
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    keys: Keys,
     repo: floe_vault::VaultConversationRepository<Keys>,
     person: PersonId,
     session_id: Uuid,
@@ -32,7 +34,8 @@ impl Fixture {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person = PersonId::new();
-        let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        let keys = Keys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
             .await
             .unwrap();
         vault.activate_conversation_executor().await.unwrap();
@@ -60,7 +63,8 @@ impl Fixture {
             admission,
             floe_vault::VaultConversationAdmission::Created { .. }
         ));
-        let repo = floe_vault::VaultConversationRepository::new(Arc::new(vault));
+        let vault = Arc::new(vault);
+        let repo = floe_vault::VaultConversationRepository::new(Arc::clone(&vault));
         let receipt = floe_conversation::RunReceipt {
             run_id,
             command_id: floe_agent_contract::CommandId::new(),
@@ -96,6 +100,8 @@ impl Fixture {
         .unwrap();
         Self {
             runs,
+            vault,
+            keys,
             repo,
             person,
             session_id,
@@ -132,6 +138,8 @@ impl Fixture {
     async fn seed_inline(
         &self,
         target: floe_conversation::InlineObserveTarget,
+        source_id: &str,
+        connection_id: &str,
     ) -> floe_conversation::ConversationInteraction {
         let call = self.fresh_call();
         let admission = floe_conversation::publish_interaction(
@@ -147,8 +155,8 @@ impl Fixture {
                 kind: floe_agent_contract::UserInteractionKind::SourceAccess,
                 requirement: floe_conversation::InteractionRequirement {
                     kind: floe_conversation::InteractionRequirementKind::EnableObserve,
-                    source_id: "floe.source.calendar".into(),
-                    connection_id: Some("connection".into()),
+                    source_id: source_id.into(),
+                    connection_id: Some(connection_id.into()),
                     consumer: "floe.builtin.schedule".into(),
                     purpose: "scheduling".into(),
                     inline: true,
@@ -317,7 +325,7 @@ struct Script {
     read_failures: VecDeque<AgentFailure>,
     mutation_results: VecDeque<Result<(), AgentFailure>>,
     reads: usize,
-    mutations: Vec<Uuid>,
+    mutations: usize,
     nav_usable: bool,
     nav_satisfied: bool,
 }
@@ -335,7 +343,7 @@ impl ScriptedOwners {
                 read_failures: VecDeque::new(),
                 mutation_results: VecDeque::new(),
                 reads: 0,
-                mutations: Vec::new(),
+                mutations: 0,
                 nav_usable: true,
                 nav_satisfied: false,
             })),
@@ -387,11 +395,10 @@ impl InlineOwnerMutation for ScriptedOwners {
         _: &'a floe_conversation::InlineObserveTarget,
         _: PersonId,
         _: &'a str,
-        operation_id: Uuid,
         _: &'a floe_execution::Cancellation,
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         let mut script = self.script.lock().unwrap();
-        script.mutations.push(operation_id);
+        script.mutations += 1;
         let result = script.mutation_results.pop_front().unwrap_or(Ok(()));
         Box::pin(async move { result })
     }
@@ -444,12 +451,21 @@ fn live_precondition() -> LiveInlineState {
 
 fn live_satisfied() -> LiveInlineState {
     let (id, authority) = grant_pair();
+    let source = floe_context_contract::SourceAuthority::from_parts(
+        Uuid::new_v4(),
+        NonZeroU64::new(3).unwrap(),
+    )
+    .unwrap();
     LiveInlineState {
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
             resource: "personal".into(),
             source_revision: None,
-            live_grants: vec![LiveGrant { id, authority }],
+            live_grants: vec![LiveGrant {
+                id,
+                authority,
+                source_authority: source,
+            }],
             policy_authority: None,
         }],
         connection_revision: Some(9),
@@ -466,7 +482,9 @@ fn owner_operation_id(command_id: Uuid) -> Uuid {
 #[tokio::test]
 async fn deny_records_denied_without_owner_contact() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let outcome = resolve_interaction(
         &fixture.runs,
@@ -487,7 +505,7 @@ async fn deny_records_denied_without_owner_contact() {
     {
         let script = owners.script.lock().unwrap();
         assert_eq!(script.reads, 0);
-        assert!(script.mutations.is_empty());
+        assert_eq!(script.mutations, 0);
     }
     let stored =
         floe_conversation::load_interaction(&fixture.repo, &fixture.principal(), current.id)
@@ -502,7 +520,9 @@ async fn deny_records_denied_without_owner_contact() {
 #[tokio::test]
 async fn dismiss_cancels_pending_without_owner_contact() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let outcome = resolve_interaction(
         &fixture.runs,
@@ -525,13 +545,15 @@ async fn dismiss_cancels_pending_without_owner_contact() {
     );
     let script = owners.script.lock().unwrap();
     assert_eq!(script.reads, 0);
-    assert!(script.mutations.is_empty());
+    assert_eq!(script.mutations, 0);
 }
 
 #[tokio::test]
 async fn approve_precondition_mutates_once_with_stable_operation_id() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let command = fixture.resolve_command(
         &current,
@@ -562,7 +584,7 @@ async fn approve_precondition_mutates_once_with_stable_operation_id() {
     );
     {
         let script = script_handle.lock().unwrap();
-        assert_eq!(script.mutations, vec![expected_operation]);
+        assert_eq!(script.mutations, 1);
     }
     let stored =
         floe_conversation::load_interaction(&fixture.repo, &fixture.principal(), current.id)
@@ -588,11 +610,10 @@ impl InlineOwnerMutation for FlippingMutation {
         _: &'a floe_conversation::InlineObserveTarget,
         _: PersonId,
         _: &'a str,
-        operation_id: Uuid,
         _: &'a floe_execution::Cancellation,
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         let mut script = self.owners.script.lock().unwrap();
-        script.mutations.push(operation_id);
+        script.mutations += 1;
         script.live = self.flip_to.clone();
         Box::pin(async move { Ok(()) })
     }
@@ -601,7 +622,9 @@ impl InlineOwnerMutation for FlippingMutation {
 #[tokio::test]
 async fn double_allow_same_command_resolves_once() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let command = fixture.resolve_command(
         &current,
@@ -646,14 +669,24 @@ async fn double_allow_same_command_resolves_once() {
         matches!(second, ResolveOutcome::Resolved { .. }),
         "{second:?}"
     );
-    let script = owners.script.lock().unwrap();
-    assert_eq!(script.mutations, vec![expected_operation]);
+    assert_eq!(owners.script.lock().unwrap().mutations, 1);
+    // Both attempts settle on the same stable owner operation.
+    let stored =
+        floe_conversation::load_interaction(&fixture.repo, &fixture.principal(), current.id)
+            .await
+            .unwrap();
+    let floe_conversation::InteractionState::Resolved { receipt } = stored.state else {
+        panic!("must resolve: {:?}", stored.state);
+    };
+    assert_eq!(receipt.owner_operation_id, expected_operation);
 }
 
 #[tokio::test]
 async fn same_command_different_digest_conflicts_without_mutation() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let mut command = fixture.resolve_command(
         &current,
@@ -695,13 +728,15 @@ async fn same_command_different_digest_conflicts_without_mutation() {
     // The digest no longer echoes the reviewed target: rejected before any
     // owner work.
     assert_eq!(outcome.unwrap_err(), AgentFailure::InvalidInput);
-    assert_eq!(owners.script.lock().unwrap().mutations.len(), 1);
+    assert_eq!(owners.script.lock().unwrap().mutations, 1);
 }
 
 #[tokio::test]
 async fn fresh_approve_with_concurrent_grant_supersedes_with_replacement() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     // Live already satisfies the requirement: a fresh Allow is a conflict,
     // not a silent adoption.
     let owners = ScriptedOwners::new(live_satisfied());
@@ -729,7 +764,7 @@ async fn fresh_approve_with_concurrent_grant_supersedes_with_replacement() {
         other => panic!("must supersede: {other:?}"),
     };
     assert_eq!(reason, DriftReason::ConcurrentEnablement);
-    assert!(owners.script.lock().unwrap().mutations.is_empty());
+    assert_eq!(owners.script.lock().unwrap().mutations, 0);
     let replacement_id = replacement.expect("drift publishes a fresh review");
     let replacement =
         floe_conversation::load_interaction(&fixture.repo, &fixture.principal(), replacement_id)
@@ -750,9 +785,75 @@ async fn fresh_approve_with_concurrent_grant_supersedes_with_replacement() {
 }
 
 #[tokio::test]
+async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
+    let fixture = Fixture::open().await;
+    let (id, authority) = grant_pair();
+    let source = floe_context_contract::SourceAuthority::from_parts(
+        Uuid::new_v4(),
+        NonZeroU64::new(3).unwrap(),
+    )
+    .unwrap();
+    let mut target = reviewed_target();
+    target.members[0].source_revision = Some(floe_conversation::AuthorityRevision {
+        incarnation: source.incarnation(),
+        epoch: source.epoch().get(),
+    });
+    target.members[0].expected_grant = floe_conversation::ExpectedGrantState::Active {
+        grant_id: id.as_uuid(),
+        authority_incarnation: authority.incarnation(),
+        authority_epoch: authority.access_epoch().get(),
+    };
+    let current = fixture
+        .seed_inline(target, "floe.source.calendar", "connection")
+        .await;
+    // Live matches the reviewed grant exactly: confirmation runs the
+    // canonical re-review instead of superseding again.
+    let live = LiveInlineState {
+        members: vec![LiveMember {
+            member_id: "calendar.timeline".into(),
+            resource: "personal".into(),
+            source_revision: Some(source),
+            live_grants: vec![LiveGrant {
+                id,
+                authority,
+                source_authority: source,
+            }],
+            policy_authority: None,
+        }],
+        connection_revision: Some(9),
+        producer_fingerprint: None,
+        native_subject: Some("subject".into()),
+        connection_usable: true,
+    };
+    let owners = ScriptedOwners::new(live);
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &fixture.caller,
+        fixture.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(owners.script.lock().unwrap().mutations, 1);
+}
+
+#[tokio::test]
 async fn fresh_approve_with_drift_supersedes_without_mutation() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let mut live = live_precondition();
     live.native_subject = Some("rotated-subject".into());
     let owners = ScriptedOwners::new(live);
@@ -782,13 +883,15 @@ async fn fresh_approve_with_drift_supersedes_without_mutation() {
         }
         other => panic!("must supersede: {other:?}"),
     }
-    assert!(owners.script.lock().unwrap().mutations.is_empty());
+    assert_eq!(owners.script.lock().unwrap().mutations, 0);
 }
 
 #[tokio::test]
 async fn foreign_person_session_and_device_are_rejected() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let foreign_person = crate::CallerContext::verified(
         crate::LocalIdentityClaim {
@@ -857,13 +960,15 @@ async fn foreign_person_session_and_device_are_rejected() {
         matches!(outcome, ResolveOutcome::WrongDevice { .. }),
         "{outcome:?}"
     );
-    assert!(owners.script.lock().unwrap().mutations.is_empty());
+    assert_eq!(owners.script.lock().unwrap().mutations, 0);
 }
 
 #[tokio::test]
 async fn stale_revision_conflicts_without_owner_contact() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let mut command = fixture.resolve_command(
         &current,
@@ -888,13 +993,15 @@ async fn stale_revision_conflicts_without_owner_contact() {
     );
     let script = owners.script.lock().unwrap();
     assert_eq!(script.reads, 0);
-    assert!(script.mutations.is_empty());
+    assert_eq!(script.mutations, 0);
 }
 
 #[tokio::test]
 async fn expired_interaction_persists_expired() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let outcome = resolve_interaction(
         &fixture.runs,
@@ -959,7 +1066,9 @@ async fn approve_on_navigation_only_is_rejected() {
 async fn refresh_settles_satisfaction_replaces_drift_and_keeps_precondition() {
     let fixture = Fixture::open().await;
     // Satisfied: explicit refresh resolves without any mutation.
-    let satisfied_card = fixture.seed_inline(reviewed_target()).await;
+    let satisfied_card = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_satisfied());
     let outcome = refresh_interaction(
         &fixture.runs,
@@ -977,10 +1086,12 @@ async fn refresh_settles_satisfaction_replaces_drift_and_keeps_precondition() {
         matches!(outcome, RefreshOutcome::Resolved { .. }),
         "{outcome:?}"
     );
-    assert!(owners.script.lock().unwrap().mutations.is_empty());
+    assert_eq!(owners.script.lock().unwrap().mutations, 0);
 
     // Precondition: still pending, nothing claimed.
-    let pending_card = fixture.seed_inline(reviewed_target()).await;
+    let pending_card = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     assert_ne!(pending_card.id, satisfied_card.id);
     owners.script.lock().unwrap().live = live_precondition();
     let outcome = refresh_interaction(
@@ -1029,13 +1140,15 @@ async fn refresh_settles_satisfaction_replaces_drift_and_keeps_precondition() {
         }
         other => panic!("must supersede: {other:?}"),
     }
-    assert!(owners.script.lock().unwrap().mutations.is_empty());
+    assert_eq!(owners.script.lock().unwrap().mutations, 0);
 }
 
 #[tokio::test]
 async fn refresh_reconciles_resolving_by_current_truth() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     // Mutation reports response loss; live still shows the precondition, so
     // the card stays Resolving for explicit reconciliation.
@@ -1083,7 +1196,7 @@ async fn refresh_reconciles_resolving_by_current_truth() {
         matches!(outcome, RefreshOutcome::Resolved { .. }),
         "{outcome:?}"
     );
-    assert_eq!(owners.script.lock().unwrap().mutations.len(), 1);
+    assert_eq!(owners.script.lock().unwrap().mutations, 1);
 }
 
 #[tokio::test]
@@ -1091,7 +1204,9 @@ async fn owner_refusal_after_commit_resolves_and_other_failures_stay_resolving()
     let fixture = Fixture::open().await;
     // The owner op refused on fresher evidence, but the grant is live: the
     // commit hid behind the refusal, so reconciliation resolves.
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     let flip = owners.script.clone();
     let satisfied = live_satisfied();
@@ -1106,15 +1221,9 @@ async fn owner_refusal_after_commit_resolves_and_other_failures_stay_resolving()
             _: &'a floe_conversation::InlineObserveTarget,
             _: PersonId,
             _: &'a str,
-            operation_id: Uuid,
             _: &'a floe_execution::Cancellation,
         ) -> BoxFuture<'a, Result<(), AgentFailure>> {
-            self.owners
-                .script
-                .lock()
-                .unwrap()
-                .mutations
-                .push(operation_id);
+            self.owners.script.lock().unwrap().mutations += 1;
             self.flip.lock().unwrap().live = self.flip_to.clone();
             Box::pin(async move { Err(AgentFailure::AccessReviewRequired) })
         }
@@ -1144,7 +1253,9 @@ async fn owner_refusal_after_commit_resolves_and_other_failures_stay_resolving()
     );
 
     // A hard ambiguous failure with the precondition intact stays Resolving.
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     owners.script.lock().unwrap().live = live_precondition();
     owners
         .script
@@ -1176,7 +1287,9 @@ async fn owner_refusal_after_commit_resolves_and_other_failures_stay_resolving()
 #[tokio::test]
 async fn dismiss_cancels_resolving_without_revoking_owner_state() {
     let fixture = Fixture::open().await;
-    let current = fixture.seed_inline(reviewed_target()).await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
     let owners = ScriptedOwners::new(live_precondition());
     owners
         .script
@@ -1229,7 +1342,7 @@ async fn dismiss_cancels_resolving_without_revoking_owner_state() {
         "{outcome:?}"
     );
     // Dismiss records cancellation only; it never touches owner state.
-    assert_eq!(owners.script.lock().unwrap().mutations.len(), 1);
+    assert_eq!(owners.script.lock().unwrap().mutations, 1);
 }
 
 #[tokio::test]
@@ -1303,4 +1416,1548 @@ async fn refresh_navigation_settles_satisfaction_and_dead_connections() {
         matches!(outcome, RefreshOutcome::StillPending { .. }),
         "{outcome:?}"
     );
+}
+
+use super::super::interaction_owners::HostInteractionOwners;
+use super::super::review_snapshot::fixtures::{FixtureCalendarSubject, FixturePersonalInspector};
+
+const NATIVE_FINGERPRINT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const ROTATED_FINGERPRINT: &str =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+struct HostFixture {
+    base: Fixture,
+    core: crate::FloeCore,
+    core_dir: tempfile::TempDir,
+    store: floe_provider_adapters::control::CurrentSavedConnectionStore,
+}
+
+impl HostFixture {
+    async fn open() -> Self {
+        let base = Fixture::open().await;
+        let core_dir = tempfile::tempdir().unwrap();
+        let core = crate::FloeCore::open(core_dir.path().join("core.db"))
+            .await
+            .unwrap();
+        core.set_calendar_scope(
+            base.person,
+            "connection".into(),
+            9,
+            DEVICE.into(),
+            floe_context_contract::CalendarProvider::EventKit,
+            vec![floe_day::CalendarSelection {
+                calendar_id: "personal".into(),
+                calendar_name: "Personal".into(),
+            }],
+            floe_context_contract::CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+        let store = TestConnections::default().store();
+        Self {
+            base,
+            core,
+            core_dir,
+            store,
+        }
+    }
+
+    fn owners<'a>(
+        &'a self,
+        calendar: &'a FixtureCalendarSubject,
+        personal: &'a FixturePersonalInspector,
+    ) -> HostInteractionOwners<'a, Keys, FixtureCalendarSubject, FixturePersonalInspector> {
+        HostInteractionOwners {
+            core: &self.core,
+            vault: &self.base.vault,
+            connections: &self.store,
+            calendar_subject: calendar,
+            personal_subject: personal,
+            probe_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        }
+    }
+
+    /// The reviewed target an honest capture binds: live connection
+    /// identity plus the probed subject fingerprint.
+    async fn native_target(&self, fingerprint: &str) -> floe_conversation::InlineObserveTarget {
+        let live = self
+            .core
+            .calendar_connection(self.base.person)
+            .await
+            .unwrap()
+            .unwrap();
+        floe_conversation::InlineObserveTarget {
+            connection_id: live.connection_id.clone(),
+            device_id: Some(DEVICE.into()),
+            source_id: "floe.source.calendar".into(),
+            connector_id: Some("calendar.event_kit".into()),
+            consumer: "floe.builtin.schedule".into(),
+            purpose: "scheduling".into(),
+            connection_revision: Some(live.revision),
+            reviewed_producer_fingerprint: None,
+            reviewed_native_subject: Some(fingerprint.into()),
+            members: live
+                .calendars
+                .iter()
+                .map(|calendar| floe_conversation::ReviewedBundleMember {
+                    member_id: "calendar.timeline".into(),
+                    resource: calendar.calendar_id.clone(),
+                    source_revision: Some(floe_conversation::AuthorityRevision {
+                        incarnation: live.source_authority.incarnation(),
+                        epoch: live.source_authority.epoch().get(),
+                    }),
+                    expected_grant: floe_conversation::ExpectedGrantState::Absent,
+                    policy_authority: None,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_allow_creates_exact_grant_and_resolves() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.calendar", "connection")
+        .await;
+    let unrelated = host.base.seed_navigation().await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    let grant = &grants[0];
+    assert_eq!(grant.state(), floe_access::GrantState::Active);
+    assert_eq!(grant.source().connector().as_str(), "calendar.event_kit");
+    assert_eq!(grant.source().connection_id().as_str(), "connection");
+    assert!(
+        grant
+            .scope()
+            .resources()
+            .iter()
+            .any(|value| value.as_str() == "personal"),
+        "grant covers the reviewed resource"
+    );
+    let stored =
+        floe_conversation::load_interaction(&host.base.repo, &host.base.principal(), unrelated.id)
+            .await
+            .unwrap();
+    assert!(matches!(
+        stored.state,
+        floe_conversation::InteractionState::Pending
+    ));
+    assert_eq!(stored.revision, 1);
+}
+
+#[tokio::test]
+async fn native_concurrent_enable_conflicts_then_replacement_confirms_without_new_grant() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target.clone(), "floe.source.calendar", "connection")
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    // The person enables through the owning connection screen first: the
+    // same canonical operation the decision would run.
+    owners
+        .enable_reviewed(&target, host.base.person, DEVICE, &host.base.cancellation)
+        .await
+        .unwrap();
+    let committed = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(committed.len(), 1);
+    // A fresh Allow is now a conflict, not a silent adoption.
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let (replacement_id, replacement_target) = match outcome {
+        ResolveOutcome::Superseded {
+            reason,
+            replacement_id,
+            ..
+        } => {
+            assert_eq!(reason, DriftReason::ConcurrentEnablement);
+            let replacement_id = replacement_id.expect("drift publishes a fresh review");
+            let replacement = floe_conversation::load_interaction(
+                &host.base.repo,
+                &host.base.principal(),
+                replacement_id,
+            )
+            .await
+            .unwrap();
+            let floe_conversation::ReviewedTarget::InlineObserve(inline) =
+                replacement.target.clone()
+            else {
+                panic!("replacement must stay inline");
+            };
+            assert!(matches!(
+                inline.members[0].expected_grant,
+                floe_conversation::ExpectedGrantState::Active { .. }
+            ));
+            (replacement_id, replacement)
+        }
+        other => panic!("must supersede: {other:?}"),
+    };
+    // Confirming the fresh review re-reviews the same grant: no second
+    // grant, no authority advance.
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &replacement_target,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].id(), committed[0].id());
+    assert_eq!(grants[0].authority(), committed[0].authority());
+    assert_ne!(replacement_id, current.id);
+}
+
+#[tokio::test]
+async fn native_stale_subject_supersedes_without_mutation() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.calendar", "connection")
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: ROTATED_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded { reason, .. } => {
+            assert_eq!(reason, DriftReason::NativeSubject);
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert!(grants.is_empty());
+}
+
+#[tokio::test]
+async fn native_commit_then_crash_reopens_and_resolves_without_second_advance() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target.clone(), "floe.source.calendar", "connection")
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    // Decide first (Resolving claimed), then commit the owner mutation,
+    // then crash before the resolution is recorded.
+    let command = host.base.resolve_command(
+        &current,
+        floe_conversation::InteractionDecisionKind::Approve,
+    );
+    let admitted = floe_conversation::decide_interaction(
+        &host.base.repo,
+        floe_conversation::DecideInteractionCommand {
+            command_id: command.command_id,
+            interaction_id: current.id,
+            principal: host.base.principal(),
+            expected_revision: current.revision,
+            kind: floe_conversation::InteractionDecisionKind::Approve,
+            target_digest: current.target_digest,
+        },
+        NOW,
+    )
+    .await
+    .unwrap();
+    let resolving = match admitted {
+        floe_conversation::DecisionAdmission::Applied(current) => current,
+        floe_conversation::DecisionAdmission::Rejoined(_) => panic!("fresh decision must apply"),
+    };
+    assert!(matches!(
+        resolving.state,
+        floe_conversation::InteractionState::Resolving { .. }
+    ));
+    owners
+        .enable_reviewed(&target, host.base.person, DEVICE, &host.base.cancellation)
+        .await
+        .unwrap();
+    let committed = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(committed.len(), 1);
+    let committed_id = committed[0].id();
+    let committed_authority = committed[0].authority();
+
+    // Crash: drop the vault and repo (releasing the host lock), reopen
+    // from disk with the same keys, reboot the core with the same device
+    // state, and reconcile explicitly. Named bindings plus explicit
+    // drops: `_` placeholders would keep the vault alive to the end of
+    // the block and hold the host lock.
+    let HostFixture {
+        base,
+        store,
+        core: old_core,
+        core_dir,
+    } = host;
+    drop(old_core);
+    let Fixture {
+        runs,
+        repo: old_repo,
+        vault: old_vault,
+        keys,
+        person,
+        session_id,
+        run_id: _run_id,
+        caller,
+        cancellation,
+        _root,
+    } = base;
+    drop(old_repo);
+    drop(old_vault);
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(_root.path(), person, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let repo = floe_vault::VaultConversationRepository::new(Arc::clone(&reopened));
+    // The rebooted core reopens the same store: the connection record,
+    // including its source authority, survives the crash.
+    let core = crate::FloeCore::open(core_dir.path().join("core.db"))
+        .await
+        .unwrap();
+    let owners = HostInteractionOwners {
+        core: &core,
+        vault: &reopened,
+        connections: &store,
+        calendar_subject: &calendar,
+        personal_subject: &personal,
+        probe_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+    };
+    let outcome = refresh_interaction(
+        &runs,
+        &repo,
+        &owners,
+        &owners,
+        &caller,
+        RefreshInteractionCommand {
+            interaction_id: resolving.id,
+            command_id: Uuid::new_v4(),
+            session_id,
+            expected_revision: resolving.revision,
+        },
+        &cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, RefreshOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = reopened.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].id(), committed_id);
+    assert_eq!(grants[0].authority(), committed_authority);
+}
+
+#[tokio::test]
+async fn native_external_enable_refresh_resolves_inspect_does_not() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target.clone(), "floe.source.calendar", "connection")
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    owners
+        .enable_reviewed(&target, host.base.person, DEVICE, &host.base.cancellation)
+        .await
+        .unwrap();
+    // A read-only load never settles the card.
+    let inspected =
+        floe_conversation::load_interaction(&host.base.repo, &host.base.principal(), current.id)
+            .await
+            .unwrap();
+    assert!(matches!(
+        inspected.state,
+        floe_conversation::InteractionState::Pending
+    ));
+    let outcome = refresh_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.refresh_command(&inspected),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, RefreshOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+}
+
+struct DeniedCalendarSubject;
+
+impl floe_context::NativeCalendarSubjectSource for DeniedCalendarSubject {
+    async fn subject(
+        &self,
+        _request: floe_context::NativeSubjectRequest,
+    ) -> Result<floe_context::NativeSubjectObservation, AgentFailure> {
+        Err(AgentFailure::CapabilityUnavailable)
+    }
+}
+
+#[tokio::test]
+async fn native_os_denied_and_deselected_scope_never_falsely_resolve() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.calendar", "connection")
+        .await;
+    // The OS denies the subject probe: the decision is durably recorded
+    // but no owner state is touched, so the card waits in Resolving for
+    // explicit reconciliation once the device heals.
+    let denied = DeniedCalendarSubject;
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = HostInteractionOwners {
+        core: &host.core,
+        vault: &host.base.vault,
+        connections: &host.store,
+        calendar_subject: &denied,
+        personal_subject: &personal,
+        probe_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+    };
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await;
+    assert_eq!(outcome.unwrap_err(), AgentFailure::CapabilityUnavailable);
+    let stored =
+        floe_conversation::load_interaction(&host.base.repo, &host.base.principal(), current.id)
+            .await
+            .unwrap();
+    assert!(matches!(
+        stored.state,
+        floe_conversation::InteractionState::Resolving { .. }
+    ));
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert!(grants.is_empty());
+    // The device heals: explicit refresh reconciles the claimed decision
+    // through the canonical operation.
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = refresh_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.refresh_command(&stored),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, RefreshOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn native_deselected_scope_supersedes_without_mutation() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.calendar", "connection")
+        .await;
+    // The reviewed resource leaves the selection: the review no longer
+    // binds anything, so it supersedes instead of resolving.
+    host.core
+        .set_calendar_scope(
+            host.base.person,
+            "connection".into(),
+            10,
+            DEVICE.into(),
+            floe_context_contract::CalendarProvider::EventKit,
+            vec![floe_day::CalendarSelection {
+                calendar_id: "work".into(),
+                calendar_name: "Work".into(),
+            }],
+            floe_context_contract::CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded { reason, .. } => {
+            assert_eq!(reason, DriftReason::ConnectionUnusable);
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert!(grants.is_empty());
+}
+
+#[tokio::test]
+async fn personal_attention_allow_resolves() {
+    let host = HostFixture::open().await;
+    let target = floe_conversation::InlineObserveTarget {
+        connection_id: floe_access::ATTENTION_CONNECTION.into(),
+        device_id: Some(DEVICE.into()),
+        source_id: "floe.source.attention".into(),
+        connector_id: Some(floe_access::ATTENTION_CONNECTOR.into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        connection_revision: None,
+        reviewed_producer_fingerprint: None,
+        reviewed_native_subject: Some(NATIVE_FINGERPRINT.into()),
+        members: vec![floe_conversation::ReviewedBundleMember {
+            member_id: floe_access::ATTENTION_CONNECTOR.into(),
+            resource: floe_access::ATTENTION_RESOURCE.into(),
+            source_revision: None,
+            expected_grant: floe_conversation::ExpectedGrantState::Absent,
+            policy_authority: None,
+        }],
+    };
+    let current = host
+        .base
+        .seed_inline(
+            target,
+            "floe.source.attention",
+            floe_access::ATTENTION_CONNECTION,
+        )
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(
+        grants[0].source().connector().as_str(),
+        floe_access::ATTENTION_CONNECTOR
+    );
+}
+
+#[tokio::test]
+async fn sibling_grant_revoked_out_of_band_supersedes_with_absent_replacement() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target.clone(), "floe.source.calendar", "connection")
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    // Enable out-of-band, then confirm the fresh review so the card binds
+    // the live grant as a reviewed sibling.
+    owners
+        .enable_reviewed(&target, host.base.person, DEVICE, &host.base.cancellation)
+        .await
+        .unwrap();
+    let outcome = refresh_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.refresh_command(&current),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, RefreshOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    // A second card reviews the live grant; revoking it out-of-band
+    // invalidates that review.
+    let mut sibling_target = host.native_target(NATIVE_FINGERPRINT).await;
+    sibling_target.members[0].expected_grant = floe_conversation::ExpectedGrantState::Active {
+        grant_id: grants[0].id().as_uuid(),
+        authority_incarnation: grants[0].authority().incarnation(),
+        authority_epoch: grants[0].authority().access_epoch().get(),
+    };
+    sibling_target.members[0].policy_authority = host
+        .base
+        .vault
+        .calendar_grant_policy_authority(grants[0].id())
+        .await
+        .ok()
+        .map(|authority| floe_conversation::AuthorityRevision {
+            incarnation: authority.incarnation(),
+            epoch: authority.epoch().get(),
+        });
+    let sibling = host
+        .base
+        .seed_inline(sibling_target, "floe.source.calendar", "connection")
+        .await;
+    host.base
+        .vault
+        .revoke_data_access_grant(grants[0].id(), grants[0].authority())
+        .await
+        .unwrap();
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &sibling,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded {
+            reason,
+            replacement_id,
+            ..
+        } => {
+            assert!(
+                matches!(reason, DriftReason::GrantState { .. }),
+                "{reason:?}"
+            );
+            let replacement_id = replacement_id.expect("drift publishes a fresh review");
+            let replacement = floe_conversation::load_interaction(
+                &host.base.repo,
+                &host.base.principal(),
+                replacement_id,
+            )
+            .await
+            .unwrap();
+            let floe_conversation::ReviewedTarget::InlineObserve(inline) = replacement.target
+            else {
+                panic!("replacement must stay inline");
+            };
+            assert!(matches!(
+                inline.members[0].expected_grant,
+                floe_conversation::ExpectedGrantState::Absent
+            ));
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
+}
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ring::rand::SystemRandom;
+use ring::signature::Ed25519KeyPair;
+use sha2::Sha256;
+
+use super::super::interaction_owners::enable_remote_reviewed;
+use super::super::remote_observe::RemoteObserveContext;
+
+const REMOTE_CLIENT_ID: &str = "paired-client";
+
+struct ScriptedRemoteTransport {
+    producer: floe_access::RemoteProducerIdentity,
+    pkcs8: Vec<u8>,
+    person_id: PersonId,
+    authority: Mutex<floe_context_contract::SourceAuthority>,
+    provider_identity: Mutex<String>,
+    corrupt_signature: Mutex<bool>,
+}
+
+impl ScriptedRemoteTransport {
+    fn sign(&self, descriptor: &[u8]) -> String {
+        let pair = Ed25519KeyPair::from_pkcs8(&self.pkcs8).unwrap();
+        let mut message = Vec::from(b"floe.remote.producer.v1\0".as_slice());
+        message.extend_from_slice(descriptor);
+        if *self.corrupt_signature.lock().unwrap() {
+            message.extend_from_slice(b"tampered");
+        }
+        URL_SAFE_NO_PAD.encode(pair.sign(&message).as_ref())
+    }
+
+    fn view_preview(
+        &self,
+        query: floe_access::RemoteSourceQuery<'_>,
+    ) -> floe_access::SignedSourcePreview {
+        let authority = *self.authority.lock().unwrap();
+        let descriptor = serde_json::json!({
+            "v": 1,
+            "operation": "remote_view_source_preview",
+            "challenge_id": Uuid::new_v4().to_string(),
+            "nonce": URL_SAFE_NO_PAD.encode([7u8; 32]),
+            "view_id": query.view_id,
+            "person_id": self.person_id.to_string(),
+            "client_id": REMOTE_CLIENT_ID,
+            "device_id": DEVICE,
+            "audience": self.producer.audience,
+            "connector_id": query.connector_id,
+            "connection_id": query.connection_id,
+            "connection_revision": 11u64,
+            "execution_owner": self.producer.execution_owner,
+            "incarnation": authority.incarnation().to_string(),
+            "epoch": authority.epoch().get(),
+            "resource": query.resource,
+            "provider_identity": self.provider_identity.lock().unwrap().clone(),
+            "issued_at_unix_ms": 1_700_000_000_000i64,
+        });
+        let bytes = serde_json::to_vec(&descriptor).unwrap();
+        floe_access::SignedSourcePreview {
+            descriptor_b64url: URL_SAFE_NO_PAD.encode(&bytes),
+            producer_signature: self.sign(&bytes),
+            connection_revision: 11,
+            producer: self.producer.clone(),
+        }
+    }
+
+    fn calendar_preview(
+        &self,
+        query: floe_access::RemoteCalendarQuery<'_>,
+    ) -> floe_access::SignedCalendarPreview {
+        let authority = *self.authority.lock().unwrap();
+        let descriptor = serde_json::json!({
+            "v": 1,
+            "operation": "calendar_source_preview",
+            "challenge_id": Uuid::new_v4().to_string(),
+            "nonce": URL_SAFE_NO_PAD.encode([7u8; 32]),
+            "person_id": self.person_id.to_string(),
+            "client_id": REMOTE_CLIENT_ID,
+            "device_id": DEVICE,
+            "audience": self.producer.audience,
+            "connector_id": query.connector_id,
+            "connection_id": query.connection_id,
+            "execution_owner": self.producer.execution_owner,
+            "incarnation": authority.incarnation().to_string(),
+            "epoch": authority.epoch().get(),
+            "resource": query.resource,
+            "provider_identity": self.provider_identity.lock().unwrap().clone(),
+            "issued_at_unix_ms": 1_700_000_000_000i64,
+        });
+        let bytes = serde_json::to_vec(&descriptor).unwrap();
+        floe_access::SignedCalendarPreview {
+            descriptor_b64url: URL_SAFE_NO_PAD.encode(&bytes),
+            producer_signature: self.sign(&bytes),
+            producer: self.producer.clone(),
+        }
+    }
+}
+
+impl floe_access::RemoteGrantTransport for ScriptedRemoteTransport {
+    fn producer_identity<'a>(
+        &'a self,
+        _window: &'a floe_access::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<floe_access::RemoteProducerIdentity, AgentFailure>> {
+        let producer = self.producer.clone();
+        Box::pin(async move { Ok(producer) })
+    }
+
+    fn view_source_preview<'a>(
+        &'a self,
+        query: floe_access::RemoteSourceQuery<'a>,
+        _window: &'a floe_access::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<floe_access::SignedSourcePreview, AgentFailure>> {
+        let preview = self.view_preview(query);
+        Box::pin(async move { Ok(preview) })
+    }
+
+    fn calendar_source_preview<'a>(
+        &'a self,
+        query: floe_access::RemoteCalendarQuery<'a>,
+        _window: &'a floe_access::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<floe_access::SignedCalendarPreview, AgentFailure>> {
+        let preview = self.calendar_preview(query);
+        Box::pin(async move { Ok(preview) })
+    }
+}
+
+struct RemoteFixture {
+    base: Fixture,
+    core: crate::FloeCore,
+    store: floe_provider_adapters::control::CurrentSavedConnectionStore,
+    transport: ScriptedRemoteTransport,
+    connection_id: String,
+}
+
+impl RemoteFixture {
+    async fn open() -> Self {
+        let base = Fixture::open().await;
+        let core = crate::FloeCore::open(":memory:").await.unwrap();
+        let connection_id = Uuid::new_v4().to_string();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let public = pair.public_key().as_ref().to_vec();
+        let fingerprint = Sha256::digest(&public)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let instance_id = Uuid::new_v4().to_string();
+        let producer = floe_access::RemoteProducerIdentity {
+            schema_version: 1,
+            audience: format!("floe.server:{instance_id}"),
+            instance_id,
+            execution_owner: Uuid::new_v4().to_string(),
+            key_id: Uuid::new_v4().to_string(),
+            public_key: URL_SAFE_NO_PAD.encode(&public),
+            fingerprint,
+        };
+        base.vault
+            .remote_pin_producer(producer.clone())
+            .await
+            .unwrap();
+        let transport = ScriptedRemoteTransport {
+            producer,
+            pkcs8: pkcs8.as_ref().to_vec(),
+            person_id: base.person,
+            authority: Mutex::new(floe_context_contract::SourceAuthority::new()),
+            provider_identity: Mutex::new("google:subject-a".into()),
+            corrupt_signature: Mutex::new(false),
+        };
+        let store = TestConnections::default().store();
+        Self {
+            base,
+            core,
+            store,
+            transport,
+            connection_id,
+        }
+    }
+
+    fn owners<'a>(
+        &'a self,
+        calendar: &'a FixtureCalendarSubject,
+        personal: &'a FixturePersonalInspector,
+    ) -> RemoteTestOwners<'a> {
+        RemoteTestOwners {
+            core: &self.core,
+            vault: &self.base.vault,
+            store: &self.store,
+            calendar,
+            personal,
+            transport: &self.transport,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        }
+    }
+
+    /// The reviewed target an honest capture binds for the canonical
+    /// gmail bundle: live producer pin plus the previewed authority.
+    fn gmail_target(&self) -> floe_conversation::InlineObserveTarget {
+        let policies = crate::first_party_observe::remote_policies("gmail").unwrap();
+        assert_eq!(policies.len(), 2);
+        let authority = *self.transport.authority.lock().unwrap();
+        let mut members: Vec<floe_conversation::ReviewedBundleMember> = policies
+            .iter()
+            .map(|policy| floe_conversation::ReviewedBundleMember {
+                member_id: policy.view_id.to_owned(),
+                resource: floe_context::remote_view_resource(policy.view_id, &self.connection_id),
+                source_revision: Some(floe_conversation::AuthorityRevision {
+                    incarnation: authority.incarnation(),
+                    epoch: authority.epoch().get(),
+                }),
+                expected_grant: floe_conversation::ExpectedGrantState::Absent,
+                policy_authority: None,
+            })
+            .collect();
+        members.sort_by(|left, right| {
+            left.member_id
+                .cmp(&right.member_id)
+                .then_with(|| left.resource.cmp(&right.resource))
+        });
+        floe_conversation::InlineObserveTarget {
+            connection_id: self.connection_id.clone(),
+            device_id: Some(DEVICE.into()),
+            source_id: "floe.source.gmail".into(),
+            connector_id: Some("gmail".into()),
+            consumer: "floe.builtin.schedule".into(),
+            purpose: "scheduling".into(),
+            connection_revision: None,
+            reviewed_producer_fingerprint: Some(self.transport.producer.fingerprint.clone()),
+            reviewed_native_subject: None,
+            members,
+        }
+    }
+}
+
+struct RemoteTestOwners<'a> {
+    core: &'a crate::FloeCore,
+    vault: &'a EncryptedAgentVault<Keys>,
+    store: &'a floe_provider_adapters::control::CurrentSavedConnectionStore,
+    calendar: &'a FixtureCalendarSubject,
+    personal: &'a FixturePersonalInspector,
+    transport: &'a ScriptedRemoteTransport,
+    deadline: tokio::time::Instant,
+}
+
+impl RemoteTestOwners<'_> {
+    fn host(
+        &self,
+    ) -> HostInteractionOwners<'_, Keys, FixtureCalendarSubject, FixturePersonalInspector> {
+        HostInteractionOwners {
+            core: self.core,
+            vault: self.vault,
+            connections: self.store,
+            calendar_subject: self.calendar,
+            personal_subject: self.personal,
+            probe_deadline: self.deadline,
+        }
+    }
+}
+
+impl ObserveStateReader for RemoteTestOwners<'_> {
+    fn read_live_inline<'a>(
+        &'a self,
+        target: &'a floe_conversation::InlineObserveTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        cancellation: &'a floe_execution::Cancellation,
+    ) -> BoxFuture<'a, Result<LiveInlineState, AgentFailure>> {
+        Box::pin(async move {
+            self.host()
+                .read_live_inline(target, person_id, device_id, cancellation)
+                .await
+        })
+    }
+
+    fn navigation_connection_usable<'a>(
+        &'a self,
+        target: &'a floe_conversation::NavigationOnlyTarget,
+        person_id: PersonId,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            self.host()
+                .navigation_connection_usable(target, person_id)
+                .await
+        })
+    }
+
+    fn navigation_satisfied<'a>(
+        &'a self,
+        target: &'a floe_conversation::NavigationOnlyTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        cancellation: &'a floe_execution::Cancellation,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            self.host()
+                .navigation_satisfied(target, person_id, device_id, cancellation)
+                .await
+        })
+    }
+}
+
+impl InlineOwnerMutation for RemoteTestOwners<'_> {
+    fn enable_reviewed<'a>(
+        &'a self,
+        target: &'a floe_conversation::InlineObserveTarget,
+        person_id: PersonId,
+        device_id: &'a str,
+        cancellation: &'a floe_execution::Cancellation,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            let connector = target.connector_id.as_deref().unwrap_or("");
+            let policies = crate::first_party_observe::remote_policies(connector)?;
+            if policies.is_empty() {
+                let host = self.host();
+                return host
+                    .enable_reviewed(target, person_id, device_id, cancellation)
+                    .await;
+            }
+            let calendar = policies.len() == 1 && policies[0].view_id == "calendar.timeline";
+            let resource = if calendar {
+                Some(
+                    target
+                        .members
+                        .first()
+                        .ok_or(AgentFailure::InvalidInput)?
+                        .resource
+                        .as_str(),
+                )
+            } else {
+                None
+            };
+            let person_text = person_id.to_string();
+            let window = floe_access::RemoteCallWindow {
+                deadline: self.deadline,
+                cancellation: cancellation.clone(),
+            };
+            let pairing = floe_access::RemotePairingIdentity {
+                person_id: &person_text,
+                device_id,
+                client_id: REMOTE_CLIENT_ID,
+            };
+            let ctx = RemoteObserveContext {
+                core: self.core,
+                vault: self.vault,
+                person_id,
+                pairing,
+                connector_id: connector,
+                connection_id: target.connection_id.as_str(),
+                resource,
+                window: &window,
+            };
+            enable_remote_reviewed(&ctx, self.transport, target).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
+    let host = RemoteFixture::open().await;
+    let target = host.gmail_target();
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 2);
+    for grant in &grants {
+        assert_eq!(grant.state(), floe_access::GrantState::Active);
+        assert_eq!(grant.source().connector().as_str(), "gmail");
+        assert_eq!(grant.source().connection_id().as_str(), host.connection_id);
+    }
+    let mut resources: Vec<&str> = grants
+        .iter()
+        .flat_map(|grant| grant.scope().resources().iter().map(|value| value.as_str()))
+        .collect();
+    resources.sort();
+    resources.dedup();
+    assert_eq!(resources.len(), 2);
+}
+
+#[tokio::test]
+async fn gmail_authority_rotation_after_review_supersedes_without_mutation() {
+    let host = RemoteFixture::open().await;
+    let target = host.gmail_target();
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
+        .await;
+    // The server rotates its source authority after the review. The local
+    // re-read cannot observe it, but the enable's fresh bundle can, so the
+    // owner refuses and the card supersedes instead of widening.
+    *host.transport.authority.lock().unwrap() = floe_context_contract::SourceAuthority::new();
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded { reason, .. } => {
+            assert_eq!(reason, DriftReason::OwnerObservedDrift);
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert!(grants.is_empty());
+}
+
+#[tokio::test]
+async fn gmail_bad_signature_never_mutates_nor_resolves() {
+    let host = RemoteFixture::open().await;
+    let target = host.gmail_target();
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
+        .await;
+    *host.transport.corrupt_signature.lock().unwrap() = true;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    // The previews fail verification: the claimed decision waits in
+    // Resolving for recovery, with no mutation and no false resolution.
+    let resolving = match outcome {
+        ResolveOutcome::Resolving { interaction } => interaction,
+        other => panic!("must stay resolving: {other:?}"),
+    };
+    assert!(matches!(
+        resolving.state,
+        floe_conversation::InteractionState::Resolving { .. }
+    ));
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert!(grants.is_empty());
+}
+
+#[tokio::test]
+async fn remote_calendar_allow_resolves_through_hosted_connection() {
+    let host = RemoteFixture::open().await;
+    host.core
+        .set_calendar_scope(
+            host.base.person,
+            host.connection_id.clone(),
+            9,
+            DEVICE.into(),
+            floe_context_contract::CalendarProvider::Google,
+            vec![floe_day::CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            floe_context_contract::CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+    let authority = *host.transport.authority.lock().unwrap();
+    let target = floe_conversation::InlineObserveTarget {
+        connection_id: host.connection_id.clone(),
+        device_id: Some(DEVICE.into()),
+        source_id: "floe.source.calendar".into(),
+        connector_id: Some("calendar.google".into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        connection_revision: Some(9),
+        reviewed_producer_fingerprint: Some(host.transport.producer.fingerprint.clone()),
+        reviewed_native_subject: None,
+        members: vec![floe_conversation::ReviewedBundleMember {
+            member_id: "calendar.timeline".into(),
+            resource: "primary".into(),
+            source_revision: Some(floe_conversation::AuthorityRevision {
+                incarnation: authority.incarnation(),
+                epoch: authority.epoch().get(),
+            }),
+            expected_grant: floe_conversation::ExpectedGrantState::Absent,
+            policy_authority: None,
+        }],
+    };
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.calendar", host.connection_id.as_str())
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Resolved { .. }),
+        "{outcome:?}"
+    );
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0].source().connector().as_str(), "calendar.google");
+    assert_eq!(
+        grants[0].source().connection_id().as_str(),
+        host.connection_id
+    );
+}
+
+#[tokio::test]
+async fn gmail_reviewed_subset_supersedes_on_canonical_extras() {
+    let host = RemoteFixture::open().await;
+    let mut target = host.gmail_target();
+    // The review covers only one of the two canonical views: the live
+    // bundle is wider than reviewed, so the card supersedes instead of
+    // widening.
+    target.members.pop();
+    assert_eq!(target.members.len(), 1);
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded { reason, .. } => {
+            assert_eq!(reason, DriftReason::MemberSet);
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert!(grants.is_empty());
+}
+
+#[tokio::test]
+async fn native_grant_paused_out_of_band_supersedes() {
+    let host = HostFixture::open().await;
+    let target = host.native_target(NATIVE_FINGERPRINT).await;
+    let current = host
+        .base
+        .seed_inline(target.clone(), "floe.source.calendar", "connection")
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    owners
+        .enable_reviewed(&target, host.base.person, DEVICE, &host.base.cancellation)
+        .await
+        .unwrap();
+    let first = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(first.len(), 1);
+    // A second card reviews the live grant; pausing it out-of-band
+    // invalidates that review, because a paused grant authorizes nothing.
+    let mut paused_target = host.native_target(NATIVE_FINGERPRINT).await;
+    paused_target.members[0].expected_grant = floe_conversation::ExpectedGrantState::Active {
+        grant_id: first[0].id().as_uuid(),
+        authority_incarnation: first[0].authority().incarnation(),
+        authority_epoch: first[0].authority().access_epoch().get(),
+    };
+    let paused = host
+        .base
+        .seed_inline(paused_target, "floe.source.calendar", "connection")
+        .await;
+    host.base
+        .vault
+        .pause_data_access_grant(first[0].id(), first[0].authority())
+        .await
+        .unwrap();
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base
+            .resolve_command(&paused, floe_conversation::InteractionDecisionKind::Approve),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded { reason, .. } => {
+            assert!(
+                matches!(reason, DriftReason::GrantState { .. }),
+                "{reason:?}"
+            );
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
+    assert_ne!(paused.id, current.id);
+}
+
+#[tokio::test]
+async fn same_command_different_kind_conflicts() {
+    let fixture = Fixture::open().await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
+    let owners = ScriptedOwners::new(live_precondition());
+    let mut command =
+        fixture.resolve_command(&current, floe_conversation::InteractionDecisionKind::Deny);
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &fixture.caller,
+        command.clone(),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, ResolveOutcome::Denied { .. }),
+        "{outcome:?}"
+    );
+    // The same command with a different decision conflicts: terminal
+    // states never reopen.
+    command.kind = floe_conversation::InteractionDecisionKind::Approve;
+    command.expected_revision = current.revision;
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &fixture.caller,
+        command,
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            ResolveOutcome::Stale { .. } | ResolveOutcome::Terminal { .. }
+        ),
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn owner_refusal_on_matching_precondition_supersedes() {
+    let fixture = Fixture::open().await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
+    // The owner refuses even though the local re-read matches: it judged
+    // fresher evidence (remote rotation the local read cannot see), so
+    // the review is stale by definition.
+    let owners = ScriptedOwners::new(live_precondition());
+    owners
+        .script
+        .lock()
+        .unwrap()
+        .mutation_results
+        .push_back(Err(AgentFailure::AccessReviewRequired));
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &fixture.caller,
+        fixture.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ResolveOutcome::Superseded { reason, .. } => {
+            assert_eq!(reason, DriftReason::OwnerObservedDrift);
+        }
+        other => panic!("must supersede: {other:?}"),
+    }
 }

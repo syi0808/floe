@@ -418,23 +418,7 @@ where
         connection: &str,
         resource: &str,
     ) -> Result<Vec<floe_access::DataAccessGrant>, AgentFailure> {
-        Ok(self
-            .vault
-            .list_data_access_grants(128)
-            .await?
-            .into_iter()
-            .filter(|grant| {
-                grant.source().person_id() == person_id
-                    && grant.source().connector().as_str() == connector
-                    && grant.source().connection_id().as_str() == connection
-                    && grant.state() != floe_access::GrantState::Revoked
-                    && grant
-                        .scope()
-                        .resources()
-                        .iter()
-                        .any(|value| value.as_str() == resource)
-            })
-            .collect())
+        live_grants_for_member(self.vault, person_id, connector, connection, resource).await
     }
 
     /// The blocked member's reviewed expectation still holds now: the
@@ -596,6 +580,35 @@ where
         }
         Ok(Some(policy))
     }
+}
+
+/// The live non-revoked grants naming one bundle member resource:
+/// the same filter capture, publication gating and decision-time
+/// re-verification all share, so a grant observed by one path is observed
+/// by all of them.
+pub(super) async fn live_grants_for_member<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    person_id: PersonId,
+    connector: &str,
+    connection: &str,
+    resource: &str,
+) -> Result<Vec<floe_access::DataAccessGrant>, AgentFailure> {
+    Ok(vault
+        .list_data_access_grants(128)
+        .await?
+        .into_iter()
+        .filter(|grant| {
+            grant.source().person_id() == person_id
+                && grant.source().connector().as_str() == connector
+                && grant.source().connection_id().as_str() == connection
+                && grant.state() != floe_access::GrantState::Revoked
+                && grant
+                    .scope()
+                    .resources()
+                    .iter()
+                    .any(|value| value.as_str() == resource)
+        })
+        .collect())
 }
 
 fn observed_expectation(

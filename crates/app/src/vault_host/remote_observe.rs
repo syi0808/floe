@@ -550,22 +550,14 @@ async fn live_member_grants<Keys: VaultKeyProvider>(
     connection_id: &str,
     resource: &str,
 ) -> Result<Vec<floe_access::DataAccessGrant>, AgentFailure> {
-    Ok(vault
-        .list_data_access_grants(128)
-        .await?
-        .into_iter()
-        .filter(|grant| {
-            grant.source().person_id() == person_id
-                && grant.source().connector().as_str() == connector_id
-                && grant.source().connection_id().as_str() == connection_id
-                && grant.state() != floe_access::GrantState::Revoked
-                && grant
-                    .scope()
-                    .resources()
-                    .iter()
-                    .any(|value| value.as_str() == resource)
-        })
-        .collect())
+    super::review_snapshot::live_grants_for_member(
+        vault,
+        person_id,
+        connector_id,
+        connection_id,
+        resource,
+    )
+    .await
 }
 
 async fn local_calendar_revision<Keys: VaultKeyProvider>(
