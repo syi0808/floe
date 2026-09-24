@@ -61,13 +61,18 @@ fn target() -> ReviewedTarget {
         device_id: None,
         source_id: "floe.source.calendar".into(),
         connector_id: Some("floe.connector.calendar".into()),
-        resources: vec!["personal".into()],
-        capability_bundle: vec!["calendar.observe".into()],
         consumer: "floe.builtin.schedule".into(),
         purpose: "scheduling".into(),
-        source_revision: None,
-        expected_grant: floe_conversation::ExpectedGrantState::Absent,
-        policy_authority: None,
+        connection_revision: None,
+        reviewed_producer_fingerprint: None,
+        reviewed_native_subject: None,
+        members: vec![floe_conversation::ReviewedBundleMember {
+            member_id: "calendar.timeline".into(),
+            resource: "personal".into(),
+            source_revision: None,
+            expected_grant: floe_conversation::ExpectedGrantState::Absent,
+            policy_authority: None,
+        }],
     })
 }
 

@@ -251,8 +251,21 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
             };
-            let repository =
-                floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
+            let repository = floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
+            let calendar_subject = crate::vault_host::calendar_access::DeviceCalendarSubject {
+                local_context: &self.local_context,
+            };
+            let personal_subject =
+                crate::vault_host::personal_grants::native_driver(&self.local_context);
+            let snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
+                core: &self.core,
+                vault: &self.vault,
+                calendar_subject: &calendar_subject,
+                personal_subject: &personal_subject,
+                capture_deadline: scope
+                    .deadline()
+                    .min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
+            };
             let experts = ConversationExperts {
                 executor: &service,
                 scope,
@@ -276,6 +289,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 runs: Some(&repository),
                 interactions: Some(&repository),
                 device_id: Some(context.device_id.as_str()),
+                snapshots: Some(&snapshots),
             };
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
@@ -364,6 +378,11 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) runs: Option<&'model dyn floe_conversation::ConversationRepository>,
     pub(super) interactions: Option<&'model dyn floe_conversation::InteractionRepository>,
     pub(super) device_id: Option<&'model str>,
+    /// The reviewed-snapshot capture publication binds inline cards to. A
+    /// blocked source without it fails closed rather than completing
+    /// ref-less.
+    pub(super) snapshots:
+        Option<&'model dyn crate::vault_host::review_snapshot::ReviewSnapshotSource>,
 }
 
 /// One delegated message's Expert host.
@@ -736,6 +755,7 @@ impl InProcessAgent for ConversationExperts<'_> {
                 .interactions
                 .ok_or(AgentFailure::CapabilityUnavailable)?;
             let device_id = self.device_id.ok_or(AgentFailure::CapabilityUnavailable)?;
+            let snapshots = self.snapshots.ok_or(AgentFailure::CapabilityUnavailable)?;
             let blockers = floe_context_contract::SourceAccessBlockers::try_new(captured)
                 .map_err(|_| AgentFailure::InvalidModelOutput)?;
             let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
@@ -743,6 +763,7 @@ impl InProcessAgent for ConversationExperts<'_> {
             let refs = super::interaction_publication::publish_requirements(
                 runs,
                 interactions,
+                snapshots,
                 &request.person_id.to_string(),
                 request.session_id,
                 origin_run_id,
@@ -750,15 +771,18 @@ impl InProcessAgent for ConversationExperts<'_> {
                     task_id: expert_request.task_id,
                     capability_call_id: None,
                 },
+                request.person_id,
                 device_id,
-                std::slice::from_ref(&request.agent_id),
                 &blockers,
+                &expert_request.cancellation,
                 expert_request.current_time_unix_ms,
             )
             .await?;
-            output.artifacts.extend(
-                super::interaction_publication::interaction_ref_artifacts(&refs)?,
-            );
+            output
+                .artifacts
+                .extend(super::interaction_publication::interaction_ref_artifacts(
+                    &refs,
+                )?);
         }
         let task = floe_experts::completed_expert_task(
             request,
@@ -975,6 +999,7 @@ mod capture_tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let captured = Mutex::new(Vec::new());
         let host = DelegatedMessageExperts {
@@ -1024,12 +1049,17 @@ mod capture_tests {
         ));
         // Both blockers are preserved as distinct requirements: nothing is
         // merged, nothing is dropped, and the capture is deduplicated.
-        let _ = BuiltinExpertHost::attention_view(&host, &request).await.unwrap();
+        let _ = BuiltinExpertHost::attention_view(&host, &request)
+            .await
+            .unwrap();
         let captured = host.take_captured().unwrap();
         assert_eq!(captured.len(), 2);
         let mut sources: Vec<_> = captured.iter().map(|blocker| blocker.source_id()).collect();
         sources.sort();
-        assert_eq!(sources, vec!["floe.source.attention", "floe.source.calendar"]);
+        assert_eq!(
+            sources,
+            vec!["floe.source.attention", "floe.source.calendar"]
+        );
     }
 
     struct ReadyAttention;
@@ -1198,6 +1228,7 @@ mod capture_tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let dependencies = Mutex::new(Vec::new());
         let host = DelegatedMessageExperts {

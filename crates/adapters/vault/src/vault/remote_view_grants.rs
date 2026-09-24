@@ -229,6 +229,73 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         })
     }
 
+    /// The recorded grant and consumer policy one remote view review bound.
+    ///
+    /// Unlike [`Self::remote_view_grant_binding`], this gates nothing on grant
+    /// state: review capture reads the recorded facts (including a paused
+    /// grant awaiting re-enable) and the decision path judges them. A missing
+    /// mapping is reviewable absence only when the caller proves no live
+    /// grant names the member.
+    pub async fn remote_view_grant_policy(
+        &self,
+        view_id: &str,
+        connector: &str,
+        connection_id: &str,
+        source_authority: floe_access::SourceAuthority,
+    ) -> Result<(GrantId, ConsumerPolicyAuthority), AgentFailure> {
+        if !valid_view_id(view_id) || connector.is_empty() || connection_id.is_empty() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT grant_id, policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE person_id = ? AND view_id = ? AND connector = ? AND connection_id = ? AND source_incarnation = ? AND source_epoch = ?",
+                (
+                    self.person_id.to_string(),
+                    view_id,
+                    connector,
+                    connection_id,
+                    source_authority.incarnation().to_string(),
+                    source_authority.epoch().get() as i64,
+                ),
+            )
+            .await
+            .map_err(super::storage)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(super::storage)?
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        if rows.next().await.map_err(super::storage)?.is_some() {
+            return Err(AgentFailure::Conflict);
+        }
+        let encoded = row.get::<String>(3).map_err(super::storage)?;
+        if encoded.len() > 16 * 1024 {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        let mapping: RemoteViewGrantMapping =
+            serde_json::from_str(&encoded).map_err(|_| AgentFailure::VaultUnavailable)?;
+        if mapping.grant_id.as_uuid().to_string() != row.get::<String>(0).map_err(super::storage)?
+            || mapping.policy_incarnation.to_string()
+                != row.get::<String>(1).map_err(super::storage)?
+            || mapping.policy_epoch as i64 != row.get::<i64>(2).map_err(super::storage)?
+            || mapping.view_id != view_id
+            || mapping.source.person_id() != self.person_id
+            || mapping.source.connector().as_str() != connector
+            || mapping.source.connection_id().as_str() != connection_id
+            || mapping.source.source_authority() != source_authority
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        let policy = ConsumerPolicyAuthority::from_parts(
+            mapping.policy_incarnation,
+            std::num::NonZeroU64::new(mapping.policy_epoch)
+                .ok_or(AgentFailure::VaultUnavailable)?,
+        )
+        .ok_or(AgentFailure::VaultUnavailable)?;
+        Ok((mapping.grant_id, policy))
+    }
+
     pub async fn review_and_activate_remote_view_grant(
         &self,
         view_id: &str,

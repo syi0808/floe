@@ -10,11 +10,13 @@
 //! resolves (05-C/05-D).
 //!
 //! The reviewed target carries opaque bounded identifiers only: exact
-//! connection/device/source, selected resources, affected capability bundle,
-//! requesting consumer/purpose, source revision, grant expectation (including
-//! expected absence) and policy authority where applicable. It carries no
-//! credentials, tokens, source payloads, prompts, provider errors or display
-//! labels. Model-safe artifacts carry only the opaque [`UserInteractionRef`].
+//! connection/device/source, requesting consumer/purpose, reviewed owner
+//! identity (connection revision, pinned producer, live native subject), and
+//! the whole affected bundle with per-member source revision, grant
+//! expectation (including expected absence) and policy authority. It carries
+//! no credentials, tokens, source payloads, prompts, provider errors or
+//! display labels. Model-safe artifacts carry only the opaque
+//! [`UserInteractionRef`].
 
 use floe_agent_contract::{AgentFailure, UserInteractionKind};
 use floe_kernel::{PersonId, RunId};
@@ -31,8 +33,7 @@ pub const INTERACTION_PENDING_LIFETIME_MS: i64 = 24 * 60 * 60 * 1000;
 pub const MAX_REVIEWED_SOURCE_BYTES: usize = 128;
 pub const MAX_REVIEWED_IDENTIFIER_BYTES: usize = 256;
 pub const MAX_REVIEWED_PURPOSE_BYTES: usize = 64;
-pub const MAX_TARGET_RESOURCES: usize = 64;
-pub const MAX_TARGET_CAPABILITIES: usize = 16;
+pub const MAX_TARGET_BUNDLE_MEMBERS: usize = 8;
 pub const MAX_REVIEWED_TARGET_BYTES: usize = 8 * 1024;
 
 /// Fixed namespace for deterministic interaction publication identity.
@@ -170,8 +171,45 @@ impl ExpectedGrantState {
     }
 }
 
+/// One reviewed grant of an inline Observe bundle: the exact member, its
+/// resource, and the per-member source revision, grant expectation (including
+/// expected absence) and policy authority the decision binds. Members are the
+/// whole affected bundle, not just the view the blocked read named: a live
+/// member outside this set, or a changed per-member expectation, invalidates
+/// the review instead of widening it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedBundleMember {
+    pub member_id: String,
+    pub resource: String,
+    pub source_revision: Option<AuthorityRevision>,
+    pub expected_grant: ExpectedGrantState,
+    pub policy_authority: Option<AuthorityRevision>,
+}
+
+impl ReviewedBundleMember {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if validate_identifier(&self.member_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
+            || validate_identifier(&self.resource, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        if let Some(revision) = &self.source_revision {
+            revision.validate()?;
+        }
+        self.expected_grant.validate()?;
+        if let Some(authority) = &self.policy_authority {
+            authority.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// An inline-mutation target: connection-level Observe approval over the
-/// reviewed bundle. The card discloses every affected capability/resource.
+/// reviewed bundle. The bundle-level fields bind the owner identity the
+/// person reviewed (local connection revision, pinned remote producer,
+/// live native subject); the members bind every affected grant. The card
+/// discloses the whole bundle.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InlineObserveTarget {
@@ -179,13 +217,12 @@ pub struct InlineObserveTarget {
     pub device_id: Option<String>,
     pub source_id: String,
     pub connector_id: Option<String>,
-    pub resources: Vec<String>,
-    pub capability_bundle: Vec<String>,
     pub consumer: String,
     pub purpose: String,
-    pub source_revision: Option<AuthorityRevision>,
-    pub expected_grant: ExpectedGrantState,
-    pub policy_authority: Option<AuthorityRevision>,
+    pub connection_revision: Option<u64>,
+    pub reviewed_producer_fingerprint: Option<String>,
+    pub reviewed_native_subject: Option<String>,
+    pub members: Vec<ReviewedBundleMember>,
 }
 
 impl InlineObserveTarget {
@@ -201,25 +238,31 @@ impl InlineObserveTarget {
                 .is_some_and(|value| validate_identifier(value, MAX_REVIEWED_SOURCE_BYTES).is_err())
             || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
             || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
-            || !is_canonical_set(
-                &self.resources,
-                MAX_TARGET_RESOURCES,
-                MAX_REVIEWED_IDENTIFIER_BYTES,
-            )
-            || !is_canonical_set(
-                &self.capability_bundle,
-                MAX_TARGET_CAPABILITIES,
-                MAX_REVIEWED_SOURCE_BYTES,
-            )
+            || self
+                .connection_revision
+                .is_some_and(|revision| revision == 0)
+            || self
+                .reviewed_producer_fingerprint
+                .as_ref()
+                .is_some_and(|value| {
+                    validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+                })
+            || self.reviewed_native_subject.as_ref().is_some_and(|value| {
+                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            })
+            || self.members.is_empty()
+            || self.members.len() > MAX_TARGET_BUNDLE_MEMBERS
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        if let Some(revision) = &self.source_revision {
-            revision.validate()?;
-        }
-        self.expected_grant.validate()?;
-        if let Some(authority) = &self.policy_authority {
-            authority.validate()?;
+        let mut previous: Option<(&str, &str)> = None;
+        for member in &self.members {
+            member.validate()?;
+            let key = (member.member_id.as_str(), member.resource.as_str());
+            if previous.is_some_and(|previous| previous >= key) {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            previous = Some(key);
         }
         if serde_json::to_vec(self)
             .map(|encoded| encoded.len() > MAX_REVIEWED_TARGET_BYTES)
@@ -626,36 +669,61 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
                 }
                 None => bytes.push(0),
             }
-            append_set(&mut bytes, &target.resources);
-            append_set(&mut bytes, &target.capability_bundle);
             append_str(&mut bytes, &target.consumer);
             append_str(&mut bytes, &target.purpose);
-            match &target.source_revision {
+            match &target.connection_revision {
                 Some(revision) => {
                     bytes.push(1);
-                    append_authority(&mut bytes, revision);
+                    bytes.extend_from_slice(&revision.to_be_bytes());
                 }
                 None => bytes.push(0),
             }
-            match &target.expected_grant {
-                ExpectedGrantState::Absent => bytes.push(0),
-                ExpectedGrantState::Active {
-                    grant_id,
-                    authority_incarnation,
-                    authority_epoch,
-                } => {
+            match &target.reviewed_producer_fingerprint {
+                Some(fingerprint) => {
                     bytes.push(1);
-                    bytes.extend_from_slice(grant_id.as_bytes());
-                    bytes.extend_from_slice(authority_incarnation.as_bytes());
-                    bytes.extend_from_slice(&authority_epoch.to_be_bytes());
-                }
-            }
-            match &target.policy_authority {
-                Some(authority) => {
-                    bytes.push(1);
-                    append_authority(&mut bytes, authority);
+                    append_str(&mut bytes, fingerprint);
                 }
                 None => bytes.push(0),
+            }
+            match &target.reviewed_native_subject {
+                Some(subject) => {
+                    bytes.push(1);
+                    append_str(&mut bytes, subject);
+                }
+                None => bytes.push(0),
+            }
+            let member_count = u64::try_from(target.members.len()).unwrap_or(u64::MAX);
+            bytes.extend_from_slice(&member_count.to_be_bytes());
+            for member in &target.members {
+                append_str(&mut bytes, &member.member_id);
+                append_str(&mut bytes, &member.resource);
+                match &member.source_revision {
+                    Some(revision) => {
+                        bytes.push(1);
+                        append_authority(&mut bytes, revision);
+                    }
+                    None => bytes.push(0),
+                }
+                match &member.expected_grant {
+                    ExpectedGrantState::Absent => bytes.push(0),
+                    ExpectedGrantState::Active {
+                        grant_id,
+                        authority_incarnation,
+                        authority_epoch,
+                    } => {
+                        bytes.push(1);
+                        bytes.extend_from_slice(grant_id.as_bytes());
+                        bytes.extend_from_slice(authority_incarnation.as_bytes());
+                        bytes.extend_from_slice(&authority_epoch.to_be_bytes());
+                    }
+                }
+                match &member.policy_authority {
+                    Some(authority) => {
+                        bytes.push(1);
+                        append_authority(&mut bytes, authority);
+                    }
+                    None => bytes.push(0),
+                }
             }
         }
         ReviewedTarget::NavigationOnly(target) => {
@@ -818,14 +886,6 @@ fn append_str(bytes: &mut Vec<u8>, value: &str) {
     append_bytes(bytes, value.as_bytes());
 }
 
-fn append_set(bytes: &mut Vec<u8>, values: &[String]) {
-    let count = u64::try_from(values.len()).unwrap_or(u64::MAX);
-    bytes.extend_from_slice(&count.to_be_bytes());
-    for value in values {
-        append_str(bytes, value);
-    }
-}
-
 fn append_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
     let length = u64::try_from(value.len()).unwrap_or(u64::MAX);
     bytes.extend_from_slice(&length.to_be_bytes());
@@ -843,23 +903,6 @@ fn validate_identifier(value: &str, limit: usize) -> Result<(), AgentFailure> {
     Ok(())
 }
 
-fn is_canonical_set(values: &[String], max: usize, member_limit: usize) -> bool {
-    if values.len() > max {
-        return false;
-    }
-    let mut previous: Option<&str> = None;
-    for value in values {
-        if validate_identifier(value, member_limit).is_err() {
-            return false;
-        }
-        if previous.is_some_and(|previous| previous >= value.as_str()) {
-            return false;
-        }
-        previous = Some(value);
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,19 +918,28 @@ mod tests {
         }
     }
 
+    pub(crate) fn member(member_id: &str, resource: &str) -> ReviewedBundleMember {
+        ReviewedBundleMember {
+            member_id: member_id.into(),
+            resource: resource.into(),
+            source_revision: None,
+            expected_grant: ExpectedGrantState::Absent,
+            policy_authority: None,
+        }
+    }
+
     pub(crate) fn target() -> ReviewedTarget {
         ReviewedTarget::InlineObserve(InlineObserveTarget {
             connection_id: "calendar-connection".into(),
             device_id: None,
             source_id: "floe.source.calendar".into(),
             connector_id: Some("floe.connector.calendar".into()),
-            resources: vec!["personal".into()],
-            capability_bundle: vec!["calendar.observe".into()],
             consumer: "floe.builtin.schedule".into(),
             purpose: "scheduling".into(),
-            source_revision: None,
-            expected_grant: ExpectedGrantState::Absent,
-            policy_authority: None,
+            connection_revision: None,
+            reviewed_producer_fingerprint: None,
+            reviewed_native_subject: None,
+            members: vec![member("calendar.timeline", "personal")],
         })
     }
 
@@ -967,7 +1019,7 @@ mod tests {
         let ReviewedTarget::InlineObserve(inline) = &mut absent else {
             panic!("test target is inline");
         };
-        inline.expected_grant = ExpectedGrantState::Active {
+        inline.members[0].expected_grant = ExpectedGrantState::Active {
             grant_id: Uuid::new_v4(),
             authority_incarnation: Uuid::new_v4(),
             authority_epoch: 3,
@@ -978,7 +1030,10 @@ mod tests {
         let ReviewedTarget::InlineObserve(inline) = &mut reordered else {
             panic!("test target is inline");
         };
-        inline.resources = vec!["work".into(), "personal".into()];
+        inline.members = vec![
+            member("calendar.timeline", "work"),
+            member("calendar.timeline", "personal"),
+        ];
         assert!(canonical_target_digest(&reordered).is_err());
     }
 
@@ -1018,17 +1073,27 @@ mod tests {
         let ReviewedTarget::InlineObserve(inline) = &mut unsorted else {
             panic!("test target is inline");
         };
-        inline.resources = vec!["b".into(), "a".into()];
+        inline.members = vec![
+            member("calendar.timeline", "b"),
+            member("calendar.timeline", "a"),
+        ];
         assert!(unsorted.validate().is_err());
 
         let mut oversized = target();
         let ReviewedTarget::InlineObserve(inline) = &mut oversized else {
             panic!("test target is inline");
         };
-        inline.resources = (0..=MAX_TARGET_RESOURCES)
-            .map(|index| format!("resource-{index:04}"))
+        inline.members = (0..=MAX_TARGET_BUNDLE_MEMBERS)
+            .map(|index| member("calendar.timeline", &format!("resource-{index:04}")))
             .collect();
         assert!(oversized.validate().is_err());
+
+        let mut empty = target();
+        let ReviewedTarget::InlineObserve(inline) = &mut empty else {
+            panic!("test target is inline");
+        };
+        inline.members.clear();
+        assert!(empty.validate().is_err());
 
         let mut requirement = requirement();
         requirement.source_id = "x".repeat(MAX_REVIEWED_SOURCE_BYTES + 1);

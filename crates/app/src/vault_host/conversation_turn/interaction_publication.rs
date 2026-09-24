@@ -73,27 +73,15 @@ fn purpose_label(purpose: floe_context_contract::GrantPurpose) -> &'static str {
     }
 }
 
-/// Convert one owner-produced requirement into the reviewed descriptor the
-/// decision binds.
-///
-/// Inline Observe is offered only for a complete identity with a reviewable
-/// Observe reason; anything else navigates. Recipient consent is Access-owned
-/// (05-D) and never becomes a source card here.
-pub(crate) fn source_requirement_target(
+/// Convert one owner-produced requirement into the stored interaction
+/// request. Recipient consent is Access-owned (05-D) and never becomes a
+/// source card here.
+fn interaction_requirement(
     requirement: &SourceAccessRequirement,
-    device_id: &str,
-    capability_bundle: Vec<String>,
-) -> Result<
-    (
-        floe_conversation::InteractionRequirement,
-        floe_conversation::ReviewedTarget,
-    ),
-    AgentFailure,
-> {
-    requirement.validate().map_err(|_| AgentFailure::InvalidInput)?;
-    if device_id.trim().is_empty() || device_id.len() > 256 {
-        return Err(AgentFailure::InvalidInput);
-    }
+) -> Result<floe_conversation::InteractionRequirement, AgentFailure> {
+    requirement
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
     let kind = match requirement.reason() {
         SourceAccessRequirementKind::EnableObserve => {
             floe_conversation::InteractionRequirementKind::EnableObserve
@@ -114,95 +102,142 @@ pub(crate) fn source_requirement_target(
             return Err(AgentFailure::PolicyDenied);
         }
     };
-    let consumer = requirement.consumer().identifier().to_owned();
-    let purpose = purpose_label(requirement.purpose()).to_owned();
     let interaction = floe_conversation::InteractionRequirement {
         kind,
         source_id: requirement.source_id().to_owned(),
         connection_id: requirement.connection_id().map(|id| id.as_str().to_owned()),
-        consumer: consumer.clone(),
-        purpose: purpose.clone(),
+        consumer: requirement.consumer().identifier().to_owned(),
+        purpose: purpose_label(requirement.purpose()).to_owned(),
         inline: requirement.inline_resolution(),
-    };
-    let inline = requirement.inline_resolution()
-        && matches!(
-            kind,
-            floe_conversation::InteractionRequirementKind::EnableObserve
-                | floe_conversation::InteractionRequirementKind::ReviewChangedSource
-        )
-        && requirement.connector_id().is_some()
-        && requirement.connection_id().is_some()
-        && !requirement.resources().is_empty();
-    let target = if inline {
-        let mut resources: Vec<String> = requirement
-            .resources()
-            .iter()
-            .map(|resource| resource.as_str().to_owned())
-            .collect();
-        resources.sort();
-        resources.dedup();
-        let mut bundle = capability_bundle;
-        bundle.sort();
-        bundle.dedup();
-        floe_conversation::ReviewedTarget::InlineObserve(
-            floe_conversation::InlineObserveTarget {
-                connection_id: requirement
-                    .connection_id()
-                    .map(|id| id.as_str().to_owned())
-                    .ok_or(AgentFailure::InvalidInput)?,
-                device_id: Some(device_id.to_owned()),
-                source_id: requirement.source_id().to_owned(),
-                connector_id: requirement
-                    .connector_id()
-                    .map(|id| id.as_str().to_owned()),
-                resources,
-                capability_bundle: bundle,
-                consumer,
-                purpose,
-                source_revision: requirement.source_authority().map(|authority| {
-                    floe_conversation::AuthorityRevision {
-                        incarnation: authority.incarnation(),
-                        epoch: authority.epoch().get(),
-                    }
-                }),
-                expected_grant: match requirement.observed_grant() {
-                    Some(observed) => floe_conversation::ExpectedGrantState::Active {
-                        grant_id: observed.grant_id().as_uuid(),
-                        authority_incarnation: observed.authority().incarnation(),
-                        authority_epoch: observed.authority().access_epoch().get(),
-                    },
-                    None => floe_conversation::ExpectedGrantState::Absent,
-                },
-                policy_authority: None,
-            },
-        )
-    } else {
-        let destination = match requirement.reason() {
-            SourceAccessRequirementKind::RequestSystemPermission => {
-                floe_conversation::NavigationDestination::SystemPermission
-            }
-            SourceAccessRequirementKind::SelectResource => {
-                floe_conversation::NavigationDestination::ResourcePicker
-            }
-            _ => floe_conversation::NavigationDestination::ConnectionSettings,
-        };
-        floe_conversation::ReviewedTarget::NavigationOnly(
-            floe_conversation::NavigationOnlyTarget {
-                destination,
-                source_id: requirement.source_id().to_owned(),
-                connection_id: requirement
-                    .connection_id()
-                    .map(|id| id.as_str().to_owned()),
-                consumer,
-                purpose,
-            },
-        )
     };
     interaction
         .validate()
         .map_err(|_| AgentFailure::InvalidInput)?;
+    Ok(interaction)
+}
+
+/// Whether the requirement may offer inline Observe once its reviewed
+/// snapshot captures. Anything else navigates without capturing.
+fn inline_eligible(requirement: &SourceAccessRequirement) -> bool {
+    requirement.inline_resolution()
+        && matches!(
+            requirement.reason(),
+            SourceAccessRequirementKind::EnableObserve
+                | SourceAccessRequirementKind::ReviewChangedSource
+        )
+        && requirement.connector_id().is_some()
+        && requirement.connection_id().is_some()
+        && !requirement.resources().is_empty()
+        && requirement.resources().len() <= floe_conversation::MAX_TARGET_BUNDLE_MEMBERS
+}
+
+/// The navigation-only target: no inline-mutation fields exist on it, so a
+/// card that never offered inline enable cannot resolve one.
+fn navigation_target(
+    requirement: &SourceAccessRequirement,
+    consumer: String,
+    purpose: String,
+) -> Result<floe_conversation::ReviewedTarget, AgentFailure> {
+    let connector = requirement
+        .connector_id()
+        .map(|id| id.as_str())
+        .unwrap_or_default();
+    let destination = match requirement.reason() {
+        SourceAccessRequirementKind::RequestSystemPermission => {
+            floe_conversation::NavigationDestination::SystemPermission
+        }
+        SourceAccessRequirementKind::SelectResource => {
+            floe_conversation::NavigationDestination::ResourcePicker
+        }
+        _ if connector.starts_with("contacts.") => {
+            floe_conversation::NavigationDestination::ResourcePicker
+        }
+        _ => floe_conversation::NavigationDestination::ConnectionSettings,
+    };
+    let target = floe_conversation::ReviewedTarget::NavigationOnly(
+        floe_conversation::NavigationOnlyTarget {
+            destination,
+            source_id: requirement.source_id().to_owned(),
+            connection_id: requirement.connection_id().map(|id| id.as_str().to_owned()),
+            consumer,
+            purpose,
+        },
+    );
     target.validate().map_err(|_| AgentFailure::InvalidInput)?;
-    Ok((interaction, target))
+    Ok(target)
+}
+
+/// The inline target bound to a captured owner snapshot: the whole reviewed
+/// bundle with per-member expectations, in canonical member order.
+fn inline_target_from_snapshot(
+    requirement: &SourceAccessRequirement,
+    device_id: &str,
+    consumer: String,
+    purpose: String,
+    snapshot: crate::vault_host::review_snapshot::InlineReviewSnapshot,
+) -> Result<floe_conversation::ReviewedTarget, AgentFailure> {
+    let connector_id = requirement
+        .connector_id()
+        .map(|id| id.as_str().to_owned())
+        .ok_or(AgentFailure::InvalidInput)?;
+    let connection_id = requirement
+        .connection_id()
+        .map(|id| id.as_str().to_owned())
+        .ok_or(AgentFailure::InvalidInput)?;
+    let mut members: Vec<floe_conversation::ReviewedBundleMember> = snapshot
+        .members
+        .into_iter()
+        .map(|member| floe_conversation::ReviewedBundleMember {
+            member_id: member.member_id,
+            resource: member.resource,
+            source_revision: member.source_revision.map(|authority| {
+                floe_conversation::AuthorityRevision {
+                    incarnation: authority.incarnation(),
+                    epoch: authority.epoch().get(),
+                }
+            }),
+            expected_grant: match member.expected_grant {
+                Some((grant_id, authority)) => floe_conversation::ExpectedGrantState::Active {
+                    grant_id: grant_id.as_uuid(),
+                    authority_incarnation: authority.incarnation(),
+                    authority_epoch: authority.access_epoch().get(),
+                },
+                None => floe_conversation::ExpectedGrantState::Absent,
+            },
+            policy_authority: member.policy_authority.map(|authority| {
+                floe_conversation::AuthorityRevision {
+                    incarnation: authority.incarnation(),
+                    epoch: authority.epoch().get(),
+                }
+            }),
+        })
+        .collect();
+    members.sort_by(|left, right| {
+        left.member_id
+            .cmp(&right.member_id)
+            .then_with(|| left.resource.cmp(&right.resource))
+    });
+    if members
+        .windows(2)
+        .any(|pair| pair[0].member_id == pair[1].member_id && pair[0].resource == pair[1].resource)
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let target =
+        floe_conversation::ReviewedTarget::InlineObserve(floe_conversation::InlineObserveTarget {
+            connection_id,
+            device_id: Some(device_id.to_owned()),
+            source_id: requirement.source_id().to_owned(),
+            connector_id: Some(connector_id),
+            consumer,
+            purpose,
+            connection_revision: snapshot.connection_revision,
+            reviewed_producer_fingerprint: snapshot.producer_fingerprint,
+            reviewed_native_subject: snapshot.native_subject,
+            members,
+        });
+    target.validate().map_err(|_| AgentFailure::InvalidInput)?;
+    Ok(target)
 }
 
 fn interaction_status(state: &floe_conversation::InteractionState) -> UserInteractionStatus {
@@ -221,30 +256,62 @@ fn interaction_status(state: &floe_conversation::InteractionState) -> UserIntera
 ///
 /// Publication is deterministic in origin plus canonical requirement digest:
 /// replaying the same requirement replays the same interaction, while a
-/// different account binds a separate id. `capability_bundle` names the
-/// requesting capability for the reviewed bundle disclosure.
+/// different account binds a separate id. An inline-eligible requirement
+/// captures its reviewed owner snapshot; a capture failure navigates to a
+/// fresh review instead of offering an unbound inline mutation.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn publish_requirements<Runs, Interactions>(
     runs: &Runs,
     interactions: &Interactions,
+    snapshots: &dyn crate::vault_host::review_snapshot::ReviewSnapshotSource,
     principal: &str,
     session_id: Uuid,
     origin_run_id: RunId,
     origin: floe_conversation::InteractionOrigin,
+    person_id: PersonId,
     device_id: &str,
-    capability_bundle: &[String],
     blockers: &SourceAccessBlockers,
+    cancellation: &floe_execution::Cancellation,
     now_unix_ms: i64,
 ) -> Result<Vec<UserInteractionRef>, AgentFailure>
 where
     Runs: floe_conversation::ConversationRepository + ?Sized,
     Interactions: floe_conversation::InteractionRepository + ?Sized,
 {
-    blockers.validate().map_err(|_| AgentFailure::InvalidInput)?;
+    blockers
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    if device_id.trim().is_empty() || device_id.len() > 256 {
+        return Err(AgentFailure::InvalidInput);
+    }
     let mut refs = Vec::with_capacity(blockers.blockers().len());
     for requirement in blockers.blockers() {
-        let (interaction, target) =
-            source_requirement_target(requirement, device_id, capability_bundle.to_vec())?;
+        let interaction = interaction_requirement(requirement)?;
+        let target = if inline_eligible(requirement) {
+            match snapshots
+                .capture_inline(requirement, person_id, device_id, cancellation)
+                .await
+            {
+                Ok(snapshot) => inline_target_from_snapshot(
+                    requirement,
+                    device_id,
+                    interaction.consumer.clone(),
+                    interaction.purpose.clone(),
+                    snapshot,
+                )?,
+                Err(_) => navigation_target(
+                    requirement,
+                    interaction.consumer.clone(),
+                    interaction.purpose.clone(),
+                )?,
+            }
+        } else {
+            navigation_target(
+                requirement,
+                interaction.consumer.clone(),
+                interaction.purpose.clone(),
+            )?
+        };
         let admission = floe_conversation::publish_interaction(
             runs,
             interactions,
@@ -278,7 +345,9 @@ where
 /// The deterministic model-safe text for a blocked read: generic source
 /// labels only, never account, resource or authority detail.
 pub(crate) fn blocked_text(blockers: &SourceAccessBlockers) -> Result<String, AgentFailure> {
-    blockers.validate().map_err(|_| AgentFailure::InvalidInput)?;
+    blockers
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
     let mut labels: Vec<&str> = blockers
         .blockers()
         .iter()
@@ -359,6 +428,7 @@ pub(crate) struct PublishingToolPort<'a, Runs, Interactions> {
     inner: &'a dyn ToolOutcomePort,
     runs: &'a Runs,
     interactions: &'a Interactions,
+    snapshots: &'a dyn crate::vault_host::review_snapshot::ReviewSnapshotSource,
     person_id: PersonId,
     session_id: Uuid,
     device_id: String,
@@ -369,6 +439,7 @@ impl<'a, Runs, Interactions> PublishingToolPort<'a, Runs, Interactions> {
         inner: &'a dyn ToolOutcomePort,
         runs: &'a Runs,
         interactions: &'a Interactions,
+        snapshots: &'a dyn crate::vault_host::review_snapshot::ReviewSnapshotSource,
         person_id: PersonId,
         session_id: Uuid,
         device_id: String,
@@ -380,6 +451,7 @@ impl<'a, Runs, Interactions> PublishingToolPort<'a, Runs, Interactions> {
             inner,
             runs,
             interactions,
+            snapshots,
             person_id,
             session_id,
             device_id,
@@ -403,20 +475,21 @@ where
                 SourceReadOutcome::Ready(result) => Ok(result),
                 SourceReadOutcome::Unavailable(_) => Err(AgentFailure::CapabilityUnavailable),
                 SourceReadOutcome::NeedsUserAction(blockers) => {
-                    let origin_run_id =
-                        scope.root_run_id().ok_or(AgentFailure::InvalidInput)?;
+                    let origin_run_id = scope.root_run_id().ok_or(AgentFailure::InvalidInput)?;
                     let refs = publish_requirements(
                         self.runs,
                         self.interactions,
+                        self.snapshots,
                         &self.person_id.to_string(),
                         self.session_id,
                         origin_run_id,
                         floe_conversation::InteractionOrigin::Tool {
                             call_id: call.call_id,
                         },
+                        self.person_id,
                         &self.device_id,
-                        &[call.tool_id.clone()],
                         &blockers,
+                        scope.cancellation(),
                         chrono::Utc::now().timestamp_millis(),
                     )
                     .await?;
@@ -475,45 +548,79 @@ mod tests {
         .unwrap()
     }
 
+    struct ScriptedSnapshots {
+        snapshot:
+            Mutex<Result<crate::vault_host::review_snapshot::InlineReviewSnapshot, AgentFailure>>,
+    }
+
+    impl crate::vault_host::review_snapshot::ReviewSnapshotSource for ScriptedSnapshots {
+        fn capture_inline<'a>(
+            &'a self,
+            _requirement: &'a SourceAccessRequirement,
+            _person_id: PersonId,
+            _device_id: &'a str,
+            _cancellation: &'a floe_execution::Cancellation,
+        ) -> BoxFuture<
+            'a,
+            Result<crate::vault_host::review_snapshot::InlineReviewSnapshot, AgentFailure>,
+        > {
+            let snapshot = self.snapshot.lock().unwrap();
+            let cloned = match &*snapshot {
+                Ok(snapshot) => Ok(crate::vault_host::review_snapshot::InlineReviewSnapshot {
+                    members: snapshot.members.clone(),
+                    connection_revision: snapshot.connection_revision,
+                    producer_fingerprint: snapshot.producer_fingerprint.clone(),
+                    native_subject: snapshot.native_subject.clone(),
+                }),
+                Err(failure) => Err(*failure),
+            };
+            Box::pin(async move { cloned })
+        }
+    }
+
+    fn captured_snapshot() -> crate::vault_host::review_snapshot::InlineReviewSnapshot {
+        crate::vault_host::review_snapshot::InlineReviewSnapshot {
+            members: vec![crate::vault_host::review_snapshot::SnapshotMember {
+                member_id: "attention.macos".into(),
+                resource: "attention.coarse".into(),
+                source_revision: None,
+                expected_grant: None,
+                policy_authority: None,
+            }],
+            connection_revision: None,
+            producer_fingerprint: None,
+            native_subject: Some("b".repeat(64)),
+        }
+    }
+
     #[test]
     fn inline_observe_needs_complete_identity_and_reviewable_reason() {
-        let (interaction, target) = source_requirement_target(
-            &requirement(
-                "floe.source.attention",
-                SourceAccessRequirementKind::EnableObserve,
-                true,
-            ),
-            "device",
-            vec!["attention.coarse.read".into()],
-        )
-        .unwrap();
-        assert_eq!(
-            interaction.kind,
-            floe_conversation::InteractionRequirementKind::EnableObserve
-        );
-        let floe_conversation::ReviewedTarget::InlineObserve(inline) = target else {
-            panic!("complete identity must offer inline observe");
-        };
-        assert_eq!(inline.connection_id, "attention.macos.local");
-        assert_eq!(inline.device_id.as_deref(), Some("device"));
-        assert_eq!(
-            inline.capability_bundle,
-            vec!["attention.coarse.read".to_owned()]
-        );
-        assert_eq!(
-            inline.expected_grant,
-            floe_conversation::ExpectedGrantState::Absent
-        );
+        assert!(inline_eligible(&requirement(
+            "floe.source.attention",
+            SourceAccessRequirementKind::EnableObserve,
+            true,
+        )));
+        // Incomplete identity never captures even when the owner hinted inline.
+        assert!(!inline_eligible(&requirement(
+            "floe.source.contacts",
+            SourceAccessRequirementKind::EnableObserve,
+            false,
+        )));
+        // Reconnect never offers inline mutation.
+        assert!(!inline_eligible(&requirement(
+            "floe.source.mail",
+            SourceAccessRequirementKind::Reconnect,
+            true,
+        )));
 
-        // Incomplete identity navigates even when the owner hinted inline.
-        let (_, target) = source_requirement_target(
+        let target = navigation_target(
             &requirement(
                 "floe.source.contacts",
                 SourceAccessRequirementKind::EnableObserve,
                 false,
             ),
-            "device",
-            vec!["people.identity.read".into()],
+            "assistant".into(),
+            "assistant".into(),
         )
         .unwrap();
         let floe_conversation::ReviewedTarget::NavigationOnly(nav) = target else {
@@ -523,20 +630,6 @@ mod tests {
             nav.destination,
             floe_conversation::NavigationDestination::ConnectionSettings
         );
-
-        // Reconnect never offers inline mutation.
-        let reconnect = requirement(
-            "floe.source.mail",
-            SourceAccessRequirementKind::Reconnect,
-            true,
-        );
-        let (_, target) =
-            source_requirement_target(&reconnect, "device", vec!["mail.communication.read".into()])
-                .unwrap();
-        assert!(matches!(
-            target,
-            floe_conversation::ReviewedTarget::NavigationOnly(_)
-        ));
     }
 
     #[test]
@@ -557,9 +650,117 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            source_requirement_target(&requirement, "device", vec![]),
+            interaction_requirement(&requirement),
             Err(AgentFailure::PolicyDenied)
         );
+    }
+
+    #[tokio::test]
+    async fn captured_snapshot_binds_inline_members_and_failure_navigates() {
+        let person_id = PersonId::new();
+        let session_id = Uuid::new_v4();
+        let run_id = RunId::new();
+        let call = tool_call("attention.coarse.read");
+        let runs = FakeRuns {
+            receipt: receipt_fixture(person_id, session_id, run_id),
+            journal: vec![JournalEntry {
+                revision: 1,
+                event: JournalEvent::ToolIntent { call: call.clone() },
+            }],
+        };
+        let interactions = FakeInteractions::default();
+        let cancellation = floe_execution::Cancellation::default();
+        let blockers = SourceAccessBlockers::try_new(vec![requirement(
+            "floe.source.attention",
+            SourceAccessRequirementKind::EnableObserve,
+            true,
+        )])
+        .unwrap();
+
+        // A captured snapshot binds the inline members, the owner identity
+        // and the reviewed absence exactly as captured.
+        let snapshots = ScriptedSnapshots {
+            snapshot: Mutex::new(Ok(captured_snapshot())),
+        };
+        let refs = publish_requirements(
+            &runs,
+            &interactions,
+            &snapshots,
+            &person_id.to_string(),
+            session_id,
+            run_id,
+            floe_conversation::InteractionOrigin::Tool {
+                call_id: call.call_id,
+            },
+            person_id,
+            "device",
+            &blockers,
+            &cancellation,
+            1_000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(refs.len(), 1);
+        let stored = interactions
+            .records
+            .lock()
+            .unwrap()
+            .get(&refs[0].interaction_id)
+            .cloned()
+            .unwrap();
+        let floe_conversation::ReviewedTarget::InlineObserve(inline) = &stored.target else {
+            panic!("captured snapshot must bind inline observe");
+        };
+        assert_eq!(inline.connection_id, "attention.macos.local");
+        assert_eq!(inline.device_id.as_deref(), Some("device"));
+        assert_eq!(inline.members.len(), 1);
+        assert_eq!(inline.members[0].member_id, "attention.macos");
+        assert_eq!(inline.members[0].resource, "attention.coarse");
+        assert_eq!(
+            inline.members[0].expected_grant,
+            floe_conversation::ExpectedGrantState::Absent
+        );
+        assert_eq!(
+            inline.reviewed_native_subject.as_deref(),
+            Some("b".repeat(64).as_str())
+        );
+
+        // A capture failure still publishes, but navigates: no inline
+        // mutation without a bound snapshot.
+        let failing = ScriptedSnapshots {
+            snapshot: Mutex::new(Err(AgentFailure::CapabilityUnavailable)),
+        };
+        let declined = publish_requirements(
+            &runs,
+            &interactions,
+            &failing,
+            &person_id.to_string(),
+            session_id,
+            run_id,
+            floe_conversation::InteractionOrigin::Tool {
+                call_id: call.call_id,
+            },
+            person_id,
+            "device",
+            &blockers,
+            &cancellation,
+            1_000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(declined.len(), 1);
+        assert_ne!(declined[0].interaction_id, refs[0].interaction_id);
+        let navigated = interactions
+            .records
+            .lock()
+            .unwrap()
+            .get(&declined[0].interaction_id)
+            .cloned()
+            .unwrap();
+        assert!(matches!(
+            navigated.target,
+            floe_conversation::ReviewedTarget::NavigationOnly(_)
+        ));
     }
 
     #[test]
@@ -835,10 +1036,12 @@ mod tests {
         let scripted = ScriptedOutcome {
             outcome: Mutex::new(Some(SourceReadOutcome::NeedsUserAction(blockers.clone()))),
         };
+        let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
         let port = PublishingToolPort::new(
             &scripted,
             &runs,
             &interactions,
+            &snapshots,
             person_id,
             session_id,
             "device".into(),
@@ -864,8 +1067,7 @@ mod tests {
 
         // Replaying the same blocked call replays the same interaction: no
         // duplicate card, same id and message.
-        *scripted.outcome.lock().unwrap() =
-            Some(SourceReadOutcome::NeedsUserAction(blockers));
+        *scripted.outcome.lock().unwrap() = Some(SourceReadOutcome::NeedsUserAction(blockers));
         let second = ToolPort::invoke(&port, call.clone(), &scope).await.unwrap();
         let again = match &second.artifacts[0].parts[0] {
             floe_agent_contract::ArtifactPart::Data { data, .. } => {
@@ -909,16 +1111,22 @@ mod tests {
             }],
         };
         let interactions = FakeInteractions::default();
+        let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
+        let cancellation = floe_execution::Cancellation::default();
         let first = publish_requirements(
             &runs,
             &interactions,
+            &snapshots,
             &person_id.to_string(),
             session_id,
             run_id,
-            floe_conversation::InteractionOrigin::Tool { call_id: call.call_id },
+            floe_conversation::InteractionOrigin::Tool {
+                call_id: call.call_id,
+            },
+            person_id,
             "device",
-            &["mail.communication.read".to_owned()],
             &SourceAccessBlockers::try_new(vec![blocker_for("a-connection")]).unwrap(),
+            &cancellation,
             1_000,
         )
         .await
@@ -926,13 +1134,17 @@ mod tests {
         let second = publish_requirements(
             &runs,
             &interactions,
+            &snapshots,
             &person_id.to_string(),
             session_id,
             run_id,
-            floe_conversation::InteractionOrigin::Tool { call_id: call.call_id },
+            floe_conversation::InteractionOrigin::Tool {
+                call_id: call.call_id,
+            },
+            person_id,
             "device",
-            &["mail.communication.read".to_owned()],
             &SourceAccessBlockers::try_new(vec![blocker_for("b-connection")]).unwrap(),
+            &cancellation,
             1_000,
         )
         .await
@@ -965,10 +1177,12 @@ mod tests {
         let scripted = ScriptedOutcome {
             outcome: Mutex::new(Some(SourceReadOutcome::NeedsUserAction(blockers.clone()))),
         };
+        let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
         let port = PublishingToolPort::new(
             &scripted,
             &runs,
             &interactions,
+            &snapshots,
             person_id,
             session_id,
             "device".into(),
@@ -982,8 +1196,7 @@ mod tests {
         assert!(interactions.records.lock().unwrap().is_empty());
 
         // A scope without a run cannot name an origin at all.
-        *scripted.outcome.lock().unwrap() =
-            Some(SourceReadOutcome::NeedsUserAction(blockers));
+        *scripted.outcome.lock().unwrap() = Some(SourceReadOutcome::NeedsUserAction(blockers));
         let ledger = floe_execution::budget::BudgetLedger::new(
             floe_execution::budget::BudgetConfig::new(100, 100),
             Default::default(),

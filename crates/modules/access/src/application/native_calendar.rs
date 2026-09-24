@@ -69,6 +69,15 @@ pub fn native_calendar_connector(provider: CalendarProvider) -> Option<&'static 
     }
 }
 
+/// The native provider a connector identity grants bind, when it is native.
+pub fn native_calendar_provider(connector_id: &str) -> Option<CalendarProvider> {
+    match connector_id {
+        "calendar.event_kit" => Some(CalendarProvider::EventKit),
+        "calendar.android" => Some(CalendarProvider::Android),
+        _ => None,
+    }
+}
+
 fn binds(connection: NativeCalendarConnection<'_>, review: NativeCalendarReview<'_>) -> bool {
     !connection.disconnected
         && connection.device_id == review.device_id

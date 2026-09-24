@@ -1,6 +1,6 @@
 use floe_agent_contract::{
-    AgentMessage, BatchCursor, DependencyCoverage, EngineStep, JournalEvent,
-    ModelConversation, ReplayReceipt, ValidatedModelBatch,
+    AgentMessage, BatchCursor, DependencyCoverage, EngineStep, JournalEvent, ModelConversation,
+    ReplayReceipt, ValidatedModelBatch,
 };
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
@@ -19,8 +19,8 @@ pub use interaction::{
     InteractionRequirementKind, InteractionResolution, InteractionState,
     MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
     MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
-    MAX_TARGET_CAPABILITIES, MAX_TARGET_RESOURCES, NavigationDestination, NavigationOnlyTarget,
-    PublishAdmission, ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
+    MAX_TARGET_BUNDLE_MEMBERS, NavigationDestination, NavigationOnlyTarget, PublishAdmission,
+    ReviewedBundleMember, ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
     canonical_target_digest, decision_operation_id, interaction_publication_id,
     next_state_after_decision, state_after_resolution,
 };

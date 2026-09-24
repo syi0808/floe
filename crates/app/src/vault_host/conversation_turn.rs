@@ -263,10 +263,22 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             personal_grants::native_driver(local_context),
             remote_reader.as_ref(),
         )?;
+        let calendar_subject =
+            crate::vault_host::calendar_access::DeviceCalendarSubject { local_context };
+        let personal_subject = personal_grants::native_driver(local_context);
+        let review_snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
+            core: inputs.core,
+            vault,
+            calendar_subject: &calendar_subject,
+            personal_subject: &personal_subject,
+            capture_deadline: deadline
+                .min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
+        };
         let publishing_tools = interaction_publication::PublishingToolPort::new(
             &tool_service,
             inputs.conversation_repository.as_ref(),
             inputs.conversation_repository.as_ref(),
+            &review_snapshots,
             person_id,
             session_id,
             request.device_id.clone(),
@@ -1284,6 +1296,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let task_id = Uuid::new_v4();
         let task = experts
@@ -1664,6 +1677,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -1755,6 +1769,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1801,6 +1816,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2010,15 +2026,30 @@ mod tests {
             "test-device".to_owned(),
             floe_vault::VaultGrantRecords::new(vault.as_ref()),
             personal_grants::native_driver(&local_context),
-            None::<
-                &remote_views::RemoteViewReader<'_, AttentionTestKeys>,
-            >,
+            None::<&remote_views::RemoteViewReader<'_, AttentionTestKeys>>,
         )
         .unwrap();
+        let core = FloeCore::open(":memory:").await.unwrap();
+        let calendar_subject =
+            crate::vault_host::review_snapshot::fixtures::FixtureCalendarSubject {
+                fingerprint: "a".repeat(64),
+            };
+        let personal_subject =
+            crate::vault_host::review_snapshot::fixtures::FixturePersonalInspector {
+                fingerprint: "b".repeat(64),
+            };
+        let snapshots = crate::vault_host::review_snapshot::HostReviewSnapshots {
+            core: &core,
+            vault: vault.as_ref(),
+            calendar_subject: &calendar_subject,
+            personal_subject: &personal_subject,
+            capture_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        };
         let port = PublishingToolPort::new(
             &tools,
             repository.as_ref(),
             repository.as_ref(),
+            &snapshots,
             person_id,
             started.session_id,
             "test-device".into(),
@@ -2507,6 +2538,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -2746,6 +2778,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -2923,6 +2956,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -3199,6 +3233,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -3264,6 +3299,7 @@ mod tests {
             runs: None,
             interactions: None,
             device_id: None,
+            snapshots: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

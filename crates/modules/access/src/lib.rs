@@ -43,7 +43,8 @@ pub use application::{
 pub use application::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
     admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
-    native_calendar_connector, native_calendar_source_current, reviewed_native_subject,
+    native_calendar_connector, native_calendar_provider, native_calendar_source_current,
+    reviewed_native_subject,
 };
 pub use application::{
     REMOTE_CALENDAR_RECIPIENT, RemoteCalendarConnection, RemoteCalendarGrantPreview,

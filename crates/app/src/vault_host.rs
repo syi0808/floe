@@ -50,6 +50,7 @@ mod personal_grants;
 mod product_actions;
 mod remote_authority;
 mod remote_views;
+mod review_snapshot;
 
 use floe_vault::{VaultConversationRepository, VaultTaskRepository};
 
