@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, DelegationRequest, MAX_AGENT_MESSAGES, MAX_OUTPUT_BYTES, TaskReceipt, ToolCall,
-    ToolResult,
+    AgentFailure, DelegationRequest, TaskReceipt, ToolCall, ToolResult, MAX_AGENT_MESSAGES,
+    MAX_OUTPUT_BYTES,
 };
 
 /// Hard cap on the encoded typed conversation. Individual entries are already
@@ -66,22 +66,10 @@ impl ModelConversation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelConversationEntry {
-    User {
-        message_id: Uuid,
-        text: String,
-    },
-    Preamble {
-        message_id: Uuid,
-        text: String,
-    },
-    Assistant {
-        message_id: Uuid,
-        text: String,
-    },
-    ToolExchange {
-        call: ToolCall,
-        result: ToolResult,
-    },
+    User { message_id: Uuid, text: String },
+    Preamble { message_id: Uuid, text: String },
+    Assistant { message_id: Uuid, text: String },
+    ToolExchange { call: ToolCall, result: ToolResult },
     DelegationExchange {
         request: DelegationRequest,
         receipt: TaskReceipt,
