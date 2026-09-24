@@ -35,18 +35,18 @@ void main() {
         deadline: Duration.zero,
       );
       await expectLater(
-        gateway.perform({'kind': 'calendar_grant_review'}, (_) => true),
+        gateway.perform({'kind': 'connection_observe'}, (_) => true),
         throwsA(isA<RemoteOperationPending>()),
       );
       done = true;
       await expectLater(
-        gateway.perform({'kind': 'calendar_grant_review'}, (_) => true),
+        gateway.perform({'kind': 'connection_observe'}, (_) => true),
         throwsA(isA<RemoteOperationPending>()),
       );
       expect(requests, hasLength(1));
       expect(
         (requests.single['operation'] as Map)['kind'],
-        'calendar_grant_review',
+        'connection_observe',
       );
     },
   );
@@ -103,7 +103,7 @@ void main() {
         pollInterval: Duration.zero,
       );
       await expectLater(
-        gateway.perform({'kind': 'calendar_grant_review'}, (_) => true),
+        gateway.perform({'kind': 'connection_observe'}, (_) => true),
         throwsA(
           isA<RemoteOperationPending>().having(
             (pending) => pending.phase,
@@ -113,7 +113,7 @@ void main() {
         ),
       );
       expect(
-        await gateway.perform({'kind': 'calendar_grant_review'}, (_) => true),
+        await gateway.perform({'kind': 'connection_observe'}, (_) => true),
         true,
       );
       expect(
@@ -142,7 +142,7 @@ void main() {
             'category': 'security',
             'reason_code': 'source_changed',
             'kind': 'policy_denied',
-            'stage': 'remote_view_grant_review',
+            'stage': 'remote_connection_observe_enable',
             'safe_actions': ['review_source'],
             'affected_refs': ['source:exact'],
             'incident_id': 'incident',
@@ -156,7 +156,7 @@ void main() {
         };
       }, resultFields: {});
       await expectLater(
-        gateway.perform({'kind': 'view_grant_review'}, (_) => true),
+        gateway.perform({'kind': 'connection_observe'}, (_) => true),
         throwsA(
           isA<AgentVaultException>()
               .having((failure) => failure.requestId, 'correlation', isNotNull)

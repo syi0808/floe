@@ -241,19 +241,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if !valid_view_id(view_id) || !grant_id.is_valid() || source.person_id() != self.person_id {
             return Err(AgentFailure::InvalidInput);
         }
-        let policy = expected_policy.unwrap_or_default();
-        if !policy.is_valid() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mapping = RemoteViewGrantMapping {
-            grant_id,
-            view_id: view_id.to_owned(),
-            source: source.clone(),
-            scope: scope.clone(),
-            policy_incarnation: policy.incarnation(),
-            policy_epoch: policy.epoch().get(),
-        };
-        let payload = serde_json::to_string(&mapping).map_err(|_| AgentFailure::InvalidInput)?;
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -263,7 +250,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.ensure_remote_view_schema(&transaction).await?;
             let existing = transaction
                 .query(
-                    "SELECT policy_incarnation, policy_epoch FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
+                    "SELECT policy_incarnation, policy_epoch, payload FROM remote_view_grant_mappings WHERE grant_id = ? AND person_id = ?",
                     (grant_id.as_uuid().to_string(), self.person_id.to_string()),
                 )
                 .await
@@ -271,16 +258,53 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .next()
                 .await
                 .map_err(super::storage)?;
-            if let Some(row) = existing {
-                if expected.is_none()
-                    || row.get::<String>(0).map_err(super::storage)? != policy.incarnation().to_string()
-                    || row.get::<i64>(1).map_err(super::storage)? != policy.epoch().get() as i64
+            let policy = if let Some(row) = existing {
+                if expected.is_none() {
+                    return Err(AgentFailure::Conflict);
+                }
+                let encoded = row.get::<String>(2).map_err(super::storage)?;
+                let previous: RemoteViewGrantMapping =
+                    serde_json::from_str(&encoded).map_err(|_| AgentFailure::VaultUnavailable)?;
+                let current = ConsumerPolicyAuthority::from_parts(
+                    previous.policy_incarnation,
+                    std::num::NonZeroU64::new(previous.policy_epoch)
+                        .ok_or(AgentFailure::VaultUnavailable)?,
+                )
+                .ok_or(AgentFailure::VaultUnavailable)?;
+                if row.get::<String>(0).map_err(super::storage)?
+                    != current.incarnation().to_string()
+                    || row.get::<i64>(1).map_err(super::storage)?
+                        != current.epoch().get() as i64
+                    || previous.grant_id != grant_id
+                    || previous.view_id != view_id
+                    || previous.source.person_id() != self.person_id
+                    || expected_policy.is_some_and(|expected| expected != current)
                 {
                     return Err(AgentFailure::Conflict);
                 }
+                if previous.scope == scope && previous.source == source {
+                    current
+                } else {
+                    current.advance().ok_or(AgentFailure::Conflict)?
+                }
             } else if expected.is_some() {
                 return Err(AgentFailure::NotFound);
-            }
+            } else {
+                if expected_policy.is_some() {
+                    return Err(AgentFailure::Conflict);
+                }
+                ConsumerPolicyAuthority::new()
+            };
+            let mapping = RemoteViewGrantMapping {
+                grant_id,
+                view_id: view_id.to_owned(),
+                source: source.clone(),
+                scope: scope.clone(),
+                policy_incarnation: policy.incarnation(),
+                policy_epoch: policy.epoch().get(),
+            };
+            let payload =
+                serde_json::to_string(&mapping).map_err(|_| AgentFailure::InvalidInput)?;
             let grant = match expected {
                 Some(authority) => {
                     self.mutate_data_access_grant_in_transaction(
@@ -555,5 +579,83 @@ mod tests {
                 .await,
             Err(AgentFailure::PolicyDenied)
         ));
+    }
+
+    #[tokio::test]
+    async fn reactivation_retains_policy_and_consumer_change_advances_it() {
+        let (_root, vault, person) = vault().await;
+        let authority = SourceAuthority::new();
+        let source = source(person, authority);
+        let active = vault
+            .review_and_activate_remote_view_grant(
+                "mail.communication",
+                GrantId::new(),
+                None,
+                source.clone(),
+                scope(),
+                None,
+            )
+            .await
+            .unwrap();
+        let initial_policy = vault
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .await
+            .unwrap()
+            .consumer_policy;
+        let paused = vault
+            .pause_remote_view_grant(active.id(), active.authority())
+            .await
+            .unwrap();
+        let reactivated = vault
+            .review_and_activate_remote_view_grant(
+                "mail.communication",
+                paused.id(),
+                Some(paused.authority()),
+                source.clone(),
+                scope(),
+                None,
+            )
+            .await
+            .unwrap();
+        let unchanged_policy = vault
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .await
+            .unwrap()
+            .consumer_policy;
+        assert_eq!(unchanged_policy, initial_policy);
+
+        let changed_scope = GrantScope::try_new(
+            vec![ResourceHandle::try_new("mail.communication:mail.connection").unwrap()],
+            vec![GrantDataCategory::Content],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![
+                GrantConsumer::builtin("assistant").unwrap(),
+                GrantConsumer::builtin("commitments.expert").unwrap(),
+            ],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        vault
+            .review_and_activate_remote_view_grant(
+                "mail.communication",
+                reactivated.id(),
+                Some(reactivated.authority()),
+                source,
+                changed_scope,
+                None,
+            )
+            .await
+            .unwrap();
+        let changed_policy = vault
+            .remote_view_grant_binding("mail.communication", "gmail", "mail.connection", authority)
+            .await
+            .unwrap()
+            .consumer_policy;
+        assert_eq!(changed_policy.incarnation(), initial_policy.incarnation());
+        assert_eq!(
+            changed_policy.epoch().get(),
+            initial_policy.epoch().get() + 1
+        );
     }
 }

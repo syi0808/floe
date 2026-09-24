@@ -296,7 +296,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
     if (connectionId == null || connectionRevision == null) {
       throw const ServerConnectionException('connection_changed');
     }
-    await _setConnectionObserve(false);
+    await _setConnectionObserve(false, disconnecting: true);
     await widget.client.disconnectConnector(
       connection: widget.connection,
       connectorId: widget.connector.id,
@@ -331,6 +331,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
   Future<void> _setConnectionObserve(
     bool enabled, {
     String? connectionId,
+    bool disconnecting = false,
   }) async {
     final gateway = widget.remoteAccessGateway;
     connectionId ??= widget.connector.connectionId;
@@ -340,6 +341,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
       connectionId: connectionId,
       resource: _observeResource,
       enabled: enabled,
+      disconnecting: disconnecting,
     );
   }
 

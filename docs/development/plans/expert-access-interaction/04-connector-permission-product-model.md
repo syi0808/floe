@@ -1,6 +1,6 @@
 # Checkpoint 04 — Connector permission product model
 
-- **Status:** active execution plan
+- **Status:** complete
 - **Baseline:** main at 833b9f191fa6d1c14a11efa07f6f382e48627d9d
 - **Precondition:** Checkpoint 03 complete. Registry is source-independent; Calendar Observe is Access-owned; native and remote Calendar CAS and policy reauthorization are converged.
 - **Goal:** make a successful first-party source connection the product ceremony that enables that source for Floe by default, expose one connection-level **Use with Floe** control, and remove duplicate/protocol-shaped permission editors without collapsing Observe, Act, or external-processing authority.
@@ -17,6 +17,15 @@ This file is the authoritative Checkpoint 04 index. Execute these child plans in
 6. [04-F — deletion, verification, and documentation convergence](04-f-verification-doc-convergence.md)
 
 Do not start 04-B until 04-A fixes the durable product decision and canonical first-party consumer policy. Do not default-enable remote source grants until 04-D has a correct multi-source read story for overlapping views. Do not implement Checkpoint 05 chat interactions in this checkpoint.
+
+Completion commits:
+
+- 04-A: `543d0ec8def8c85affe098efacdb8430a0856a8a`
+- 04-B: `8ab92b9152145727afce4beb9be9267c318fd578`
+- 04-C: `755081d9fd6d28b66a83ec4022c20e7f3b4c309e`
+- 04-D: `64f5adc2cd361f49880ec1c70331d601ef954ac9`
+- 04-E: `d4ac4b78d3bc7bcbc584d2bc62a97268f96f0fef`
+- 04-F: this completion commit; Checkpoint 05 is next and has not started.
 
 ---
 
@@ -444,28 +453,28 @@ Use isolated development profiles for connection/grant persistence acceptance.
 
 ## 12. Definition of done
 
-- [ ] explicit new/reconnect connection completion enables supported first-party Observe by default.
-- [ ] merely inspecting an old connected profile never creates a grant.
-- [ ] every migrated connection detail exposes one Use with Floe control.
-- [ ] Use with Floe is derived from current owner state, not persisted separately.
-- [ ] Off pauses Observe while preserving connection/resources/credentials/system permission.
-- [ ] On performs fresh source/resource validation and CAS-bound review.
-- [ ] resource selection and active Observe converge in one product interaction.
-- [ ] disconnect invalidates Observe before source credential removal.
-- [ ] Flutter sends no first-party consumer list or GrantScope.
-- [ ] App is the single product-composition source for first-party consumer policy.
-- [ ] actual production consumer identities are covered; third-party consumers are excluded.
-- [ ] remote grant consumer picker and raw grant ceremony are gone from connection UI.
-- [ ] Flutter _remoteViewsFor product policy is gone.
-- [ ] overlapping remote sources can coexist and be read without provenance loss.
-- [ ] Settings no longer edits migrated source Observe permissions.
-- [ ] Settings external-model toggle is gone.
-- [ ] exact-recipient processing enforcement remains.
-- [ ] ActionAuthority is unchanged by Observe operations.
-- [ ] old connected state is not reinterpreted as authorization.
-- [ ] legacy Calendar-Expert/source Registry surfaces remain deleted.
-- [ ] full Rust/architecture/FFI/Flutter/macOS gates pass.
-- [ ] Go gates pass for server changes.
-- [ ] durable ADR/product/current architecture docs match final behavior.
+- [x] explicit new/reconnect connection completion enables supported first-party Observe by default.
+- [x] merely inspecting an old connected profile never creates a grant.
+- [x] every migrated connection detail exposes one Use with Floe control.
+- [x] Use with Floe is derived from current owner state, not persisted separately.
+- [x] Off pauses Observe while preserving connection/resources/credentials/system permission.
+- [x] On performs fresh source/resource validation and CAS-bound review.
+- [x] resource selection and active Observe converge in one product interaction.
+- [x] disconnect invalidates Observe before source credential removal.
+- [x] Flutter sends no first-party consumer list or GrantScope.
+- [x] App is the single product-composition source for first-party consumer policy.
+- [x] actual production consumer identities are covered; third-party consumers are excluded.
+- [x] remote grant consumer picker and raw grant ceremony are gone from connection UI.
+- [x] Flutter _remoteViewsFor product policy is gone.
+- [x] overlapping remote sources can coexist and be read without provenance loss.
+- [x] Settings no longer edits migrated source Observe permissions.
+- [x] Settings external-model toggle is gone.
+- [x] exact-recipient processing enforcement remains.
+- [x] ActionAuthority is unchanged by Observe operations.
+- [x] old connected state is not reinterpreted as authorization.
+- [x] legacy Calendar-Expert/source Registry surfaces remain deleted.
+- [x] full Rust/architecture/FFI/Flutter/macOS gates pass.
+- [x] Go gates pass for server changes.
+- [x] durable ADR/product/current architecture docs match final behavior.
 
 Checkpoint 05 may start only after all items above are true.

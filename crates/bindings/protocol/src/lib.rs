@@ -33,11 +33,10 @@ pub use dto::{
     PersonalCompletionDto, PersonalMemoryKindDto, PriorityDto, RegistryConfigurationDto,
     RegistryConfigurationTargetDto, RegistryOverviewDto, RemoteAccessOperationDto,
     RemoteAccessRequestDto, RemoteAccessResultDto, RemoteAuthorityEnrollmentStatusDto,
-    RemoteCalendarGrantOverviewDto, RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto,
-    RemotePairingChallengeDto, RemotePairingOperationDto, RemotePairingRequestDto,
-    RemotePairingResultDto, RemoteProducerIdentityDto, RemoteViewGrantOverviewDto,
-    RemoteViewGrantPreviewDto, ResponseEnvelopeDto, ResponseOutcomeDto, SourceRefDto, TaskDto,
-    TimelineItemDto, VaultLifecycleResultDto,
+    RemoteOwnerPublicKeyDto, RemotePairingChallengeDto, RemotePairingOperationDto,
+    RemotePairingRequestDto, RemotePairingResultDto, RemoteProducerIdentityDto,
+    ResponseEnvelopeDto, ResponseOutcomeDto, SourceRefDto, TaskDto, TimelineItemDto,
+    VaultLifecycleResultDto,
 };
 
 /// The shared identity values this wire carries.

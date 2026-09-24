@@ -119,6 +119,7 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
             connection_id: Uuid::new_v4().to_string(),
             resource: None,
             enabled: None,
+            disconnecting: false,
         },
     ];
     for saved in [
@@ -146,7 +147,10 @@ fn all_remote_access_operations_reload_and_reject_foreign_or_missing_saved_ident
             );
             if result.stage == "remote_connection_observe_inspect" {
                 assert_eq!(result.failure, None);
-                assert_eq!(result.connection_observe_status.as_deref(), Some("needs_review"));
+                assert_eq!(
+                    result.connection_observe_status.as_deref(),
+                    Some("needs_review")
+                );
             } else {
                 assert_eq!(
                     result.failure,

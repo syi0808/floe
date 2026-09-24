@@ -13,6 +13,7 @@ These are durable architectural safety properties, not a progress checklist.
 - Pairing setup accepts only a bounded loopback endpoint and pairing evidence. Person/device come from AppHost's verified `CallerContext`, never a product route bundle; Connections/key-holder validation binds the exact pending pairing ID, signed challenge and owner issuer. Remote authority and Calendar/View grant services prepare transports from the same current store through provider-owned exact person/device admission. Access still validates producer/source/revision/provider/recipient/grant evidence; model consent and source catalogs are not pairing/grant request fields.
 - Revocation prevents later admission or release. It cannot retroactively recall data already transmitted or a provider effect already accepted.
 - Source revocation, pause and drift affect Access authority and later dependency admission only. They never mutate Expert Registry state; a Registry revision change is never required to block, and never sufficient to admit, a source read.
+- Connection-level **Use with Floe** is a read-only projection plus explicit App intent, never persisted authorization state. Explicit connection completion may review the App-derived first-party Observe bundle; startup inspection may not. Off pauses Observe, disconnect revokes Observe before source deletion, and neither operation changes Act or model-recipient authority.
 
 ## Provenance and coverage travel with evidence
 
@@ -26,6 +27,8 @@ Source-backed model/tool inputs retain enough identity to determine:
 - exact processing recipient where required.
 
 A broader follow-up request cannot silently reuse evidence whose coverage is too narrow. Unknown or unavailable evidence is not represented as an empty successful observation.
+
+When one logical view reads multiple connected sources, each source retains its own grant, grant authority, consumer-policy authority, source authority and `ContextDependency`. Context may merge bounded payloads, but it cannot manufacture an aggregate grant or dependency or drop a contributing dependency from model coverage.
 
 ## Validated pending work is durable work
 

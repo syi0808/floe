@@ -2,7 +2,6 @@ use super::AgentVaultFailureDto;
 use super::connections::{
     validate_envelope, validate_identifier, validate_producer, validate_text, validate_uuid,
 };
-use floe_context_contract::{ConsumerPolicyAuthority, GrantAuthority, GrantId, SourceAuthority};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -29,6 +28,8 @@ pub enum RemoteAccessOperationDto {
         connection_id: String,
         resource: Option<String>,
         enabled: Option<bool>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        disconnecting: bool,
     },
     ReadResult {
         operation_id: Uuid,
@@ -98,85 +99,6 @@ pub struct RemoteAuthorityEnrollmentStatusDto {
     pub local_confirmed: bool,
     pub admin_approved: bool,
     pub active: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteCalendarGrantPreviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub provider_identity: String,
-    pub execution_owner: String,
-    pub producer: RemoteProducerIdentityDto,
-    pub consumers: Vec<String>,
-    pub purpose: String,
-    pub recipient: String,
-    pub grant_id: Option<GrantId>,
-    pub grant_authority: Option<GrantAuthority>,
-    pub consumer_policy: Option<ConsumerPolicyAuthority>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteCalendarGrantOverviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub grant_id: GrantId,
-    pub grant_authority: GrantAuthority,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub execution_owner: String,
-    pub state: String,
-    pub review_required: bool,
-    pub consumers: Vec<String>,
-    pub purpose: String,
-    pub recipient: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteViewGrantPreviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub view_id: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub connection_revision: u64,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub provider_identity: String,
-    pub execution_owner: String,
-    pub producer: RemoteProducerIdentityDto,
-    pub consumer: String,
-    pub purpose: String,
-    pub recipient: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteViewGrantOverviewDto {
-    pub schema_version: u32,
-    pub person_id: String,
-    pub grant_id: GrantId,
-    pub grant_authority: GrantAuthority,
-    pub view_id: String,
-    pub connector_id: String,
-    pub connection_id: String,
-    pub connection_revision: Option<u64>,
-    pub resource: String,
-    pub source_authority: SourceAuthority,
-    pub execution_owner: String,
-    pub state: String,
-    pub review_required: bool,
-    pub consumer: String,
-    pub purpose: String,
-    pub recipient: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

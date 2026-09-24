@@ -196,16 +196,13 @@ Settings → Permissions
   recipient. Exact-recipient processing authority remains separate and fail-closed.
 - Observe permission never implies Act permission, and preview never implies either permission.
 
-## Migration
+## Implemented shape
 
-1. Extend the pairing contract to bind producer and issuer identities to the approved attempt.
-2. Make pairing completion activate the issuer durably before returning an accepted connection.
-3. Move existing Calendar access management from Data & privacy to the macOS Calendar detail.
-4. Present EventKit state, selected calendars and consumer grants as separate layers on that screen.
-5. Add the same capability and grant-management pattern to other connection detail screens.
-6. Move Calendar and remote-view grant creation out of Remote server settings.
-7. Replace the enrollment section with pairing health and optional security details.
-8. Add the cross-connection permissions overview without scope-expansion controls.
+- Pairing binds producer and issuer identities but creates no connector grant.
+- Connection details own one **Use with Floe** control; raw grant preview, consumer selection and Settings source editors are removed.
+- App derives the exact first-party consumer set, Access owns its grants, and Context keeps every contributing source dependency through bounded multi-source merge.
+- Data & privacy explains the boundaries and points to Connections; it is not a second grant editor.
+- The generic external-model toggle is removed. Exact-recipient enforcement remains fail-closed until a contextual approval path exists.
 
 Existing local development state may be reset. No compatibility flow is required solely to preserve
 disposable pairings or grants. Migration must not reinterpret an old pairing as proof that a particular
@@ -248,7 +245,7 @@ issuer fingerprint was approved; reset or explicit repair is preferred.
 - Changing either pinned identity blocks protected access and requires explicit repair or re-pairing.
 - Permission creation and scope expansion occur only within the owning connection's detail context.
 - Two accounts of the same connector display and enforce independent resources and consumers.
-- The global permissions screen can explain, navigate, pause and revoke, but cannot expand access.
+- Data & privacy explains the boundary and points to Connections without creating, pausing or expanding source grants.
 - macOS Calendar system access, selected source scope and consumer grants are distinguishable and
   manageable from the macOS Calendar connection detail.
 - Data & privacy no longer creates, enables or expands Calendar grants and links to the owning

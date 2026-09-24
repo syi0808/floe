@@ -186,11 +186,13 @@ fn access_with_host<Services: floe_app::HostServices + floe_app::RemoteAccessCom
             connection_id,
             resource,
             enabled,
+            disconnecting,
         } => floe_app::RemoteAccessCommand::ConnectionObserve {
             connector_id,
             connection_id,
             resource,
             enabled,
+            disconnecting,
         },
         RemoteAccessOperationDto::ReadResult { .. } => unreachable!(),
     };

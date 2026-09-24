@@ -144,6 +144,7 @@ pub enum RemoteAccessCommand {
         connection_id: String,
         resource: Option<String>,
         enabled: Option<bool>,
+        disconnecting: bool,
     },
 }
 

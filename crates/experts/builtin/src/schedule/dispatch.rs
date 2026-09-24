@@ -183,7 +183,7 @@ mod tests {
     };
     use floe_context_contract::{
         AttentionView, AuthorizedRead, CalendarContextItem, ConfirmedInteractionView,
-        ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope,
+        ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
         MemoryContextSnapshot, NativeContextView, PeopleView, SourceAccessRequirement,
         SourceAccessRequirementKind, WellbeingView, WorkContextView,
     };
@@ -196,12 +196,8 @@ mod tests {
     struct UnusedRead;
 
     impl floe_context_contract::HeldGrant for UnusedRead {
-        fn scope(&self) -> &GrantScope {
-            panic!("unused source read")
-        }
-
-        fn dependency(&self) -> &ContextDependency {
-            panic!("unused source read")
+        fn bindings(&self) -> &[floe_context_contract::AuthorizedSourceBinding] {
+            &[]
         }
     }
 

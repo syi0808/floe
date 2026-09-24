@@ -14,6 +14,7 @@ abstract interface class RemoteAccessGateway {
     required String connectionId,
     String? resource,
     bool? enabled,
+    bool disconnecting = false,
   });
 }
 
@@ -66,11 +67,13 @@ final class NativeRemoteAccessGateway implements RemoteAccessGateway {
     required String connectionId,
     String? resource,
     bool? enabled,
+    bool disconnecting = false,
   }) => _operations.perform({
     'kind': 'connection_observe',
     'connector_id': connectorId,
     'connection_id': connectionId,
     'resource': resource,
     'enabled': enabled,
+    'disconnecting': disconnecting,
   }, (result) => result['connection_observe_status']! as String);
 }

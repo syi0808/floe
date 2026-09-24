@@ -1980,6 +1980,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     connection_id,
                     resource,
                     enabled,
+                    disconnecting,
                 } => {
                     let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
                     let vault = vault.vault.as_ref();
@@ -2006,7 +2007,11 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                     })
                                 }) || expected_views == ["calendar.timeline"])
                             {
-                                if expected_views == ["calendar.timeline"] {
+                                if *disconnecting {
+                                    vault
+                                        .revoke_data_access_grant(grant.id(), grant.authority())
+                                        .await?;
+                                } else if expected_views == ["calendar.timeline"] {
                                     vault
                                         .pause_remote_calendar_grant(grant.id(), grant.authority())
                                         .await?;
@@ -2018,6 +2023,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                             }
                         }
                     } else if *enabled == Some(true) {
+                        let mut current_grants = Vec::with_capacity(policies.len());
                         if expected_views == ["calendar.timeline"] {
                             let resource = resource.as_deref().ok_or(AgentFailure::InvalidInput)?;
                             let transport = RemoteAuthorityEndpoint::from_current_connection(
@@ -2051,7 +2057,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 &window,
                             )
                             .await?;
-                            floe_access::review_and_activate_remote_calendar_grant(
+                            let grant = floe_access::review_and_activate_remote_calendar_grant(
                                 vault,
                                 &transport,
                                 request,
@@ -2067,6 +2073,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                 &window,
                             )
                             .await?;
+                            current_grants.push(grant.id());
                         } else {
                             let source_client = floe_provider_adapters::sources::ServerSourceClient::from_current_connection(
                                 connections, &person_text, caller.device_id(),
@@ -2103,7 +2110,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                     vault, &transport, request, true, true, &window,
                                 )
                                 .await?;
-                                floe_access::review_and_activate_remote_view_grant(
+                                let grant = floe_access::review_and_activate_remote_view_grant(
                                     vault,
                                     &transport,
                                     request,
@@ -2119,6 +2126,29 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                                     &window,
                                 )
                                 .await?;
+                                current_grants.push(grant.id());
+                            }
+                        }
+                        for grant in vault.list_data_access_grants(128).await? {
+                            let product_grant = expected_views == ["calendar.timeline"]
+                                || grant.scope().resources().iter().any(|value| {
+                                    expected_views.iter().any(|view| {
+                                        value.as_str()
+                                            == floe_context::remote_view_resource(
+                                                view,
+                                                connection_id,
+                                            )
+                                    })
+                                });
+                            if grant.source().connector().as_str() == connector_id
+                                && grant.source().connection_id().as_str() == connection_id
+                                && product_grant
+                                && grant.state() != floe_access::GrantState::Revoked
+                                && !current_grants.contains(&grant.id())
+                            {
+                                vault
+                                    .revoke_data_access_grant(grant.id(), grant.authority())
+                                    .await?;
                             }
                         }
                     }
@@ -2128,6 +2158,17 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         .filter(|grant| {
                             grant.source().connector().as_str() == connector_id
                                 && grant.source().connection_id().as_str() == connection_id
+                                && grant.state() != floe_access::GrantState::Revoked
+                                && (expected_views == ["calendar.timeline"]
+                                    || grant.scope().resources().iter().any(|value| {
+                                        expected_views.iter().any(|view| {
+                                            value.as_str()
+                                                == floe_context::remote_view_resource(
+                                                    view,
+                                                    connection_id,
+                                                )
+                                        })
+                                    }))
                         })
                         .collect::<Vec<_>>();
                     let status = if relevant.len() != policies.len() {

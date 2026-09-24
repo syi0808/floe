@@ -1,8 +1,7 @@
 use floe_app::{
     AgentFailure, CalendarActionOperation, CalendarActionProposal, CalendarActionState,
     CalendarProposalInspection, CalendarSubjectPreview, ContactsAccessChange,
-    FeasibilityGrantQuery, GrantState, MemoryReviewResult, PairingIssuer, PersonId,
-    PersonalAccessChange, ProcessingRestriction, RemoteCalendarGrantPreview,
+    FeasibilityGrantQuery, MemoryReviewResult, PairingIssuer, PersonalAccessChange,
     RemoteEnrollmentStatus, RemoteOwnerPublicKey, RemoteProducerIdentity, VaultState,
 };
 use floe_protocol::wire::{WireResult, invalid};
@@ -12,129 +11,6 @@ use uuid::Uuid;
 
 fn parse_uuid(value: &str, field: &'static str) -> WireResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| invalid(field, "must be a UUID"))
-}
-
-pub(crate) fn remote_calendar_grant_overview(
-    grant: &floe_app::DataAccessGrant,
-) -> Result<RemoteCalendarGrantOverviewDto, AgentFailure> {
-    let resource = grant
-        .scope()
-        .resources()
-        .first()
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .as_str()
-        .to_owned();
-    let consumers = grant
-        .scope()
-        .consumers()
-        .iter()
-        .map(|consumer| consumer.identifier().to_owned())
-        .collect();
-    let recipient = match grant.scope().processing() {
-        ProcessingRestriction::ApprovedRecipient { recipient, .. } => recipient.clone(),
-        ProcessingRestriction::LocalOnly => "local_only".into(),
-    };
-    Ok(RemoteCalendarGrantOverviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: grant.source().person_id().to_string(),
-        grant_id: grant.id(),
-        grant_authority: grant.authority(),
-        connector_id: grant.source().connector().as_str().to_owned(),
-        connection_id: grant.source().connection_id().as_str().to_owned(),
-        resource,
-        source_authority: grant.source().source_authority(),
-        execution_owner: grant.source().execution_owner().as_str().to_owned(),
-        state: match grant.state() {
-            GrantState::Paused => "paused",
-            GrantState::Active => "active",
-            GrantState::Revoked => "revoked",
-        }
-        .into(),
-        review_required: grant.review_required(),
-        consumers,
-        purpose: "everyday_assistance".into(),
-        recipient,
-    })
-}
-
-pub(crate) fn remote_view_grant_overview(
-    grant: &floe_app::DataAccessGrant,
-    connection_revision: Option<u64>,
-) -> Result<RemoteViewGrantOverviewDto, AgentFailure> {
-    let resource = grant
-        .scope()
-        .resources()
-        .first()
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .as_str()
-        .to_owned();
-    let (view_id, _) = resource
-        .split_once(':')
-        .ok_or(AgentFailure::VaultUnavailable)?;
-    let consumer = grant
-        .scope()
-        .consumers()
-        .first()
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .identifier()
-        .to_owned();
-    let recipient = match grant.scope().processing() {
-        ProcessingRestriction::ApprovedRecipient { recipient, .. } => recipient.clone(),
-        ProcessingRestriction::LocalOnly => "local_only".into(),
-    };
-    Ok(RemoteViewGrantOverviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: grant.source().person_id().to_string(),
-        grant_id: grant.id(),
-        grant_authority: grant.authority(),
-        view_id: view_id.into(),
-        connector_id: grant.source().connector().as_str().into(),
-        connection_id: grant.source().connection_id().as_str().into(),
-        connection_revision,
-        resource,
-        source_authority: grant.source().source_authority(),
-        execution_owner: grant.source().execution_owner().as_str().into(),
-        state: match grant.state() {
-            GrantState::Paused => "paused",
-            GrantState::Active => "active",
-            GrantState::Revoked => "revoked",
-        }
-        .into(),
-        review_required: grant.review_required(),
-        consumer,
-        purpose: "everyday_assistance".into(),
-        recipient,
-    })
-}
-
-pub(crate) fn remote_view_grant_preview(
-    person_id: PersonId,
-    preview: &floe_app::RemoteViewGrantPreview,
-) -> RemoteViewGrantPreviewDto {
-    RemoteViewGrantPreviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: person_id.to_string(),
-        view_id: preview.reference.view_id.clone(),
-        connector_id: preview.reference.connector_id.clone(),
-        connection_id: preview.reference.connection_id.clone(),
-        connection_revision: preview.connection_revision,
-        resource: preview.reference.resource.clone(),
-        source_authority: preview.reference.source_authority,
-        provider_identity: preview.reference.provider_identity.clone(),
-        execution_owner: preview.reference.execution_owner.clone(),
-        producer: RemoteProducerIdentityDto {
-            schema_version: preview.producer.schema_version,
-            instance_id: preview.producer.instance_id.clone(),
-            execution_owner: preview.producer.execution_owner.clone(),
-            audience: preview.producer.audience.clone(),
-            key_id: preview.producer.key_id.clone(),
-            public_key: preview.producer.public_key.clone(),
-            fingerprint: preview.producer.fingerprint.clone(),
-        },
-        consumer: preview.consumers.first().cloned().unwrap_or_default(),
-        purpose: "everyday_assistance".into(),
-        recipient: preview.producer.audience.clone(),
-    }
 }
 
 fn calendar_action(action: floe_app::CalendarAction) -> AgentProposalActionDto {
@@ -217,14 +93,9 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
             | "remote_pairing_confirm"
             | "remote_pairing_status"
             | "remote_pairing_finalize"
-            | "remote_calendar_grant_preview"
-            | "remote_calendar_grant_review"
-            | "remote_calendar_grant_status"
-            | "remote_calendar_grant_pause"
-            | "remote_view_grant_preview"
-            | "remote_view_grant_review"
-            | "remote_view_grant_status"
-            | "remote_view_grant_pause"
+            | "remote_connection_observe_inspect"
+            | "remote_connection_observe_enable"
+            | "remote_connection_observe_disable"
     );
     let (domain, category, reason_code) = match failure {
         AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => (
@@ -740,29 +611,6 @@ pub(crate) fn memory_dto(
             })
             .collect::<Result<Vec<_>, _>>()?,
     })
-}
-
-pub(crate) fn remote_calendar_preview_dto(
-    person_id: PersonId,
-    preview: RemoteCalendarGrantPreview,
-) -> RemoteCalendarGrantPreviewDto {
-    RemoteCalendarGrantPreviewDto {
-        schema_version: PROTOCOL_VERSION,
-        person_id: person_id.to_string(),
-        connector_id: preview.connector_id,
-        connection_id: preview.connection_id,
-        resource: preview.resource,
-        source_authority: preview.source_authority,
-        provider_identity: preview.provider_identity,
-        execution_owner: preview.execution_owner,
-        producer: producer_identity_dto(&preview.producer),
-        consumers: preview.consumers,
-        purpose: "everyday_assistance".into(),
-        recipient: preview.recipient,
-        grant_id: preview.grant_id,
-        grant_authority: preview.grant_authority,
-        consumer_policy: preview.consumer_policy,
-    }
 }
 
 pub(crate) fn personal_access_dto(
