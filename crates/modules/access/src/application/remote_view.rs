@@ -51,7 +51,10 @@ pub struct RemoteViewSourceReference {
 pub struct RemoteViewApproval<'a> {
     pub producer_fingerprint: &'a str,
     pub source_authority: SourceAuthority,
-    pub connection_revision: u64,
+    /// The server revision the review observed, when the reviewer probed
+    /// for it. `None` leaves the revision unbound: the review still binds
+    /// producer, authority, provider, recipient, grant and policy.
+    pub connection_revision: Option<u64>,
     pub provider_identity: &'a str,
     pub recipient: &'a str,
 }
@@ -95,7 +98,9 @@ pub fn matches_review(
 ) -> Result<(), AgentFailure> {
     if producer.fingerprint != approval.producer_fingerprint
         || reference.source_authority != approval.source_authority
-        || connection_revision != approval.connection_revision
+        || approval
+            .connection_revision
+            .is_some_and(|revision| revision != connection_revision)
         || reference.provider_identity != approval.provider_identity
         || producer.audience != approval.recipient
     {

@@ -348,7 +348,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         activation.expected,
                         activation.source,
                         activation.scope,
-                        None,
+                        activation.expected_policy,
                     )
                     .await?,
                 );
@@ -779,6 +779,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bundle_activation_compares_reviewed_policy_atomically() {
+        let (_root, vault, person) = vault().await;
+        let authority = SourceAuthority::new();
+        let grant = vault
+            .review_and_activate_remote_view_grant(
+                "mail.communication",
+                GrantId::new(),
+                None,
+                source(person, authority),
+                scope(),
+                None,
+            )
+            .await
+            .unwrap();
+        let (_, policy) = vault
+            .remote_view_grant_policy("mail.communication", "gmail", "mail.connection", authority)
+            .await
+            .unwrap();
+
+        // A wrong reviewed policy fails the whole bundle: nothing commits.
+        let result = vault
+            .activate_remote_view_grants(vec![
+                floe_access::RemoteViewGrantActivation {
+                    view_id: "mail.communication".into(),
+                    grant_id: grant.id(),
+                    expected: Some(grant.authority()),
+                    expected_policy: Some(ConsumerPolicyAuthority::new()),
+                    source: source(person, authority),
+                    scope: scope(),
+                },
+                floe_access::RemoteViewGrantActivation {
+                    view_id: "life.logistics".into(),
+                    grant_id: GrantId::new(),
+                    expected: None,
+                    expected_policy: None,
+                    source: source(person, authority),
+                    scope: scope(),
+                },
+            ])
+            .await;
+        assert_eq!(result, Err(AgentFailure::Conflict));
+        let unchanged = vault.get_data_access_grant(grant.id()).await.unwrap();
+        assert_eq!(unchanged.authority(), grant.authority());
+        assert_eq!(vault.list_data_access_grants(128).await.unwrap().len(), 1);
+
+        // The reviewed policy commits through the same transaction,
+        // idempotently for an unchanged grant.
+        let grants = vault
+            .activate_remote_view_grants(vec![floe_access::RemoteViewGrantActivation {
+                view_id: "mail.communication".into(),
+                grant_id: grant.id(),
+                expected: Some(grant.authority()),
+                expected_policy: Some(policy),
+                source: source(person, authority),
+                scope: scope(),
+            }])
+            .await
+            .unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].authority(), grant.authority());
+    }
+
+    #[tokio::test]
     async fn multi_view_activation_rolls_back_as_one_local_set() {
         let (_root, vault, person) = vault().await;
         let source = source(person, SourceAuthority::new());
@@ -789,6 +852,7 @@ mod tests {
                     view_id: "mail.communication".into(),
                     grant_id: first_id,
                     expected: None,
+                    expected_policy: None,
                     source: source.clone(),
                     scope: scope(),
                 },
@@ -796,6 +860,7 @@ mod tests {
                     view_id: "life.logistics".into(),
                     grant_id: GrantId::new(),
                     expected: Some(GrantAuthority::new()),
+                    expected_policy: None,
                     source,
                     scope: scope(),
                 },

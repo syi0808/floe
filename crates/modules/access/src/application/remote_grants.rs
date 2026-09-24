@@ -43,14 +43,21 @@ pub struct RemoteViewGrantPreview {
     pub consumers: Vec<String>,
 }
 
-/// What the Person says they already reviewed.
+/// What the Person says they already reviewed: the live descriptor fields
+/// plus the exact grant (or reviewed absence) and recorded policy the
+/// decision binds. A fresh read never substitutes for these values.
 #[derive(Clone, Copy)]
 pub struct RemoteViewGrantExpectation<'a> {
     pub producer_fingerprint: &'a str,
     pub source_authority: SourceAuthority,
-    pub connection_revision: u64,
+    pub connection_revision: Option<u64>,
     pub provider_identity: &'a str,
     pub recipient: &'a str,
+    pub expected_grant: Option<(
+        floe_context_contract::GrantId,
+        floe_context_contract::GrantAuthority,
+    )>,
+    pub expected_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +65,7 @@ pub struct RemoteViewGrantActivation {
     pub view_id: String,
     pub grant_id: floe_context_contract::GrantId,
     pub expected: Option<floe_context_contract::GrantAuthority>,
+    pub expected_policy: Option<floe_context_contract::ConsumerPolicyAuthority>,
     pub source: floe_context_contract::GrantSourceBinding,
     pub scope: floe_context_contract::GrantScope,
 }
@@ -192,6 +200,14 @@ pub async fn prepare_remote_view_grant_activation(
         &preview.producer,
         preview.connection_revision,
     )?;
+    match (&expectation.expected_grant, &expectation.expected_policy) {
+        (None, None) => {}
+        (Some(_), Some(policy)) if policy.is_valid() => {}
+        _ => return Err(AgentFailure::InvalidInput),
+    }
+    if expectation.connection_revision == Some(0) {
+        return Err(AgentFailure::InvalidInput);
+    }
     let scope = remote_view_scope(
         request.resource,
         request.data_category,
@@ -202,6 +218,12 @@ pub async fn prepare_remote_view_grant_activation(
     let existing = store
         .find_view_grant(request.view_id, &source, request.consumers[0].identifier())
         .await?;
+    match (&expectation.expected_grant, existing.as_ref()) {
+        (None, None) => {}
+        (Some((grant_id, authority)), Some(grant))
+            if grant.id() == *grant_id && grant.authority() == *authority => {}
+        _ => return Err(AgentFailure::AccessReviewRequired),
+    }
     match review_remote_view_grant(existing.as_ref(), &scope)? {
         RemoteViewGrantReview::AlreadyGranted => Ok(RemoteViewGrantPreparation::Current(
             existing.ok_or(AgentFailure::PolicyDenied)?,
@@ -211,6 +233,7 @@ pub async fn prepare_remote_view_grant_activation(
                 view_id: request.view_id.to_owned(),
                 grant_id,
                 expected,
+                expected_policy: expectation.expected_policy,
                 source,
                 scope,
             }),
