@@ -11,15 +11,16 @@ use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
     CONVERSATION_MODEL_CONSUMER, CancelRunRequest, CancelRunStatus, CommandQuery,
-    CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationPorts,
-    ConversationRepository, InteractionOrigin, InteractionRepository, MODEL_CONSENT_LIMITATION,
-    ManagerConfig, ProfileSelection, PublishAdmission, PublishModelRequirement, RecoveryReceipt,
-    RecoveryRequest, RunCancellationRegistry, RunQuery, RunReceipt, RunState, RunTerminal,
-    TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
+    CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationInteraction,
+    ConversationPorts, ConversationRepository, InteractionOrigin, InteractionRepository,
+    InteractionResumeRef, InteractionState, MODEL_CONSENT_LIMITATION, ManagerConfig,
+    ProfileSelection, PublishAdmission, PublishModelRequirement, RecoveryReceipt, RecoveryRequest,
+    RunCancellationRegistry, RunQuery, RunReceipt, RunState, RunTerminal, TurnAdmission,
+    TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
-use super::interactions::publish_model_requirement;
+use super::interactions::{publish_model_requirement, rescope_blocked_requirement};
 use super::recovery::{JournalLineage, project_journal, project_transcript_history};
 
 pub struct ConversationService<Repository> {
@@ -79,7 +80,7 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             return Ok(receipt);
         }
         let continuation = match &request.mode {
-            TurnMode::New => None,
+            TurnMode::New | TurnMode::Resume(_) => None,
             TurnMode::Continue(reference) => {
                 let snapshot = continuation(
                     self.repository.as_ref(),
@@ -98,6 +99,10 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                 }
                 Some(snapshot)
             }
+        };
+        let resume_origin = match &request.mode {
+            TurnMode::Resume(reference) => Some(self.resume_origin(reference, &request).await?),
+            TurnMode::New | TurnMode::Continue(_) => None,
         };
         if let Some(retry_of) = request.retry_of {
             let source = self
@@ -142,6 +147,14 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                 verify_existing(&request, request_digest, &receipt)?;
                 return Ok(receipt);
             }
+            TurnAdmission::Resumed(receipt) => {
+                let TurnMode::Resume(reference) = &request.mode else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                verify_resumed(&request, reference, &receipt)?;
+                on_admitted(&receipt);
+                return Ok(receipt);
+            }
         };
         admitted.validate()?;
         if admitted.receipt.run_id != run_id
@@ -167,6 +180,17 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                         || admitted.receipt.continuation_executor_generation
                             != Some(reference.executor_generation)
                         || admitted.receipt.continuation_level != reference.level
+                        || admitted
+                            .transcript
+                            .iter()
+                            .any(|message| message.message_id == request.command_id.as_uuid())
+                }
+                TurnMode::Resume(reference) => {
+                    admitted.receipt.resume_of != Some(reference.origin_run_id)
+                        || admitted.receipt.resume_lineage != reference.lineage
+                        || admitted.receipt.continuation_of.is_some()
+                        || admitted.receipt.continuation_level != 0
+                        || admitted.receipt.retry_of.is_some()
                         || admitted
                             .transcript
                             .iter()
@@ -230,6 +254,40 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                     .await;
             }
         };
+        // The resume context re-reads the origin group after admission:
+        // the group gate itself was decided atomically inside admission,
+        // while this listing only tells the fresh Manager what the person
+        // resolved. A listing failure fails the admitted child closed. The
+        // restated User entry keeps the origin command's identity: it is
+        // the origin's own utterance, not a new one.
+        let resume_context = match &resume_origin {
+            None => None,
+            Some(origin) => {
+                let group = match super::interactions::list_run_interactions(
+                    self.repository.as_ref(),
+                    &request.principal,
+                    origin.run_id,
+                )
+                .await
+                {
+                    Ok(group) => group,
+                    Err(failure) => {
+                        return self
+                            .repository
+                            .finish_run(
+                                run_id,
+                                expected_aggregate_revision,
+                                RunTerminal::from_failure(failure),
+                            )
+                            .await;
+                    }
+                };
+                Some((
+                    origin.command_id.as_uuid(),
+                    resume_marker_text(origin, &group),
+                ))
+            }
+        };
         let completed_iterations = continuation
             .as_ref()
             .map_or(0, |snapshot| snapshot.completed_iterations);
@@ -258,9 +316,11 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         );
         let user_entry = ModelConversationEntry::User {
             message_id: request.command_id.as_uuid(),
-            text: intent.text,
+            text: intent.text.clone(),
         };
         let (model_conversation, resume, mut continuation_replay) = match continuation {
+            // Continuation and resume both derive from the validated request
+            // mode, so the marker arm below only runs for a linked resume.
             Some(snapshot) => {
                 // The new user message leads; the settled exchanges of the
                 // continued execution follow as context for it.
@@ -283,32 +343,60 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                     snapshot.replay,
                 )
             }
-            None => {
-                let history = project_transcript_history(&admitted.transcript)?
-                    .into_iter()
-                    .filter(|entry| {
-                        !matches!(
-                            entry,
-                            ModelConversationEntry::User { message_id, .. }
-                                if *message_id == request.command_id.as_uuid()
-                        )
-                    })
-                    .collect();
-                (
+            None => match resume_context {
+                // A linked resume takes no batch: the origin's own
+                // exchanges stay in history, one host-owned marker frames
+                // the fresh turn, and the owner-derived original intent
+                // follows as the turn's User entry. The transcript gains
+                // no message; only the model turn restates the intent.
+                Some((user_message_id, marker)) => (
                     ModelConversation {
-                        history,
-                        current_turn: vec![user_entry],
+                        history: project_transcript_history(&admitted.transcript)?,
+                        current_turn: vec![
+                            ModelConversationEntry::Preamble {
+                                message_id: request.command_id.as_uuid(),
+                                text: marker,
+                            },
+                            ModelConversationEntry::User {
+                                message_id: user_message_id,
+                                text: intent.text,
+                            },
+                        ],
                     },
                     None,
                     Vec::new(),
-                )
-            }
+                ),
+                None => {
+                    let history = project_transcript_history(&admitted.transcript)?
+                        .into_iter()
+                        .filter(|entry| {
+                            !matches!(
+                                entry,
+                                ModelConversationEntry::User { message_id, .. }
+                                    if *message_id == request.command_id.as_uuid()
+                            )
+                        })
+                        .collect();
+                    (
+                        ModelConversation {
+                            history,
+                            current_turn: vec![user_entry],
+                        },
+                        None,
+                        Vec::new(),
+                    )
+                }
+            },
         };
         continuation_replay.extend(request.replay);
-        // The lineage binds this explicit intent: the admitted Run's own
-        // identity. A linked resume (05-E) will carry its origin instead.
+        // The lineage binds this explicit intent: a linked resume carries
+        // its origin, so consent granted under the origin's reviewed
+        // lineage still scopes the child; anything else carries itself.
+        let lineage_origin = resume_origin
+            .as_ref()
+            .map_or(run_id.as_uuid(), |origin| origin.run_id.as_uuid());
         let lineage =
-            floe_agent_contract::RecipientLineage::try_new(request.session_id, run_id.as_uuid())
+            floe_agent_contract::RecipientLineage::try_new(request.session_id, lineage_origin)
                 .map_err(|_| AgentFailure::StorageUnavailable)?;
         let engine_request = EngineRequest {
             principal: request.principal.clone(),
@@ -425,6 +513,13 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             Ok(coverage) => coverage,
             Err(failure) => return RunTerminal::from_failure(failure),
         };
+        // A linked resume dispatches under origin-carried lineage; the fresh
+        // review re-scopes to this attempting Run before publication.
+        let requirement =
+            match rescope_blocked_requirement(blocked.requirement, request.session_id, run_id) {
+                Ok(requirement) => requirement,
+                Err(failure) => return RunTerminal::from_failure(failure),
+            };
         let published = match publish_model_requirement(
             self.repository.as_ref(),
             self.repository.as_ref(),
@@ -435,7 +530,7 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                 origin: InteractionOrigin::Model {
                     attempt_id: blocked.attempt_id,
                 },
-                requirement: blocked.requirement,
+                requirement,
                 device_id: request.device_id.clone(),
             },
             request.now_unix_ms,
@@ -504,6 +599,31 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
         principal: &str,
     ) -> Result<ContinuationSnapshot, AgentFailure> {
         continuation(self.repository.as_ref(), run_id, principal).await
+    }
+
+    /// The origin a linked resume continues, verified before admission.
+    ///
+    /// Fail-fast only: the Vault re-verifies the origin, the profile, the
+    /// interaction group and the resume slot atomically inside admission.
+    async fn resume_origin(
+        &self,
+        reference: &InteractionResumeRef,
+        request: &TurnRequest,
+    ) -> Result<RunReceipt, AgentFailure> {
+        let origin = self
+            .repository
+            .load_receipt(reference.origin_run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        origin.validate()?;
+        if origin.principal != request.principal
+            || origin.session_id != request.session_id
+            || origin.resume().as_ref() != Some(reference)
+            || origin.profile != request.profile
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(origin)
     }
 
     pub async fn get_command(
@@ -771,6 +891,76 @@ fn verify_existing(
         || receipt.request_digest != request_digest
     {
         return Err(AgentFailure::Conflict);
+    }
+    Ok(())
+}
+
+/// The host-owned marker that opens a linked resume turn.
+///
+/// Model-safe linkage only: the origin identity, the chain depth, and each
+/// reviewed interaction's opaque id, kind and terminal status. Resolved
+/// cards name a target-digest prefix so the fresh Manager can tell them
+/// apart; anything the person did not resolve stays unavailable by
+/// instruction, never by re-prompting in a loop. Bounded: at most eight
+/// entries name ids, the rest count.
+fn resume_marker_text(origin: &RunReceipt, group: &[ConversationInteraction]) -> String {
+    const MAX_MARKER_ENTRIES: usize = 8;
+    let depth = origin
+        .resume()
+        .map_or(origin.resume_lineage, |link| link.lineage);
+    let mut marker = format!(
+        "Linked resume of run {} at depth {depth}. The person finished reviewing its interactions; re-derive every read under current authority.",
+        origin.run_id.as_uuid(),
+    );
+    for interaction in group.iter().take(MAX_MARKER_ENTRIES) {
+        let status = match &interaction.state {
+            InteractionState::Resolved { .. } => "resolved",
+            InteractionState::Denied { .. } => "denied: unavailable",
+            InteractionState::Cancelled { .. } => "cancelled: unavailable",
+            InteractionState::Superseded { .. } => "superseded: unavailable",
+            InteractionState::Expired => "expired: unavailable",
+            InteractionState::Pending | InteractionState::Resolving { .. } => {
+                "still pending review: do not wait for it"
+            }
+        };
+        let digest: String = interaction.target_digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        marker.push_str(&format!(
+            "\nInteraction {} ({:?}, target {digest}): {status}.",
+            interaction.id, interaction.kind,
+        ));
+    }
+    if group.len() > MAX_MARKER_ENTRIES {
+        marker.push_str(&format!(
+            "\nAnd {} more reviewed interactions.",
+            group.len() - MAX_MARKER_ENTRIES
+        ));
+    }
+    marker.push_str(
+        "\nProceed with resolved and still-authorized information. Do not retry unavailable interactions, and do not re-ask the person about them.",
+    );
+    marker
+}
+
+/// A slot rejoin across commands: the receipt is the canonical child the
+/// origin slot already admitted. Identity binds the origin linkage, the
+/// session, the principal and the kept profile; the digest is the winner's
+/// and is never compared against the loser's request.
+fn verify_resumed(
+    request: &TurnRequest,
+    reference: &InteractionResumeRef,
+    receipt: &RunReceipt,
+) -> Result<(), AgentFailure> {
+    receipt.validate()?;
+    if receipt.session_id != request.session_id
+        || receipt.principal != request.principal
+        || receipt.resume_of != Some(reference.origin_run_id)
+        || receipt.resume_lineage != reference.lineage
+        || receipt.profile != request.profile
+    {
+        return Err(AgentFailure::StorageUnavailable);
     }
     Ok(())
 }

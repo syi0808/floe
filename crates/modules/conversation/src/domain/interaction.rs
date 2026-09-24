@@ -21,7 +21,7 @@
 use floe_agent_contract::{
     AgentFailure, DataClass, ProcessingSourceScope, RecipientLineage, UserInteractionKind,
 };
-use floe_kernel::{PersonId, RunId};
+use floe_kernel::{CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -608,6 +608,53 @@ impl InteractionDecision {
             && self.target_digest == recorded.target_digest
             && self.principal == recorded.principal
     }
+}
+
+/// How many linked generations one resume chain may admit automatically.
+///
+/// A resume child whose own origin blocks again resumes at the next depth;
+/// past this cap the person starts a fresh explicit turn instead of growing
+/// an automatic chain.
+pub const MAX_RESUME_LINEAGE: u8 = 3;
+
+/// Which origin Run a linked fresh Run resumes, and at which chain depth.
+///
+/// The origin is the immediate parent whose interaction group the admission
+/// re-verifies; the lineage is that parent's lineage plus one. It is not a
+/// budget continuation: the child takes no batch, cursor, attempt identity
+/// or transport from the origin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InteractionResumeRef {
+    pub origin_run_id: RunId,
+    pub lineage: u8,
+}
+
+impl InteractionResumeRef {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if !self.origin_run_id.is_valid()
+            || self.lineage == 0
+            || self.lineage > MAX_RESUME_LINEAGE
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+/// The stable command identity for one origin's automatic resume slot.
+///
+/// Automatic and explicit-Continue paths derive the same command from the
+/// same origin, so concurrent resolutions and repeated clicks rejoin one
+/// canonical command instead of admitting siblings.
+pub fn resume_command_id(origin_run_id: RunId) -> Result<CommandId, AgentFailure> {
+    if !origin_run_id.is_valid() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"floe.conversation.resume-command\0");
+    bytes.extend_from_slice(origin_run_id.as_uuid().as_bytes());
+    CommandId::from_uuid(Uuid::new_v5(&INTERACTION_ID_NAMESPACE, &bytes))
+        .ok_or(AgentFailure::StorageUnavailable)
 }
 
 /// The stable owner-operation identity claimed by one decision command.

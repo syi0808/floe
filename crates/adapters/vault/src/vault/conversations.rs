@@ -1,12 +1,15 @@
 use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use floe_agent_contract::DataClass;
-use floe_conversation::{AgentContinuation, AgentMessage, AgentOutcome, AgentUsage, ProfileSelection};
+use floe_conversation::{
+    AgentContinuation, AgentMessage, AgentOutcome, AgentUsage, MAX_RESUME_LINEAGE,
+    ProfileSelection,
+};
 use serde::{Deserialize, Serialize};
 use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -51,6 +54,8 @@ pub struct VaultConversationRunRecord {
     pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
     pub retry_of: Option<RunId>,
+    pub resume_of: Option<RunId>,
+    pub resume_lineage: u8,
     pub profile: ProfileSelection,
 }
 
@@ -77,6 +82,8 @@ impl VaultConversationRunRecord {
             || self.executor_generation == 0
             || self.continuation_level > 3
             || self.retry_of == Some(self.run_id)
+            || self.resume_of == Some(self.run_id)
+            || self.resume_lineage > MAX_RESUME_LINEAGE
             || self.journal_revision > MAX_JOURNAL_ENTRIES
             || self.coverage.validate().is_err()
             || self
@@ -89,6 +96,11 @@ impl VaultConversationRunRecord {
         if self.continuation_of.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation == Some(0)
+            || self.resume_of.is_some() != (self.resume_lineage > 0)
+            || self.resume_of.is_some()
+                && (self.continuation_of.is_some()
+                    || self.continuation_level > 0
+                    || self.retry_of.is_some())
         {
             return Err(AgentFailure::VaultUnavailable);
         }
@@ -155,6 +167,8 @@ impl VaultConversationRunRecord {
             && self.continuation_level
                 == request.continuation.as_ref().map_or(0, |value| value.level)
             && self.retry_of == request.retry_of
+            && self.resume_of == request.resume.as_ref().map(|value| value.origin_run_id)
+            && self.resume_lineage == request.resume.as_ref().map_or(0, |value| value.lineage)
             && self.profile == request.profile
     }
 }
@@ -164,6 +178,12 @@ pub struct VaultConversationContinuationRef {
     pub run_id: RunId,
     pub executor_generation: u64,
     pub level: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultConversationResumeRef {
+    pub origin_run_id: RunId,
+    pub lineage: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -177,6 +197,7 @@ pub struct VaultConversationAdmissionRequest {
     pub text: String,
     pub continuation: Option<VaultConversationContinuationRef>,
     pub retry_of: Option<RunId>,
+    pub resume: Option<VaultConversationResumeRef>,
     pub profile: ProfileSelection,
 }
 
@@ -200,6 +221,12 @@ impl VaultConversationAdmissionRequest {
             })
             || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
             || self.retry_of.is_some() && self.continuation.is_some()
+            || self.resume.as_ref().is_some_and(|reference| {
+                !reference.origin_run_id.is_valid()
+                    || reference.lineage == 0
+                    || reference.lineage > MAX_RESUME_LINEAGE
+            })
+            || self.resume.is_some() && (self.continuation.is_some() || self.retry_of.is_some())
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -214,6 +241,8 @@ pub enum VaultConversationAdmission {
         session: AgentSession,
     },
     Existing(VaultConversationRunRecord),
+    /// The origin slot already admitted this resume under another command.
+    Resumed(VaultConversationRunRecord),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -488,6 +517,45 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let executor_generation = self
                 .active_conversation_executor_generation(&transaction)
                 .await?;
+            // A claimed resume slot rejoins before any Session comparison:
+            // the winner's child is canonical no matter which revision the
+            // losing command carries.
+            if let Some(reference) = &request.resume {
+                let origin = self
+                    .conversation_run_on(&transaction, reference.origin_run_id)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                if origin.person_id != request.person_id
+                    || origin.session_id != request.session_id
+                    || origin.state != VaultConversationRunState::Completed
+                    || origin
+                        .resume_lineage
+                        .checked_add(1)
+                        .filter(|lineage| *lineage <= MAX_RESUME_LINEAGE)
+                        != Some(reference.lineage)
+                    || origin.profile != request.profile
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                if let Some(child_run_id) =
+                    self.resume_slot_on(&transaction, reference.origin_run_id).await?
+                {
+                    let child = self
+                        .conversation_run_on(&transaction, child_run_id)
+                        .await?
+                        .ok_or(AgentFailure::VaultUnavailable)?;
+                    if child.person_id != request.person_id
+                        || child.session_id != request.session_id
+                        || child.resume_of != Some(reference.origin_run_id)
+                        || child.resume_lineage != reference.lineage
+                    {
+                        return Err(AgentFailure::VaultUnavailable);
+                    }
+                    return Ok(VaultConversationAdmission::Resumed(child));
+                }
+                self.check_resume_group(&transaction, reference.origin_run_id)
+                    .await?;
+            }
             let mut session = self.session_on(&transaction, request.session_id).await?;
             if session.person_id != request.person_id
                 || session.scope.is_some()
@@ -558,7 +626,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .revision
                 .checked_add(1)
                 .ok_or(AgentFailure::Conflict)?;
-            if request.continuation.is_none() {
+            if request.continuation.is_none() && request.resume.is_none() {
                 session.messages.push(AgentMessage::User {
                     turn_id: request.run_id.as_uuid(),
                     text: request.text,
@@ -614,9 +682,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .map(|value| value.executor_generation),
                 continuation_level: request.continuation.as_ref().map_or(0, |value| value.level),
                 retry_of: request.retry_of,
+                resume_of: request.resume.as_ref().map(|value| value.origin_run_id),
+                resume_lineage: request.resume.as_ref().map_or(0, |value| value.lineage),
                 profile: request.profile.clone(),
             };
             record.validate(self.person_id)?;
+            if let Some(reference) = &request.resume {
+                transaction
+                    .execute(
+                        "INSERT INTO agent_conversation_resume_slots (origin_run_id, child_run_id, child_command_id, session_id, person_id) VALUES (?, ?, ?, ?, ?)",
+                        (
+                            reference.origin_run_id.as_uuid().to_string(),
+                            record.run_id.as_uuid().to_string(),
+                            record.command_id.as_uuid().to_string(),
+                            record.session_id.to_string(),
+                            record.person_id.to_string(),
+                        ),
+                    )
+                    .await
+                    .map_err(storage)?;
+            }
             transaction
                 .execute(
                     "INSERT INTO agent_conversation_runs (run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)",
@@ -1102,6 +1187,67 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
+    /// The child already admitted for one origin, if its slot is claimed.
+    async fn resume_slot_on(
+        &self,
+        transaction: &Transaction<'_>,
+        origin_run_id: RunId,
+    ) -> Result<Option<RunId>, AgentFailure> {
+        let mut rows = transaction
+            .query(
+                "SELECT child_run_id FROM agent_conversation_resume_slots WHERE origin_run_id = ?",
+                [origin_run_id.as_uuid().to_string()],
+            )
+            .await
+            .map_err(storage)?;
+        let Some(row) = rows.next().await.map_err(storage)? else {
+            return Ok(None);
+        };
+        let child = RunId::from_uuid(
+            Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
+                .map_err(|_| AgentFailure::VaultUnavailable)?,
+        )
+        .ok_or(AgentFailure::VaultUnavailable)?;
+        if rows.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        Ok(Some(child))
+    }
+
+    /// The origin group admits a child only once every card is terminal
+    /// and at least one resolved. Missing tables or rows conflict: nothing
+    /// was ever reviewed for this origin.
+    async fn check_resume_group(
+        &self,
+        transaction: &Transaction<'_>,
+        origin_run_id: RunId,
+    ) -> Result<(), AgentFailure> {
+        if !table_exists(transaction, "agent_conversation_interactions").await? {
+            return Err(AgentFailure::Conflict);
+        }
+        let mut rows = transaction
+            .query(
+                "SELECT state FROM agent_conversation_interactions WHERE origin_run_id = ?",
+                [origin_run_id.as_uuid().to_string()],
+            )
+            .await
+            .map_err(storage)?;
+        let mut count = 0u64;
+        let mut resolved = false;
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            count += 1;
+            match row.get::<String>(0).map_err(storage)?.as_str() {
+                "resolved" => resolved = true,
+                "denied" | "cancelled" | "superseded" | "expired" => {}
+                _ => return Err(AgentFailure::Conflict),
+            }
+        }
+        if count == 0 || !resolved {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
     async fn active_conversation_executor_generation(
         &self,
         connection: &turso::Connection,
@@ -1119,7 +1265,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     let mut tables = transaction
         .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal', 'agent_conversation_commands')",
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal', 'agent_conversation_commands', 'agent_conversation_resume_slots')",
             (),
         )
         .await
@@ -1132,7 +1278,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 7))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 8))",
                 (),
             )
             .await
@@ -1167,6 +1313,13 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
+                "CREATE TABLE agent_conversation_resume_slots (origin_run_id TEXT PRIMARY KEY, child_run_id TEXT NOT NULL, child_command_id TEXT NOT NULL, session_id TEXT NOT NULL, person_id TEXT NOT NULL, FOREIGN KEY (child_run_id) REFERENCES agent_conversation_runs(run_id))",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
                 "CREATE INDEX agent_conversation_active_session ON agent_conversation_runs (session_id, state, run_id)",
                 (),
             )
@@ -1174,7 +1327,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 7)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 8)",
                 (),
             )
             .await
@@ -1193,6 +1346,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             "agent_conversation_commands".to_owned(),
             "agent_conversation_executor".to_owned(),
             "agent_conversation_journal".to_owned(),
+            "agent_conversation_resume_slots".to_owned(),
             "agent_conversation_runs".to_owned(),
             "agent_conversation_schema".to_owned(),
         ]
@@ -1235,6 +1389,13 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
         )
         .await
         .map_err(storage)?;
+    transaction
+        .query(
+            "SELECT origin_run_id, child_run_id, child_command_id, session_id, person_id FROM agent_conversation_resume_slots LIMIT 0",
+            (),
+        )
+        .await
+        .map_err(storage)?;
     let mut index = transaction
         .query(
             "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_conversation_active_session' AND tbl_name = 'agent_conversation_runs'",
@@ -1249,6 +1410,17 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     }
     executor_generation(transaction).await?;
     Ok(())
+}
+
+async fn table_exists(transaction: &Transaction<'_>, table: &str) -> Result<bool, AgentFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
+            [table],
+        )
+        .await
+        .map_err(storage)?;
+    Ok(rows.next().await.map_err(storage)?.is_some())
 }
 
 async fn read_record(

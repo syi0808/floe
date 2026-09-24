@@ -952,6 +952,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             text: "continue safely".into(),
             continuation: None,
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -1092,6 +1093,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
                 level: continuation.reference.level,
             }),
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -1293,6 +1295,7 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
             text: "unfinished".into(),
             continuation: None,
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -1343,6 +1346,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
             text: "continue safely".into(),
             continuation: None,
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -1448,6 +1452,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
                 level: parent.reference.level,
             }),
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -1543,6 +1548,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
             text: "continue safely".into(),
             continuation: None,
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -1640,6 +1646,7 @@ async fn child_resume_batch_mismatch_is_storage_fault() {
                 level: parent.reference.level,
             }),
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await
@@ -2113,6 +2120,8 @@ fn interaction_message_projects_to_opaque_transcript_entry() {
         continuation_executor_generation: None,
         continuation_level: 0,
         retry_of: None,
+        resume_of: None,
+        resume_lineage: 0,
         profile: floe_conversation::ProfileSelection::Auto,
         attempt_refs: vec![],
         task_refs: vec![],
@@ -2402,4 +2411,596 @@ fn malformed_projection_refs_fail_closed_without_dangling_cards() {
             "malformed ref must fail closed: {data}"
         );
     }
+}
+
+// ---- linked resume (05-E) ----
+
+async fn resume_fixture() -> (
+    tempfile::TempDir,
+    PersonId,
+    Keys,
+    Arc<EncryptedAgentVault<Keys>>,
+    Arc<VaultConversationRepository<Keys>>,
+    floe_conversation::AgentSession,
+) {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    (root, person_id, keys, vault, repository, session)
+}
+
+async fn run_origin(
+    repository: &Arc<VaultConversationRepository<Keys>>,
+    session_id: Uuid,
+    expected_session_revision: u64,
+    principal: &str,
+    prompt: &str,
+) -> floe_conversation::RunReceipt {
+    let service = build_service(Arc::clone(repository));
+    let model = Model::default();
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session_id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = principal.into();
+    turn.prompt = prompt.into();
+    turn.expected_session_revision = expected_session_revision;
+    service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                projection: &PROJECTOR,
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap()
+}
+
+fn vault_record(
+    person_id: PersonId,
+    session_id: Uuid,
+    origin_run_id: floe_agent_contract::RunId,
+) -> floe_conversation::ConversationInteraction {
+    let requirement = floe_conversation::InteractionRequirement {
+        kind: floe_conversation::InteractionRequirementKind::EnableObserve,
+        source_id: "floe.source.calendar".into(),
+        connection_id: Some("calendar-connection".into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        inline: true,
+    };
+    let target =
+        floe_conversation::ReviewedTarget::InlineObserve(floe_conversation::InlineObserveTarget {
+            connection_id: "calendar-connection".into(),
+            device_id: None,
+            source_id: "floe.source.calendar".into(),
+            connector_id: Some("floe.connector.calendar".into()),
+            consumer: "floe.builtin.schedule".into(),
+            purpose: "scheduling".into(),
+            connection_revision: None,
+            reviewed_producer_fingerprint: None,
+            reviewed_native_subject: None,
+            members: vec![floe_conversation::ReviewedBundleMember {
+                member_id: "calendar.timeline".into(),
+                resource: "personal".into(),
+                source_revision: None,
+                expected_grant: floe_conversation::ExpectedGrantState::Absent,
+                policy_authority: None,
+            }],
+        });
+    let requirement_digest = floe_conversation::canonical_requirement_digest(&requirement).unwrap();
+    let target_digest = floe_conversation::canonical_target_digest(&target).unwrap();
+    let origin = floe_conversation::InteractionOrigin::Tool {
+        call_id: Uuid::new_v4(),
+    };
+    let id = floe_conversation::interaction_publication_id(
+        origin_run_id,
+        &origin,
+        &requirement_digest,
+        &target_digest,
+    )
+    .unwrap();
+    floe_conversation::ConversationInteraction {
+        id,
+        person_id,
+        session_id,
+        origin_run_id,
+        origin_turn_id: origin_run_id.as_uuid(),
+        origin,
+        kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        requirement,
+        requirement_digest,
+        target,
+        target_digest,
+        state: floe_conversation::InteractionState::Pending,
+        revision: 1,
+        created_at_unix_ms: 1_700_000_000_000,
+        expires_at_unix_ms: 1_700_000_000_000 + floe_conversation::INTERACTION_PENDING_LIFETIME_MS,
+    }
+}
+
+async fn resolve_vault_record(
+    vault: &EncryptedAgentVault<Keys>,
+    record: floe_conversation::ConversationInteraction,
+    principal: &str,
+) -> floe_conversation::ConversationInteraction {
+    let admission = vault
+        .publish_conversation_interaction(record)
+        .await
+        .unwrap();
+    let pending = match admission {
+        floe_conversation::PublishAdmission::Created(record)
+        | floe_conversation::PublishAdmission::Existing(record) => record,
+    };
+    let decision_id = Uuid::new_v4();
+    let decided = vault
+        .record_conversation_interaction_decision(floe_conversation::InteractionDecision {
+            command_id: decision_id,
+            interaction_id: pending.id,
+            interaction_revision: pending.revision,
+            kind: floe_conversation::InteractionDecisionKind::Approve,
+            target_digest: pending.target_digest,
+            principal: principal.into(),
+            decided_at_unix_ms: 1_700_000_000_000,
+        })
+        .await
+        .unwrap();
+    let floe_conversation::DecisionAdmission::Applied(decided) = decided else {
+        panic!("fresh approval applies");
+    };
+    let floe_conversation::InteractionState::Resolving {
+        decision_id,
+        owner_operation_id,
+    } = decided.state
+    else {
+        panic!("approval resolves through owner work");
+    };
+    vault
+        .resolve_conversation_interaction(floe_conversation::InteractionResolution {
+            interaction_id: pending.id,
+            person_id: pending.person_id,
+            expected_revision: decided.revision,
+            decision_id,
+            owner_operation_id,
+            resolved_at_unix_ms: 1_700_000_000_001,
+        })
+        .await
+        .unwrap()
+}
+
+fn resume_admission(
+    session_id: Uuid,
+    expected_session_revision: u64,
+    principal: &str,
+    text: &str,
+    reference: floe_conversation::InteractionResumeRef,
+) -> floe_conversation::TurnAdmissionRequest {
+    let command_id = floe_conversation::resume_command_id(reference.origin_run_id).unwrap();
+    let mut intent = floe_conversation::StartTurn {
+        command_id,
+        session_id,
+        expected_revision: expected_session_revision,
+        text: text.into(),
+        mode: floe_conversation::TurnMode::Resume(reference),
+        retry_of: None,
+        profile: floe_conversation::ProfileSelection::Auto,
+    };
+    let canonical = floe_conversation::CanonicalTurnIntent::from_start_turn(&mut intent).unwrap();
+    let request_digest = canonical.digest(principal).unwrap();
+    floe_conversation::TurnAdmissionRequest {
+        run_id: floe_agent_contract::RunId::new(),
+        command_id,
+        session_id,
+        expected_session_revision,
+        principal: principal.into(),
+        request_digest,
+        mode: floe_conversation::TurnMode::Resume(reference),
+        retry_of: None,
+        profile: floe_conversation::ProfileSelection::Auto,
+        user_message: floe_agent_contract::AgentMessage {
+            message_id: command_id.as_uuid(),
+            role: floe_agent_contract::MessageRole::User,
+            text: canonical.text.clone(),
+            call_id: None,
+            coverage: DependencyCoverage::Independent,
+        },
+    }
+}
+
+#[tokio::test]
+async fn resume_admission_claims_unique_slot_and_rejoins_across_commands() {
+    let (_root, person_id, _keys, vault, repository, session) = resume_fixture().await;
+    let principal = person_id.to_string();
+    let origin = run_origin(&repository, session.id, 0, &principal, "plan my day").await;
+    assert_eq!(origin.state, floe_conversation::RunState::Completed);
+    let record = vault_record(person_id, session.id, origin.run_id);
+    let resolved = resolve_vault_record(&vault, record, &principal).await;
+    assert!(matches!(
+        resolved.state,
+        floe_conversation::InteractionState::Resolved { .. }
+    ));
+
+    let link = origin.resume().unwrap();
+    let floe_conversation::TurnAdmission::Created(first) = repository
+        .admit_turn(resume_admission(
+            session.id,
+            origin.session_revision,
+            &principal,
+            "plan my day",
+            link,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("first claim creates the child");
+    };
+    assert_eq!(first.receipt.resume_of, Some(origin.run_id));
+    assert_eq!(first.receipt.resume_lineage, 1);
+    assert!(
+        first
+            .transcript
+            .iter()
+            .all(|message| message.message_id != first.receipt.command_id.as_uuid()),
+        "resume pushes no command message"
+    );
+    // The slot row itself is only reachable through the canonical child
+    // it names; the rejoin below proves exactly one row exists.
+    let winner = first.receipt.run_id;
+
+    // A second command for the same slot rejoins the canonical child,
+    // even at a now-stale revision.
+    let mut second = resume_admission(
+        session.id,
+        origin.session_revision,
+        &principal,
+        "plan my day",
+        link,
+    );
+    second.command_id = floe_agent_contract::CommandId::new();
+    second.run_id = floe_agent_contract::RunId::new();
+    second.user_message.message_id = second.command_id.as_uuid();
+    let floe_conversation::TurnAdmission::Resumed(rejoined) =
+        repository.admit_turn(second).await.unwrap()
+    else {
+        panic!("second claim rejoins the slot");
+    };
+    assert_eq!(rejoined.run_id, winner);
+    assert_eq!(rejoined.resume_of, Some(origin.run_id));
+}
+
+#[tokio::test]
+async fn concurrent_resume_claims_admit_exactly_one_child() {
+    let (_root, person_id, _keys, vault, repository, session) = resume_fixture().await;
+    let principal = person_id.to_string();
+    let origin = run_origin(&repository, session.id, 0, &principal, "plan my day").await;
+    let record = vault_record(person_id, session.id, origin.run_id);
+    resolve_vault_record(&vault, record, &principal).await;
+    let link = origin.resume().unwrap();
+
+    let mut first = resume_admission(
+        session.id,
+        origin.session_revision,
+        &principal,
+        "plan my day",
+        link,
+    );
+    first.command_id = floe_agent_contract::CommandId::new();
+    first.run_id = floe_agent_contract::RunId::new();
+    first.user_message.message_id = first.command_id.as_uuid();
+    let mut second = resume_admission(
+        session.id,
+        origin.session_revision,
+        &principal,
+        "plan my day",
+        link,
+    );
+    second.command_id = floe_agent_contract::CommandId::new();
+    second.run_id = floe_agent_contract::RunId::new();
+    second.user_message.message_id = second.command_id.as_uuid();
+    let (first, second) =
+        tokio::join!(repository.admit_turn(first), repository.admit_turn(second),);
+    let mut created = Vec::new();
+    let mut resumed = Vec::new();
+    for admission in [first.unwrap(), second.unwrap()] {
+        match admission {
+            floe_conversation::TurnAdmission::Created(admitted) => {
+                created.push(admitted.receipt.run_id)
+            }
+            floe_conversation::TurnAdmission::Resumed(receipt) => resumed.push(receipt.run_id),
+            floe_conversation::TurnAdmission::Existing(_) => {
+                panic!("distinct commands never replay each other")
+            }
+        }
+    }
+    assert_eq!(created.len(), 1);
+    assert_eq!(resumed, created);
+}
+
+#[tokio::test]
+async fn resume_admission_enforces_group_profile_lineage_and_revision() {
+    let (_root, person_id, _keys, vault, repository, session) = resume_fixture().await;
+    let principal = person_id.to_string();
+    let origin = run_origin(&repository, session.id, 0, &principal, "plan my day").await;
+    let link = origin.resume().unwrap();
+    let claim =
+        |revision: u64| resume_admission(session.id, revision, &principal, "plan my day", link);
+
+    // No group: nothing was ever reviewed for this origin.
+    assert!(matches!(
+        repository.admit_turn(claim(origin.session_revision)).await,
+        Err(AgentFailure::Conflict)
+    ));
+
+    // An open card blocks the group.
+    let open = vault_record(person_id, session.id, origin.run_id);
+    vault.publish_conversation_interaction(open).await.unwrap();
+    assert!(matches!(
+        repository.admit_turn(claim(origin.session_revision)).await,
+        Err(AgentFailure::Conflict)
+    ));
+
+    // A denied card settles terminal but resolves nothing.
+    let open = vault
+        .run_conversation_interactions(origin.run_id)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    let denied = vault
+        .record_conversation_interaction_decision(floe_conversation::InteractionDecision {
+            command_id: Uuid::new_v4(),
+            interaction_id: open.id,
+            interaction_revision: open.revision,
+            kind: floe_conversation::InteractionDecisionKind::Deny,
+            target_digest: open.target_digest,
+            principal: principal.clone(),
+            decided_at_unix_ms: 1_700_000_000_000,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        denied,
+        floe_conversation::DecisionAdmission::Applied(_)
+    ));
+    assert!(matches!(
+        repository.admit_turn(claim(origin.session_revision)).await,
+        Err(AgentFailure::Conflict)
+    ));
+
+    // Resolving one card of a denied+resolved group admits the child.
+    let second = vault_record(person_id, session.id, origin.run_id);
+    resolve_vault_record(&vault, second, &principal).await;
+    let child = repository
+        .admit_turn(claim(origin.session_revision))
+        .await
+        .unwrap();
+    let floe_conversation::TurnAdmission::Created(child) = child else {
+        panic!("mixed group admits one child");
+    };
+    assert_eq!(child.receipt.resume_of, Some(origin.run_id));
+    // Finish the admitted child so later turns can proceed in this Session.
+    vault
+        .finish_conversation_run(
+            child.receipt.run_id,
+            1,
+            crate::VaultConversationTerminal {
+                state: crate::VaultConversationRunState::Completed,
+                output: Some("child done".into()),
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                appended_messages: vec![floe_conversation::AgentMessage::Assistant {
+                    turn_id: child.receipt.run_id.as_uuid(),
+                    text: "child done".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    // A newer turn supersedes the automatic revision: the stable command
+    // now conflicts instead of silently restarting stale work. (The slot
+    // is already claimed here, so this leg runs against a fresh origin.)
+    let current = vault.load(person_id, session.id).await.unwrap();
+    let next_origin = run_origin(
+        &repository,
+        session.id,
+        current.revision,
+        &principal,
+        "another task",
+    )
+    .await;
+    let next_record = vault_record(person_id, session.id, next_origin.run_id);
+    resolve_vault_record(&vault, next_record, &principal).await;
+    let next_link = next_origin.resume().unwrap();
+    let current = vault.load(person_id, session.id).await.unwrap();
+    let _newer = run_origin(
+        &repository,
+        session.id,
+        current.revision,
+        &principal,
+        "newest turn",
+    )
+    .await;
+    assert!(matches!(
+        repository
+            .admit_turn(resume_admission(
+                session.id,
+                next_origin.session_revision,
+                &principal,
+                "another task",
+                next_link,
+            ))
+            .await,
+        Err(AgentFailure::Conflict)
+    ));
+    // A changed profile or a skipped lineage depth is not the origin's
+    // child, at any revision.
+    let current = vault.load(person_id, session.id).await.unwrap();
+    let mut changed_profile = resume_admission(
+        session.id,
+        current.revision,
+        &principal,
+        "another task",
+        next_link,
+    );
+    changed_profile.profile = floe_conversation::ProfileSelection::Explicit("other".into());
+    assert!(matches!(
+        repository.admit_turn(changed_profile).await,
+        Err(AgentFailure::Conflict)
+    ));
+    let skipped = floe_conversation::InteractionResumeRef {
+        origin_run_id: next_origin.run_id,
+        lineage: next_link.lineage + 1,
+    };
+    assert!(matches!(
+        repository
+            .admit_turn(resume_admission(
+                session.id,
+                current.revision,
+                &principal,
+                "another task",
+                skipped,
+            ))
+            .await,
+        Err(AgentFailure::Conflict)
+    ));
+    // The explicit path claims the same slot at the current revision.
+    let current = vault.load(person_id, session.id).await.unwrap();
+    let explicit = repository
+        .admit_turn(resume_admission(
+            session.id,
+            current.revision,
+            &principal,
+            "another task",
+            next_link,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        explicit,
+        floe_conversation::TurnAdmission::Created(_)
+    ));
+}
+
+#[tokio::test]
+async fn resume_slot_survives_vault_reopen_and_rejoins() {
+    let (root, person_id, keys, vault, repository, session) = resume_fixture().await;
+    let principal = person_id.to_string();
+    let origin = run_origin(&repository, session.id, 0, &principal, "plan my day").await;
+    let record = vault_record(person_id, session.id, origin.run_id);
+    resolve_vault_record(&vault, record, &principal).await;
+    let link = origin.resume().unwrap();
+    let floe_conversation::TurnAdmission::Created(first) = repository
+        .admit_turn(resume_admission(
+            session.id,
+            origin.session_revision,
+            &principal,
+            "plan my day",
+            link,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("first claim creates the child");
+    };
+    drop(repository);
+    drop(vault);
+
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(root.path(), person_id, keys.clone())
+            .await
+            .unwrap(),
+    );
+    reopened.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&reopened)));
+    let mut retry = resume_admission(
+        session.id,
+        origin.session_revision,
+        &principal,
+        "plan my day",
+        link,
+    );
+    retry.command_id = floe_agent_contract::CommandId::new();
+    retry.run_id = floe_agent_contract::RunId::new();
+    retry.user_message.message_id = retry.command_id.as_uuid();
+    let floe_conversation::TurnAdmission::Resumed(rejoined) =
+        repository.admit_turn(retry).await.unwrap()
+    else {
+        panic!("post-restart claim rejoins the durable slot");
+    };
+    assert_eq!(rejoined.run_id, first.receipt.run_id);
+    // And the stable command itself still replays exactly.
+    let floe_conversation::TurnAdmission::Existing(replayed) = repository
+        .admit_turn(resume_admission(
+            session.id,
+            origin.session_revision,
+            &principal,
+            "plan my day",
+            link,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("stable command replays after reopen");
+    };
+    assert_eq!(replayed.run_id, first.receipt.run_id);
+}
+
+#[tokio::test]
+async fn resume_admission_recovers_resolved_group_after_restart_before_claim() {
+    let (root, person_id, keys, vault, repository, session) = resume_fixture().await;
+    let principal = person_id.to_string();
+    let origin = run_origin(&repository, session.id, 0, &principal, "plan my day").await;
+    let record = vault_record(person_id, session.id, origin.run_id);
+    resolve_vault_record(&vault, record, &principal).await;
+    let link = origin.resume().unwrap();
+    // Crash after the owner recorded the resolution but before any child
+    // admission: the restart re-reads the durable group and admits once.
+    drop(repository);
+    drop(vault);
+
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(root.path(), person_id, keys.clone())
+            .await
+            .unwrap(),
+    );
+    reopened.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&reopened)));
+    let floe_conversation::TurnAdmission::Created(first) = repository
+        .admit_turn(resume_admission(
+            session.id,
+            origin.session_revision,
+            &principal,
+            "plan my day",
+            link,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("resolved group admits after restart");
+    };
+    assert_eq!(first.receipt.resume_of, Some(origin.run_id));
+    let group = reopened
+        .run_conversation_interactions(origin.run_id)
+        .await
+        .unwrap();
+    assert_eq!(group.len(), 1);
+    assert!(matches!(
+        group[0].state,
+        floe_conversation::InteractionState::Resolved { .. }
+    ));
 }

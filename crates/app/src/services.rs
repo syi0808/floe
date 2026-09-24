@@ -41,6 +41,7 @@ impl StartTurn {
         match &self.mode {
             TurnMode::New => Ok(()),
             TurnMode::Continue(reference) => reference.validate(),
+            TurnMode::Resume(reference) => reference.validate(),
         }
     }
 }
@@ -56,6 +57,7 @@ fn normalize_turn_text(text: &str) -> Result<String, ServiceError> {
 pub enum TurnMode {
     New,
     Continue(ContinuationRef),
+    Resume(ResumeRef),
 }
 
 /// Which model profile a turn runs on is Conversation's own choice of words.
@@ -71,6 +73,25 @@ pub struct ContinuationRef {
 impl ContinuationRef {
     fn validate(&self) -> Result<(), ServiceError> {
         if self.run_id.is_nil() || self.executor_generation == 0 || !(1..=3).contains(&self.level) {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResumeRef {
+    pub origin_run_id: Uuid,
+    pub lineage: u8,
+}
+
+impl ResumeRef {
+    fn validate(&self) -> Result<(), ServiceError> {
+        if self.origin_run_id.is_nil()
+            || self.lineage == 0
+            || self.lineage > floe_conversation::MAX_RESUME_LINEAGE
+        {
             Err(ServiceError::InvalidInput)
         } else {
             Ok(())

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use crate::{
     EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
     VaultConversationCancelAdmission, VaultConversationCancelRequest,
-    VaultConversationContinuationRef, VaultConversationRunRecord, VaultConversationRunState,
-    VaultConversationTerminal, VaultKeyProvider,
+    VaultConversationContinuationRef, VaultConversationResumeRef, VaultConversationRunRecord,
+    VaultConversationRunState, VaultConversationTerminal, VaultKeyProvider,
 };
 use floe_agent_contract::{
     AgentFailure, AgentMessage as ContractMessage, ArchivePointer, ArchiveReadRequest,
@@ -224,13 +224,23 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 } => text,
                 _ => return Err(AgentFailure::InvalidInput),
             };
-            let continuation = match request.mode {
-                TurnMode::New => None,
-                TurnMode::Continue(reference) => Some(VaultConversationContinuationRef {
-                    run_id: reference.run_id,
-                    executor_generation: reference.executor_generation,
-                    level: reference.level,
-                }),
+            let (continuation, resume) = match request.mode {
+                TurnMode::New => (None, None),
+                TurnMode::Continue(reference) => (
+                    Some(VaultConversationContinuationRef {
+                        run_id: reference.run_id,
+                        executor_generation: reference.executor_generation,
+                        level: reference.level,
+                    }),
+                    None,
+                ),
+                TurnMode::Resume(reference) => (
+                    None,
+                    Some(VaultConversationResumeRef {
+                        origin_run_id: reference.origin_run_id,
+                        lineage: reference.lineage,
+                    }),
+                ),
             };
             match self
                 .vault
@@ -244,6 +254,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     text,
                     continuation,
                     retry_of: request.retry_of,
+                    resume,
                     profile: request.profile.clone(),
                 })
                 .await?
@@ -257,6 +268,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     }))
                 }
                 VaultConversationAdmission::Existing(record) => Ok(TurnAdmission::Existing(
+                    self.attach_run_references(run_receipt(record)?).await?,
+                )),
+                VaultConversationAdmission::Resumed(record) => Ok(TurnAdmission::Resumed(
                     self.attach_run_references(run_receipt(record)?).await?,
                 )),
             }
@@ -644,6 +658,8 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         continuation_executor_generation: record.continuation_executor_generation,
         continuation_level: record.continuation_level,
         retry_of: record.retry_of,
+        resume_of: record.resume_of,
+        resume_lineage: record.resume_lineage,
         profile: record.profile,
         attempt_refs: vec![],
         task_refs: vec![],

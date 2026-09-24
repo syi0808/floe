@@ -9,11 +9,12 @@ mod interactions;
 mod model_projection;
 mod query;
 mod recovery;
+mod resume;
 mod session;
 
 pub use admission::{
-    PreparedTurn, TurnPrecheck, TurnPrecheckRequest, TurnPreparationRequest, precheck_turn,
-    prepare_turn,
+    PreparedResume, PreparedTurn, ResumePreparationRequest, TurnPrecheck, TurnPrecheckRequest,
+    TurnPreparationRequest, precheck_turn, prepare_resume, prepare_turn,
 };
 pub use archive::{compact_session, read_archive};
 pub use cancellation::{
@@ -34,6 +35,7 @@ pub use interactions::{
 pub use model_projection::ConversationModelProjection;
 pub use query::{get_command, get_run};
 pub use recovery::project_continuation;
+pub use resume::{ResumeSuppression, resume_gate};
 pub use session::{
     admit_unscoped_session, admitted_session, get_session, recovered_session, resume_session,
     start_session,

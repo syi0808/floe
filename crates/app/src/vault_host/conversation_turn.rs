@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use crate::ConversationTurnRequest;
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
-use floe_conversation::{AgentBudget, AgentEvent, SessionStore};
+use floe_conversation::{AgentBudget, AgentEvent, ConversationRepository, SessionStore};
 use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
@@ -83,13 +83,6 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         },
     )
     .await?;
-    let context = AgentContext {
-        projection_version: 1,
-        persona: None,
-        memories: vec![],
-        optional_context_issues: vec![],
-        evidence: vec![],
-    };
     let inputs = ConversationTurnInputs {
         core,
         vault,
@@ -104,14 +97,224 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         mode: prepared.mode,
         session_data_classes: prepared.session.data_classes.clone(),
     };
+    drive_turn(&inputs, cancellation, on_admitted, emit).await
+}
+
+/// One linked-resume drive, as this host states it.
+///
+/// The caller names only the origin linkage and the revision to admit at:
+/// the origin's own revision for an automatic resume, the current reviewed
+/// Session revision for an explicit Continue. Text, profile and mode all
+/// resolve from the origin's durable admission.
+pub(super) struct ResumeTurnRequest {
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub device_id: String,
+    pub resume: floe_conversation::InteractionResumeRef,
+}
+
+pub(super) async fn run_resume<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &LocalContextHost,
+    task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
+    conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
+    run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
+    connections: &floe_provider_adapters::control::CurrentSavedConnectionStore,
+    person_id: PersonId,
+    command_id: floe_agent_contract::CommandId,
+    request: &ResumeTurnRequest,
+    cancellation: floe_execution::Cancellation,
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<floe_conversation::AgentSession, AgentFailure> {
+    let prepared = floe_conversation::prepare_resume(
+        conversation_repository.as_ref(),
+        vault,
+        floe_conversation::ResumePreparationRequest {
+            principal: person_id.to_string(),
+            person_id,
+            session_id: request.session_id,
+            resume: request.resume,
+        },
+    )
+    .await?;
+    let derived = ConversationTurnRequest::new(
+        request.session_id,
+        request.expected_revision,
+        prepared.text,
+        request.device_id.clone(),
+        prepared.origin.profile.clone(),
+        false,
+        None,
+    );
+    let inputs = ConversationTurnInputs {
+        core,
+        vault,
+        local_context,
+        person_id,
+        request: &derived,
+        connections,
+        command_id,
+        conversation_repository,
+        run_cancellations,
+        task_coordinator,
+        mode: prepared.mode,
+        session_data_classes: prepared.session.data_classes.clone(),
+    };
+    drive_turn(&inputs, cancellation, on_admitted, emit).await
+}
+
+async fn drive_turn<Keys: VaultKeyProvider + 'static>(
+    inputs: &ConversationTurnInputs<'_, Keys>,
+    cancellation: floe_execution::Cancellation,
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<floe_conversation::AgentSession, AgentFailure> {
+    let context = AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: vec![],
+        optional_context_issues: vec![],
+        evidence: vec![],
+    };
     Box::pin(expert_dispatch::run(
-        &inputs,
+        inputs,
         context,
         cancellation,
         on_admitted,
         emit,
     ))
     .await
+}
+
+/// What one automatic resume attempt decided.
+///
+/// Suppression is an ordinary outcome, never an error: the person's
+/// decision already stands, and a suppressed automatic child never blocks
+/// an explicit Continue or a fresh turn.
+pub(super) enum AutoResumeOutcome {
+    Admitted {
+        session: floe_conversation::AgentSession,
+        child: floe_conversation::RunReceipt,
+    },
+    Suppressed(floe_conversation::ResumeSuppression),
+}
+
+/// Admit and drive one origin's automatic child, unless suppressed.
+///
+/// Best-effort by design: the gate pre-reads the origin, its group and
+/// the Session revision, then admission re-verifies everything atomically.
+/// A lost race (a newer turn, a group flip, a concurrent claim) suppresses
+/// with its honest reason instead of erroring; only storage, identity or
+/// cancellation failures propagate.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn maybe_auto_resume<Keys: VaultKeyProvider + 'static>(
+    core: &FloeCore,
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &LocalContextHost,
+    task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
+    conversation_repository: &std::sync::Arc<floe_vault::VaultConversationRepository<Keys>>,
+    run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
+    connections: &floe_provider_adapters::control::CurrentSavedConnectionStore,
+    person_id: PersonId,
+    session_id: Uuid,
+    origin_run_id: floe_kernel::RunId,
+    device_id: &str,
+    cancellation: floe_execution::Cancellation,
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<AutoResumeOutcome, AgentFailure> {
+    use floe_conversation::ResumeSuppression;
+    if session_id.is_nil()
+        || !origin_run_id.is_valid()
+        || device_id.trim() != device_id
+        || device_id.is_empty()
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let principal = person_id.to_string();
+    let Some(origin) = conversation_repository
+        .load_receipt(origin_run_id)
+        .await?
+    else {
+        return Ok(AutoResumeOutcome::Suppressed(
+            ResumeSuppression::OriginNotCompleted,
+        ));
+    };
+    if origin.principal != principal || origin.session_id != session_id {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let group = floe_conversation::list_run_interactions(
+        conversation_repository.as_ref(),
+        &principal,
+        origin_run_id,
+    )
+    .await?;
+    let link = match floe_conversation::resume_gate(&origin, &group) {
+        Ok(link) => link,
+        Err(suppression) => return Ok(AutoResumeOutcome::Suppressed(suppression)),
+    };
+    let session = vault.load(person_id, session_id).await?;
+    if session.revision != origin.session_revision {
+        return Ok(AutoResumeOutcome::Suppressed(ResumeSuppression::NewerTurn));
+    }
+    let command_id = floe_conversation::resume_command_id(origin_run_id)?;
+    let mut child = None;
+    let drive = run_resume(
+        core,
+        vault,
+        local_context,
+        task_coordinator,
+        conversation_repository,
+        run_cancellations,
+        connections,
+        person_id,
+        command_id,
+        &ResumeTurnRequest {
+            session_id,
+            expected_revision: origin.session_revision,
+            device_id: device_id.to_owned(),
+            resume: link,
+        },
+        cancellation,
+        |receipt: &floe_conversation::RunReceipt| {
+            child = Some(receipt.clone());
+        },
+        emit,
+    )
+    .await;
+    match drive {
+        Ok(driven) => {
+            let Some(child) = child else {
+                return Err(AgentFailure::StorageUnavailable);
+            };
+            Ok(AutoResumeOutcome::Admitted {
+                session: driven,
+                child,
+            })
+        }
+        Err(AgentFailure::Conflict) => {
+            // A concurrent event won between the pre-read and admission.
+            // Name the honest reason with one fresh read instead of
+            // erroring; a conflict with no visible cause stays an error
+            // so a genuine restart race can retry.
+            let fresh = vault.load(person_id, session_id).await?;
+            if fresh.revision != origin.session_revision {
+                return Ok(AutoResumeOutcome::Suppressed(ResumeSuppression::NewerTurn));
+            }
+            let group = floe_conversation::list_run_interactions(
+                conversation_repository.as_ref(),
+                &principal,
+                origin_run_id,
+            )
+            .await?;
+            match floe_conversation::resume_gate(&origin, &group) {
+                Ok(_) => Err(AgentFailure::Conflict),
+                Err(suppression) => Ok(AutoResumeOutcome::Suppressed(suppression)),
+            }
+        }
+        Err(failure) => Err(failure),
+    }
 }
 
 #[cfg(test)]
@@ -3973,6 +4176,7 @@ mod tests {
                 text: "how am I doing?".into(),
                 continuation: None,
                 retry_of: None,
+                resume: None,
                 profile: floe_conversation::ProfileSelection::Auto,
             })
             .await

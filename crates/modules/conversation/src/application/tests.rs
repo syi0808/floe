@@ -101,21 +101,55 @@ impl ConversationRepository for MemoryRepository {
                 let receipt = state.runs.get(run_id).unwrap().admitted.receipt.clone();
                 return Ok(TurnAdmission::Existing(receipt));
             }
-            let (continuation_of, continuation_level) = match &request.mode {
-                crate::TurnMode::New => (None, 0),
-                crate::TurnMode::Continue(reference) => {
-                    let source = state
-                        .runs
-                        .get(&reference.run_id)
-                        .ok_or(AgentFailure::Conflict)?;
-                    if source.admitted.receipt.continuation().as_ref() != Some(reference)
-                        || source.admitted.receipt.session_id != request.session_id
-                    {
-                        return Err(AgentFailure::Conflict);
+            let (continuation_of, continuation_level, resume_of, resume_lineage) =
+                match &request.mode {
+                    crate::TurnMode::New => (None, 0, None, 0),
+                    crate::TurnMode::Continue(reference) => {
+                        let source = state
+                            .runs
+                            .get(&reference.run_id)
+                            .ok_or(AgentFailure::Conflict)?;
+                        if source.admitted.receipt.continuation().as_ref() != Some(reference)
+                            || source.admitted.receipt.session_id != request.session_id
+                        {
+                            return Err(AgentFailure::Conflict);
+                        }
+                        (Some(reference.run_id), reference.level, None, 0)
                     }
-                    (Some(reference.run_id), reference.level)
-                }
-            };
+                    crate::TurnMode::Resume(reference) => {
+                        let origin = state
+                            .runs
+                            .get(&reference.origin_run_id)
+                            .ok_or(AgentFailure::Conflict)?;
+                        if origin.admitted.receipt.resume().as_ref() != Some(reference)
+                            || origin.admitted.receipt.session_id != request.session_id
+                            || origin.admitted.receipt.profile != request.profile
+                        {
+                            return Err(AgentFailure::Conflict);
+                        }
+                        // The claimed slot rejoins across commands before any
+                        // revision comparison, exactly like the Vault table.
+                        if let Some(child) = state.runs.values().find(|stored| {
+                            stored.admitted.receipt.resume_of == Some(reference.origin_run_id)
+                        }) {
+                            return Ok(TurnAdmission::Resumed(child.admitted.receipt.clone()));
+                        }
+                        let group: Vec<&ConversationInteraction> = state
+                            .interactions
+                            .values()
+                            .filter(|entry| entry.origin_run_id == reference.origin_run_id)
+                            .collect();
+                        if group.is_empty()
+                            || group.iter().any(|entry| !entry.state.is_terminal())
+                            || !group.iter().any(|entry| {
+                                matches!(entry.state, crate::InteractionState::Resolved { .. })
+                            })
+                        {
+                            return Err(AgentFailure::Conflict);
+                        }
+                        (None, 0, Some(reference.origin_run_id), reference.lineage)
+                    }
+                };
             let session = state
                 .sessions
                 .get_mut(&request.session_id)
@@ -146,11 +180,13 @@ impl ConversationRepository for MemoryRepository {
                 executor_generation: 1,
                 continuation_of,
                 continuation_executor_generation: match &request.mode {
-                    crate::TurnMode::New => None,
+                    crate::TurnMode::New | crate::TurnMode::Resume(_) => None,
                     crate::TurnMode::Continue(reference) => Some(reference.executor_generation),
                 },
                 continuation_level,
                 retry_of: request.retry_of,
+                resume_of,
+                resume_lineage,
                 profile: request.profile,
                 attempt_refs: vec![],
                 task_refs: vec![],
@@ -2267,4 +2303,1026 @@ async fn retained_history_answer_commits_its_dependency_until_revocation() {
         "revoked derived history must not reach the model: {last:?}"
     );
     assert!(!last.is_empty());
+}
+
+// ---- linked resume (05-E) ----
+
+#[derive(Default)]
+struct ResumeModel {
+    calls: std::sync::atomic::AtomicUsize,
+    first_conversation: Mutex<Option<ModelConversation>>,
+}
+
+impl ModelPort for ResumeModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.first_conversation.lock().unwrap().is_none() {
+            *self.first_conversation.lock().unwrap() =
+                Some(request.projection.envelope.conversation.clone());
+        }
+        Box::pin(async move {
+            Ok(ModelCallOutcome::Ready(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: vec![ModelStep::Answer {
+                    text: "resumed".into(),
+                    artifacts: vec![],
+                }],
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            }))
+        })
+    }
+}
+
+fn resume_requirement() -> crate::InteractionRequirement {
+    crate::InteractionRequirement {
+        kind: crate::InteractionRequirementKind::EnableObserve,
+        source_id: "floe.source.calendar".into(),
+        connection_id: Some("calendar-connection".into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        inline: true,
+    }
+}
+
+fn resume_target() -> crate::ReviewedTarget {
+    crate::ReviewedTarget::InlineObserve(crate::InlineObserveTarget {
+        connection_id: "calendar-connection".into(),
+        device_id: None,
+        source_id: "floe.source.calendar".into(),
+        connector_id: Some("floe.connector.calendar".into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        connection_revision: None,
+        reviewed_producer_fingerprint: None,
+        reviewed_native_subject: None,
+        members: vec![crate::ReviewedBundleMember {
+            member_id: "calendar.timeline".into(),
+            resource: "personal".into(),
+            source_revision: None,
+            expected_grant: crate::ExpectedGrantState::Absent,
+            policy_authority: None,
+        }],
+    })
+}
+
+fn pending_record(
+    person_id: PersonId,
+    session_id: Uuid,
+    origin_run_id: RunId,
+) -> ConversationInteraction {
+    let requirement = resume_requirement();
+    let target = resume_target();
+    let requirement_digest = crate::canonical_requirement_digest(&requirement).unwrap();
+    let target_digest = crate::canonical_target_digest(&target).unwrap();
+    // Distinct origins publish distinct rows; distinct requirements under one
+    // origin need distinct call ids.
+    let origin = crate::InteractionOrigin::Tool {
+        call_id: Uuid::new_v4(),
+    };
+    let id = crate::interaction_publication_id(
+        origin_run_id,
+        &origin,
+        &requirement_digest,
+        &target_digest,
+    )
+    .unwrap();
+    ConversationInteraction {
+        id,
+        person_id,
+        session_id,
+        origin_run_id,
+        origin_turn_id: origin_run_id.as_uuid(),
+        origin,
+        kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        requirement,
+        requirement_digest,
+        target,
+        target_digest,
+        state: InteractionState::Pending,
+        revision: 1,
+        created_at_unix_ms: 1_700_000_000_000,
+        expires_at_unix_ms: 1_700_000_000_000 + crate::INTERACTION_PENDING_LIFETIME_MS,
+    }
+}
+
+async fn resolve_record(
+    repository: &MemoryRepository,
+    record: ConversationInteraction,
+    principal: &str,
+    now_unix_ms: i64,
+) -> ConversationInteraction {
+    let admission = repository.publish_interaction(record).await.unwrap();
+    let pending = match admission {
+        PublishAdmission::Created(record) | PublishAdmission::Existing(record) => record,
+    };
+    let DecisionAdmission::Applied(decided) = crate::decide_interaction(
+        repository,
+        crate::DecideInteractionCommand {
+            command_id: Uuid::new_v4(),
+            interaction_id: pending.id,
+            principal: principal.into(),
+            expected_revision: pending.revision,
+            kind: crate::InteractionDecisionKind::Approve,
+            target_digest: pending.target_digest,
+        },
+        now_unix_ms,
+    )
+    .await
+    .unwrap() else {
+        panic!("fresh approval applies");
+    };
+    let InteractionState::Resolving {
+        decision_id,
+        owner_operation_id,
+    } = decided.state
+    else {
+        panic!("approval resolves through owner work");
+    };
+    crate::resolve_interaction(
+        repository,
+        InteractionResolution {
+            interaction_id: pending.id,
+            person_id: pending.person_id,
+            expected_revision: decided.revision,
+            decision_id,
+            owner_operation_id,
+            resolved_at_unix_ms: now_unix_ms + 1,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+async fn deny_record(
+    repository: &MemoryRepository,
+    record: ConversationInteraction,
+    principal: &str,
+    now_unix_ms: i64,
+) -> ConversationInteraction {
+    let admission = repository.publish_interaction(record).await.unwrap();
+    let pending = match admission {
+        PublishAdmission::Created(record) | PublishAdmission::Existing(record) => record,
+    };
+    let DecisionAdmission::Applied(denied) = crate::decide_interaction(
+        repository,
+        crate::DecideInteractionCommand {
+            command_id: Uuid::new_v4(),
+            interaction_id: pending.id,
+            principal: principal.into(),
+            expected_revision: pending.revision,
+            kind: crate::InteractionDecisionKind::Deny,
+            target_digest: pending.target_digest,
+        },
+        now_unix_ms,
+    )
+    .await
+    .unwrap() else {
+        panic!("fresh denial applies");
+    };
+    assert!(matches!(denied.state, InteractionState::Denied { .. }));
+    denied
+}
+
+fn resume_request(
+    command_id: CommandId,
+    session_id: Uuid,
+    expected_session_revision: u64,
+    principal: &str,
+    prompt: &str,
+    reference: crate::InteractionResumeRef,
+) -> TurnRequest {
+    TurnRequest {
+        command_id,
+        session_id,
+        expected_session_revision,
+        principal: principal.into(),
+        device_id: "device-a".into(),
+        now_unix_ms: 1_700_000_000_000,
+        prompt: prompt.into(),
+        mode: crate::TurnMode::Resume(reference),
+        retry_of: None,
+        profile: crate::ProfileSelection::Auto,
+        allowed_catalog: AllowedCatalog::default(),
+        replay: vec![],
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        cancellation: floe_execution::Cancellation::default(),
+        delegation_context: Some(delegation_context()),
+    }
+}
+
+#[test]
+fn resume_intent_digest_binds_origin_and_rejects_mixed_modes() {
+    let origin = RunId::new();
+    let mut first = crate::StartTurn {
+        command_id: CommandId::new(),
+        session_id: Uuid::new_v4(),
+        expected_revision: 2,
+        text: "plan my day".into(),
+        mode: crate::TurnMode::Resume(crate::InteractionResumeRef {
+            origin_run_id: origin,
+            lineage: 1,
+        }),
+        retry_of: None,
+        profile: crate::ProfileSelection::Auto,
+    };
+    let mut second = first.clone();
+    second.command_id = CommandId::new();
+    let first_intent = crate::CanonicalTurnIntent::from_start_turn(&mut first).unwrap();
+    let second_intent = crate::CanonicalTurnIntent::from_start_turn(&mut second).unwrap();
+    assert_eq!(
+        first_intent.digest("person"),
+        second_intent.digest("person")
+    );
+
+    let mut deeper = first.clone();
+    deeper.mode = crate::TurnMode::Resume(crate::InteractionResumeRef {
+        origin_run_id: origin,
+        lineage: 2,
+    });
+    let deeper = crate::CanonicalTurnIntent::from_start_turn(&mut deeper).unwrap();
+    assert_ne!(first_intent.digest("person"), deeper.digest("person"));
+
+    let mut other_origin = first.clone();
+    other_origin.mode = crate::TurnMode::Resume(crate::InteractionResumeRef {
+        origin_run_id: RunId::new(),
+        lineage: 1,
+    });
+    let other_origin = crate::CanonicalTurnIntent::from_start_turn(&mut other_origin).unwrap();
+    assert_ne!(first_intent.digest("person"), other_origin.digest("person"));
+
+    // A retry is a New-mode link only; resume never mixes with retry.
+    let mut mixed = first.clone();
+    mixed.retry_of = Some(RunId::new());
+    assert_eq!(
+        crate::CanonicalTurnIntent::from_start_turn(&mut mixed),
+        Err(AgentFailure::InvalidInput)
+    );
+
+    for reference in [
+        crate::InteractionResumeRef {
+            origin_run_id: RunId(Uuid::nil()),
+            lineage: 1,
+        },
+        crate::InteractionResumeRef {
+            origin_run_id: origin,
+            lineage: 0,
+        },
+        crate::InteractionResumeRef {
+            origin_run_id: origin,
+            lineage: crate::MAX_RESUME_LINEAGE + 1,
+        },
+    ] {
+        let mut invalid = first.clone();
+        invalid.mode = crate::TurnMode::Resume(reference);
+        assert_eq!(
+            crate::CanonicalTurnIntent::from_start_turn(&mut invalid),
+            Err(AgentFailure::InvalidInput)
+        );
+    }
+}
+
+#[tokio::test]
+async fn linked_resume_runs_original_intent_with_marker_and_no_user_restatement() {
+    let repository = Arc::new(MemoryRepository::default());
+    let person = PersonId::new();
+    let principal = person.to_string();
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, &principal);
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut origin_request = request(CommandId::new(), session_id, 0, "plan my day");
+    origin_request.principal = principal.clone();
+    let origin = service
+        .run_turn(origin_request, ports(&model))
+        .await
+        .unwrap();
+    assert_eq!(origin.state, RunState::Completed);
+
+    let record = pending_record(person, session_id, origin.run_id);
+    let resolved = resolve_record(&repository, record, &principal, 1_700_000_000_000).await;
+    assert!(matches!(resolved.state, InteractionState::Resolved { .. }));
+
+    let link = origin.resume().unwrap();
+    let child_command = crate::resume_command_id(origin.run_id).unwrap();
+    let resume = ResumeModel::default();
+    let child = service
+        .run_turn(
+            resume_request(
+                child_command,
+                session_id,
+                origin.session_revision,
+                &principal,
+                "plan my day",
+                link,
+            ),
+            ports(&resume),
+        )
+        .await
+        .unwrap();
+    assert_eq!(child.state, RunState::Completed);
+    assert_eq!(child.resume_of, Some(origin.run_id));
+    assert_eq!(child.resume_lineage, 1);
+    assert_eq!(child.continuation_of, None);
+    assert_eq!(child.retry_of, None);
+    assert_eq!(child.output.as_deref(), Some("resumed"));
+
+    // Exactly one User message in the whole transcript: the origin's own.
+    // The resume restates nothing as the user.
+    let stored = repository.load_run(child.run_id).await.unwrap().unwrap();
+    let users: Vec<&AgentMessage> = stored
+        .transcript
+        .iter()
+        .filter(|message| message.role == floe_agent_contract::MessageRole::User)
+        .collect();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].text, "plan my day");
+    assert!(
+        stored
+            .transcript
+            .iter()
+            .all(|message| message.message_id != child_command.as_uuid()),
+        "resume pushes no command message"
+    );
+
+    // The model saw the origin intent in history and one host-owned marker
+    // up front, never a forged second User turn.
+    let observed = resume.first_conversation.lock().unwrap().clone().unwrap();
+    assert!(
+        observed.history.iter().any(|entry| matches!(
+            entry,
+            ModelConversationEntry::User { text, .. } if text == "plan my day"
+        )),
+        "origin intent reaches the child through history: {observed:?}"
+    );
+    assert_eq!(observed.current_turn.len(), 2);
+    let ModelConversationEntry::Preamble { message_id, text } = &observed.current_turn[0] else {
+        panic!("resume opens with a host marker");
+    };
+    assert_eq!(*message_id, child_command.as_uuid());
+    assert!(text.contains(&origin.run_id.as_uuid().to_string()));
+    assert!(text.contains("resolved"));
+    // The engine contract needs a current-turn User entry: it restates
+    // the owner-derived original intent under the origin command's own
+    // identity, never a new utterance.
+    let ModelConversationEntry::User {
+        message_id,
+        text: restated,
+    } = &observed.current_turn[1]
+    else {
+        panic!("resume restates the derived intent for the engine contract");
+    };
+    assert_eq!(*message_id, origin.command_id.as_uuid());
+    assert_eq!(restated, "plan my day");
+
+    // A fresh journal: the first entry starts new work rather than
+    // re-recording any origin batch.
+    let journal = repository.load_journal(child.run_id).await.unwrap();
+    assert!(matches!(
+        journal.first(),
+        Some(JournalEntry {
+            event: JournalEvent::ModelIntent { .. },
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn resume_slot_rejoins_across_commands_without_redriving() {
+    let repository = Arc::new(MemoryRepository::default());
+    let person = PersonId::new();
+    let principal = person.to_string();
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, &principal);
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut origin_request = request(CommandId::new(), session_id, 0, "plan my day");
+    origin_request.principal = principal.clone();
+    let origin = service
+        .run_turn(origin_request, ports(&model))
+        .await
+        .unwrap();
+
+    let record = pending_record(person, session_id, origin.run_id);
+    resolve_record(&repository, record, &principal, 1_700_000_000_000).await;
+
+    let link = origin.resume().unwrap();
+    let resume = ResumeModel::default();
+    let first = service
+        .run_turn(
+            resume_request(
+                crate::resume_command_id(origin.run_id).unwrap(),
+                session_id,
+                origin.session_revision,
+                &principal,
+                "plan my day",
+                link,
+            ),
+            ports(&resume),
+        )
+        .await
+        .unwrap();
+    // A second command for the same slot, even at the now-stale revision,
+    // rejoins the canonical child instead of admitting a sibling.
+    let second = service
+        .run_turn(
+            resume_request(
+                CommandId::new(),
+                session_id,
+                origin.session_revision,
+                &principal,
+                "plan my day",
+                link,
+            ),
+            ports(&resume),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.run_id, first.run_id);
+    assert_eq!(second.resume_of, Some(origin.run_id));
+    assert_eq!(resume.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[derive(Default)]
+struct ToolThenAnswerModel {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for ToolThenAnswerModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelCallOutcome, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            let steps = if call == 0 {
+                vec![ModelStep::CallTool {
+                    tool_id: "lookup".into(),
+                    definition_revision: 1,
+                    input: "{}".into(),
+                }]
+            } else {
+                vec![ModelStep::Answer {
+                    text: format!("answered: {}", current_user_text(&request)),
+                    artifacts: vec![],
+                }]
+            };
+            Ok(ModelCallOutcome::Ready(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps,
+                usage: ModelUsage {
+                    tokens: 1,
+                    cost_micros: 1,
+                },
+            }))
+        })
+    }
+}
+
+#[tokio::test]
+async fn resume_child_never_redrives_origin_settled_tool_effect() {
+    let repository = Arc::new(MemoryRepository::default());
+    let person = PersonId::new();
+    let principal = person.to_string();
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, &principal);
+    let service = service(Arc::clone(&repository));
+    let model = ToolThenAnswerModel::default();
+    let tools = CountingTool {
+        calls: Default::default(),
+        failure: None,
+    };
+    let tool_ports = ConversationPorts {
+        projection: &PROJECTOR,
+        model: &model,
+        tools: &tools,
+        delegation: &NoDelegation,
+        validator: &Validator,
+    };
+    let mut origin_request = request(CommandId::new(), session_id, 0, "look this up");
+    origin_request.principal = principal.clone();
+    origin_request.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "lookup".into(),
+            definition_revision: 1,
+            description: "Read a stable value.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "public".into(),
+        }],
+        revision: 1,
+    };
+    let origin = service.run_turn(origin_request, tool_ports).await.unwrap();
+    assert_eq!(origin.state, RunState::Completed);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let tool_events = |events: &Vec<JournalEvent>| {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    JournalEvent::ToolIntent { .. } | JournalEvent::ToolResult { .. }
+                )
+            })
+            .count()
+    };
+    assert_eq!(
+        tool_events(&repository.journal.events.lock().unwrap()),
+        2,
+        "one settled tool intent/result pair from the origin"
+    );
+
+    let record = pending_record(person, session_id, origin.run_id);
+    resolve_record(&repository, record, &principal, 1_700_000_000_000).await;
+    let link = origin.resume().unwrap();
+    let child_ports = ConversationPorts {
+        projection: &PROJECTOR,
+        model: &model,
+        tools: &tools,
+        delegation: &NoDelegation,
+        validator: &Validator,
+    };
+    let child = service
+        .run_turn(
+            resume_request(
+                crate::resume_command_id(origin.run_id).unwrap(),
+                session_id,
+                origin.session_revision,
+                &principal,
+                "look this up",
+                link,
+            ),
+            child_ports,
+        )
+        .await
+        .unwrap();
+    assert_eq!(child.state, RunState::Completed);
+    assert_eq!(child.resume_of, Some(origin.run_id));
+    // The child answers fresh: the origin's settled tool effect is never
+    // re-executed and no tool intent/result is journaled for the child.
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(tool_events(&repository.journal.events.lock().unwrap()), 2);
+}
+
+#[tokio::test]
+async fn resume_rejects_unready_origins_and_groups() {
+    let repository = Arc::new(MemoryRepository::default());
+    let person = PersonId::new();
+    let principal = person.to_string();
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, &principal);
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut origin_request = request(CommandId::new(), session_id, 0, "plan my day");
+    origin_request.principal = principal.clone();
+    let origin = service
+        .run_turn(origin_request, ports(&model))
+        .await
+        .unwrap();
+    let link = origin.resume().unwrap();
+    let attempt = |command_id: CommandId, revision: u64, reference: crate::InteractionResumeRef| {
+        resume_request(
+            command_id,
+            session_id,
+            revision,
+            &principal,
+            "plan my day",
+            reference,
+        )
+    };
+
+    // No group at all: nothing was ever reviewed.
+    assert_eq!(
+        service
+            .run_turn(
+                attempt(CommandId::new(), origin.session_revision, link),
+                ports(&model)
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    // An open card blocks the whole group.
+    let open = pending_record(person, session_id, origin.run_id);
+    repository.publish_interaction(open).await.unwrap();
+    assert_eq!(
+        service
+            .run_turn(
+                attempt(CommandId::new(), origin.session_revision, link),
+                ports(&model)
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    // Deny-all settles the group with nothing resolved: still no child.
+    let open = repository
+        .list_run_interactions(person, origin.run_id)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    deny_record(&repository, open, &principal, 1_700_000_000_000).await;
+    assert_eq!(
+        service
+            .run_turn(
+                attempt(CommandId::new(), origin.session_revision, link),
+                ports(&model)
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    // A skipped lineage depth is not the origin's next child.
+    let skipped = crate::InteractionResumeRef {
+        origin_run_id: origin.run_id,
+        lineage: link.lineage + 1,
+    };
+    assert_eq!(
+        service
+            .run_turn(
+                attempt(CommandId::new(), origin.session_revision, skipped),
+                ports(&model)
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    // An unknown origin is NotFound, not an invented linkage.
+    let missing = crate::InteractionResumeRef {
+        origin_run_id: RunId::new(),
+        lineage: 1,
+    };
+    assert_eq!(
+        service
+            .run_turn(
+                attempt(CommandId::new(), origin.session_revision, missing),
+                ports(&model)
+            )
+            .await,
+        Err(AgentFailure::NotFound)
+    );
+
+    // A Working origin has no resume linkage at all.
+    let working_command = CommandId::new();
+    let working = repository
+        .admit_turn(TurnAdmissionRequest {
+            run_id: RunId::new(),
+            command_id: working_command,
+            session_id,
+            expected_session_revision: 2,
+            principal: principal.clone(),
+            request_digest: [9; 32],
+            mode: crate::TurnMode::New,
+            retry_of: None,
+            profile: crate::ProfileSelection::Auto,
+            user_message: AgentMessage {
+                message_id: working_command.as_uuid(),
+                role: floe_agent_contract::MessageRole::User,
+                text: "working".into(),
+                call_id: None,
+                coverage: DependencyCoverage::Independent,
+            },
+        })
+        .await
+        .unwrap();
+    let TurnAdmission::Created(working) = working else {
+        panic!("fresh command creates");
+    };
+    let working_link = crate::InteractionResumeRef {
+        origin_run_id: working.receipt.run_id,
+        lineage: 1,
+    };
+    assert_eq!(
+        service
+            .run_turn(
+                attempt(CommandId::new(), origin.session_revision, working_link),
+                ports(&model)
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    // A changed profile is not the origin's kept preference.
+    let resolved_record = pending_record(person, session_id, origin.run_id);
+    resolve_record(&repository, resolved_record, &principal, 1_700_000_000_000).await;
+    let mut changed_profile = attempt(CommandId::new(), origin.session_revision, link);
+    changed_profile.profile = crate::ProfileSelection::Explicit("other-profile".into());
+    assert_eq!(
+        service.run_turn(changed_profile, ports(&model)).await,
+        Err(AgentFailure::Conflict)
+    );
+}
+
+struct StaticSessions {
+    sessions: Mutex<HashMap<Uuid, crate::AgentSession>>,
+}
+
+impl crate::SessionStore for StaticSessions {
+    fn protection(&self) -> floe_agent_contract::SessionProtection {
+        floe_agent_contract::SessionProtection::SyntheticOnly
+    }
+
+    fn load(
+        &self,
+        person_id: PersonId,
+        session_id: Uuid,
+    ) -> impl Future<Output = Result<crate::AgentSession, AgentFailure>> + Send {
+        let sessions = self.sessions.lock().unwrap();
+        let loaded = sessions.get(&session_id).cloned();
+        async move {
+            loaded
+                .filter(|session| session.person_id == person_id)
+                .ok_or(AgentFailure::NotFound)
+        }
+    }
+
+    fn compare_and_swap(
+        &self,
+        _session: &crate::AgentSession,
+        _previous_revision: u64,
+    ) -> impl Future<Output = Result<(), AgentFailure>> + Send {
+        async { Err(AgentFailure::StorageUnavailable) }
+    }
+}
+
+fn stored_session(
+    person_id: PersonId,
+    session_id: Uuid,
+    revision: u64,
+    messages: Vec<crate::AgentMessage>,
+) -> crate::AgentSession {
+    let mut session = crate::AgentSession::new(person_id);
+    session.id = session_id;
+    session.revision = revision;
+    session.messages = messages;
+    session
+}
+
+#[tokio::test]
+async fn prepare_resume_derives_origin_text_and_never_invents_it() {
+    let person = PersonId::new();
+    let principal = person.to_string();
+    let session_id = Uuid::new_v4();
+    let live = Arc::new(MemoryRepository::default());
+    live.add_session(session_id, &principal);
+    let session_two = Uuid::new_v4();
+    let live_two = Arc::new(MemoryRepository::default());
+    live_two.add_session(session_two, &principal);
+    let svc = service(Arc::clone(&live));
+    let svc_two = service(Arc::clone(&live_two));
+    let model = AnswerModel::default();
+    let mut origin_request = request(CommandId::new(), session_id, 0, "plan my day");
+    origin_request.principal = principal.clone();
+    let origin = svc.run_turn(origin_request, ports(&model)).await.unwrap();
+
+    let sessions = StaticSessions {
+        sessions: Mutex::new(HashMap::from([(
+            session_id,
+            stored_session(
+                person,
+                session_id,
+                origin.session_revision,
+                vec![crate::AgentMessage::User {
+                    turn_id: origin.run_id.as_uuid(),
+                    text: "plan my day".into(),
+                }],
+            ),
+        )])),
+    };
+    let prepared = crate::prepare_resume(
+        live.as_ref(),
+        &sessions,
+        crate::ResumePreparationRequest {
+            principal: principal.clone(),
+            person_id: person,
+            session_id,
+            resume: origin.resume().unwrap(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(prepared.text, "plan my day");
+    assert_eq!(prepared.origin.run_id, origin.run_id);
+    assert!(matches!(
+        prepared.mode,
+        crate::TurnMode::Resume(link) if link.origin_run_id == origin.run_id
+    ));
+
+    // A compacted-away origin message cannot be reconstituted: no text,
+    // no child.
+    let compacted = StaticSessions {
+        sessions: Mutex::new(HashMap::from([(
+            session_id,
+            stored_session(person, session_id, origin.session_revision + 1, vec![]),
+        )])),
+    };
+    assert!(matches!(
+        crate::prepare_resume(
+            live.as_ref(),
+            &compacted,
+            crate::ResumePreparationRequest {
+                principal: principal.clone(),
+                person_id: person,
+                session_id,
+                resume: origin.resume().unwrap(),
+            },
+        )
+        .await,
+        Err(AgentFailure::Conflict)
+    ));
+
+    // A continuation origin never persisted its new text either. The
+    // continuation leg runs on its own repository: the test journal is
+    // global per repository, and the origin's drive events must not leak
+    // into the continued projection.
+    let mut expired = request(CommandId::new(), session_two, 0, "finish this");
+    expired.principal = principal.clone();
+    expired.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+    let timed_out = svc_two.run_turn(expired, ports(&model)).await.unwrap();
+    assert_eq!(timed_out.state, RunState::TimedOut);
+    let mut continued_request = request(
+        CommandId::new(),
+        session_two,
+        timed_out.session_revision,
+        "finish this",
+    );
+    continued_request.principal = principal.clone();
+    continued_request.mode = crate::TurnMode::Continue(timed_out.continuation().unwrap());
+    let continued = svc_two
+        .run_turn(continued_request, ports(&model))
+        .await
+        .unwrap();
+    assert_eq!(continued.state, RunState::Completed);
+    sessions.sessions.lock().unwrap().insert(
+        session_two,
+        stored_session(person, session_two, continued.session_revision, vec![]),
+    );
+    assert!(matches!(
+        crate::prepare_resume(
+            live_two.as_ref(),
+            &sessions,
+            crate::ResumePreparationRequest {
+                principal: principal.clone(),
+                person_id: person,
+                session_id: session_two,
+                resume: continued.resume().unwrap(),
+            },
+        )
+        .await,
+        Err(AgentFailure::Conflict)
+    ));
+
+    // An unknown origin is NotFound; a wrong session conflicts.
+    assert!(matches!(
+        crate::prepare_resume(
+            live.as_ref(),
+            &sessions,
+            crate::ResumePreparationRequest {
+                principal: principal.clone(),
+                person_id: person,
+                session_id,
+                resume: crate::InteractionResumeRef {
+                    origin_run_id: RunId::new(),
+                    lineage: 1,
+                },
+            },
+        )
+        .await,
+        Err(AgentFailure::NotFound)
+    ));
+    assert!(matches!(
+        crate::prepare_resume(
+            live.as_ref(),
+            &sessions,
+            crate::ResumePreparationRequest {
+                principal: principal.clone(),
+                person_id: person,
+                session_id: Uuid::new_v4(),
+                resume: origin.resume().unwrap(),
+            },
+        )
+        .await,
+        Err(AgentFailure::Conflict)
+    ));
+}
+
+#[tokio::test]
+async fn precheck_resume_verifies_origin_then_recorded_linkage() {
+    let person = PersonId::new();
+    let principal = person.to_string();
+    let session_id = Uuid::new_v4();
+    let live = Arc::new(MemoryRepository::default());
+    live.add_session(session_id, &principal);
+    let service = service(Arc::clone(&live));
+    let model = AnswerModel::default();
+    let mut origin_request = request(CommandId::new(), session_id, 0, "plan my day");
+    origin_request.principal = principal.clone();
+    let origin = service
+        .run_turn(origin_request, ports(&model))
+        .await
+        .unwrap();
+    let link = origin.resume().unwrap();
+
+    // A first-time resume names a Completed origin of the same Session.
+    let command_id = CommandId::new();
+    let precheck = crate::precheck_turn(
+        live.as_ref(),
+        crate::TurnPrecheckRequest {
+            principal: principal.clone(),
+            command_id,
+            session_id,
+            mode: crate::TurnMode::Resume(link),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(precheck.existing.is_none());
+    assert!(precheck.continuation);
+
+    // A mismatched session or lineage is not the origin's child.
+    assert!(
+        crate::precheck_turn(
+            live.as_ref(),
+            crate::TurnPrecheckRequest {
+                principal: principal.clone(),
+                command_id: CommandId::new(),
+                session_id: Uuid::new_v4(),
+                mode: crate::TurnMode::Resume(link),
+            },
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        crate::precheck_turn(
+            live.as_ref(),
+            crate::TurnPrecheckRequest {
+                principal: principal.clone(),
+                command_id: CommandId::new(),
+                session_id,
+                mode: crate::TurnMode::Resume(crate::InteractionResumeRef {
+                    origin_run_id: link.origin_run_id,
+                    lineage: link.lineage + 1,
+                }),
+            },
+        )
+        .await
+        .is_err()
+    );
+
+    // Once admitted, the command rejoins only with the same linkage.
+    let record = pending_record(person, session_id, origin.run_id);
+    resolve_record(&live, record, &principal, 1_700_000_000_000).await;
+    let resume = ResumeModel::default();
+    let child = service
+        .run_turn(
+            resume_request(
+                command_id,
+                session_id,
+                origin.session_revision,
+                &principal,
+                "plan my day",
+                link,
+            ),
+            ports(&resume),
+        )
+        .await
+        .unwrap();
+    let rejoined = crate::precheck_turn(
+        live.as_ref(),
+        crate::TurnPrecheckRequest {
+            principal: principal.clone(),
+            command_id,
+            session_id,
+            mode: crate::TurnMode::Resume(link),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(rejoined.existing.unwrap().run_id, child.run_id);
+    assert!(
+        crate::precheck_turn(
+            live.as_ref(),
+            crate::TurnPrecheckRequest {
+                principal: principal.clone(),
+                command_id,
+                session_id,
+                mode: crate::TurnMode::Resume(crate::InteractionResumeRef {
+                    origin_run_id: RunId::new(),
+                    lineage: 1,
+                }),
+            },
+        )
+        .await
+        .is_err()
+    );
 }

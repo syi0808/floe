@@ -16,14 +16,15 @@ pub use interaction::{
     AuthorityRevision, ConversationInteraction, DecisionAdmission, ExpectedGrantState,
     ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InlineObserveTarget,
     InteractionDecision, InteractionDecisionKind, InteractionOrigin, InteractionRequirement,
-    InteractionRequirementKind, InteractionResolution, InteractionState,
-    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RECIPIENT_CONSENT_TARGET_BYTES,
+    InteractionRequirementKind, InteractionResolution, InteractionResolutionReceipt,
+    InteractionResumeRef, InteractionState,
+    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RECIPIENT_CONSENT_TARGET_BYTES, MAX_RESUME_LINEAGE,
     MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
     MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
     NavigationDestination, NavigationOnlyTarget, PublishAdmission, RecipientConsentTarget,
     ReviewedBundleMember, ReviewedTarget, SupersedeInteraction, canonical_requirement_digest,
     canonical_target_digest, decision_operation_id, interaction_publication_id,
-    next_state_after_decision, state_after_resolution,
+    next_state_after_decision, resume_command_id, state_after_resolution,
 };
 
 pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
@@ -150,6 +151,7 @@ pub enum TurnMode {
     #[default]
     New,
     Continue(ContinuationRef),
+    Resume(InteractionResumeRef),
 }
 
 impl RunState {
@@ -176,6 +178,8 @@ pub struct RunReceipt {
     pub continuation_executor_generation: Option<u64>,
     pub continuation_level: u8,
     pub retry_of: Option<RunId>,
+    pub resume_of: Option<RunId>,
+    pub resume_lineage: u8,
     pub profile: ProfileSelection,
     pub attempt_refs: Vec<Uuid>,
     pub task_refs: Vec<Uuid>,
@@ -196,6 +200,8 @@ impl RunReceipt {
             || self.executor_generation == 0
             || self.continuation_level > 3
             || self.retry_of == Some(self.run_id)
+            || self.resume_of == Some(self.run_id)
+            || self.resume_lineage > MAX_RESUME_LINEAGE
             || self.profile.validate().is_err()
             || self.attempt_refs.len() > 64
             || self.task_refs.len() > 64
@@ -224,6 +230,11 @@ impl RunReceipt {
         if self.continuation_of.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation == Some(0)
+            || self.resume_of.is_some() != (self.resume_lineage > 0)
+            || self.resume_of.is_some()
+                && (self.continuation_of.is_some()
+                    || self.continuation_level > 0
+                    || self.retry_of.is_some())
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -275,6 +286,21 @@ impl RunReceipt {
             level,
         })
     }
+
+    /// The linked-resume reference this Run's child would carry, if this Run
+    /// may be an origin: Completed, with chain depth left. Whether the
+    /// interaction group actually admits that child is decided atomically at
+    /// admission, never from this receipt alone.
+    pub fn resume(&self) -> Option<InteractionResumeRef> {
+        (self.state == RunState::Completed)
+            .then(|| self.resume_lineage.checked_add(1))
+            .flatten()
+            .filter(|lineage| *lineage <= MAX_RESUME_LINEAGE)
+            .map(|lineage| InteractionResumeRef {
+                origin_run_id: self.run_id,
+                lineage,
+            })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -312,8 +338,10 @@ impl TurnAdmissionRequest {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        if let TurnMode::Continue(reference) = &self.mode {
-            reference.validate()?;
+        match &self.mode {
+            TurnMode::New => {}
+            TurnMode::Continue(reference) => reference.validate()?,
+            TurnMode::Resume(reference) => reference.validate()?,
         }
         Ok(())
     }
@@ -334,7 +362,7 @@ impl AdmittedTurn {
                 .transcript
                 .iter()
                 .any(|message| message.validate().is_err())
-            || if self.receipt.continuation_of.is_some() {
+            || if self.receipt.continuation_of.is_some() || self.receipt.resume_of.is_some() {
                 self.transcript
                     .iter()
                     .any(|message| message.message_id == self.receipt.command_id.as_uuid())
@@ -359,6 +387,10 @@ impl AdmittedTurn {
 pub enum TurnAdmission {
     Created(AdmittedTurn),
     Existing(RunReceipt),
+    /// The origin slot already admitted this resume under another command.
+    /// The receipt is the canonical child; its digest is the winner's and
+    /// is never compared against the loser's request.
+    Resumed(RunReceipt),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

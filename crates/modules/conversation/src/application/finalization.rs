@@ -14,7 +14,7 @@ use crate::{
     PublishAdmission, PublishModelRequirement, RunState, RunTerminal, TurnRequest,
 };
 
-use super::interactions::publish_model_requirement;
+use super::interactions::{publish_model_requirement, rescope_blocked_requirement};
 use super::recovery::project_active_journal;
 
 const MAX_FINALIZATION_DURATION: Duration = Duration::from_secs(10);
@@ -151,6 +151,14 @@ pub(super) async fn finalize_exhausted_run<
         // limitation. The exhaustion issue is superseded: no output was
         // produced, and the fresh review unblocks a linked resume.
         EngineOutcome::Blocked(blocked) => {
+            // A linked resume dispatches under origin-carried lineage; the
+            // fresh review re-scopes to this attempting Run before
+            // publication.
+            let Ok(requirement) =
+                rescope_blocked_requirement(blocked.requirement, turn.session_id, run_id)
+            else {
+                return Ok(FinalizationOutcome::AttemptedWithoutReply);
+            };
             let published = match publish_model_requirement(
                 repository,
                 repository,
@@ -161,7 +169,7 @@ pub(super) async fn finalize_exhausted_run<
                     origin: InteractionOrigin::Model {
                         attempt_id: blocked.attempt_id,
                     },
-                    requirement: blocked.requirement,
+                    requirement,
                     device_id: turn.device_id.clone(),
                 },
                 turn.now_unix_ms,

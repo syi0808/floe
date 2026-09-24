@@ -9,7 +9,8 @@ use floe_kernel::{AgentFailure, CommandId};
 use uuid::Uuid;
 
 use crate::{
-    CommandQuery, ContinuationRef, ConversationRepository, RunQuery, RunReceipt, TurnMode,
+    CommandQuery, ContinuationRef, ConversationRepository, InteractionResumeRef, RunQuery,
+    RunReceipt, TurnMode,
 };
 
 /// One caller request to admit, in Conversation's own terms.
@@ -26,8 +27,10 @@ impl TurnPrecheckRequest {
         if !self.command_id.is_valid() || self.session_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
         }
-        if let TurnMode::Continue(reference) = &self.mode {
-            reference.validate()?;
+        match &self.mode {
+            TurnMode::New => {}
+            TurnMode::Continue(reference) => reference.validate()?,
+            TurnMode::Resume(reference) => reference.validate()?,
         }
         Ok(())
     }
@@ -69,6 +72,13 @@ pub async fn precheck_turn<Repository: ConversationRepository>(
             }
             true
         }
+        TurnMode::Resume(reference) => {
+            match existing.as_ref() {
+                Some(receipt) => verify_recorded_resume(receipt, request.session_id, reference)?,
+                None => verify_resume_source(repository, &request, reference).await?,
+            }
+            true
+        }
     };
     Ok(TurnPrecheck {
         existing,
@@ -87,6 +97,46 @@ fn verify_recorded(
         || receipt.continuation_executor_generation != Some(reference.executor_generation)
         || receipt.continuation_level != reference.level
     {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(())
+}
+
+/// The command was admitted before: it must describe the same resume linkage.
+fn verify_recorded_resume(
+    receipt: &RunReceipt,
+    session_id: Uuid,
+    reference: &InteractionResumeRef,
+) -> Result<(), AgentFailure> {
+    if receipt.session_id != session_id
+        || receipt.resume_of != Some(reference.origin_run_id)
+        || receipt.resume_lineage != reference.lineage
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(())
+}
+
+/// A first-time resume: the named origin must actually admit this child.
+///
+/// The receipt's own linkage rule decides: Completed, at the next lineage
+/// depth, with chain depth left. The interaction group gate is re-verified
+/// atomically at admission, never here.
+async fn verify_resume_source<Repository: ConversationRepository>(
+    repository: &Repository,
+    request: &TurnPrecheckRequest,
+    reference: &InteractionResumeRef,
+) -> Result<(), AgentFailure> {
+    let origin = super::query::get_run(
+        repository,
+        RunQuery {
+            principal: request.principal.clone(),
+            run_id: reference.origin_run_id,
+        },
+    )
+    .await?
+    .ok_or(AgentFailure::NotFound)?;
+    if origin.session_id != request.session_id || origin.resume().as_ref() != Some(reference) {
         return Err(AgentFailure::Conflict);
     }
     Ok(())
@@ -235,4 +285,123 @@ async fn continued_run<Repository: ConversationRepository>(
         return Err(AgentFailure::Conflict);
     }
     Ok(snapshot.reference)
+}
+
+/// One linked-resume request to prepare, in Conversation's own terms.
+///
+/// The caller names only the origin linkage. The original text, the profile
+/// and the mode all come from the origin's own durable admission: no caller
+/// resends text, chooses a parent Run or injects a second user message.
+pub struct ResumePreparationRequest {
+    pub principal: String,
+    pub person_id: floe_kernel::PersonId,
+    pub session_id: Uuid,
+    pub resume: InteractionResumeRef,
+}
+
+/// A prepared resume: the Session, the owner-derived origin intent, and
+/// the origin itself. The child keeps the origin's profile and, on the
+/// automatic path, admits at the origin's Session revision; an explicit
+/// Continue admits at the current Session revision instead.
+pub struct PreparedResume {
+    pub session: crate::turn::AgentSession,
+    pub mode: TurnMode,
+    pub text: String,
+    pub origin: RunReceipt,
+}
+
+/// Prepare one linked resume against the origin it names.
+///
+/// The origin must be Completed in this Session at exactly the named
+/// lineage; its text is read back from the live Session transcript, chasing
+/// resume links to the New root. A continuation origin, a compacted-away or
+/// deleted origin message, or a chain deeper than admission allows fails
+/// closed: the child is never admitted with invented text.
+///
+/// Whether the origin's interaction group currently admits a child, and
+/// whether a newer turn has superseded the request, is decided atomically
+/// inside admission, never from this read.
+pub async fn prepare_resume<Repository, Store>(
+    repository: &Repository,
+    sessions: &Store,
+    request: ResumePreparationRequest,
+) -> Result<PreparedResume, AgentFailure>
+where
+    Repository: ConversationRepository,
+    Store: crate::turn::SessionStore,
+{
+    request.resume.validate()?;
+    let origin = super::query::get_run(
+        repository,
+        RunQuery {
+            principal: request.principal.clone(),
+            run_id: request.resume.origin_run_id,
+        },
+    )
+    .await?
+    .ok_or(AgentFailure::NotFound)?;
+    if origin.session_id != request.session_id || origin.resume().as_ref() != Some(&request.resume)
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    let session = sessions.load(request.person_id, request.session_id).await?;
+    if session.scope.is_some()
+        || session.data_classes != [floe_agent_contract::DataClass::Personal]
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    let text = derive_origin_text(repository, &request, &session, &origin).await?;
+    Ok(PreparedResume {
+        session,
+        mode: TurnMode::Resume(request.resume),
+        text,
+        origin,
+    })
+}
+
+/// The origin's canonical text, chased to the New root that spoke it.
+///
+/// Resume children push no Session message of their own, so a resume origin
+/// resolves through its own origin link. Continuation turns never persisted
+/// their new text, and a compacted-away message is gone: both fail closed
+/// rather than inventing the intent the child would execute.
+async fn derive_origin_text<Repository: ConversationRepository>(
+    repository: &Repository,
+    request: &ResumePreparationRequest,
+    session: &crate::turn::AgentSession,
+    origin: &RunReceipt,
+) -> Result<String, AgentFailure> {
+    let mut current = origin.clone();
+    for _ in 0..=crate::MAX_RESUME_LINEAGE {
+        let Some(parent_id) = current.resume_of else {
+            break;
+        };
+        current = super::query::get_run(
+            repository,
+            RunQuery {
+                principal: request.principal.clone(),
+                run_id: parent_id,
+            },
+        )
+        .await?
+        .ok_or(AgentFailure::Conflict)?;
+        if current.session_id != request.session_id {
+            return Err(AgentFailure::Conflict);
+        }
+    }
+    if current.resume_of.is_some() || current.continuation_of.is_some() {
+        return Err(AgentFailure::Conflict);
+    }
+    session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            crate::turn::AgentMessage::User { turn_id, text }
+                if *turn_id == current.run_id.as_uuid() =>
+            {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .ok_or(AgentFailure::Conflict)
 }

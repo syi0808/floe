@@ -16,15 +16,17 @@ pub use api::{
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationModelProjection, ConversationService, DecideInteractionCommand,
-    GovernedSessionRepository, GovernedSessionStore, HistoryProjection, PreparedTurn,
-    ProjectedModelConversation, PublishInteractionRequest, PublishModelRequirement,
-    RunCancellationRegistry, TurnPrecheck, TurnPrecheckRequest, TurnPreparationRequest,
+    GovernedSessionRepository, GovernedSessionStore, HistoryProjection, PreparedResume,
+    PreparedTurn, ProjectedModelConversation, PublishInteractionRequest, PublishModelRequirement,
+    ResumePreparationRequest, ResumeSuppression, RunCancellationRegistry, TurnPrecheck,
+    TurnPrecheckRequest, TurnPreparationRequest,
     admit_unscoped_session, admitted_session, cancel_run_command, compact_session, continuation,
     decide_interaction, expire_interaction, get_command, get_run, get_session,
     list_run_interactions, load_interaction, narrow_by_source_boundary, precheck_turn,
-    prepare_turn, project_continuation, project_model_conversation_history, publish_interaction,
+    prepare_resume, prepare_turn, project_continuation, project_model_conversation_history,
+    publish_interaction,
     publish_model_requirement, read_archive, recover_session, recovered_session,
-    resolve_interaction, resume_session, start_session, supersede_interaction,
+    resolve_interaction, resume_gate, resume_session, start_session, supersede_interaction,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, AuthorityRevision, CommandQuery, CompactionReceipt,
@@ -32,8 +34,9 @@ pub use domain::{
     DecisionAdmission, ExpectedGrantState, ExpireInteraction, ExpireOutcome,
     INTERACTION_PENDING_LIFETIME_MS, InlineObserveTarget, InteractionDecision,
     InteractionDecisionKind, InteractionOrigin, InteractionRequirement, InteractionRequirementKind,
-    InteractionResolution, InteractionState, JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN,
-    MAX_COMPACTION_SUMMARY_BYTES, MAX_RECIPIENT_CONSENT_TARGET_BYTES,
+    InteractionResolution, InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
+    JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_COMPACTION_SUMMARY_BYTES,
+    MAX_RECIPIENT_CONSENT_TARGET_BYTES, MAX_RESUME_LINEAGE,
     MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
     MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
     MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget, ProfileSelection,
@@ -42,7 +45,7 @@ pub use domain::{
     SessionReadRequest, SessionReceipt, SessionRequest, StartTurn, SupersedeInteraction,
     TurnAdmission, TurnAdmissionRequest, TurnMode, canonical_requirement_digest,
     canonical_target_digest, decision_operation_id, interaction_publication_id,
-    next_state_after_decision, state_after_resolution,
+    next_state_after_decision, resume_command_id, state_after_resolution,
 };
 pub use domain::{CanonicalTurnIntent, normalize_turn_text};
 pub use floe_agent_contract::{

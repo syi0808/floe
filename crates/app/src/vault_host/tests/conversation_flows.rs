@@ -944,6 +944,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
                 text: "Finish after the deadline".into(),
                 continuation: None,
                 retry_of: None,
+                resume: None,
                 profile: floe_conversation::ProfileSelection::Explicit("server-model".into()),
             }),
         )
@@ -1678,6 +1679,7 @@ fn remote_tool_name(identifier: &str) -> String {
 fn observing_server(
     inventory: serde_json::Value,
     agent_script: Vec<serde_json::Value>,
+    external_routing: bool,
 ) -> (
     MockServer,
     Arc<std::sync::atomic::AtomicUsize>,
@@ -1759,13 +1761,18 @@ fn observing_server(
             assert_eq!(path, "/v1/agent", "unexpected request: {headers}");
             server_posts.fetch_add(1, Ordering::SeqCst);
             let output = script.next().expect("unexpected model call").to_string();
+            let (placement, external_transfer) = if external_routing {
+                ("remote", true)
+            } else {
+                ("server_local", false)
+            };
             let response = serde_json::json!({
                 "schema_version": 1,
                 "purpose": "everyday_assistance",
                 "trace_id": "c".repeat(32),
                 "routing": {
-                    "placement": "server_local",
-                    "external_transfer": false,
+                    "placement": placement,
+                    "external_transfer": external_transfer,
                     "replay_source": "c".repeat(64),
                 },
                 "output": output,
@@ -1840,6 +1847,7 @@ fn canonical_root_turn_discovers_profiles_before_posting_to_transport() {
     let (mock, purposes, agent_posts, done, server) = observing_server(
         server_local_inventory(),
         canonical_answer_script("Canonical hello."),
+        false,
     );
     let request_id = Uuid::new_v4();
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
@@ -1906,7 +1914,7 @@ fn canonical_root_explicit_unknown_profile_fails_without_agent_post() {
     .session
     .unwrap();
     let (mock, purposes, agent_posts, done, server) =
-        observing_server(server_local_inventory(), vec![]);
+        observing_server(server_local_inventory(), vec![], false);
     let request_id = Uuid::new_v4();
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
@@ -1977,7 +1985,7 @@ fn canonical_root_unconsented_external_recipient_blocks_with_card_without_agent_
             }
         }
     });
-    let (mock, purposes, agent_posts, done, server) = observing_server(inventory, vec![]);
+    let (mock, purposes, agent_posts, done, server) = observing_server(inventory, vec![], false);
     let request_id = Uuid::new_v4();
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
     worker
@@ -2095,7 +2103,7 @@ fn delegated_model_dispatch_uses_the_same_owner_checks_as_root() {
             }
         }
     });
-    let (mock, purposes, agent_posts, done, server) = observing_server(inventory, vec![]);
+    let (mock, purposes, agent_posts, done, server) = observing_server(inventory, vec![], false);
     let connection = saved_server_connection(&mock, person, "mac-local");
     let store =
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection));
@@ -3140,4 +3148,719 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
             &endpoint, invocation, &scope,
         ));
     assert_eq!(result.err(), Some(AgentFailure::CapabilityDenied));
+}
+
+// ---- linked resume (05-E) ----
+
+use super::super::conversation_turn::{
+    AutoResumeOutcome, ResumeTurnRequest, maybe_auto_resume, run, run_resume,
+};
+use super::super::interaction_owners::HostInteractionOwners;
+use crate::vault_host::interaction_resolution::{
+    ResolveInteractionCommand, ResolveOutcome, resolve_interaction,
+};
+
+struct StubCalendarSubject;
+
+impl floe_context::NativeCalendarSubjectSource for StubCalendarSubject {
+    fn subject(
+        &self,
+        _request: floe_context::NativeSubjectRequest,
+    ) -> impl Future<Output = Result<floe_context::NativeSubjectObservation, AgentFailure>> + Send
+    {
+        async { panic!("recipient-consent resolution never probes calendar subjects") }
+    }
+}
+
+struct StubPersonalInspector;
+
+impl floe_access::PersonalSubjectInspector for StubPersonalInspector {
+    fn inspect<'a>(
+        &'a self,
+        _person_id: PersonId,
+        _device_id: &'a str,
+        _probe: floe_access::PersonalSubjectProbe<'a>,
+        _expected_native_subject_fingerprint: Option<String>,
+        _deadline: Option<tokio::time::Instant>,
+        _cancellation: floe_execution::Cancellation,
+    ) -> floe_agent_contract::BoxFuture<
+        'a,
+        Result<floe_access::PersonalSubjectEvidence, AgentFailure>,
+    > {
+        Box::pin(async { panic!("recipient-consent resolution never probes personal subjects") })
+    }
+
+    fn attention_presence(&self, _person_id: PersonId, _device_id: &str) -> Option<Uuid> {
+        None
+    }
+}
+
+struct ResumeHarness {
+    person: PersonId,
+    device: String,
+    core: Arc<crate::FloeCore>,
+    vault: Arc<floe_vault::EncryptedAgentVault<Keys>>,
+    repository: Arc<floe_vault::VaultConversationRepository<Keys>>,
+    coordinator: floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
+    cancellations: Arc<floe_conversation::RunCancellationRegistry>,
+    local: Arc<crate::local_context::LocalContextHost>,
+    connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
+    session_id: Uuid,
+    agent_posts: Arc<std::sync::atomic::AtomicUsize>,
+    done: Arc<AtomicBool>,
+    server: Option<std::thread::JoinHandle<()>>,
+    caller: crate::CallerContext,
+    calendar: StubCalendarSubject,
+    personal: StubPersonalInspector,
+    _root: tempfile::TempDir,
+}
+
+fn consent_inventory() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "purposes": {
+            "everyday_assistance": {
+                "available": true,
+                "requires_external_consent": true,
+                "placement": "external",
+                "recipient": "someone-else.example"
+            }
+        }
+    })
+}
+
+impl ResumeHarness {
+    async fn open(agent_script: Vec<serde_json::Value>) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let person = PersonId::new();
+        let device = "mac-local".to_string();
+        let core = Arc::new(
+            crate::FloeCore::open(root.path().join("core.db"))
+                .await
+                .unwrap(),
+        );
+        let vault = Arc::new(
+            floe_vault::EncryptedAgentVault::create(root.path(), person, Keys::default())
+                .await
+                .unwrap(),
+        );
+        let session = vault.create_session().await.unwrap();
+        vault.activate_conversation_executor().await.unwrap();
+        let repository = Arc::new(floe_vault::VaultConversationRepository::new(Arc::clone(
+            &vault,
+        )));
+        let tasks = Arc::new(floe_vault::VaultTaskRepository::new(Arc::clone(&vault)));
+        let (coordinator, _recovered) = floe_experts::TaskCoordinator::activate(
+            floe_experts::Directory::default(),
+            tasks,
+            "everyday-assistance",
+            floe_agent_contract::MAX_OUTPUT_BYTES,
+        )
+        .await
+        .unwrap();
+        let (mock, _purposes, agent_posts, done, server) =
+            observing_server(consent_inventory(), agent_script, true);
+        let connections = floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(
+            Some(saved_server_connection(&mock, person, &device)),
+        );
+        let caller = crate::CallerContext::verified(
+            crate::LocalIdentityClaim {
+                person_id: person.0,
+                device_id: device.clone(),
+            },
+            1,
+        )
+        .unwrap();
+        Self {
+            person,
+            device,
+            core,
+            vault,
+            repository,
+            coordinator,
+            cancellations: Arc::new(floe_conversation::RunCancellationRegistry::default()),
+            local: Arc::new(crate::local_context::LocalContextHost::default()),
+            connections,
+            session_id: session.id,
+            agent_posts,
+            done,
+            server: Some(server),
+            caller,
+            calendar: StubCalendarSubject,
+            personal: StubPersonalInspector,
+            _root: root,
+        }
+    }
+
+    async fn drive_origin(&self, text: &str, revision: u64) -> floe_conversation::RunReceipt {
+        let mut admitted = None;
+        let request = ConversationTurnRequest::new(
+            self.session_id,
+            revision,
+            text.into(),
+            self.device.clone(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        );
+        run(
+            &self.core,
+            &self.vault,
+            &self.local,
+            &self.coordinator,
+            &self.repository,
+            &self.cancellations,
+            &self.connections,
+            self.person,
+            floe_agent_contract::CommandId::new(),
+            &request,
+            floe_execution::Cancellation::default(),
+            |receipt: &floe_conversation::RunReceipt| {
+                admitted = Some(receipt.clone());
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let admitted = admitted.expect("origin turn admits");
+        // on_admitted fires at admission (Working); reload the terminal
+        // receipt the drive settled.
+        floe_conversation::ConversationRepository::load_receipt(
+            self.repository.as_ref(),
+            admitted.run_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+    }
+
+    fn owners(
+        &self,
+    ) -> HostInteractionOwners<'_, Keys, StubCalendarSubject, StubPersonalInspector> {
+        HostInteractionOwners {
+            core: &self.core,
+            vault: &self.vault,
+            connections: &self.connections,
+            calendar_subject: &self.calendar,
+            personal_subject: &self.personal,
+            probe_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        }
+    }
+
+    async fn allow(
+        &self,
+        interaction_id: Uuid,
+        expected_revision: u64,
+        target_digest: [u8; 32],
+    ) -> floe_conversation::ConversationInteraction {
+        let owners = self.owners();
+        let outcome = resolve_interaction(
+            self.repository.as_ref(),
+            self.repository.as_ref(),
+            &owners,
+            &owners,
+            &owners,
+            &self.caller,
+            ResolveInteractionCommand {
+                interaction_id,
+                command_id: Uuid::new_v4(),
+                session_id: self.session_id,
+                expected_revision,
+                kind: floe_conversation::InteractionDecisionKind::Approve,
+                target_digest,
+            },
+            &floe_execution::Cancellation::default(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .unwrap();
+        let ResolveOutcome::Resolved { interaction } = outcome else {
+            panic!("consent allow resolves synchronously: {outcome:?}");
+        };
+        interaction
+    }
+
+    async fn finish(mut self) {
+        self.done.store(true, Ordering::Release);
+        self.server.take().unwrap().join().unwrap();
+    }
+}
+
+fn pending_consent_card(session: &floe_conversation::AgentSession) -> Uuid {
+    let cards: Vec<Uuid> = session
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Interaction { interaction_id, .. } => Some(*interaction_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cards.len(), 1, "one blocked card: {session:?}");
+    cards[0]
+}
+
+#[tokio::test]
+async fn allow_resolves_and_auto_child_runs_authorized_under_origin_lineage() {
+    let harness = ResumeHarness::open(canonical_answer_script("The model resumed.")).await;
+    let origin = harness.drive_origin("Hello", 0).await;
+    assert_eq!(origin.state, floe_conversation::RunState::Completed);
+    assert_eq!(
+        harness.agent_posts.load(Ordering::SeqCst),
+        0,
+        "blocked origin never reaches transport"
+    );
+    let stored_origin = harness
+        .vault
+        .conversation_run(origin.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_origin.state,
+        floe_vault::VaultConversationRunState::Completed
+    );
+
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Assistant { text, .. }
+            if text == floe_conversation::MODEL_CONSENT_LIMITATION
+    )));
+    let card_id = pending_consent_card(&session);
+    let card = floe_conversation::InteractionRepository::get_interaction(
+        harness.repository.as_ref(),
+        harness.person,
+        card_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(card.state, floe_conversation::InteractionState::Pending);
+
+    let resolved = harness
+        .allow(card.id, card.revision, card.target_digest)
+        .await;
+    assert!(matches!(
+        resolved.state,
+        floe_conversation::InteractionState::Resolved { .. }
+    ));
+    assert!(matches!(
+        resolved.target,
+        floe_conversation::ReviewedTarget::RecipientConsent(_)
+    ));
+
+    let outcome = maybe_auto_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        harness.session_id,
+        origin.run_id,
+        &harness.device,
+        floe_execution::Cancellation::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let AutoResumeOutcome::Admitted { child, .. } = outcome else {
+        panic!("resolved group admits its automatic child");
+    };
+    assert_eq!(child.resume_of, Some(origin.run_id));
+    assert_eq!(child.resume_lineage, 1);
+    let child = floe_conversation::ConversationRepository::load_receipt(
+        harness.repository.as_ref(),
+        child.run_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(child.state, floe_conversation::RunState::Completed);
+    assert_eq!(child.output.as_deref(), Some("The model resumed."));
+    // The grant admitted under the origin lineage authorizes the child
+    // dispatch: lineage continuity is what reaches transport here.
+    assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 1);
+
+    // Exactly one User message in the whole Session: the origin's own.
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let users: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|message| matches!(message, AgentMessage::User { .. }))
+        .collect();
+    assert_eq!(users.len(), 1);
+    let AgentMessage::User { text, .. } = users[0] else {
+        unreachable!()
+    };
+    assert_eq!(text, "Hello");
+    harness.finish().await;
+}
+
+#[tokio::test]
+async fn deny_all_suppresses_automatic_child_without_dispatch() {
+    let harness = ResumeHarness::open(canonical_answer_script("unused")).await;
+    let origin = harness.drive_origin("Hello", 0).await;
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let card_id = pending_consent_card(&session);
+    let card = floe_conversation::InteractionRepository::get_interaction(
+        harness.repository.as_ref(),
+        harness.person,
+        card_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let owners = harness.owners();
+    let outcome = resolve_interaction(
+        harness.repository.as_ref(),
+        harness.repository.as_ref(),
+        &owners,
+        &owners,
+        &owners,
+        &harness.caller,
+        ResolveInteractionCommand {
+            interaction_id: card.id,
+            command_id: Uuid::new_v4(),
+            session_id: harness.session_id,
+            expected_revision: card.revision,
+            kind: floe_conversation::InteractionDecisionKind::Deny,
+            target_digest: card.target_digest,
+        },
+        &floe_execution::Cancellation::default(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, ResolveOutcome::Denied { .. }));
+
+    let outcome = maybe_auto_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        harness.session_id,
+        origin.run_id,
+        &harness.device,
+        floe_execution::Cancellation::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        AutoResumeOutcome::Suppressed(floe_conversation::ResumeSuppression::NothingResolved)
+    ));
+    assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
+    harness.finish().await;
+}
+
+#[tokio::test]
+async fn newer_turn_suppresses_auto_but_explicit_continue_claims() {
+    let harness = ResumeHarness::open(canonical_answer_script("Resumed answer.")).await;
+    let origin = harness.drive_origin("Hello", 0).await;
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let card_id = pending_consent_card(&session);
+    let card = floe_conversation::InteractionRepository::get_interaction(
+        harness.repository.as_ref(),
+        harness.person,
+        card_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    harness
+        .allow(card.id, card.revision, card.target_digest)
+        .await;
+
+    // A newer user turn supersedes the automatic revision. The grant is
+    // origin-lineage-scoped, so the newer turn blocks under its own
+    // lineage with its own honest card: consent never leaks across runs.
+    let mut admitted = None;
+    run(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        floe_agent_contract::CommandId::new(),
+        &ConversationTurnRequest::new(
+            harness.session_id,
+            origin.session_revision,
+            "Newer question".into(),
+            harness.device.clone(),
+            ProfileSelection::Explicit("server-model".into()),
+            false,
+            None,
+        ),
+        floe_execution::Cancellation::default(),
+        |receipt: &floe_conversation::RunReceipt| {
+            admitted = Some(receipt.clone());
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let newer = admitted.unwrap();
+    let newer = floe_conversation::ConversationRepository::load_receipt(
+        harness.repository.as_ref(),
+        newer.run_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(newer.state, floe_conversation::RunState::Completed);
+    assert_eq!(
+        newer.output.as_deref(),
+        Some(floe_conversation::MODEL_CONSENT_LIMITATION)
+    );
+    assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
+
+    let outcome = maybe_auto_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        harness.session_id,
+        origin.run_id,
+        &harness.device,
+        floe_execution::Cancellation::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        AutoResumeOutcome::Suppressed(floe_conversation::ResumeSuppression::NewerTurn)
+    ));
+
+    // The explicit Continue claims the same origin slot at the current
+    // revision and runs authorized.
+    let current = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let link = origin.resume().unwrap();
+    let mut child = None;
+    run_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        floe_agent_contract::CommandId::new(),
+        &ResumeTurnRequest {
+            session_id: harness.session_id,
+            expected_revision: current.revision,
+            device_id: harness.device.clone(),
+            resume: link,
+        },
+        floe_execution::Cancellation::default(),
+        |receipt: &floe_conversation::RunReceipt| {
+            child = Some(receipt.clone());
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let child = child.unwrap();
+    assert_eq!(child.resume_of, Some(origin.run_id));
+    let child = floe_conversation::ConversationRepository::load_receipt(
+        harness.repository.as_ref(),
+        child.run_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(child.output.as_deref(), Some("Resumed answer."));
+    harness.finish().await;
+}
+
+#[tokio::test]
+async fn revoked_consent_blocks_child_fresh_without_stale_release() {
+    let harness = ResumeHarness::open(canonical_answer_script("must not leak")).await;
+    let origin = harness.drive_origin("Hello", 0).await;
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let card_id = pending_consent_card(&session);
+    let card = floe_conversation::InteractionRepository::get_interaction(
+        harness.repository.as_ref(),
+        harness.person,
+        card_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let resolved = harness
+        .allow(card.id, card.revision, card.target_digest)
+        .await;
+    let floe_conversation::ReviewedTarget::RecipientConsent(target) = &resolved.target else {
+        panic!("model blockage reviews a recipient consent");
+    };
+    // Revoke the grant after resolution but before the child dispatches.
+    let consent_id = floe_access::recipient_consent_id(
+        harness.person,
+        &harness.device,
+        "test-client",
+        &target.recipient,
+        &target.profile_id,
+        &target.purpose,
+        &target.consumer,
+        &target.input_data_classes,
+        &target.source_scopes,
+        target.lineage,
+    );
+    harness
+        .vault
+        .revoke_recipient_consent_record(consent_id)
+        .await
+        .unwrap();
+
+    let outcome = maybe_auto_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        harness.session_id,
+        origin.run_id,
+        &harness.device,
+        floe_execution::Cancellation::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let AutoResumeOutcome::Admitted { child, .. } = outcome else {
+        panic!("revocation does not suppress admission; it denies dispatch");
+    };
+    // The child re-checks live authority: blocked again, honestly, with a
+    // fresh card under its own origin and nothing reaching transport.
+    let child = floe_conversation::ConversationRepository::load_receipt(
+        harness.repository.as_ref(),
+        child.run_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(child.state, floe_conversation::RunState::Completed);
+    assert_eq!(
+        child.output.as_deref(),
+        Some(floe_conversation::MODEL_CONSENT_LIMITATION)
+    );
+    assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
+    let fresh_cards = floe_conversation::InteractionRepository::list_run_interactions(
+        harness.repository.as_ref(),
+        harness.person,
+        child.run_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fresh_cards.len(), 1);
+    assert_eq!(
+        fresh_cards[0].state,
+        floe_conversation::InteractionState::Pending
+    );
+    harness.finish().await;
+}
+
+#[tokio::test]
+async fn pairing_removed_after_allow_fails_child_fresh_without_dispatch() {
+    let harness = ResumeHarness::open(canonical_answer_script("must not leak")).await;
+    let origin = harness.drive_origin("Hello", 0).await;
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let card_id = pending_consent_card(&session);
+    let card = floe_conversation::InteractionRepository::get_interaction(
+        harness.repository.as_ref(),
+        harness.person,
+        card_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    harness
+        .allow(card.id, card.revision, card.target_digest)
+        .await;
+
+    // The server pairing is removed after resolution: the child cannot
+    // even prepare its route and fails fresh — the recorded grant never
+    // releases a dispatch without its pairing.
+    let removed = floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None);
+    let outcome = maybe_auto_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &removed,
+        harness.person,
+        harness.session_id,
+        origin.run_id,
+        &harness.device,
+        floe_execution::Cancellation::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    let AutoResumeOutcome::Admitted { child, .. } = outcome else {
+        panic!("pairing loss does not suppress admission; it denies dispatch");
+    };
+    let child = floe_conversation::ConversationRepository::load_receipt(
+        harness.repository.as_ref(),
+        child.run_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(child.state, floe_conversation::RunState::Failed);
+    assert_eq!(
+        child.issue,
+        Some(floe_agent_contract::AgentFailure::ModelUnavailable)
+    );
+    assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
+    harness.finish().await;
 }

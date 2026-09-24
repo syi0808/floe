@@ -44,8 +44,8 @@ pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
     VaultConversationCancelAdmission, VaultConversationCancelReceipt,
     VaultConversationCancelRequest, VaultConversationContinuationRef,
-    VaultConversationJournalEntry, VaultConversationRunRecord, VaultConversationRunState,
-    VaultConversationTerminal,
+    VaultConversationJournalEntry, VaultConversationResumeRef, VaultConversationRunRecord,
+    VaultConversationRunState, VaultConversationTerminal,
 };
 pub use floe_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use keyring::KeyringVaultKeys;

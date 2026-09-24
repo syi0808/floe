@@ -68,7 +68,12 @@ authority; the interaction then records a semantic receipt. A linked
 resume is a fresh Run, not budget continuation: it recomputes context,
 claims no old batch takeover, duplicates no user text, and admits through
 one atomically bound per-origin auto-resume slot. No global run-id stash,
-no Flutter-double-click-only exactly-once.
+no Flutter-double-click-only exactly-once. Grant consumption and fresh
+review use different lineage: the child dispatches under origin-carried
+lineage so a grant reviewed under the origin still scopes it, but a
+fresh blockage is the child's own review and re-scopes to the attempting
+Run before publication, so each generation carries the review it
+actually attempted.
 
 Model-safe artifacts and session messages carry only the opaque
 interaction reference (id, kind, historical status at most). Reference

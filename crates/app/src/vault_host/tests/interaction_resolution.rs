@@ -55,6 +55,7 @@ impl Fixture {
                 text: "hello".into(),
                 continuation: None,
                 retry_of: None,
+                resume: None,
                 profile: floe_conversation::ProfileSelection::Auto,
             })
             .await
@@ -82,6 +83,8 @@ impl Fixture {
             continuation_executor_generation: None,
             continuation_level: 0,
             retry_of: None,
+            resume_of: None,
+            resume_lineage: 0,
             profile: floe_conversation::ProfileSelection::Auto,
             attempt_refs: vec![],
             task_refs: vec![],

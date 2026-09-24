@@ -136,8 +136,8 @@ pub use services::CalendarActionsResult;
 pub use services::{
     CancelRun, CancelRunOutcome, CancelRunReceipt, CommandReceipt, ContinuationRef,
     ConversationCommands, ConversationEvent, ConversationEvents, ConversationQueries, EventPayload,
-    EventRead, ProfileSelection, ReadConversation, ReadConversationEvents, RunEventRecord,
-    ServiceError, StartTurn, TurnMode,
+    EventRead, ProfileSelection, ReadConversation, ReadConversationEvents, ResumeRef,
+    RunEventRecord, ServiceError, StartTurn, TurnMode,
 };
 #[cfg(unix)]
 pub use session_services::{

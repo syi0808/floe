@@ -170,6 +170,13 @@ fn continuation_mode(
                 level: reference.level,
             })
         }
+        crate::TurnMode::Resume(reference) => {
+            floe_conversation::TurnMode::Resume(floe_conversation::InteractionResumeRef {
+                origin_run_id: floe_kernel::RunId::from_uuid(reference.origin_run_id)
+                    .ok_or(crate::ServiceError::InvalidInput)?,
+                lineage: reference.lineage,
+            })
+        }
     })
 }
 

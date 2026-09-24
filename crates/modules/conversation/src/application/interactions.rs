@@ -181,6 +181,39 @@ pub struct PublishModelRequirement {
     pub device_id: String,
 }
 
+/// Re-scope a blocked-dispatch requirement to the attempting Run.
+///
+/// A linked resume dispatches under its origin-carried lineage so a grant
+/// reviewed under the origin still scopes the child — but a fresh blockage
+/// is the child's own review: the card publishes under the attempting Run,
+/// so the requirement must bind that same Run. A dispatch that already
+/// binds itself passes through unchanged.
+pub fn rescope_blocked_requirement(
+    requirement: floe_agent_contract::ProcessingRequirement,
+    session_id: Uuid,
+    run_id: RunId,
+) -> Result<floe_agent_contract::ProcessingRequirement, AgentFailure> {
+    if requirement.lineage().session_id() == session_id
+        && requirement.lineage().origin_run_id() == run_id.as_uuid()
+    {
+        return Ok(requirement);
+    }
+    let lineage = floe_agent_contract::RecipientLineage::try_new(session_id, run_id.as_uuid())
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+    floe_agent_contract::ProcessingRequirement::try_new(
+        requirement.recipient().to_owned(),
+        requirement.profile_id().to_owned(),
+        requirement.purpose().to_owned(),
+        requirement.consumer().to_owned(),
+        requirement.input_data_classes().to_vec(),
+        requirement.source_scopes().to_vec(),
+        requirement.projection_ref(),
+        requirement.projection_revision(),
+        lineage,
+    )
+    .map_err(|_| AgentFailure::StorageUnavailable)
+}
+
 /// Publish the durable card for one blocked model dispatch.
 ///
 /// Converts the owner-produced requirement into the reviewed interaction
@@ -489,6 +522,8 @@ mod tests {
             continuation_executor_generation: None,
             continuation_level: 0,
             retry_of: None,
+            resume_of: None,
+            resume_lineage: 0,
             profile: crate::ProfileSelection::Auto,
             attempt_refs: vec![],
             task_refs: vec![],
@@ -1270,5 +1305,56 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(resolved.state, InteractionState::Resolved { .. }));
+    }
+
+    fn blocked_requirement(
+        lineage: floe_agent_contract::RecipientLineage,
+    ) -> floe_agent_contract::ProcessingRequirement {
+        floe_agent_contract::ProcessingRequirement::try_new(
+            "model.example",
+            "server-model",
+            "everyday_assistance",
+            crate::CONVERSATION_MODEL_CONSUMER,
+            vec![floe_agent_contract::DataClass::Personal],
+            vec![],
+            Uuid::new_v4(),
+            1,
+            lineage,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rescope_binds_fresh_review_to_attempting_run() {
+        let session_id = Uuid::new_v4();
+        let origin = RunId::new();
+        let child = RunId::new();
+        let carried =
+            floe_agent_contract::RecipientLineage::try_new(session_id, origin.as_uuid()).unwrap();
+        let requirement = blocked_requirement(carried);
+        let rescoped = rescope_blocked_requirement(requirement.clone(), session_id, child).unwrap();
+        assert_eq!(rescoped.lineage().session_id(), session_id);
+        assert_eq!(rescoped.lineage().origin_run_id(), child.as_uuid());
+        assert_eq!(rescoped.recipient(), requirement.recipient());
+        assert_eq!(rescoped.profile_id(), requirement.profile_id());
+        assert_eq!(rescoped.purpose(), requirement.purpose());
+        assert_eq!(rescoped.consumer(), requirement.consumer());
+        assert_eq!(
+            rescoped.input_data_classes(),
+            requirement.input_data_classes()
+        );
+        assert_eq!(rescoped.source_scopes(), requirement.source_scopes());
+        assert_eq!(rescoped.projection_ref(), requirement.projection_ref());
+        assert_eq!(
+            rescoped.projection_revision(),
+            requirement.projection_revision()
+        );
+
+        // A dispatch that already binds itself passes through unchanged.
+        let bound =
+            floe_agent_contract::RecipientLineage::try_new(session_id, child.as_uuid()).unwrap();
+        let passthrough =
+            rescope_blocked_requirement(blocked_requirement(bound), session_id, child).unwrap();
+        assert_eq!(passthrough.lineage().origin_run_id(), child.as_uuid());
     }
 }

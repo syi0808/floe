@@ -61,8 +61,10 @@ impl StartTurn {
             return Err(AgentFailure::InvalidInput);
         }
         self.profile.validate()?;
-        if let TurnMode::Continue(reference) = &self.mode {
-            reference.validate()?;
+        match &self.mode {
+            TurnMode::New => {}
+            TurnMode::Continue(reference) => reference.validate()?,
+            TurnMode::Resume(reference) => reference.validate()?,
         }
         Ok(())
     }
@@ -158,6 +160,12 @@ fn append_mode(bytes: &mut Vec<u8>, mode: &TurnMode) -> Result<(), AgentFailure>
             bytes.extend_from_slice(reference.run_id.as_uuid().as_bytes());
             bytes.extend_from_slice(&reference.executor_generation.to_be_bytes());
             bytes.push(reference.level);
+        }
+        TurnMode::Resume(reference) => {
+            reference.validate()?;
+            bytes.push(2);
+            bytes.extend_from_slice(reference.origin_run_id.as_uuid().as_bytes());
+            bytes.push(reference.lineage);
         }
     }
     Ok(())

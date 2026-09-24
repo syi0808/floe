@@ -1534,6 +1534,8 @@ mod tests {
             continuation_executor_generation: None,
             continuation_level: 0,
             retry_of: None,
+            resume_of: None,
+            resume_lineage: 0,
             profile: floe_app::ProfileSelection::Auto,
             attempt_refs: vec![Uuid::from_u128(2)],
             task_refs: vec![Uuid::from_u128(3)],

@@ -166,6 +166,7 @@ async fn admit_run(
             text: "hello".into(),
             continuation: None,
             retry_of: None,
+            resume: None,
             profile: floe_conversation::ProfileSelection::Auto,
         })
         .await

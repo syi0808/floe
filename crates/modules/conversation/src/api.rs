@@ -109,8 +109,10 @@ impl TurnRequest {
         if let Some(context) = &self.delegation_context {
             context.validate()?;
         }
-        if let TurnMode::Continue(reference) = &self.mode {
-            reference.validate()?;
+        match &self.mode {
+            TurnMode::New => {}
+            TurnMode::Continue(reference) => reference.validate()?,
+            TurnMode::Resume(reference) => reference.validate()?,
         }
         self.allowed_catalog
             .cards
