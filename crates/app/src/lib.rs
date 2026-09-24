@@ -15,6 +15,7 @@ mod composition;
 mod connection_services;
 #[cfg(unix)]
 mod context_services;
+mod first_party_observe;
 mod core;
 #[cfg(unix)]
 mod day_services;

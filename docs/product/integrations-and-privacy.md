@@ -14,7 +14,11 @@ External source
   -> Manager
 ```
 
-Observe and Act are separate authority classes. A successful read connection does not imply permission to use the data for AI processing or to mutate the source.
+Observe and Act are separate authority classes. Completing a concrete supported source connection enables Floe's exact, product-approved first-party readers for the selected resources by default. The connection's **Use with Floe** control pauses or freshly revalidates those Observe grants without disconnecting the account or changing its selected resources.
+
+Pairing a server by itself grants no connector Observe access. Existing connections discovered during startup are never silently promoted; a connection without current grants requires explicit review. Adding or changing resources while Use with Floe is active coordinates source selection and Observe scope as one user interaction, while provider-side drift fails closed.
+
+Observe does not authorize write/send/create actions and does not approve a new external model recipient. Actions remain separately authorized, and source-backed data may leave its approved processing boundary only under exact-recipient authority. Third-party Experts are never added to a connection's default first-party reader set.
 
 Credentials never become domain data or Expert input.
 

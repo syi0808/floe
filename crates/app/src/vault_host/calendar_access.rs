@@ -19,7 +19,6 @@ use floe_context::{
     preview_native_calendar_subject,
 };
 use floe_execution::Cancellation;
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 use floe_kernel::PersonId;
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 
@@ -32,25 +31,8 @@ use crate::local_context::LocalContextHost;
 /// How long the device is given to answer for its own calendar subject.
 const SUBJECT_DEADLINE: Duration = Duration::from_secs(30);
 
-pub(super) fn calendar_first_party_consumers(
-) -> Result<Vec<floe_access::GrantConsumer>, AgentFailure> {
-    let calendar_source = BuiltinContextSource::Calendar.source_id();
-    let mut consumers = BuiltinExpertKind::ALL
-        .into_iter()
-        .filter(|kind| {
-            kind.declaration()
-                .required_sources
-                .contains(&calendar_source)
-        })
-        .map(|kind| floe_access::GrantConsumer::builtin(kind.package_id()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| AgentFailure::InvalidInput)?;
-    consumers.sort();
-    consumers.dedup();
-    if consumers.is_empty() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    Ok(consumers)
+pub(super) fn calendar_first_party_consumers() -> Result<Vec<floe_access::GrantConsumer>, AgentFailure> {
+    Ok(crate::first_party_observe::calendar_policy()?.consumers)
 }
 
 /// The window one device probe must finish inside.
@@ -305,6 +287,7 @@ impl<'host> DeviceCalendarAdmission<'host> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
 
     #[test]
     fn calendar_consumers_are_derived_from_builtin_declarations() {

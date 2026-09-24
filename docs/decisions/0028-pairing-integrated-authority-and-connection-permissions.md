@@ -58,8 +58,10 @@ internal protocol steps. The app orchestrates them as part of pairing and does n
 implementation vocabulary. Private signing keys remain encrypted in the local vault and are never
 sent to the server.
 
-Pairing grants no connector data access. All Observe and Act permissions start denied until the user
-explicitly grants them.
+Pairing grants no connector data access. A later, explicit connection to a concrete supported
+first-party source/account is a separate product event: once account/system authority and the current
+resource selection are established, Floe creates or reviews the exact default first-party Observe
+grant set. Act remains denied until separately authorized.
 
 ### 2. Treat identity changes as repair, not routine setup
 
@@ -77,19 +79,26 @@ Permission creation and expansion live on the detail screen for the connection t
 The connection header identifies the provider, account, Person, execution location and connection
 state. Its **Permissions** section lists the capabilities that the connector can provide.
 
-Each permission shows, in user language:
+Each connection shows, in user language:
 
 - the capability, such as Calendar events or Mail search;
 - the exact selected resource set, such as calendars, account view or bounded category;
-- the Floe features or consumers allowed to use it;
+- the product-approved first-party features that can use it;
 - Observe and Act authority separately where both exist;
 - processing or remote-transfer implications that require consent; and
 - its state: Off, Active, Paused, Needs review or Unavailable.
 
-The user creates or broadens a grant only from this connection context. Previewing available
-resources is read-only and does not create a grant. Grant submission binds the stable
-`connection_id`, current source authority, selected resources, allowed consumers and processing
-policy. Connector type alone is never a permission scope.
+The connection detail has one **Use with Floe** control. Its state is a projection over current
+connection/source/system state and Access-owned grants, not a persisted authorization bit. Turning
+it off pauses the connection's product-owned first-party Observe grants while preserving credentials,
+system permission and selected resources. Turning it on performs fresh source/resource validation
+and exact grant review. Inspecting or discovering an old connected profile is read-only and never
+creates a grant.
+
+An explicit resource edit while Use with Floe is active coordinates the connection owner's current
+selection and the exact Observe scope as one product interaction. While paused, selection can change
+without activating Observe; a later On reviews the latest selection. Uninitiated provider-side drift
+never widens a grant. Connector type alone is never a permission scope.
 
 Connection removal revokes its grants before credentials and connection metadata are deleted.
 Pausing a connection or permission blocks later admissions and releases without claiming to recall
@@ -103,13 +112,14 @@ together three distinct layers without conflating their authority:
 1. **System access** reports EventKit authorization and offers the operating-system permission or
    recovery action.
 2. **Calendars available to Floe** selects the exact calendars exposed by this connection.
-3. **Use in Floe** manages saved Observe grants for Assistant, Schedule and other consumers, including
+3. **Use with Floe** manages saved Observe grants for the exact current first-party readers, including
    the Calendar access currently edited under **Data & privacy**.
 
 The screen explains that system access only makes calendars available, selection only establishes the
-maximum connection scope, and a consumer grant authorizes actual AI use. Effective access is their
-intersection. Grant resource choices cannot exceed the currently selected calendars, and expanding
-the connection selection does not expand an existing grant.
+maximum connection scope, and an Observe grant authorizes actual source use. Effective access is
+their intersection. Grant resource choices cannot exceed the currently selected calendars. An
+explicit selection change while Use with Floe is active reviews the matching new scope; a failed
+review leaves Needs review rather than silently retaining a stale or wider authorization.
 
 Existing Calendar Tool/Expert installation state may be shown as implementation detail under the
 relevant Floe feature, but users grant a capability to a named feature rather than “installing a
@@ -182,6 +192,8 @@ Settings → Permissions
   consumer, purpose and processing policy defined by ADR 0027.
 - Flutter presents and requests consent but does not become the authorization enforcement point.
 - Identity mismatch, ambiguous ownership, stale consent and failed durable activation fail closed.
+- Default first-party Observe never implies Act permission or approval for an external model
+  recipient. Exact-recipient processing authority remains separate and fail-closed.
 - Observe permission never implies Act permission, and preview never implies either permission.
 
 ## Migration
@@ -216,10 +228,10 @@ issuer fingerprint was approved; reset or explicit repair is preferred.
 
 ## Consequences
 
-- The common path becomes familiar: pair a server, connect accounts, then grant account-specific
-  capabilities where they are used.
+- The common path becomes familiar: pair a server, then connect an account to establish its bounded
+  first-party Observe policy without a second protocol-shaped grant ceremony.
 - Cryptographic enrollment remains auditable without being a product concept users must learn.
-- Connection detail screens need a consistent capability/resource/consumer permission component.
+- Connection detail screens need a consistent resource and Use with Floe component.
 - Pairing becomes a larger atomic security transaction and requires coordinated Go, Rust and Flutter
   protocol changes.
 - Server operators lose a separate routine issuer-approval queue; exact issuer details remain available
@@ -230,6 +242,8 @@ issuer fingerprint was approved; reset or explicit repair is preferred.
 
 - A new user can pair once without encountering enrollment, producer, audience or issuer terminology.
 - Successful pairing leaves a durably pinned producer and active issuer, but zero connector grants.
+- Successful explicit connection of a supported source reviews its exact current first-party Observe
+  grants; merely discovering an old connection never does.
 - Failure during credential or issuer activation does not produce a partially trusted usable pairing.
 - Changing either pinned identity blocks protected access and requires explicit repair or re-pairing.
 - Permission creation and scope expansion occur only within the owning connection's detail context.
@@ -239,6 +253,7 @@ issuer fingerprint was approved; reset or explicit repair is preferred.
   manageable from the macOS Calendar connection detail.
 - Data & privacy no longer creates, enables or expands Calendar grants and links to the owning
   connection when the user needs to change them.
-- Selecting an additional macOS calendar does not add it to any existing consumer grant.
+- Selecting an additional macOS calendar while Use with Floe is active coordinates a fresh exact
+  Observe review; while paused it changes selection without activating Observe.
 - Deleting a connection revokes its grants and prevents subsequent admission and release.
 - Focused end-to-end validation covers pair, grant, use, pause, revoke, identity change and re-pair.
