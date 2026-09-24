@@ -96,6 +96,7 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
             | "remote_connection_observe_inspect"
             | "remote_connection_observe_enable"
             | "remote_connection_observe_disable"
+            | "remote_connection_observe_review"
     );
     let (domain, category, reason_code) = match failure {
         AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => (

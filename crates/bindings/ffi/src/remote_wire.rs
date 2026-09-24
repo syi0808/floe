@@ -187,12 +187,23 @@ fn access_with_host<Services: floe_app::HostServices + floe_app::RemoteAccessCom
             resource,
             enabled,
             disconnecting,
+            expected,
         } => floe_app::RemoteAccessCommand::ConnectionObserve {
             connector_id,
             connection_id,
             resource,
             enabled,
             disconnecting,
+            expected: expected.as_ref().map(observe_expectation),
+        },
+        RemoteAccessOperationDto::ConnectionObserveReview {
+            connector_id,
+            connection_id,
+            resource,
+        } => floe_app::RemoteAccessCommand::ConnectionObserveReview {
+            connector_id,
+            connection_id,
+            resource,
         },
         RemoteAccessOperationDto::ReadResult { .. } => unreachable!(),
     };
@@ -211,10 +222,57 @@ fn access_result(result: floe_app::RemoteAccessResult) -> AppWireResult<RemoteAc
         owner: result.owner.as_ref().map(owner_key_dto),
         enrollment: result.enrollment.map(enrollment_status_dto),
         connection_observe_status: result.connection_observe_status,
+        reviewed_bundle: result.reviewed_bundle.as_ref().map(observe_expectation_dto),
         failure: result.failure.as_ref().map(|failure| {
             failure_envelope(failure, &result.stage, &result.operation_id.to_string())
         }),
     })
+}
+
+fn observe_expectation(
+    expected: &ConnectionObserveExpectationDto,
+) -> floe_app::RemoteConnectionObserveExpectation {
+    floe_app::RemoteConnectionObserveExpectation {
+        members: expected
+            .members
+            .iter()
+            .map(|member| floe_app::RemoteObserveMemberExpectation {
+                view_id: member.view_id.clone(),
+                resource: member.resource.clone(),
+                producer_fingerprint: member.producer_fingerprint.clone(),
+                source_authority: member.source_authority,
+                connection_revision: member.connection_revision,
+                provider_identity: member.provider_identity.clone(),
+                recipient: member.recipient.clone(),
+                expected_grant_id: member.expected_grant_id,
+                expected_grant_authority: member.expected_grant_authority,
+                expected_policy: member.expected_policy,
+            })
+            .collect(),
+    }
+}
+
+fn observe_expectation_dto(
+    expected: &floe_app::RemoteConnectionObserveExpectation,
+) -> ConnectionObserveExpectationDto {
+    ConnectionObserveExpectationDto {
+        members: expected
+            .members
+            .iter()
+            .map(|member| ConnectionObserveMemberDto {
+                view_id: member.view_id.clone(),
+                resource: member.resource.clone(),
+                producer_fingerprint: member.producer_fingerprint.clone(),
+                source_authority: member.source_authority,
+                connection_revision: member.connection_revision,
+                provider_identity: member.provider_identity.clone(),
+                recipient: member.recipient.clone(),
+                expected_grant_id: member.expected_grant_id,
+                expected_grant_authority: member.expected_grant_authority,
+                expected_policy: member.expected_policy,
+            })
+            .collect(),
+    }
 }
 
 #[cfg(test)]

@@ -31,6 +31,82 @@ fn envelope(operation: Value) -> Value {
     json!({"schema_version": APP_WIRE_VERSION, "request_id": Uuid::new_v4(), "operation": operation})
 }
 
+fn authority() -> Value {
+    json!({"incarnation": Uuid::new_v4(), "epoch": 3})
+}
+
+fn observe_member(view_id: &str, resource: &str) -> Value {
+    json!({
+        "view_id": view_id,
+        "resource": resource,
+        "producer_fingerprint": "fp",
+        "source_authority": authority(),
+        "connection_revision": 11,
+        "provider_identity": "google:subject-a",
+        "recipient": "floe.server:test",
+        "expected_grant_id": null,
+        "expected_grant_authority": null,
+        "expected_policy": null,
+    })
+}
+
+#[test]
+fn observe_review_and_echoed_enable_roundtrip() {
+    let connection = Uuid::new_v4();
+    let review = json!({"kind": "connection_observe_review", "connector_id": "gmail", "connection_id": connection});
+    let decoded: RemoteAccessRequestDto =
+        serde_json::from_value(envelope(review)).unwrap();
+    assert_eq!(decoded.validate(), Ok(()));
+
+    let resource = format!("mail.communication:{connection}");
+    let bundle = json!({"members": [observe_member("mail.communication", &resource)]});
+    let enable = json!({
+        "kind": "connection_observe",
+        "connector_id": "gmail",
+        "connection_id": connection,
+        "enabled": true,
+        "expected": bundle,
+    });
+    let decoded: RemoteAccessRequestDto =
+        serde_json::from_value(envelope(enable)).unwrap();
+    assert_eq!(decoded.validate(), Ok(()));
+
+    // An incoherent grant triple never validates.
+    let mut broken = observe_member("mail.communication", &resource);
+    broken["expected_grant_id"] = json!(Uuid::new_v4().to_string());
+    let enable = json!({
+        "kind": "connection_observe",
+        "connector_id": "gmail",
+        "connection_id": connection,
+        "enabled": true,
+        "expected": json!({"members": [broken]}),
+    });
+    assert!(
+        serde_json::from_value::<RemoteAccessRequestDto>(envelope(enable))
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+
+    // The result carries the reviewed bundle back to the reviewer.
+    let result = json!({
+        "operation_id": Uuid::new_v4(),
+        "done": true,
+        "producer": null,
+        "owner": null,
+        "enrollment": null,
+        "connection_observe_status": null,
+        "reviewed_bundle": bundle,
+        "failure": null,
+    });
+    let decoded: RemoteAccessResultDto = serde_json::from_value(result).unwrap();
+    let bundle = decoded.reviewed_bundle.unwrap();
+    assert_eq!(bundle.members.len(), 1);
+    assert_eq!(bundle.members[0].view_id, "mail.communication");
+    assert_eq!(bundle.members[0].connection_revision, Some(11));
+    assert_eq!(bundle.members[0].expected_grant_id, None);
+}
+
 #[test]
 fn pairing_contract_roundtrips_only_setup_intent_and_signed_evidence() {
     let target = json!({"base_url": "http://127.0.0.1:8431"});

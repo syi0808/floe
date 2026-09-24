@@ -1,8 +1,9 @@
 mod access;
 mod actions;
 pub use access::{
-    RemoteAccessOperationDto, RemoteAccessRequestDto, RemoteAccessResultDto,
-    RemoteAuthorityEnrollmentStatusDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
+    ConnectionObserveExpectationDto, ConnectionObserveMemberDto, RemoteAccessOperationDto,
+    RemoteAccessRequestDto, RemoteAccessResultDto, RemoteAuthorityEnrollmentStatusDto,
+    RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
 };
 pub use actions::ActionOperationResultDto;
 pub use connections::RemotePairingChallengeDto;
