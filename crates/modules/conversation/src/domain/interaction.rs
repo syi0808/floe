@@ -51,12 +51,16 @@ pub const INTERACTION_OPERATION_NAMESPACE: Uuid =
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionOrigin {
-    Tool { call_id: Uuid },
+    Tool {
+        call_id: Uuid,
+    },
     Task {
         task_id: Uuid,
         capability_call_id: Option<Uuid>,
     },
-    Model { attempt_id: Uuid },
+    Model {
+        attempt_id: Uuid,
+    },
 }
 
 impl InteractionOrigin {
@@ -66,10 +70,7 @@ impl InteractionOrigin {
             Self::Task {
                 task_id,
                 capability_call_id,
-            } => {
-                !task_id.is_nil()
-                    && capability_call_id.is_none_or(|call_id| !call_id.is_nil())
-            }
+            } => !task_id.is_nil() && capability_call_id.is_none_or(|call_id| !call_id.is_nil()),
             Self::Model { attempt_id } => !attempt_id.is_nil(),
         };
         valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
@@ -106,10 +107,9 @@ pub struct InteractionRequirement {
 impl InteractionRequirement {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if validate_identifier(&self.source_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
-            || self
-                .connection_id
-                .as_ref()
-                .is_some_and(|value| validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err())
+            || self.connection_id.as_ref().is_some_and(|value| {
+                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            })
             || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
             || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
         {
@@ -191,10 +191,9 @@ pub struct InlineObserveTarget {
 impl InlineObserveTarget {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if validate_identifier(&self.connection_id, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || self
-                .device_id
-                .as_ref()
-                .is_some_and(|value| validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err())
+            || self.device_id.as_ref().is_some_and(|value| {
+                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            })
             || validate_identifier(&self.source_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
             || self
                 .connector_id
@@ -202,7 +201,11 @@ impl InlineObserveTarget {
                 .is_some_and(|value| validate_identifier(value, MAX_REVIEWED_SOURCE_BYTES).is_err())
             || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
             || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
-            || !is_canonical_set(&self.resources, MAX_TARGET_RESOURCES, MAX_REVIEWED_IDENTIFIER_BYTES)
+            || !is_canonical_set(
+                &self.resources,
+                MAX_TARGET_RESOURCES,
+                MAX_REVIEWED_IDENTIFIER_BYTES,
+            )
             || !is_canonical_set(
                 &self.capability_bundle,
                 MAX_TARGET_CAPABILITIES,
@@ -252,10 +255,9 @@ pub struct NavigationOnlyTarget {
 impl NavigationOnlyTarget {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if validate_identifier(&self.source_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
-            || self
-                .connection_id
-                .as_ref()
-                .is_some_and(|value| validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err())
+            || self.connection_id.as_ref().is_some_and(|value| {
+                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            })
             || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
             || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
             || serde_json::to_vec(self)
@@ -410,8 +412,7 @@ impl ConversationInteraction {
             || self.created_at_unix_ms < 0
             || self.expires_at_unix_ms != self.created_at_unix_ms + INTERACTION_PENDING_LIFETIME_MS
             || (self.kind == UserInteractionKind::ProcessingRecipient)
-                != (self.requirement.kind
-                    == InteractionRequirementKind::ApproveProcessingRecipient)
+                != (self.requirement.kind == InteractionRequirementKind::ApproveProcessingRecipient)
             || self.requirement_digest == [0; 32]
             || self.target_digest == [0; 32]
         {
@@ -1105,10 +1106,7 @@ mod tests {
             approve.decided_at_unix_ms,
         )
         .unwrap();
-        assert!(matches!(
-            resolved,
-            InteractionState::Resolved { .. }
-        ));
+        assert!(matches!(resolved, InteractionState::Resolved { .. }));
         assert!(state_after_resolution(&pending, decision_id, owner_operation_id, 1).is_err());
         assert!(state_after_resolution(&resolving, Uuid::new_v4(), owner_operation_id, 1).is_err());
     }

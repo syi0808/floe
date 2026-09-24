@@ -15,10 +15,12 @@ use floe_agent_contract::{
 use floe_conversation::AgentMessage;
 use floe_conversation::{
     AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
-    CompactionRequest, ConversationRepository, JournalEntry, RecoveryReceipt, RecoveryRequest,
+    CompactionRequest, ConversationInteraction, ConversationRepository, DecisionAdmission,
+    ExpireInteraction, ExpireOutcome, InteractionDecision, InteractionRepository,
+    InteractionResolution, JournalEntry, PublishAdmission, RecoveryReceipt, RecoveryRequest,
     RunReceipt, RunState, RunTerminal, SessionArchiveRepository, SessionReadRequest,
-    SessionReceipt, SessionRepository, SessionRequest, TurnAdmission, TurnAdmissionRequest,
-    TurnMode,
+    SessionReceipt, SessionRepository, SessionRequest, SupersedeInteraction, TurnAdmission,
+    TurnAdmissionRequest, TurnMode,
 };
 use floe_experts::{A2AArtifact, A2APart, A2ATask, A2ATaskState};
 use uuid::Uuid;
@@ -438,6 +440,113 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     })
                 })
                 .collect()
+        })
+    }
+}
+
+impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversationRepository<Keys> {
+    fn publish_interaction<'a>(
+        &'a self,
+        record: ConversationInteraction,
+    ) -> BoxFuture<'a, Result<PublishAdmission, AgentFailure>> {
+        Box::pin(async move {
+            record.validate()?;
+            if record.person_id != self.vault.person_id() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            self.vault.publish_conversation_interaction(record).await
+        })
+    }
+
+    fn get_interaction<'a>(
+        &'a self,
+        person_id: floe_kernel::PersonId,
+        interaction_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<ConversationInteraction>, AgentFailure>> {
+        Box::pin(async move {
+            if interaction_id.is_nil() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            if person_id != self.vault.person_id() {
+                return Ok(None);
+            }
+            self.vault.conversation_interaction(interaction_id).await
+        })
+    }
+
+    fn list_run_interactions<'a>(
+        &'a self,
+        person_id: floe_kernel::PersonId,
+        origin_run_id: RunId,
+    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>> {
+        Box::pin(async move {
+            if !origin_run_id.is_valid() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            if person_id != self.vault.person_id() {
+                return Ok(vec![]);
+            }
+            self.vault
+                .run_conversation_interactions(origin_run_id)
+                .await
+        })
+    }
+
+    fn record_decision<'a>(
+        &'a self,
+        decision: InteractionDecision,
+    ) -> BoxFuture<'a, Result<DecisionAdmission, AgentFailure>> {
+        Box::pin(async move {
+            decision.validate()?;
+            if decision.principal != self.vault.person_id().to_string() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            self.vault
+                .record_conversation_interaction_decision(decision)
+                .await
+        })
+    }
+
+    fn record_resolution<'a>(
+        &'a self,
+        resolution: InteractionResolution,
+    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>> {
+        Box::pin(async move {
+            resolution.validate()?;
+            if resolution.person_id != self.vault.person_id() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            self.vault
+                .resolve_conversation_interaction(resolution)
+                .await
+        })
+    }
+
+    fn mark_superseded<'a>(
+        &'a self,
+        supersede: SupersedeInteraction,
+    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>> {
+        Box::pin(async move {
+            supersede.validate()?;
+            if supersede.person_id != self.vault.person_id() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            self.vault
+                .supersede_conversation_interaction(supersede)
+                .await
+        })
+    }
+
+    fn mark_expired<'a>(
+        &'a self,
+        expire: ExpireInteraction,
+    ) -> BoxFuture<'a, Result<ExpireOutcome, AgentFailure>> {
+        Box::pin(async move {
+            expire.validate()?;
+            if expire.person_id != self.vault.person_id() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            self.vault.expire_conversation_interaction(expire).await
         })
     }
 }

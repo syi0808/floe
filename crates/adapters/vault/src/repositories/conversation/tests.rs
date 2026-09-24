@@ -1853,3 +1853,346 @@ async fn canonical_runtime_key_loss_recovers_confirmed_history_without_model_rep
         3
     );
 }
+
+const INTERACTION_NOW: i64 = 1_700_000_000_000;
+
+fn interaction_requirement() -> floe_conversation::InteractionRequirement {
+    floe_conversation::InteractionRequirement {
+        kind: floe_conversation::InteractionRequirementKind::EnableObserve,
+        source_id: "floe.source.calendar".into(),
+        connection_id: Some("calendar-connection".into()),
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        inline: true,
+    }
+}
+
+fn interaction_target() -> floe_conversation::ReviewedTarget {
+    floe_conversation::ReviewedTarget::InlineObserve(floe_conversation::InlineObserveTarget {
+        connection_id: "calendar-connection".into(),
+        device_id: None,
+        source_id: "floe.source.calendar".into(),
+        connector_id: Some("floe.connector.calendar".into()),
+        resources: vec!["personal".into()],
+        capability_bundle: vec!["calendar.observe".into()],
+        consumer: "floe.builtin.schedule".into(),
+        purpose: "scheduling".into(),
+        source_revision: None,
+        expected_grant: floe_conversation::ExpectedGrantState::Absent,
+        policy_authority: None,
+    })
+}
+
+#[tokio::test]
+async fn interaction_publishes_through_origin_journal_and_survives_compaction() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = VaultConversationRepository::new(Arc::clone(&vault));
+    let started = floe_conversation::start_session(
+        &repository,
+        floe_conversation::SessionRequest {
+            principal: person_id.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let command_id = floe_agent_contract::CommandId::new();
+    let run_id = floe_agent_contract::RunId::new();
+    let admission = repository
+        .admit_turn(TurnAdmissionRequest {
+            run_id,
+            command_id,
+            session_id: started.session_id,
+            expected_session_revision: 0,
+            principal: person_id.to_string(),
+            request_digest: [7; 32],
+            mode: TurnMode::New,
+            retry_of: None,
+            profile: floe_conversation::ProfileSelection::Auto,
+            user_message: ContractMessage {
+                message_id: command_id.as_uuid(),
+                role: MessageRole::User,
+                text: "check my calendar".into(),
+                call_id: None,
+                coverage: DependencyCoverage::Independent,
+            },
+        })
+        .await
+        .unwrap();
+    let TurnAdmission::Created(admitted) = admission else {
+        panic!("admission must create");
+    };
+    assert_eq!(admitted.receipt.run_id, run_id);
+
+    let call_id = Uuid::new_v4();
+    let intent = JournalEvent::ToolIntent {
+        call: ToolCall {
+            call_id,
+            invocation_key: floe_agent_contract::InvocationKey::new(),
+            tool_id: "calendar.observe".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        },
+    };
+    vault
+        .append_conversation_journal(run_id, "intent", &serde_json::to_string(&intent).unwrap())
+        .await
+        .unwrap();
+
+    let publish = floe_conversation::PublishInteractionRequest {
+        principal: person_id.to_string(),
+        session_id: started.session_id,
+        origin_run_id: run_id,
+        origin: floe_conversation::InteractionOrigin::Tool { call_id },
+        kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        requirement: interaction_requirement(),
+        target: interaction_target(),
+    };
+    let floe_conversation::PublishAdmission::Created(created) =
+        floe_conversation::publish_interaction(
+            &repository,
+            &repository,
+            publish.clone(),
+            INTERACTION_NOW,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("publish must create");
+    };
+    assert_eq!(created.state, floe_conversation::InteractionState::Pending);
+
+    let mut forged = publish.clone();
+    forged.origin = floe_conversation::InteractionOrigin::Tool {
+        call_id: Uuid::new_v4(),
+    };
+    assert_eq!(
+        floe_conversation::publish_interaction(&repository, &repository, forged, INTERACTION_NOW)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    assert_eq!(
+        repository
+            .get_interaction(PersonId::new(), created.id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        repository
+            .list_run_interactions(PersonId::new(), run_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The origin Run completes with its limitation; the pending card and
+    // the archived origin intent outlive it.
+    let finished = repository
+        .finish_run(
+            run_id,
+            1,
+            RunTerminal {
+                state: RunState::Completed,
+                output: Some("calendar access needs approval".into()),
+                steps: vec![floe_agent_contract::EngineStep::Answer {
+                    text: "calendar access needs approval".into(),
+                    artifacts: vec![],
+                }],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(finished.state, RunState::Completed);
+
+    let compacted = repository
+        .compact_session(CompactionRequest {
+            session_id: started.session_id,
+            expected_session_revision: finished.session_revision,
+            principal: person_id.to_string(),
+            through_turn_id: run_id.as_uuid(),
+            summary: "calendar question asked".into(),
+        })
+        .await
+        .unwrap();
+
+    // Compaction archives the origin turn but leaves the pending
+    // interaction's target and origin linkage intact.
+    let stored = repository
+        .get_interaction(person_id, created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, created);
+    assert!(repository.load_receipt(run_id).await.unwrap().is_some());
+    let snapshot = repository
+        .read_archive(&ArchiveReadRequest {
+            person_id,
+            session_id: started.session_id,
+            pointer: compacted.pointer,
+            max_messages: 8,
+            max_bytes: 4 * 1024,
+        })
+        .await
+        .unwrap();
+    assert!(
+        snapshot
+            .messages
+            .iter()
+            .any(|archived| archived.message.text == "check my calendar")
+    );
+
+    // The pending card stays decidable after compaction.
+    let floe_conversation::DecisionAdmission::Applied(applied) =
+        floe_conversation::decide_interaction(
+            &repository,
+            floe_conversation::DecideInteractionCommand {
+                command_id: Uuid::new_v4(),
+                interaction_id: created.id,
+                principal: person_id.to_string(),
+                expected_revision: 1,
+                kind: floe_conversation::InteractionDecisionKind::Approve,
+                target_digest: created.target_digest,
+            },
+            INTERACTION_NOW + 1,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("decision must apply");
+    };
+    assert!(matches!(
+        applied.state,
+        floe_conversation::InteractionState::Resolving { .. }
+    ));
+
+    assert_eq!(
+        floe_conversation::load_interaction(&repository, &person_id.to_string(), Uuid::new_v4())
+            .await,
+        Err(AgentFailure::NotFound)
+    );
+}
+
+#[test]
+fn interaction_message_projects_to_opaque_transcript_entry() {
+    let run_id = floe_agent_contract::RunId::new();
+    let command_id = floe_agent_contract::CommandId::new();
+    let receipt = RunReceipt {
+        run_id,
+        command_id,
+        session_id: Uuid::new_v4(),
+        principal: PersonId::new().to_string(),
+        request_digest: [7; 32],
+        state: RunState::Working,
+        output: None,
+        coverage: DependencyCoverage::Unknown,
+        issue: None,
+        session_revision: 1,
+        aggregate_revision: 1,
+        executor_generation: 1,
+        continuation_of: None,
+        continuation_executor_generation: None,
+        continuation_level: 0,
+        retry_of: None,
+        profile: floe_conversation::ProfileSelection::Auto,
+        attempt_refs: vec![],
+        task_refs: vec![],
+    };
+    let interaction_id = Uuid::new_v4();
+    let messages = vec![
+        AgentMessage::User {
+            turn_id: run_id.as_uuid(),
+            text: "hello".into(),
+        },
+        AgentMessage::Interaction {
+            turn_id: run_id.as_uuid(),
+            interaction_id,
+            interaction_kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        },
+        AgentMessage::Interaction {
+            turn_id: run_id.as_uuid(),
+            interaction_id,
+            interaction_kind: floe_agent_contract::UserInteractionKind::ProcessingRecipient,
+        },
+    ];
+    let transcript = super::transcript(&messages, &receipt).unwrap();
+    assert_eq!(transcript.len(), 3);
+    assert_eq!(transcript[1].role, MessageRole::Assistant);
+    assert_eq!(
+        transcript[1].text,
+        format!("interaction {interaction_id} source_access")
+    );
+    assert_eq!(transcript[1].coverage, DependencyCoverage::Independent);
+    assert_eq!(
+        transcript[2].text,
+        format!("interaction {interaction_id} processing_recipient")
+    );
+    assert_eq!(transcript[2].coverage, DependencyCoverage::Independent);
+}
+
+#[tokio::test]
+async fn interaction_message_survives_archive_and_search_index() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    let repository = VaultConversationRepository::new(Arc::clone(&vault));
+    let session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    let interaction_id = Uuid::new_v4();
+
+    let mut stored = vault.load(person_id, session.id).await.unwrap();
+    stored.messages.push(AgentMessage::User {
+        turn_id,
+        text: "needs approval".into(),
+    });
+    stored.messages.push(AgentMessage::Interaction {
+        turn_id,
+        interaction_id,
+        interaction_kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+    });
+    stored.revision = 1;
+    vault.compare_and_swap(&stored, 0).await.unwrap();
+
+    let compacted = repository
+        .compact_session(CompactionRequest {
+            session_id: session.id,
+            expected_session_revision: 1,
+            principal: person_id.to_string(),
+            through_turn_id: turn_id,
+            summary: "asked with pending review".into(),
+        })
+        .await
+        .unwrap();
+    let snapshot = repository
+        .read_archive(&ArchiveReadRequest {
+            person_id,
+            session_id: session.id,
+            pointer: compacted.pointer,
+            max_messages: 8,
+            max_bytes: 4 * 1024,
+        })
+        .await
+        .unwrap();
+    assert_eq!(snapshot.messages.len(), 2);
+    assert_eq!(snapshot.messages[1].message.role, MessageRole::Assistant);
+    assert_eq!(
+        snapshot.messages[1].message.text,
+        format!("interaction {interaction_id} source_access")
+    );
+}

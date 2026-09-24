@@ -1088,7 +1088,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
-    async fn conversation_run_on(
+    pub(super) async fn conversation_run_on(
         &self,
         connection: &turso::Connection,
         run_id: RunId,

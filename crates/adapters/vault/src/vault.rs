@@ -25,6 +25,7 @@ mod calendar_grant_policy;
 mod calendar_grants;
 mod context_cleanup;
 mod context_dependencies;
+mod conversation_interactions;
 mod conversations;
 mod expert_actions;
 mod keyring;

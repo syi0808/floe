@@ -16,10 +16,8 @@ use crate::{
     ExpireOutcome, InteractionDecision, InteractionDecisionKind, InteractionOrigin,
     InteractionRepository, InteractionRequirement, InteractionResolution, InteractionState,
     PublishAdmission, ReviewedTarget, RunState, SupersedeInteraction,
-    domain::{
-        canonical_requirement_digest, canonical_target_digest, interaction_publication_id,
-    },
     domain::INTERACTION_PENDING_LIFETIME_MS,
+    domain::{canonical_requirement_digest, canonical_target_digest, interaction_publication_id},
 };
 
 #[derive(Clone, Debug)]
@@ -120,10 +118,7 @@ where
         &requirement_digest,
         &target_digest,
     )?;
-    if let Some(existing) = interactions
-        .get_interaction(person_id, id)
-        .await?
-    {
+    if let Some(existing) = interactions.get_interaction(person_id, id).await? {
         if existing.requirement_digest != requirement_digest
             || existing.target_digest != target_digest
             || existing.session_id != request.session_id
@@ -169,9 +164,7 @@ where
         created_at_unix_ms: now_unix_ms,
         expires_at_unix_ms,
     };
-    record
-        .validate()
-        .map_err(|_| AgentFailure::InvalidInput)?;
+    record.validate().map_err(|_| AgentFailure::InvalidInput)?;
     interactions.publish_interaction(record).await
 }
 
@@ -290,19 +283,14 @@ where
         .await
 }
 
-fn origin_admitted(
-    journal: &[crate::JournalEntry],
-    origin: &InteractionOrigin,
-) -> bool {
+fn origin_admitted(journal: &[crate::JournalEntry], origin: &InteractionOrigin) -> bool {
     journal.iter().any(|entry| match (&entry.event, origin) {
-        (
-            JournalEvent::ToolIntent { call },
-            InteractionOrigin::Tool { call_id },
-        ) => call.call_id == *call_id,
-        (
-            JournalEvent::DelegationIntent { request },
-            InteractionOrigin::Task { task_id, .. },
-        ) => request.task_id.as_uuid() == *task_id,
+        (JournalEvent::ToolIntent { call }, InteractionOrigin::Tool { call_id }) => {
+            call.call_id == *call_id
+        }
+        (JournalEvent::DelegationIntent { request }, InteractionOrigin::Task { task_id, .. }) => {
+            request.task_id.as_uuid() == *task_id
+        }
         (
             JournalEvent::ModelIntent { attempt_id, .. },
             InteractionOrigin::Model {
@@ -492,7 +480,10 @@ mod tests {
             Box::pin(async move {
                 let records = self.records.lock().unwrap();
                 let record = records.get(&interaction_id).cloned();
-                if record.as_ref().is_some_and(|record| record.person_id != person_id) {
+                if record
+                    .as_ref()
+                    .is_some_and(|record| record.person_id != person_id)
+                {
                     return Ok(None);
                 }
                 if let Some(record) = &record {
@@ -552,6 +543,7 @@ mod tests {
                     || current.revision != decision.interaction_revision
                     || current.target_digest != decision.target_digest
                     || decision.decided_at_unix_ms < current.created_at_unix_ms
+                    || decision.decided_at_unix_ms >= current.expires_at_unix_ms
                 {
                     return Err(AgentFailure::Conflict);
                 }
@@ -728,7 +720,13 @@ mod tests {
             run_id: RunId,
         ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>> {
             Box::pin(async move {
-                Ok(self.journal.lock().unwrap().get(&run_id).cloned().unwrap_or_default())
+                Ok(self
+                    .journal
+                    .lock()
+                    .unwrap()
+                    .get(&run_id)
+                    .cloned()
+                    .unwrap_or_default())
             })
         }
     }
@@ -794,13 +792,10 @@ mod tests {
             .lock()
             .unwrap()
             .insert(run_id, receipt(person_id, session_id, run_id));
-        runs.journal.lock().unwrap().insert(
-            run_id,
-            vec![JournalEntry {
-                revision: 1,
-                event,
-            }],
-        );
+        runs.journal
+            .lock()
+            .unwrap()
+            .insert(run_id, vec![JournalEntry { revision: 1, event }]);
     }
 
     #[tokio::test]
@@ -817,7 +812,9 @@ mod tests {
         let request = publish_request(person_id, session_id, run_id, origin);
 
         let PublishAdmission::Created(first) =
-            publish_interaction(&runs, &interactions, request.clone(), NOW).await.unwrap()
+            publish_interaction(&runs, &interactions, request.clone(), NOW)
+                .await
+                .unwrap()
         else {
             panic!("first publish must create");
         };
@@ -825,7 +822,9 @@ mod tests {
         assert_eq!(first.state, InteractionState::Pending);
 
         let PublishAdmission::Existing(second) =
-            publish_interaction(&runs, &interactions, request, NOW + 1).await.unwrap()
+            publish_interaction(&runs, &interactions, request, NOW + 1)
+                .await
+                .unwrap()
         else {
             panic!("replay must rejoin");
         };
@@ -903,9 +902,18 @@ mod tests {
             call_id: Uuid::new_v4(),
         };
         working_run(&runs, person_id, session_id, run_id, &origin);
-        runs.receipts.lock().unwrap().get_mut(&run_id).unwrap().state = RunState::Cancelled;
-        runs.receipts.lock().unwrap().get_mut(&run_id).unwrap().issue =
-            Some(AgentFailure::Cancelled);
+        runs.receipts
+            .lock()
+            .unwrap()
+            .get_mut(&run_id)
+            .unwrap()
+            .state = RunState::Cancelled;
+        runs.receipts
+            .lock()
+            .unwrap()
+            .get_mut(&run_id)
+            .unwrap()
+            .issue = Some(AgentFailure::Cancelled);
 
         let request = publish_request(person_id, session_id, run_id, origin);
         assert_eq!(
@@ -927,7 +935,9 @@ mod tests {
         working_run(&runs, person_id, session_id, run_id, &origin);
         let request = publish_request(person_id, session_id, run_id, origin);
         let PublishAdmission::Created(created) =
-            publish_interaction(&runs, &interactions, request, NOW).await.unwrap()
+            publish_interaction(&runs, &interactions, request, NOW)
+                .await
+                .unwrap()
         else {
             panic!("publish must create");
         };
@@ -941,14 +951,18 @@ mod tests {
             target_digest: created.target_digest,
         };
         let DecisionAdmission::Applied(applied) =
-            decide_interaction(&interactions, command.clone(), NOW + 1).await.unwrap()
+            decide_interaction(&interactions, command.clone(), NOW + 1)
+                .await
+                .unwrap()
         else {
             panic!("decision must apply");
         };
         assert!(matches!(applied.state, InteractionState::Resolving { .. }));
 
         let DecisionAdmission::Rejoined(rejoined) =
-            decide_interaction(&interactions, command.clone(), NOW + 2).await.unwrap()
+            decide_interaction(&interactions, command.clone(), NOW + 2)
+                .await
+                .unwrap()
         else {
             panic!("identical retry must rejoin");
         };
@@ -983,7 +997,9 @@ mod tests {
         working_run(&runs, person_id, session_id, run_id, &origin);
         let request = publish_request(person_id, session_id, run_id, origin);
         let PublishAdmission::Created(created) =
-            publish_interaction(&runs, &interactions, request, NOW).await.unwrap()
+            publish_interaction(&runs, &interactions, request, NOW)
+                .await
+                .unwrap()
         else {
             panic!("publish must create");
         };
@@ -1028,7 +1044,9 @@ mod tests {
         working_run(&runs, person_id, session_id, run_id, &origin);
         let request = publish_request(person_id, session_id, run_id, origin);
         let PublishAdmission::Created(created) =
-            publish_interaction(&runs, &interactions, request, NOW).await.unwrap()
+            publish_interaction(&runs, &interactions, request, NOW)
+                .await
+                .unwrap()
         else {
             panic!("publish must create");
         };
@@ -1041,7 +1059,9 @@ mod tests {
             target_digest: created.target_digest,
         };
         let DecisionAdmission::Applied(applied) =
-            decide_interaction(&interactions, command.clone(), NOW + 1).await.unwrap()
+            decide_interaction(&interactions, command.clone(), NOW + 1)
+                .await
+                .unwrap()
         else {
             panic!("decision must apply");
         };
@@ -1074,7 +1094,9 @@ mod tests {
             owner_operation_id,
             resolved_at_unix_ms: NOW + 2,
         };
-        let resolved = resolve_interaction(&interactions, resolution).await.unwrap();
+        let resolved = resolve_interaction(&interactions, resolution)
+            .await
+            .unwrap();
         assert!(matches!(resolved.state, InteractionState::Resolved { .. }));
     }
 }

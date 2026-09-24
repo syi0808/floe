@@ -3,8 +3,8 @@ use floe_kernel::{AgentFailure, PersonId, RunId};
 use uuid::Uuid;
 
 use crate::{
-    ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome, InteractionDecision,
-    InteractionResolution, PublishAdmission, SupersedeInteraction,
+    ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
+    InteractionDecision, InteractionResolution, PublishAdmission, SupersedeInteraction,
 };
 
 /// Durable Conversation interaction storage.
