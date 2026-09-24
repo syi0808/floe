@@ -15,27 +15,41 @@ pub use api::{
 };
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
-    CancelRunStatus, ConversationModelProjection, ConversationService, GovernedSessionRepository,
-    GovernedSessionStore, HistoryProjection, PreparedTurn, ProjectedModelConversation,
-    RunCancellationRegistry, TurnPrecheck, TurnPrecheckRequest, TurnPreparationRequest,
-    admit_unscoped_session, admitted_session, cancel_run_command, compact_session, continuation,
-    get_command, get_run, get_session, narrow_by_source_boundary, precheck_turn, prepare_turn,
-    project_continuation, project_model_conversation_history, read_archive, recover_session,
-    recovered_session, resume_session, start_session,
+    CancelRunStatus, ConversationModelProjection, ConversationService, DecideInteractionCommand,
+    GovernedSessionRepository, GovernedSessionStore, HistoryProjection, PreparedTurn,
+    ProjectedModelConversation, PublishInteractionRequest, RunCancellationRegistry, TurnPrecheck,
+    TurnPrecheckRequest, TurnPreparationRequest, admit_unscoped_session, admitted_session,
+    cancel_run_command, compact_session, continuation, decide_interaction, expire_interaction,
+    get_command, get_run, get_session, list_run_interactions, load_interaction, narrow_by_source_boundary,
+    precheck_turn, prepare_turn, project_continuation, project_model_conversation_history,
+    publish_interaction, read_archive, recover_session, recovered_session, resolve_interaction,
+    resume_session, start_session, supersede_interaction,
 };
 pub use domain::{
-    AdmittedExecution, AdmittedTurn, CommandQuery, CompactionReceipt, CompactionRequest,
-    ContinuationRef, ContinuationSnapshot, JournalEntry, MAX_COMPACTION_SUMMARY_BYTES,
-    MAX_TURN_TEXT_BYTES, ProfileSelection, RecoveryReceipt, RecoveryRequest, RunQuery, RunReceipt,
-    RunState, RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, StartTurn,
-    TurnAdmission, TurnAdmissionRequest, TurnMode,
+    AdmittedExecution, AdmittedTurn, AuthorityRevision, CommandQuery, CompactionReceipt,
+    CompactionRequest, ContinuationRef, ContinuationSnapshot, ConversationInteraction,
+    DecisionAdmission, ExpireInteraction, ExpireOutcome, ExpectedGrantState, InlineObserveTarget,
+    InteractionDecision, InteractionDecisionKind, InteractionOrigin, InteractionRequirement,
+    InteractionRequirementKind, InteractionResolution, InteractionState, JournalEntry,
+    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_COMPACTION_SUMMARY_BYTES, MAX_TURN_TEXT_BYTES,
+    NavigationDestination, NavigationOnlyTarget, ProfileSelection, PublishAdmission, RecoveryReceipt,
+    RecoveryRequest, ReviewedTarget, RunQuery, RunReceipt, RunState, RunTerminal, SessionReadRequest,
+    SessionReceipt, SessionRequest, StartTurn, SupersedeInteraction, TurnAdmission,
+    TurnAdmissionRequest, TurnMode, INTERACTION_PENDING_LIFETIME_MS,
+    MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
+    MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_CAPABILITIES,
+    MAX_TARGET_RESOURCES, canonical_requirement_digest, canonical_target_digest,
+    decision_operation_id, interaction_publication_id, next_state_after_decision,
+    state_after_resolution,
 };
 pub use domain::{CanonicalTurnIntent, normalize_turn_text};
 pub use floe_agent_contract::{
     ArchivePointer, ArchiveReadRequest, ArchiveSnapshot, ArchivedMessage,
 };
 pub use floe_agent_runtime::FinalPayloadValidator;
-pub use ports::{ConversationRepository, SessionArchiveRepository, SessionRepository};
+pub use ports::{
+    ConversationRepository, InteractionRepository, SessionArchiveRepository, SessionRepository,
+};
 
 pub use turn::{
     AgentBudget, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage, AgentOutcome,

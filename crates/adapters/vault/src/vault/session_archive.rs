@@ -446,6 +446,9 @@ fn searchable_message(message: &AgentMessage) -> String {
             format!("{capability_id}\n{input}\n{result:?}")
         }
         AgentMessage::Delegation { task, .. } => serde_json::to_string(task).unwrap_or_default(),
+        // No searchable user text: the reference carries an opaque id only,
+        // and authoritative status loads from the interaction row.
+        AgentMessage::Interaction { .. } => String::new(),
     }
 }
 

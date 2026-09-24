@@ -590,7 +590,10 @@ fn transcript(
             contract_message(
                 message,
                 message_id,
-                if matches!(message, AgentMessage::User { .. }) {
+                if matches!(
+                    message,
+                    AgentMessage::User { .. } | AgentMessage::Interaction { .. }
+                ) {
                     DependencyCoverage::Independent
                 } else {
                     DependencyCoverage::Unknown
@@ -630,6 +633,26 @@ fn contract_message(
                     A2APart::Data { .. } => None,
                 })
                 .unwrap_or_else(|| format!("{}: {:?}", task.agent_id, task.state)),
+            None,
+        ),
+        // Bare metadata only: the opaque interaction id plus its generic kind
+        // label. Requirement, target and status stay in the interaction row,
+        // where the trusted lookup reads them.
+        AgentMessage::Interaction {
+            interaction_id,
+            interaction_kind,
+            ..
+        } => (
+            MessageRole::Assistant,
+            format!(
+                "interaction {interaction_id} {}",
+                match interaction_kind {
+                    floe_agent_contract::UserInteractionKind::SourceAccess => "source_access",
+                    floe_agent_contract::UserInteractionKind::ProcessingRecipient => {
+                        "processing_recipient"
+                    }
+                }
+            ),
             None,
         ),
     };

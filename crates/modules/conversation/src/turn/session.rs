@@ -150,6 +150,11 @@ pub enum AgentMessage {
         turn_id: Uuid,
         task: floe_experts::A2ATask,
     },
+    Interaction {
+        turn_id: Uuid,
+        interaction_id: Uuid,
+        interaction_kind: floe_agent_contract::UserInteractionKind,
+    },
 }
 
 impl AgentMessage {
@@ -158,7 +163,9 @@ impl AgentMessage {
     /// An answer, a capability result that succeeded, and a delegation that
     /// completed may all be derived from what a source said; the read behind
     /// them has to still hold when they are committed. A preamble, a compaction
-    /// pointer, and what the Person themselves said do not.
+    /// pointer, an interaction reference, and what the Person themselves said
+    /// do not: the interaction message is bare metadata, and authoritative
+    /// status always loads from the interaction row.
     pub fn may_derive_from_source(&self) -> bool {
         match self {
             Self::Assistant { .. } | Self::Capability { result: Ok(_), .. } => true,
@@ -166,6 +173,7 @@ impl AgentMessage {
             Self::Compaction { .. }
             | Self::Preamble { .. }
             | Self::User { .. }
+            | Self::Interaction { .. }
             | Self::Capability { result: Err(_), .. } => false,
         }
     }
@@ -177,6 +185,7 @@ impl AgentMessage {
             | Self::User { turn_id, .. }
             | Self::Assistant { turn_id, .. }
             | Self::Capability { turn_id, .. }
+            | Self::Interaction { turn_id, .. }
             | Self::Delegation { turn_id, .. } => *turn_id,
         }
     }

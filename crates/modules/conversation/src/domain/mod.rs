@@ -6,10 +6,24 @@ use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
 mod intent;
+mod interaction;
 
 pub use intent::{
     AdmittedExecution, CanonicalTurnIntent, MAX_TURN_TEXT_BYTES, ProfileSelection, StartTurn,
     normalize_turn_text,
+};
+pub use interaction::{
+    AuthorityRevision, ConversationInteraction, DecisionAdmission, ExpireInteraction,
+    ExpireOutcome, ExpectedGrantState, InlineObserveTarget, InteractionDecision,
+    InteractionDecisionKind, InteractionOrigin, InteractionRequirement,
+    InteractionRequirementKind, InteractionResolution, InteractionState, NavigationDestination,
+    NavigationOnlyTarget, PublishAdmission, ReviewedTarget, SupersedeInteraction,
+    canonical_requirement_digest, canonical_target_digest, decision_operation_id,
+    interaction_publication_id, next_state_after_decision, state_after_resolution,
+    INTERACTION_PENDING_LIFETIME_MS, MAX_ACTIVE_INTERACTIONS_PER_RUN,
+    MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
+    MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_CAPABILITIES,
+    MAX_TARGET_RESOURCES,
 };
 
 pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;

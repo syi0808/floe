@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+mod interactions;
+
+pub use interactions::InteractionRepository;
+
 use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, RunId};
 
