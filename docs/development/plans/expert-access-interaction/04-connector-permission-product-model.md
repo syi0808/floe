@@ -1,493 +1,471 @@
-# Checkpoint 04 — connector permission product model
+# Checkpoint 04 — Connector permission product model
 
-## Goal
+- **Status:** active execution plan
+- **Baseline:** main at 833b9f191fa6d1c14a11efa07f6f382e48627d9d
+- **Precondition:** Checkpoint 03 complete. Registry is source-independent; Calendar Observe is Access-owned; native and remote Calendar CAS and policy reauthorization are converged.
+- **Goal:** make a successful first-party source connection the product ceremony that enables that source for Floe by default, expose one connection-level **Use with Floe** control, and remove duplicate/protocol-shaped permission editors without collapsing Observe, Act, or external-processing authority.
+- **Compatibility posture:** pre-stable. Do not preserve obsolete permission UI or wire solely for compatibility. Existing connected profiles must not be silently promoted into new active grants.
+- **Platform priority:** Apple/macOS first. Shared contract fallout may update Android code; do not add Android parity work.
 
-Converge the product permission ceremony on the connection that owns the source.
+This file is the authoritative Checkpoint 04 index. Execute these child plans in order:
 
-After this checkpoint:
+1. [04-A — product policy and first-party consumer authority](04-a-product-policy-and-consumers.md)
+2. [04-B — connection-level Observe projection and owner API](04-b-connection-observe-owner-api.md)
+3. [04-C — native/device connection convergence](04-c-native-device-convergence.md)
+4. [04-D — remote SaaS convergence and multi-source reads](04-d-remote-saas-convergence.md)
+5. [04-E — Settings, processing, and Act separation](04-e-settings-processing-act.md)
+6. [04-F — deletion, verification, and documentation convergence](04-f-verification-doc-convergence.md)
 
-- connecting a supported first-party source/account establishes the default Observe grant that makes the selected source usable by Floe;
-- each connection has one clear “Use with Floe” control for Observe access;
-- pausing that control pauses Access grants without destroying credentials or source selection;
-- resource selection and Observe grant scope are coordinated as one user intent instead of two protocol-shaped ceremonies;
-- action/write authority remains separate;
-- Settings-level “LLM may use this data/connector” toggles are removed;
-- exact external model/recipient consent remains enforced and will be requested contextually by checkpoint 05;
-- remote and native connectors present the same product semantics even though their authentication/provider mechanics differ.
+Do not start 04-B until 04-A fixes the durable product decision and canonical first-party consumer policy. Do not default-enable remote source grants until 04-D has a correct multi-source read story for overlapping views. Do not implement Checkpoint 05 chat interactions in this checkpoint.
 
-This checkpoint changes durable product policy. Implementation must amend/supersede the parts of ADR 0028 that currently require zero connector grants after pairing/connection and must update product integrations/privacy language in checkpoint 06.
+---
 
-## Baseline surfaces
+## 1. Why this checkpoint exists
 
-Primary Flutter:
-- apps/client/lib/features/connections/presentation/connector_screen.dart
-- apps/client/lib/features/connections/presentation/server_connector_panel.dart
-- apps/client/lib/features/connections/application/remote_access_gateway.dart
-- apps/client/lib/features/settings/presentation/data_privacy.dart
-- apps/client/lib/features/settings/presentation/ai_processing.dart
-- apps/client/lib/features/settings/presentation/action_permissions.dart
-
-Primary Rust owners/adapters:
-- Connections owner and provider connection control APIs
-- Access/DataAccessGrant owner
-- crates/adapters/vault/src/vault/remote_calendar_grants.rs
-- crates/adapters/vault/src/vault/remote_view_grants.rs
-- native Calendar connection/EventKit adapter path
-- App/FFI commands used by connection detail
-
-Relevant decisions:
-- ADR 0020 — Observe and Act are separate; UI is escalation surface
-- ADR 0028 — connection-scoped permissions, but current proposed text says pair/connect creates zero grants
-- product/integrations-and-privacy.md — current text says successful read connection does not imply AI-use permission
-
-## 1. Define the product-level connection contract
-
-### 1.1 Connection vs Observe vs Act
-
-Keep three semantic layers internally:
+Checkpoint 03 fixed authority ownership but intentionally preserved explicit review ceremonies. The current product still exposes implementation details:
 
 ~~~text
-Connection
-  authentication/system access + stable source identity
+Remote SaaS:
+Connect
+  -> OAuth/source connection
+  -> separate grant preview/review/pause panel
+  -> user may choose a raw consumer
 
-Observe
-  DataAccessGrant permitting bounded read/use by approved first-party Floe consumers
+Native Calendar:
+OS/source connection + resource selection
+  -> separate Observe preview/review/pause/remove card
 
-Act
-  ActionAuthority permitting/asking/denying external mutation
+Personal device sources:
+connection detail AND Settings > Data & privacy
+  -> duplicate Observe editors
+  -> some clients submit consumer lists
+
+External processing:
+Settings > Data & privacy
+  -> generic "Allow external model providers" toggle
 ~~~
 
-The UX should not force a user to manually coordinate those layers when their intent is obvious.
-
-### 1.2 Connection completion semantics
-
-For a supported first-party connector, “Connect” is the user’s intent to let Floe use the selected source for ordinary Observe behavior.
-
-A connection becomes product-ready only when the connect flow has completed the applicable atomic/compensated steps:
-
-1. authenticate / acquire OS system access;
-2. establish stable connection/source authority;
-3. select the resource scope where the connector exposes selectable resources;
-4. create or activate the default first-party Observe grant for exactly that connection/resource scope;
-5. return a connection snapshot whose effective Observe state is Active.
-
-If step 4 fails, do not show “connected and usable”. Either:
-- fail/roll back the product connection where the provider operation is safe to compensate; or
-- show a recoverable connected-but-needs-attention state with one repair action.
-
-Do not silently leave the current “connection exists, Registry looks Active, grant absent” disagreement state.
-
-### 1.3 Empty selection
-
-For sources such as Calendar where resource selection is explicit:
-
-- no selected Calendar means no readable Calendar scope;
-- connection credentials/system access may exist, but Use with Floe cannot be Active with an empty resource set;
-- the UI asks the user to choose at least one resource before completing “usable” setup;
-- do not manufacture a wildcard scope when the user selected none.
-
-For whole-account sources such as a mail connection whose bounded resource is the account itself, the account resource can be created as the default Observe scope.
-
-## 2. One “Use with Floe” control per connection/source capability
-
-### 2.1 Meaning of ON
-
-ON means:
-
-- connection/source identity is current;
-- selected resources are valid;
-- the current default first-party Observe grant is Active;
-- new reads still require normal runtime admission and fresh source checks.
-
-ON is not a cached assertion that all future reads will succeed.
-
-### 2.2 Meaning of OFF
-
-OFF means:
-
-- keep credential/system connection;
-- keep stable connection identity;
-- keep selected resource set;
-- pause/revoke the applicable first-party Observe grants according to Access semantics;
-- later reads return NeedsUserAction(EnableObserve);
-- actions are governed independently by ActionAuthority.
-
-If disabling must invalidate derived cached views, do that through existing provenance/freshness policy. Do not claim that already released model/provider data can be recalled.
-
-### 2.3 Turning back ON
-
-Turning ON must not simply flip a UI bit.
-
-The owner path must:
-
-1. load current connection;
-2. validate source authority;
-3. validate selected resources;
-4. perform native subject/system permission check if applicable;
-5. re-review/re-activate the grant with the current authority;
-6. advance grant/policy authority/CAS state;
-7. return the resulting effective access snapshot.
-
-If source identity changed, return Needs review rather than silently activating stale consent.
-
-## 3. Resource selection is part of the same user intent
-
-Current designs can force:
+Target product model:
 
 ~~~text
-select calendars
-then separately review Calendar Expert grant
+Connect / allow system access / select resources
+  -> connection becomes current
+  -> App derives exact first-party readers
+  -> Access creates or reviews exact Observe grant set
+  -> Floe may use the source
+
+Connection detail:
+  Use with Floe [on/off]
+
+Off:
+  -> pause Observe grants
+  -> keep credentials
+  -> keep connection
+  -> keep resource selection
+  -> keep Act authority unchanged
+
+On:
+  -> fresh source/system validation
+  -> fresh exact grant review
+  -> current selected resources only
 ~~~
 
-Remove that split.
+The UI becomes simpler, but authority remains separate:
 
-When the user explicitly edits selected resources from a connection detail screen, the same product operation should update the Observe grant scope to the selected set after validation.
+- **Connections / provider / OS** — account/source identity, credentials, resource selection, system permission.
+- **Access Observe** — DataAccessGrant, consumer, source/resource scope, purpose, processing restriction, policy authority.
+- **Actions Act** — create/send/write authority and proposal approval.
+- **Inference / recipient authority** — whether source-backed data may leave its currently approved processing boundary.
 
-Internally this may be two owner operations coordinated by App:
+No new connection flag may become a second authorization truth.
+
+---
+
+## 2. Baseline findings at 833b9f19
+
+### Native/device
+
+- apps/client/lib/features/connections/application/native_calendar_access_gateway.dart exposes access.calendar.inspect/preview/configure.
+- ConnectorScreen still renders a protocol-shaped native Calendar Observe card with separate review/pause/remove actions.
+- _AppleConnectionDetail already hosts Contacts, Attention, Feasibility, and Wellbeing access cards.
+- Data & privacy still contains overlapping source/system controls.
+- PersonalAccessChangeDto::Review and ContactsAccessChangeDto::Review still accept caller-supplied consumers.
+- Attention UI still lets the Person choose assistant / attention.expert directly.
+
+### Remote SaaS
+
+- ServerConnectorPanel._connect completes connector authorization but does not establish default Observe.
+- _updateScope mutates server connection scope without coordinating Observe scope.
+- _disconnect deletes the connection without first converging local Observe authority.
+- _ServerConnectionGrants exposes raw preview/review/pause controls and a consumer selector.
+- Flutter hard-codes _remoteViewsFor(connectorId).
+- Remote grant commands are Access-owned, but product wire is still grant-oriented rather than connection-intent-oriented.
+
+### External processing and Act
+
+- _AiProcessing in Settings edits ServerConnection.allowExternal.
+- Inference still enforces exact-recipient consent separately; this enforcement must remain.
+- ActionPermissionsSection controls external side-effect authority and is correctly separate from Observe.
+
+### Runtime consequence of default-enabling every connection
+
+Remote connectors can overlap on logical views:
 
 ~~~text
-Connections: set selected resources
-Access: narrow/expand current Observe grant
+mail.communication:
+  Gmail
+  Microsoft Mail
+
+work.context:
+  Slack / Teams / GitHub family
+
+life.logistics:
+  Gmail
+  Home Assistant
+  other supported providers
 ~~~
 
-but it is one user action.
+Generic remote read currently selects one active source grant and conflicts when multiple sources admit the same logical view. Default-on connections make multi-source normal, so 04-D must fix routing/provenance before remote default Observe is complete.
 
-Required safety rules:
+---
 
-- scope may never exceed selected resources;
-- expansion happens only as part of the explicit resource-selection interaction;
-- a background provider catalog change does not expand a grant;
-- resource removal narrows/revokes access immediately;
-- failed Access update must not leave UI claiming the broader scope is usable;
-- use CAS/authority revisions so concurrent edits fail/reconcile cleanly.
+## 3. Final product semantics
 
-This deliberately changes the proposed ADR 0028 rule that connection selection and grant expansion are always separate product ceremonies.
+### 3.1 No persisted Use-with-Floe boolean
 
-## 4. Reuse the canonical first-party consumer policy
+Use with Floe is a product projection over owner state.
 
-Checkpoint 02 R4.5 establishes the Calendar consumer policy required for runtime cutover: product composition derives actual built-in consumer identities from canonical declarations and passes them into Access grant creation. Checkpoint 04 does **not** redesign or duplicate that policy; it changes the product ceremony that creates, pauses and reviews the grant.
-
-Rules:
-
-- connection creation obtains the current canonical policy from product composition;
-- Flutter never sends or edits a consumer checkbox/string list;
-- Access validates supplied scope but does not depend on built-in Expert declarations;
-- Calendar reuses the policy established in Checkpoint 02;
-- analogous source policies such as Mail follow the same owner pattern when introduced;
-- third-party Expert/package ids are never included by default;
-- a consumer may still have stricter processing/sensitivity policy than the connection-level Observe toggle;
-- disabling Use with Floe blocks Observe for the canonical first-party set without changing Act authority;
-- `calendar.expert` must never reappear as product-facing or security compatibility authority.
-
-If a direct Manager/assistant source-read path exists, add its real consumer identity only through the canonical product policy and a focused runtime test.
-
-## 5. Native Calendar connection
-
-### 5.1 Connection detail composition
-
-The macOS Calendar connection detail should present:
+Do not add durable authority such as:
 
 ~~~text
-macOS Calendar
-System access          Allowed / Needs access
-Calendars              Personal, Work
-Use with Floe          On
+connection.use_with_floe
+connector.llm_enabled
+registry.source_enabled
+settings.allow_source
 ~~~
 
-The user should not see:
+Effective state is derived from:
 
-- “Calendar Expert installation”;
-- tool assignment IDs;
-- source fingerprint under normal presentation;
-- DataAccessGrant terminology;
-- separate Schedule activation required to make Calendar usable.
+- current connection/source/system state;
+- current selected resources;
+- expected first-party Observe grant set;
+- current grant/source/policy authority.
 
-Security details may expose source authority/fingerprint under an advanced diagnostic section.
+### 3.2 Effective states
 
-### 5.2 EventKit OS permission
-
-System access remains OS-owned.
-
-If EventKit permission is denied/revoked:
-
-- connection effective state becomes Needs access/Unavailable;
-- Use with Floe cannot create a successful read;
-- clicking the recovery action invokes the native permission/system-settings path;
-- after return, refresh connection state and revalidate the Observe grant;
-- do not interpret an old grant as proof that OS permission remains present.
-
-### 5.3 Selected Calendar changes
-
-Selecting/deselecting calendars must:
-- use the connection owner to update the selected set;
-- update/narrow the Access Observe scope;
-- bump source/grant authority as appropriate;
-- invalidate stale derived source views;
-- leave Schedule Registry untouched.
-
-## 6. Remote server/SaaS connections
-
-### 6.1 Remove protocol-shaped grant ceremony from server settings
-
-server_connector_panel.dart currently exposes grant preview/review/pause operations too directly.
-
-Move permission UX to each concrete connected source/account.
-
-The server/pairing screen should focus on:
-- server trust/connection health;
-- pair/re-pair;
-- optional security details;
-- list/navigation to concrete source connections.
-
-Do not make the user understand producer/audience/issuer/grant vocabulary for routine source use.
-
-### 6.2 Pairing vs source connection
-
-Pairing authenticates the app/server relationship. It does not itself create a grant for every possible SaaS account.
-
-When the user later connects a concrete Google/Microsoft source:
-- that connection operation creates the default Observe grant for that connection;
-- pairing supplies trusted server authority infrastructure;
-- source use remains connection-scoped.
-
-If the current product treats server pairing and a single implicit source connection as one action, split the internal identities before exposing “Use with Floe”; a server instance is not a source account.
-
-## 7. Remove the generic Settings LLM/source toggle
-
-apps/client/lib/features/settings/presentation/ai_processing.dart currently presents external model use as a durable Settings toggle.
-
-Remove that product control.
-
-Do not remove the underlying processing policy.
-
-### 7.1 New processing consent semantics
-
-ProcessingRestriction / exact recipient remains an Access/Inference safety boundary.
-
-When a requested operation needs a recipient not currently approved:
+Connection-level projection must distinguish at least:
 
 ~~~text
-source read/model dispatch
-  -> NeedsUserAction(ApproveProcessingRecipient)
-  -> Manager explains
-  -> chat interaction / explicit review
-  -> owner approves exact recipient/scope
-  -> linked retry reauthorizes
+Active
+Paused
+NeedsReview
+NeedsSystemAccess
+ReconnectRequired
+Unavailable
 ~~~
 
-This is checkpoint 05 UI/runtime work.
+If an enabled boolean is exposed, it is derived from actual admitted current grants, never persisted independently.
 
-Checkpoint 04 should:
-- remove the disconnected global toggle;
-- preserve internal recipient authority;
-- ensure no caller treats “Use with Floe = ON” as blanket approval for arbitrary external model providers.
+A partial multi-grant bundle is **NeedsReview**, never clean Active.
 
-### 7.2 Server-local connector processing is not model transfer
+### 3.3 Which events may create default Observe
 
-Do not conflate:
-- a SaaS connector executing on Floe’s paired server to fetch data; and
-- sending that data to an external model provider.
+Only an explicit product event may create or review default Observe:
 
-Connection runtime placement follows the connector boundary. Model recipient approval follows Inference/Access dispatch authority.
+- successful new connection;
+- explicit reconnect;
+- explicit resource/scope update while Use with Floe is enabled;
+- explicit toggle from off/review-required to on.
 
-Tests should distinguish them.
+Merely discovering an existing connection during startup or inspection must not create a grant.
 
-## 8. Settings cleanup
+Therefore an old connected profile with no current grants becomes NeedsReview, not Active.
 
-Data & privacy should retain durable controls that are genuinely global and not owned by one connection.
+### 3.4 Off
 
-Remove/edit source-specific controls that now belong on connection detail.
+Off:
 
-At minimum inspect and clean:
+- pauses all current product-owned first-party Observe grants for the connection;
+- preserves credentials and provider connection;
+- preserves selected resources;
+- preserves OS permission;
+- preserves ActionAuthority;
+- invalidates old dependencies through normal GrantAuthority changes.
 
-- Calendar Expert access card/section;
-- Android source permission controls only where shared UI still exposes obsolete semantics; do not expand Android work;
-- _AiProcessing external provider toggle;
-- duplicate “Floe may use this source” controls outside Connections.
+### 3.5 On
 
-Action permissions remain because Act is a separate authority class.
+On:
 
-A global Permissions overview may remain/read-only if it is useful for audit/emergency pause, but:
-- it must not create or expand resource scope;
-- it navigates to the owning connection for scope changes;
-- do not implement a second full editor.
+1. reload current connection/resources;
+2. perform fresh native/signed source validation;
+3. derive exact first-party policy in App;
+4. compare reviewed expected connection/source/grant authority;
+5. create/review/reactivate exact grant set under CAS;
+6. return current derived status.
 
-## 9. Connection/access read model
+Never revive a stale source merely because an old grant exists.
 
-Flutter should not synthesize “Active” from unrelated booleans.
+### 3.6 Resource changes
 
-Expose one owner-produced effective access projection for each connection capability:
+When Active, resource selection and Observe scope are one product interaction:
 
 ~~~text
-ObserveAccessStatus
-  Off
-  Active
-  NeedsReview
-  NeedsSystemAccess
-  ReconnectRequired
-  Unavailable
+change selection
+  -> connection owner commits current selection
+  -> fresh source/resource validation
+  -> Access reviews exact current scope
+  -> return final effective state
 ~~~
 
-The projection is derived from current connection + Access authority and may include:
-- stable connection id;
-- capability/source id;
-- selected resource summary;
-- whether inline enable is safe;
-- non-secret reason code.
+If Access convergence fails after the connection owner commits the resource change, fail closed as NeedsReview. Do not widen an old grant to make the UI appear successful.
 
-It must not become a second persisted authority.
+When Paused, resource selection may change while grants stay paused. Turning On later reviews the latest selection.
 
-UI “Active” is rendered only from this projection.
+### 3.7 Disconnect
 
-## 10. Protocol/App boundary
+Invalidate or revoke Floe-owned Observe grants before deleting source credentials/connection where owner sequencing permits.
 
-Replace old source-specific commands with connection-scoped intent.
-
-A reasonable shape is:
+If provider disconnect later fails, the safe residual is:
 
 ~~~text
-connections.access.inspect
-connections.access.set_enabled
-connections.resources.update
+connection still exists
+Observe disabled or revoked
 ~~~
 
-or equivalent owner-aligned names.
-
-The command must identify:
-- Person from CallerContext, not caller payload duplication;
-- connection id;
-- source/capability id if one connection exposes several capabilities;
-- expected authority/revision;
-- desired enabled/resource state.
-
-Do not carry:
-- Expert setup id;
-- Expert Registry revision;
-- grant id selected by Flutter unless the owner explicitly exposes it as an opaque current reference;
-- native fingerprint chosen by Flutter.
-
-App orchestrates Connections + Access and returns the effective projection.
-
-## 11. Tests
-
-### Product state
-
-For native Calendar:
-1. permission allowed + resource selected + connect -> Active;
-2. Use with Floe Off -> connection remains, grant paused;
-3. turn On -> fresh native subject check and Active;
-4. OS permission revoked externally -> effective state NeedsSystemAccess;
-5. source identity changes -> NeedsReview;
-6. selection narrowed -> grant narrowed;
-7. selection expanded explicitly -> grant expanded after fresh validation;
-8. no selected calendars -> not Active.
-
-For remote SaaS:
-1. paired server alone does not create source account access;
-2. source account connect creates default first-party Observe grant;
-3. Use with Floe pause does not delete credential;
-4. disconnect revokes source grants before deleting credential metadata;
-5. re-connect creates current authority rather than reviving stale grant identity.
-
-### Processing
-
-- Use with Floe On does not authorize an unapproved external model recipient.
-- exact recipient approval still fences model dispatch.
-- server-local source acquisition can work while external model transfer remains denied.
-
-### Flutter
-
-- one Use with Floe control per concrete connection capability;
-- no Calendar Expert permission control;
-- no generic Settings LLM source toggle;
-- effective Active state comes from backend projection, not local composition of Registry flags.
-
-## 12. ADR/product decision update required by this checkpoint
-
-Implementation cannot leave ADR 0028 saying “successful pairing leaves zero connector grants” while code makes first-party source connection establish Observe access.
-
-Amend or supersede ADR 0028 with these durable decisions:
-
-- pairing authenticates the server relationship but concrete source connection establishes default first-party Observe permission;
-- resource selection and matching Observe scope update are one explicit product interaction;
-- Use with Floe pauses/reactivates Observe without disconnecting;
-- third-party consumers are still denied by default;
-- Act remains separate;
-- external model recipient consent remains separate and contextual.
-
-Update product/integrations-and-privacy.md wording so “connection does not imply AI permission” is replaced by the new, more precise rule:
-- connecting a first-party source with Use with Floe enabled grants bounded Observe to Floe first-party consumers;
-- it does not imply Act authority or arbitrary external model recipient approval.
-
-The actual docs edit may be committed in checkpoint 06 if implementation is staged, but the code and tests in checkpoint 04 must follow this decision.
-
-## 13. Residual audit
-
-Search:
+Never leave:
 
 ~~~text
-Calendar access
-Calendar Expert
-Allow external model providers
-remote calendar grant
-previewRemoteCalendarGrant
-reviewRemoteCalendarGrant
-pauseRemoteCalendarGrant
-Data & privacy
-Use with Floe
+credential/source removed
+old active grant still appears current
 ~~~
 
-Classify all remaining UI controls. There must be one editing owner for source Observe scope: the connection detail.
+---
 
-Search wire/API names for:
-- grant preview/review UI commands that no longer have a product caller;
-- source access commands under Experts owner;
-- duplicated enable flags.
+## 4. First-party default policy
 
-Delete unused commands and gateways in the same checkpoint; do not leave backend ceremony after removing its UI.
+Default connection Observe is only for product-approved first-party readers.
 
-## 14. Verification
+- built-in Expert consumers come from actual production reader identities;
+- root assistant consumers are included only where a real current root path reads the source;
+- third-party and extension consumers are never included automatically;
+- Flutter never submits the approved consumer list;
+- Access and Vault never import the built-in catalogue;
+- App composition joins connection capability and current first-party readers.
 
-Rust/protocol:
-- connection owner tests;
-- Access grant tests;
-- remote source tests;
-- native Calendar source/permission tests;
-- protocol command/DTO tests;
-- FFI build.
+Do not add an assistant wildcard to every grant.
 
-Flutter:
-- flutter analyze;
-- focused connector_screen_test.dart;
-- focused server_connector_panel_test.dart;
-- Data & privacy/settings tests;
-- full flutter test.
+04-A owns exact inventory and tests.
 
-Apple:
-- macOS EventKit permission/list/read focused native tests if present;
-- flutter build macos;
-- manual smoke with a fresh development profile:
-  - allow Calendar;
-  - select calendar;
-  - verify Use with Floe Active;
-  - pause/resume;
-  - revoke OS permission and observe repair state.
+---
 
-Do not run Android parity work beyond shared compile/test fallout unless explicitly requested.
+## 5. Multi-source rule
 
-## 15. Checkpoint exit criteria
+A default-on connection model means multiple current connections may legitimately serve the same logical view.
 
-Checkpoint 04 is complete when:
+Checkpoint 04 must not solve that by:
 
-- concrete connection completion establishes the default first-party Observe grant;
-- each source connection has one Use with Floe control;
-- resource selection and Observe scope stay coherent under one product interaction;
-- disabling Observe does not disconnect or alter Act authority;
-- external model recipient consent remains separately enforced;
-- the global Settings LLM/source-use toggle is gone;
-- remote server settings no longer expose ordinary source grant protocol ceremony;
-- backend effective access projection is the only UI Active source;
-- ADR/product update requirements are queued for checkpoint 06 or already landed with this checkpoint;
-- targeted Rust/Flutter/native checks and broad FFI/Flutter gates pass.
+- silently choosing a hidden preferred source;
+- denying the second connection permission;
+- leaving both grants active while generic reads always Conflict;
+- inventing a synthetic aggregate DataAccessGrant or ContextDependency.
 
-Checkpoint 05 can now create inline permission interactions that invoke exactly the same connection/access owner operations used by the connection screen.
+Every contributing source retains its own DataAccessGrant and ContextDependency.
+
+04-D owns the smallest correct bounded multi-source acquisition/merge contract. If SourceRead/HeldGrant cannot represent this without provenance loss, change that contract instead of collapsing authority.
+
+---
+
+## 6. External processing is not Observe
+
+Default source Observe does **not** approve a new model recipient.
+
+A source-backed request may still be blocked because the chosen model route would transmit data to a recipient that has not been approved.
+
+Checkpoint 04:
+
+- removes the generic Settings ceremony;
+- preserves exact-recipient enforcement and stored authority;
+- does not default external processing to allowed;
+- does not treat Use with Floe as external-recipient consent.
+
+Checkpoint 05 will turn a missing contextual recipient/source decision into a Conversation-owned interaction.
+
+A fresh profile may therefore have a connected, Observe-active source while remote model processing still requires later contextual approval. This is intentional fail-closed behavior.
+
+---
+
+## 7. Act is separate
+
+Observe operations never mutate:
+
+- Calendar create authority;
+- send/write/delete authority;
+- proposal approval;
+- provider write scopes.
+
+ActionPermissionsSection may remain in Settings because it is cross-connection Act policy, not source Observe.
+
+---
+
+## 8. Execution slices
+
+### 04-A — product policy and first-party consumer authority
+
+Exit:
+
+- ADR/product policy reflects the new connection ceremony;
+- App has one canonical first-party Observe policy derivation;
+- actual production readers and supported connector/view mappings are tested;
+- caller-supplied consumer editing has a deletion path.
+
+### 04-B — connection Observe projection and owner API
+
+Exit:
+
+- no persisted Use-with-Floe authorization bit;
+- one effective connection access projection exists;
+- inspect is side-effect free;
+- connection-level set-enabled/reconcile semantics are owner-correct;
+- bundle CAS/failure semantics are defined;
+- old profiles are never auto-granted on inspect.
+
+### 04-C — native/device convergence
+
+Exit:
+
+- supported Apple connection completion creates/reviews default Observe where stable resource semantics exist;
+- connection detail owns source controls;
+- duplicate Settings editors are removed for migrated sources;
+- client consumer selection is gone;
+- native Calendar resource edits and Use-with-Floe share one product state.
+
+### 04-D — remote SaaS convergence
+
+Exit:
+
+- successful new remote connection establishes current first-party grant set;
+- scope edit and disconnect coordinate Observe;
+- raw grant ceremony/consumer picker is gone from Flutter;
+- Flutter _remoteViewsFor is gone;
+- overlapping source views read correctly with exact per-source provenance.
+
+### 04-E — Settings, processing, and Act separation
+
+Exit:
+
+- generic external-model source toggle is removed from Settings;
+- recipient enforcement remains fail-closed;
+- Action permissions remain independent;
+- Settings contains only true cross-connection concerns.
+
+### 04-F — deletion and verification
+
+Exit:
+
+- residual search proves one product permission path;
+- restart/failure/reconnect/resource-change cases pass;
+- full applicable Rust/Go/FFI/Flutter/macOS gates pass;
+- current architecture, ADR/product docs, and this plan converge;
+- Checkpoint 05 becomes next.
+
+---
+
+## 9. Global invariants
+
+- Registry is never reintroduced into source access.
+- DataAccessGrant remains Observe authority.
+- Connection state is not authorization.
+- Use with Floe is derived/product intent, not a second durable authority.
+- App derives first-party policy; Access remains catalogue-agnostic.
+- Flutter may echo opaque expected authority but never composes GrantScope/consumers/recipient policy.
+- Existing connected profiles are not silently authorized.
+- Native/provider I/O occurs outside Vault transactions.
+- Resource/source drift fails closed.
+- ContextDependency records actual admitted source and consumer.
+- No third-party source consumer is default-granted.
+- Observe never changes ActionAuthority.
+- Observe never implies external-model recipient consent.
+- Disconnect cannot leave a current active Floe Observe grant.
+- Default-enable must not make multi-source views unusable.
+
+---
+
+## 10. Stop conditions
+
+Stop and update the plan instead of adding a workaround if implementation appears to require:
+
+1. a persisted use_with_floe authorization bit;
+2. Registry source permission revival;
+3. Access importing floe-experts-builtin;
+4. Flutter sending consumer lists or GrantScope;
+5. automatic grant creation merely because an old connection is discovered at startup;
+6. treating paired-server enrollment alone as connector Observe consent;
+7. turning external model consent on as a side effect of Connect;
+8. mutating ActionAuthority from Use with Floe;
+9. preserving _ServerConnectionGrants as a second permission editor;
+10. preserving Settings source Observe editors after connection-detail replacement is live;
+11. hidden source priority to avoid multi-source conflicts;
+12. synthetic aggregate grants/dependencies that erase per-source provenance;
+13. holding a database transaction across OAuth/EventKit/provider I/O;
+14. implementing Checkpoint 05 inline permission interactions early.
+
+---
+
+## 11. Broad verification
+
+Targeted gates live in each child plan. Final broad gate in 04-F:
+
+~~~sh
+cargo check --workspace --lib
+cargo test --workspace --no-fail-fast
+cargo build -p floe-ffi
+python3 tools/architecture/check_boundaries.py
+git diff --check
+
+cd apps/client
+flutter analyze
+flutter test
+flutter build macos
+~~~
+
+Server connector code is expected to change in 04-D. If it does:
+
+~~~sh
+cd server
+go test -race ./...
+go vet ./...
+~~~
+
+Run focused macOS/native tests when native provider or Runner code changes.
+
+Use isolated development profiles for connection/grant persistence acceptance.
+
+---
+
+## 12. Definition of done
+
+- [ ] explicit new/reconnect connection completion enables supported first-party Observe by default.
+- [ ] merely inspecting an old connected profile never creates a grant.
+- [ ] every migrated connection detail exposes one Use with Floe control.
+- [ ] Use with Floe is derived from current owner state, not persisted separately.
+- [ ] Off pauses Observe while preserving connection/resources/credentials/system permission.
+- [ ] On performs fresh source/resource validation and CAS-bound review.
+- [ ] resource selection and active Observe converge in one product interaction.
+- [ ] disconnect invalidates Observe before source credential removal.
+- [ ] Flutter sends no first-party consumer list or GrantScope.
+- [ ] App is the single product-composition source for first-party consumer policy.
+- [ ] actual production consumer identities are covered; third-party consumers are excluded.
+- [ ] remote grant consumer picker and raw grant ceremony are gone from connection UI.
+- [ ] Flutter _remoteViewsFor product policy is gone.
+- [ ] overlapping remote sources can coexist and be read without provenance loss.
+- [ ] Settings no longer edits migrated source Observe permissions.
+- [ ] Settings external-model toggle is gone.
+- [ ] exact-recipient processing enforcement remains.
+- [ ] ActionAuthority is unchanged by Observe operations.
+- [ ] old connected state is not reinterpreted as authorization.
+- [ ] legacy Calendar-Expert/source Registry surfaces remain deleted.
+- [ ] full Rust/architecture/FFI/Flutter/macOS gates pass.
+- [ ] Go gates pass for server changes.
+- [ ] durable ADR/product/current architecture docs match final behavior.
+
+Checkpoint 05 may start only after all items above are true.
