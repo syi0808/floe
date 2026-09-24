@@ -58,16 +58,18 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             SourceReadOutcome::Unavailable(reason) => {
                 return blocked(BlockedResult::Unavailable { reason }, vec![]);
             }
-            SourceReadOutcome::NeedsUserAction(requirement) => {
-                requirement
-                    .validate()
-                    .map_err(|_| AgentFailure::StaleContext)?;
+            SourceReadOutcome::NeedsUserAction(blockers) => {
+                blockers.validate().map_err(|_| AgentFailure::StaleContext)?;
+                let requirement = blockers
+                    .blockers()
+                    .first()
+                    .ok_or(AgentFailure::StaleContext)?;
                 let artifact = Artifact {
                     artifact_id: Uuid::new_v4(),
                     name: "Calendar access requirement".into(),
                     parts: vec![ArtifactPart::Data {
                         media_type: SOURCE_ACCESS_REQUIREMENT_MEDIA_TYPE.into(),
-                        data: serde_json::to_string(&requirement)
+                        data: serde_json::to_string(requirement)
                             .map_err(|_| AgentFailure::InvalidInput)?,
                     }],
                     coverage: DependencyCoverage::Independent,
@@ -184,8 +186,8 @@ mod tests {
     use floe_context_contract::{
         AttentionView, AuthorizedRead, CalendarContextItem, ConfirmedInteractionView,
         ContextDependency, GrantConsumer, GrantOperation, GrantPurpose,
-        MemoryContextSnapshot, NativeContextView, PeopleView, SourceAccessRequirement,
-        SourceAccessRequirementKind, WellbeingView, WorkContextView,
+        MemoryContextSnapshot, NativeContextView, PeopleView, SourceAccessBlockers,
+        SourceAccessRequirement, SourceAccessRequirementKind, WellbeingView, WorkContextView,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
@@ -298,8 +300,8 @@ mod tests {
                     Scenario::Unavailable => Ok(SourceReadOutcome::Unavailable(
                         SourceUnavailable::TemporarilyUnavailable,
                     )),
-                    Scenario::NeedsUserAction => Ok(SourceReadOutcome::NeedsUserAction(
-                        SourceAccessRequirement::try_new(
+                    Scenario::NeedsUserAction => {
+                        let requirement = SourceAccessRequirement::try_new(
                             "floe.source.calendar",
                             None,
                             None,
@@ -310,10 +312,14 @@ mod tests {
                             None,
                             SourceAccessRequirementKind::SelectResource,
                             None,
+                            None,
                             false,
                         )
-                        .unwrap(),
-                    )),
+                        .unwrap();
+                        Ok(SourceReadOutcome::NeedsUserAction(
+                            SourceAccessBlockers::try_new(vec![requirement]).unwrap(),
+                        ))
+                    }
                     Scenario::Failure => Err(AgentFailure::StorageUnavailable),
                     _ => {
                         let now = Utc::now();

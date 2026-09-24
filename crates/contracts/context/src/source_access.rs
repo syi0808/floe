@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ConnectionId, ConnectorId, GrantConsumer, GrantOperation, GrantPurpose, GrantValidationError,
-    MAX_RESOURCE_HANDLES, ResourceHandle, SourceAuthority,
+    ConnectionId, ConnectorId, GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose,
+    GrantValidationError, MAX_RESOURCE_HANDLES, ResourceHandle, SourceAuthority,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -10,7 +10,7 @@ use crate::{
 pub enum SourceReadOutcome<Value> {
     Ready(Value),
     Unavailable(SourceUnavailable),
-    NeedsUserAction(SourceAccessRequirement),
+    NeedsUserAction(SourceAccessBlockers),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -31,6 +31,43 @@ pub enum SourceAccessRequirementKind {
     SelectResource,
 }
 
+/// The exact live grant the classifying owner observed while producing a
+/// requirement, or nothing when it proved that no live grant binds the
+/// reviewed source. The reviewed descriptor binds this expectation; resolution
+/// re-reads current authority and never treats a changed grant as reviewed.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedGrant {
+    grant_id: GrantId,
+    authority: GrantAuthority,
+}
+
+impl ObservedGrant {
+    pub fn try_new(grant_id: GrantId, authority: GrantAuthority) -> Result<Self, GrantValidationError> {
+        let observed = Self {
+            grant_id,
+            authority,
+        };
+        observed.validate()?;
+        Ok(observed)
+    }
+
+    pub fn validate(&self) -> Result<(), GrantValidationError> {
+        if !self.grant_id.is_valid() || !self.authority.is_valid() {
+            return Err(GrantValidationError::InvalidState);
+        }
+        Ok(())
+    }
+
+    pub fn grant_id(&self) -> GrantId {
+        self.grant_id
+    }
+
+    pub fn authority(&self) -> GrantAuthority {
+        self.authority
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceAccessRequirement {
@@ -44,6 +81,7 @@ pub struct SourceAccessRequirement {
     processing_recipient: Option<String>,
     reason: SourceAccessRequirementKind,
     source_authority: Option<SourceAuthority>,
+    observed_grant: Option<ObservedGrant>,
     inline_resolution: bool,
 }
 
@@ -60,6 +98,7 @@ impl SourceAccessRequirement {
         processing_recipient: Option<String>,
         reason: SourceAccessRequirementKind,
         source_authority: Option<SourceAuthority>,
+        observed_grant: Option<ObservedGrant>,
         inline_resolution: bool,
     ) -> Result<Self, GrantValidationError> {
         let requirement = Self {
@@ -73,6 +112,7 @@ impl SourceAccessRequirement {
             processing_recipient,
             reason,
             source_authority,
+            observed_grant,
             inline_resolution,
         };
         requirement.validate()?;
@@ -109,6 +149,9 @@ impl SourceAccessRequirement {
         {
             return Err(GrantValidationError::InvalidState);
         }
+        if let Some(observed) = &self.observed_grant {
+            observed.validate()?;
+        }
         Ok(())
     }
 
@@ -141,6 +184,9 @@ impl SourceAccessRequirement {
     }
     pub fn source_authority(&self) -> Option<SourceAuthority> {
         self.source_authority
+    }
+    pub fn observed_grant(&self) -> Option<ObservedGrant> {
+        self.observed_grant
     }
     pub fn inline_resolution(&self) -> bool {
         self.inline_resolution
@@ -205,6 +251,7 @@ mod tests {
             None,
             SourceAccessRequirementKind::EnableObserve,
             None,
+            None,
             true,
         )
     }
@@ -234,6 +281,49 @@ mod tests {
         assert!(requirement.validate().is_err());
         requirement.processing_recipient = Some("model.example".into());
         assert!(requirement.validate().is_ok());
+    }
+
+    #[test]
+    fn observed_grant_binds_exact_grant_or_proven_absence() {
+        let observed = ObservedGrant::try_new(GrantId::new(), GrantAuthority::new()).unwrap();
+        let mut with_grant = requirement("floe.source.calendar").unwrap();
+        with_grant.observed_grant = Some(observed);
+        assert!(with_grant.validate().is_ok());
+        assert_eq!(with_grant.observed_grant(), Some(observed));
+        assert_eq!(observed.grant_id().is_valid(), true);
+        let absent = requirement("floe.source.calendar").unwrap();
+        assert_eq!(absent.observed_grant(), None);
+        assert!(absent.validate().is_ok());
+        let mut nil_grant = requirement("floe.source.calendar").unwrap();
+        nil_grant.observed_grant = Some(
+            serde_json::from_value::<ObservedGrant>(serde_json::json!({
+                "grant_id": uuid::Uuid::nil(),
+                "authority": {
+                    "incarnation": uuid::Uuid::new_v4(),
+                    "access_epoch": 1,
+                },
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            nil_grant.validate(),
+            Err(GrantValidationError::InvalidState)
+        );
+        let mut nil_authority = requirement("floe.source.calendar").unwrap();
+        nil_authority.observed_grant = Some(
+            serde_json::from_value::<ObservedGrant>(serde_json::json!({
+                "grant_id": uuid::Uuid::new_v4(),
+                "authority": {
+                    "incarnation": uuid::Uuid::nil(),
+                    "access_epoch": 1,
+                },
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            nil_authority.validate(),
+            Err(GrantValidationError::InvalidState)
+        );
     }
 
     #[test]

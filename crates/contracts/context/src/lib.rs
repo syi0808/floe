@@ -26,7 +26,7 @@ pub use memory::{
     MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
 };
 pub use source_access::{
-    MAX_SOURCE_ACCESS_BLOCKERS, SourceAccessBlockers, SourceAccessRequirement,
+    MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, SourceAccessBlockers, SourceAccessRequirement,
     SourceAccessRequirementKind, SourceReadOutcome, SourceUnavailable,
 };
 pub use views::*;
@@ -575,6 +575,7 @@ pub enum ContextIssueReason {
     Unavailable,
     Denied,
     BudgetExceeded,
+    NeedsUserAction,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

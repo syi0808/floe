@@ -27,7 +27,12 @@ pub(crate) fn optional_calendar_views(
     let (views, issue) = match outcome {
         SourceReadOutcome::Ready(views) => (views, None),
         SourceReadOutcome::Unavailable(_) => (vec![], Some(ContextIssueReason::Unavailable)),
-        SourceReadOutcome::NeedsUserAction(_) => (vec![], Some(ContextIssueReason::Denied)),
+        // The requirement itself is preserved by the host, which publishes it
+        // under the admitted origin; the context records that user action —
+        // not a denial — is what the source needs.
+        SourceReadOutcome::NeedsUserAction(_) => {
+            (vec![], Some(ContextIssueReason::NeedsUserAction))
+        }
     };
     floe_context_contract::record_source_issue(
         &mut context.optional_context_issues,
@@ -377,7 +382,7 @@ pub(crate) fn validate_judgment(
 mod calendar_outcome_tests {
     use super::*;
     use floe_context_contract::{
-        GrantConsumer, GrantOperation, GrantPurpose, SourceAccessRequirement,
+        GrantConsumer, GrantOperation, GrantPurpose, SourceAccessBlockers, SourceAccessRequirement,
         SourceAccessRequirementKind, SourceUnavailable,
     };
 
@@ -420,17 +425,20 @@ mod calendar_outcome_tests {
             None,
             SourceAccessRequirementKind::ReviewChangedSource,
             None,
+            None,
             true,
         )
         .unwrap();
         optional_calendar_views(
             &mut context,
-            SourceReadOutcome::NeedsUserAction(requirement),
+            SourceReadOutcome::NeedsUserAction(
+                SourceAccessBlockers::try_new(vec![requirement]).unwrap(),
+            ),
         );
         assert_eq!(context.optional_context_issues.len(), 1);
         assert_eq!(
             context.optional_context_issues[0].reason,
-            ContextIssueReason::Denied
+            ContextIssueReason::NeedsUserAction
         );
 
         optional_calendar_views(&mut context, SourceReadOutcome::Ready(vec![]));

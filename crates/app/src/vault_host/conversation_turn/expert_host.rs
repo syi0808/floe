@@ -15,7 +15,8 @@ use floe_agent_contract::{
     ToolResult, TransferConsent,
 };
 use floe_context::{
-    AttentionView, CalendarContextView, NativeContextView, PeopleView, WellbeingView,
+    AttentionView, CalendarContextView, NativeContextView, PeopleView, PersonalGrantRecords,
+    WellbeingView,
 };
 use floe_inference::{InferenceExecutionConstraint, InferenceExecutor};
 use floe_kernel::{PersonId, TaskId};
@@ -551,9 +552,9 @@ impl PersonalViewSource<'_> {
                     reason,
                 ));
             }
-            floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) => {
+            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
                 return Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
-                    requirement,
+                    blockers,
                 ));
             }
         };
@@ -798,15 +799,91 @@ pub(super) trait CalendarContextReaderApi: Send + Sync {
     >;
 }
 
+/// How a calendar admission failure classified against current grant facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CalendarReviewClassification {
+    reason: floe_context_contract::SourceAccessRequirementKind,
+    observed: Option<floe_context_contract::ObservedGrant>,
+}
+
+/// Classify a calendar admission failure against the live grants that bind
+/// this connection: none means the grant is missing, one paused or drifted
+/// grant is reviewable, and more than one is a duplicate authority the review
+/// cannot pick between, so it fails closed with no card.
+fn classify_calendar_review(
+    grants: &[floe_access::DataAccessGrant],
+    person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
+) -> Result<CalendarReviewClassification, AgentFailure> {
+    let mut binding = grants.iter().filter(|grant| {
+        grant.state() != floe_access::GrantState::Revoked
+            && grant.source().person_id() == person_id
+            && grant.source().connector().as_str() == connector_id
+            && grant.source().connection_id().as_str() == connection_id
+    });
+    let Some(grant) = binding.next() else {
+        return Ok(CalendarReviewClassification {
+            reason: floe_context_contract::SourceAccessRequirementKind::EnableObserve,
+            observed: None,
+        });
+    };
+    if binding.next().is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let observed = floe_context_contract::ObservedGrant::try_new(grant.id(), grant.authority())
+        .map_err(|_| AgentFailure::StaleContext)?;
+    let reason = if grant.state() == floe_access::GrantState::Paused {
+        floe_context_contract::SourceAccessRequirementKind::EnableObserve
+    } else {
+        floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource
+    };
+    Ok(CalendarReviewClassification {
+        reason,
+        observed: Some(observed),
+    })
+}
+
+/// The connector identity this calendar connection grants bind, when the
+/// provider has one.
+fn calendar_connector_id(connection: &floe_day::CalendarConnection) -> Option<&'static str> {
+    floe_access::native_calendar_connector(connection.provider)
+        .or_else(|| floe_access::hosted_calendar_connector(connection.provider))
+}
+
+/// Observe the one live grant binding this connection for reconnect review.
+/// Duplicates fail closed; absence stays a navigation-free reconnect review
+/// against the known connection.
+fn observe_calendar_binding(
+    grants: &[floe_access::DataAccessGrant],
+    person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
+) -> Result<Option<floe_context_contract::ObservedGrant>, AgentFailure> {
+    let mut binding = grants.iter().filter(|grant| {
+        grant.state() != floe_access::GrantState::Revoked
+            && grant.source().person_id() == person_id
+            && grant.source().connector().as_str() == connector_id
+            && grant.source().connection_id().as_str() == connection_id
+    });
+    let Some(grant) = binding.next() else {
+        return Ok(None);
+    };
+    if binding.next().is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    floe_context_contract::ObservedGrant::try_new(grant.id(), grant.authority())
+        .map(Some)
+        .map_err(|_| AgentFailure::StaleContext)
+}
+
 fn calendar_access_requirement<Value>(
     connection: Option<&floe_day::CalendarConnection>,
     consumer: &str,
     reason: floe_context_contract::SourceAccessRequirementKind,
+    observed_grant: Option<floe_context_contract::ObservedGrant>,
 ) -> Result<floe_context_contract::SourceReadOutcome<Value>, AgentFailure> {
-    let connector = connection.and_then(|connection| {
-        floe_access::native_calendar_connector(connection.provider)
-            .or_else(|| floe_access::hosted_calendar_connector(connection.provider))
-    });
+    let connector = connection.and_then(calendar_connector_id);
     let connector_id = connector
         .map(|value| floe_context_contract::ConnectorId::try_new(value.to_owned()))
         .transpose()
@@ -849,11 +926,14 @@ fn calendar_access_requirement<Value>(
         None,
         reason,
         source_authority,
+        observed_grant,
         inline_resolution,
     )
     .map_err(|_| AgentFailure::StaleContext)?;
+    let blockers = floe_context_contract::SourceAccessBlockers::try_new(vec![requirement])
+        .map_err(|_| AgentFailure::StaleContext)?;
     Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
-        requirement,
+        blockers,
     ))
 }
 
@@ -861,6 +941,8 @@ fn calendar_read_outcome<Value>(
     result: Result<Value, AgentFailure>,
     connection: &floe_day::CalendarConnection,
     consumer: &str,
+    review: &CalendarReviewClassification,
+    reconnect_observed: Option<floe_context_contract::ObservedGrant>,
 ) -> Result<floe_context_contract::SourceReadOutcome<Value>, AgentFailure> {
     match result {
         Ok(value) => Ok(floe_context_contract::SourceReadOutcome::Ready(value)),
@@ -872,12 +954,14 @@ fn calendar_read_outcome<Value>(
         Err(AgentFailure::AccessReviewRequired) => calendar_access_requirement(
             Some(connection),
             consumer,
-            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
+            review.reason,
+            review.observed,
         ),
         Err(AgentFailure::CredentialExpired) => calendar_access_requirement(
             Some(connection),
             consumer,
             floe_context_contract::SourceAccessRequirementKind::Reconnect,
+            reconnect_observed,
         ),
         Err(error) => Err(error),
     }
@@ -928,16 +1012,31 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                     None,
                     consumer,
                     floe_context_contract::SourceAccessRequirementKind::SelectResource,
+                    None,
                 );
             };
             if connection.device_id != self.device_id || connection.revision == 0 {
                 return Err(AgentFailure::StaleContext);
             }
             if connection.disconnected {
+                let observed = match calendar_connector_id(&connection) {
+                    Some(connector_id) => {
+                        let grants =
+                            floe_vault::VaultGrantRecords::new(self.vault).grants().await?;
+                        observe_calendar_binding(
+                            &grants,
+                            person_id,
+                            connector_id,
+                            &connection.connection_id,
+                        )?
+                    }
+                    None => None,
+                };
                 return calendar_access_requirement(
                     Some(&connection),
                     consumer,
                     floe_context_contract::SourceAccessRequirementKind::Reconnect,
+                    observed,
                 );
             }
             if connection.calendars.is_empty() {
@@ -945,6 +1044,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                     Some(&connection),
                     consumer,
                     floe_context_contract::SourceAccessRequirementKind::SelectResource,
+                    None,
                 );
             }
             let result = async {
@@ -1044,7 +1144,35 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for CurrentCalendarContext
                 Ok(reads)
             }
             .await;
-            calendar_read_outcome(result, &connection, consumer)
+            // Reviewable failures classify against current grant facts; every
+            // other outcome maps without touching grant state.
+            if matches!(
+                result,
+                Err(AgentFailure::AccessReviewRequired | AgentFailure::CredentialExpired)
+            ) {
+                let grants = floe_vault::VaultGrantRecords::new(self.vault)
+                    .grants()
+                    .await?;
+                let connector_id = calendar_connector_id(&connection).unwrap_or_default();
+                let review = classify_calendar_review(
+                    &grants,
+                    person_id,
+                    connector_id,
+                    &connection.connection_id,
+                )?;
+                let reconnect = observe_calendar_binding(
+                    &grants,
+                    person_id,
+                    connector_id,
+                    &connection.connection_id,
+                )?;
+                return calendar_read_outcome(result, &connection, consumer, &review, reconnect);
+            }
+            let unused = CalendarReviewClassification {
+                reason: floe_context_contract::SourceAccessRequirementKind::SelectResource,
+                observed: None,
+            };
+            calendar_read_outcome(result, &connection, consumer, &unused, None)
         })
     }
 }
@@ -1277,18 +1405,45 @@ mod tests {
         }
     }
 
+    fn review_classification(
+        reason: floe_context_contract::SourceAccessRequirementKind,
+        observed: Option<floe_context_contract::ObservedGrant>,
+    ) -> CalendarReviewClassification {
+        CalendarReviewClassification { reason, observed }
+    }
+
+    fn blockers_requirement(
+        outcome: floe_context_contract::SourceReadOutcome<Vec<String>>,
+    ) -> floe_context_contract::SourceAccessRequirement {
+        let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+            panic!("calendar review must remain actionable");
+        };
+        blockers.validate().unwrap();
+        assert_eq!(blockers.blockers().len(), 1);
+        blockers.blockers()[0].clone()
+    }
+
     #[test]
     fn calendar_review_requirement_binds_current_connection_and_expert() {
         let connection = calendar_connection();
+        let observed = floe_context_contract::ObservedGrant::try_new(
+            floe_context_contract::GrantId::new(),
+            floe_context_contract::GrantAuthority::new(),
+        )
+        .unwrap();
+        let review = review_classification(
+            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
+            Some(observed),
+        );
         let outcome = calendar_read_outcome::<Vec<String>>(
             Err(AgentFailure::AccessReviewRequired),
             &connection,
             "floe.builtin.schedule",
+            &review,
+            None,
         )
         .unwrap();
-        let floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
-            panic!("calendar review must remain actionable");
-        };
+        let requirement = blockers_requirement(outcome);
         assert_eq!(requirement.source_id(), "floe.source.calendar");
         assert_eq!(requirement.consumer().identifier(), "floe.builtin.schedule");
         assert_eq!(
@@ -1301,15 +1456,26 @@ mod tests {
             requirement.source_authority(),
             Some(connection.source_authority)
         );
+        assert_eq!(requirement.observed_grant(), Some(observed));
         assert!(requirement.inline_resolution());
     }
 
     #[test]
     fn calendar_unavailability_and_integrity_failure_stay_distinct() {
         let connection = calendar_connection();
+        let unused = review_classification(
+            floe_context_contract::SourceAccessRequirementKind::SelectResource,
+            None,
+        );
         assert_eq!(
-            calendar_read_outcome::<Vec<String>>(Ok(vec![]), &connection, "floe.builtin.schedule")
-                .unwrap(),
+            calendar_read_outcome::<Vec<String>>(
+                Ok(vec![]),
+                &connection,
+                "floe.builtin.schedule",
+                &unused,
+                None,
+            )
+            .unwrap(),
             floe_context_contract::SourceReadOutcome::Ready(vec![])
         );
         assert_eq!(
@@ -1317,6 +1483,8 @@ mod tests {
                 Err(AgentFailure::CapabilityUnavailable),
                 &connection,
                 "floe.builtin.schedule",
+                &unused,
+                None,
             )
             .unwrap(),
             floe_context_contract::SourceReadOutcome::Unavailable(
@@ -1335,6 +1503,8 @@ mod tests {
                     Err(failure),
                     &connection,
                     "floe.builtin.schedule",
+                    &unused,
+                    None,
                 ),
                 Err(failure)
             );
@@ -1347,11 +1517,10 @@ mod tests {
             None,
             "floe.builtin.schedule",
             floe_context_contract::SourceAccessRequirementKind::SelectResource,
+            None,
         )
         .unwrap();
-        let floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
-            panic!("missing connection must request source selection");
-        };
+        let requirement = blockers_requirement(outcome);
         assert!(requirement.connection_id().is_none());
         assert!(requirement.resources().is_empty());
         assert!(!requirement.inline_resolution());
@@ -1362,13 +1531,120 @@ mod tests {
             Some(&connection),
             "floe.builtin.schedule",
             floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource,
+            None,
         )
         .unwrap();
-        let floe_context_contract::SourceReadOutcome::NeedsUserAction(requirement) = outcome else {
-            panic!("unrepresentable resource must not become an inline grant");
-        };
+        let requirement = blockers_requirement(outcome);
         assert!(requirement.resources().is_empty());
         assert!(!requirement.inline_resolution());
+    }
+
+    fn calendar_grant_fixture(
+        person_id: PersonId,
+        state: floe_access::GrantState,
+    ) -> floe_access::DataAccessGrant {
+        let source = floe_context_contract::GrantSourceBinding::try_new(
+            person_id,
+            floe_context_contract::ConnectionId::try_new("connection").unwrap(),
+            floe_context_contract::ConnectorId::try_new("calendar.event_kit").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new("device").unwrap(),
+            floe_context_contract::SourceAuthority::new(),
+        )
+        .unwrap();
+        let scope = floe_access::GrantScope::try_new(
+            vec![floe_context_contract::ResourceHandle::try_new("primary").unwrap()],
+            vec![floe_context_contract::GrantDataCategory::Derived],
+            vec![floe_context_contract::GrantOperation::Read],
+            vec![floe_context_contract::GrantPurpose::Assistant],
+            vec![floe_context_contract::GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
+            floe_context_contract::ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        let mut grant = floe_access::DataAccessGrant::new(
+            floe_context_contract::GrantId::new(),
+            uuid::Uuid::new_v4(),
+            source.clone(),
+            scope.clone(),
+        )
+        .unwrap();
+        if state == floe_access::GrantState::Active {
+            grant
+                .activate_review(grant.authority(), source, scope)
+                .unwrap();
+        }
+        grant
+    }
+
+    #[test]
+    fn calendar_review_classifies_missing_paused_and_drifted_grants() {
+        let person_id = PersonId::new();
+        let missing =
+            classify_calendar_review(&[], person_id, "calendar.event_kit", "connection").unwrap();
+        assert_eq!(
+            missing.reason,
+            floe_context_contract::SourceAccessRequirementKind::EnableObserve
+        );
+        assert_eq!(missing.observed, None);
+
+        let paused = calendar_grant_fixture(person_id, floe_access::GrantState::Paused);
+        let review = classify_calendar_review(
+            std::slice::from_ref(&paused),
+            person_id,
+            "calendar.event_kit",
+            "connection",
+        )
+        .unwrap();
+        assert_eq!(
+            review.reason,
+            floe_context_contract::SourceAccessRequirementKind::EnableObserve
+        );
+        let observed = review.observed.unwrap();
+        assert_eq!(observed.grant_id(), paused.id());
+        assert_eq!(observed.authority(), paused.authority());
+
+        let active = calendar_grant_fixture(person_id, floe_access::GrantState::Active);
+        let review = classify_calendar_review(
+            std::slice::from_ref(&active),
+            person_id,
+            "calendar.event_kit",
+            "connection",
+        )
+        .unwrap();
+        assert_eq!(
+            review.reason,
+            floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource
+        );
+        assert_eq!(review.observed.unwrap().grant_id(), active.id());
+    }
+
+    #[test]
+    fn calendar_review_ignores_foreign_grants_and_fails_duplicates_closed() {
+        let person_id = PersonId::new();
+        let foreign = calendar_grant_fixture(PersonId::new(), floe_access::GrantState::Active);
+        let review = classify_calendar_review(
+            std::slice::from_ref(&foreign),
+            person_id,
+            "calendar.event_kit",
+            "connection",
+        )
+        .unwrap();
+        assert_eq!(
+            review.reason,
+            floe_context_contract::SourceAccessRequirementKind::EnableObserve
+        );
+        assert_eq!(review.observed, None);
+
+        let first = calendar_grant_fixture(person_id, floe_access::GrantState::Paused);
+        let second = calendar_grant_fixture(person_id, floe_access::GrantState::Paused);
+        assert_eq!(
+            classify_calendar_review(
+                &[first, second],
+                person_id,
+                "calendar.event_kit",
+                "connection",
+            ),
+            Err(AgentFailure::PolicyDenied)
+        );
     }
 
     struct FakeExecutor {
