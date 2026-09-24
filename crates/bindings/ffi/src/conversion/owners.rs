@@ -509,13 +509,11 @@ pub(crate) fn personal_access_change(change: &PersonalAccessChangeDto) -> Person
         PersonalAccessChangeDto::Inspect {} => PersonalAccessChange::Inspect,
         PersonalAccessChangeDto::Review {
             expected_native_subject_fingerprint,
-            consumers,
             feasibility_query: query,
             expected_grant_id,
             expected_grant_authority,
         } => PersonalAccessChange::Review {
             expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            consumers: consumers.clone(),
             feasibility_query: query.as_ref().map(feasibility_query),
             expected_grant_id: *expected_grant_id,
             expected_grant_authority: *expected_grant_authority,
@@ -534,13 +532,11 @@ pub(crate) fn contacts_access_change(change: &ContactsAccessChangeDto) -> Contac
         ContactsAccessChangeDto::Review {
             selected_handles,
             expected_native_subject_fingerprint,
-            consumers,
             expected_grant_id,
             expected_grant_authority,
         } => ContactsAccessChange::Review {
             selected_handles: selected_handles.clone(),
             expected_native_subject_fingerprint: expected_native_subject_fingerprint.clone(),
-            consumers: consumers.clone(),
             expected_grant_id: *expected_grant_id,
             expected_grant_authority: *expected_grant_authority,
         },

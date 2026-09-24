@@ -36,7 +36,6 @@ pub enum PersonalAccessChange {
     Inspect,
     Review {
         expected_native_subject_fingerprint: String,
-        consumers: Vec<String>,
         feasibility_query: Option<FeasibilityGrantQuery>,
         expected_grant_id: Option<GrantId>,
         expected_grant_authority: Option<GrantAuthority>,
@@ -50,6 +49,7 @@ pub enum PersonalAccessChange {
 pub struct PersonalAccessConfiguration {
     pub connector: String,
     pub device_id: String,
+    pub consumers: Vec<String>,
     pub change: PersonalAccessChange,
 }
 
@@ -62,7 +62,6 @@ pub enum ContactsAccessChange {
     Review {
         selected_handles: Vec<String>,
         expected_native_subject_fingerprint: String,
-        consumers: Vec<String>,
         expected_grant_id: Option<GrantId>,
         expected_grant_authority: Option<GrantAuthority>,
     },
@@ -75,6 +74,7 @@ pub enum ContactsAccessChange {
 pub struct ContactsAccessConfiguration {
     pub connector: String,
     pub device_id: String,
+    pub consumers: Vec<String>,
     pub change: ContactsAccessChange,
 }
 
@@ -398,7 +398,6 @@ async fn apply_attention(
         }
         PersonalAccessChange::Review {
             expected_native_subject_fingerprint,
-            consumers,
             feasibility_query: None,
             expected_grant_id,
             expected_grant_authority,
@@ -430,7 +429,7 @@ async fn apply_attention(
                 person_id,
                 &request.device_id,
                 source_authority,
-                reviewed_consumers(&consumers)?,
+                reviewed_consumers(&request.consumers)?,
             )?;
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
             let grant = store
@@ -516,13 +515,12 @@ async fn apply_feasibility(
         PersonalAccessChange::Inspect => Ok(report(existing.as_ref(), None)),
         PersonalAccessChange::Review {
             expected_native_subject_fingerprint,
-            consumers,
             feasibility_query: Some(query),
             expected_grant_id,
             expected_grant_authority,
         } => {
             query.validate()?;
-            let consumers = reviewed_feasibility_consumers(&consumers)?;
+            let consumers = reviewed_feasibility_consumers(&request.consumers)?;
             inspected_subject(
                 inspector,
                 person_id,
@@ -621,13 +619,12 @@ async fn apply_wellbeing(
         PersonalAccessChange::Inspect => Ok(report(existing.as_ref(), None)),
         PersonalAccessChange::Review {
             expected_native_subject_fingerprint,
-            consumers,
             feasibility_query: None,
             expected_grant_id,
             expected_grant_authority,
         } => {
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
-            if consumers != [ATTENTION_ASSISTANT_CONSUMER] {
+            if request.consumers != [ATTENTION_ASSISTANT_CONSUMER] {
                 return Err(AgentFailure::InvalidInput);
             }
             inspected_subject(
@@ -763,7 +760,6 @@ pub async fn apply_contacts(
         ContactsAccessChange::Review {
             selected_handles,
             expected_native_subject_fingerprint,
-            consumers,
             expected_grant_id,
             expected_grant_authority,
         } => {
@@ -780,7 +776,7 @@ pub async fn apply_contacts(
             )
             .await?;
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
-            let consumers = reviewed_contacts_consumers(&consumers)?;
+            let consumers = reviewed_contacts_consumers(&request.consumers)?;
             let authority = existing
                 .as_ref()
                 .map(|grant| grant.source().source_authority())

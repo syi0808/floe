@@ -97,7 +97,6 @@ pub enum PersonalAccessChangeDto {
     Inspect {},
     Review {
         expected_native_subject_fingerprint: String,
-        consumers: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feasibility_query: Option<FeasibilityGrantQueryDto>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,7 +130,6 @@ pub enum ContactsAccessChangeDto {
     Review {
         selected_handles: Vec<String>,
         expected_native_subject_fingerprint: String,
-        consumers: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_grant_id: Option<GrantId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,6 +1,5 @@
 import 'dart:io';
 
-
 import 'package:floe_client/app/runtime/floe_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
@@ -337,22 +336,18 @@ final class NativePersonalAccessGateway implements AgentPersonalAccessGateway {
   Future<PersonalAccessOverview> reviewPersonalAttention(
     String personId, {
     required PersonalAccessOverview reviewedPreview,
-    required List<String> consumers,
   }) async {
     final fingerprint = reviewedPreview.nativeSubjectFingerprint;
     if (fingerprint == null) {
       throw const FormatException('Attention preview unavailable');
     }
     if (reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId ||
-        consumers.isEmpty ||
-        consumers.toSet().length != consumers.length) {
+        reviewedPreview.deviceId != deviceId) {
       throw const FormatException('Attention review scope changed');
     }
     return _personalAccess(personId, {
       'kind': 'review',
       'expected_native_subject_fingerprint': fingerprint,
-      'consumers': List<String>.unmodifiable(consumers),
       'expected_grant_id': reviewedPreview.grantId,
       'expected_grant_authority': reviewedPreview.grantAuthority,
     });
@@ -383,20 +378,16 @@ final class NativePersonalAccessGateway implements AgentPersonalAccessGateway {
     String personId, {
     required PersonalFeasibilityQuery query,
     required PersonalAccessOverview reviewedPreview,
-    required List<String> consumers,
   }) async {
     final fingerprint = reviewedPreview.nativeSubjectFingerprint;
     if (fingerprint == null ||
         reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId ||
-        consumers.isEmpty ||
-        consumers.toSet().length != consumers.length) {
+        reviewedPreview.deviceId != deviceId) {
       throw const FormatException('Feasibility review scope changed');
     }
     return _personalAccess(personId, {
       'kind': 'review',
       'expected_native_subject_fingerprint': fingerprint,
-      'consumers': List<String>.unmodifiable(consumers),
       'expected_grant_id': reviewedPreview.grantId,
       'expected_grant_authority': reviewedPreview.grantAuthority,
       'feasibility_query': query.toJson(),
@@ -437,7 +428,6 @@ final class NativePersonalAccessGateway implements AgentPersonalAccessGateway {
     return _personalAccess(personId, {
       'kind': 'review',
       'expected_native_subject_fingerprint': nativeSubjectFingerprint,
-      'consumers': const ['assistant'],
       'expected_grant_id': reviewedPreview.grantId,
       'expected_grant_authority': reviewedPreview.grantAuthority,
     }, connector: 'health.apple');
@@ -471,21 +461,17 @@ final class NativePersonalAccessGateway implements AgentPersonalAccessGateway {
     String personId, {
     required List<String> selectedHandles,
     required PersonalAccessOverview reviewedPreview,
-    required List<String> consumers,
   }) async {
     final fingerprint = reviewedPreview.nativeSubjectFingerprint;
     if (fingerprint == null ||
         reviewedPreview.personId != personId ||
-        reviewedPreview.deviceId != deviceId ||
-        consumers.isEmpty ||
-        consumers.toSet().length != consumers.length) {
+        reviewedPreview.deviceId != deviceId) {
       throw const FormatException('Contacts review scope changed');
     }
     return _personalContacts(personId, {
       'kind': 'review',
       'selected_handles': _canonicalContactHandles(selectedHandles),
       'expected_native_subject_fingerprint': fingerprint,
-      'consumers': List<String>.unmodifiable(consumers),
       'expected_grant_id': reviewedPreview.grantId,
       'expected_grant_authority': reviewedPreview.grantAuthority,
     });

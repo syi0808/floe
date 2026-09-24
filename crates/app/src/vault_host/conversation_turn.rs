@@ -1428,6 +1428,7 @@ mod tests {
             floe_access::PersonalAccessConfiguration {
                 connector: floe_access::ATTENTION_CONNECTOR.into(),
                 device_id: "test-device".into(),
+                consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                 change: floe_access::PersonalAccessChange::Inspect,
             },
             Cancellation::default(),
@@ -1442,9 +1443,9 @@ mod tests {
             floe_access::PersonalAccessConfiguration {
                 connector: floe_access::ATTENTION_CONNECTOR.into(),
                 device_id: "test-device".into(),
+                consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                 change: floe_access::PersonalAccessChange::Review {
                     expected_native_subject_fingerprint: subject.clone(),
-                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                     feasibility_query: None,
                     expected_grant_id: None,
                     expected_grant_authority: None,
@@ -3230,6 +3231,7 @@ mod tests {
                 floe_access::PersonalAccessConfiguration {
                     connector: floe_access::ATTENTION_CONNECTOR.into(),
                     device_id: "test-device".into(),
+                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                     change: floe_access::PersonalAccessChange::Inspect,
                 },
                 Cancellation::default(),
@@ -3244,9 +3246,9 @@ mod tests {
                 floe_access::PersonalAccessConfiguration {
                     connector: floe_access::ATTENTION_CONNECTOR.into(),
                     device_id: "test-device".into(),
+                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                     change: floe_access::PersonalAccessChange::Review {
                         expected_native_subject_fingerprint: subject,
-                        consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                         feasibility_query: None,
                         expected_grant_id: None,
                         expected_grant_authority: None,
@@ -3274,6 +3276,7 @@ mod tests {
                 floe_access::PersonalAccessConfiguration {
                     connector: floe_access::ATTENTION_CONNECTOR.into(),
                     device_id: "test-device".into(),
+                    consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                     change: floe_access::PersonalAccessChange::SetEnabled { enabled: false },
                 },
                 Cancellation::default(),
@@ -3538,6 +3541,7 @@ mod tests {
                         floe_access::PersonalAccessConfiguration {
                             connector: floe_access::ATTENTION_CONNECTOR.into(),
                             device_id: "test-device".into(),
+                            consumers: vec![floe_access::ATTENTION_ASSISTANT_CONSUMER.into()],
                             change: floe_access::PersonalAccessChange::SetEnabled {
                                 enabled: false,
                             },

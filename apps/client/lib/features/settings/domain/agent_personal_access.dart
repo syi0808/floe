@@ -3,7 +3,6 @@ abstract interface class AgentPersonalAccessGateway {
   Future<PersonalAccessOverview> reviewPersonalAttention(
     String personId, {
     required PersonalAccessOverview reviewedPreview,
-    required List<String> consumers,
   });
   Future<PersonalAccessOverview> setPersonalAttentionEnabled(
     String personId,
@@ -14,7 +13,6 @@ abstract interface class AgentPersonalAccessGateway {
     String personId, {
     required PersonalFeasibilityQuery query,
     required PersonalAccessOverview reviewedPreview,
-    required List<String> consumers,
   });
   Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
     String personId,
@@ -38,7 +36,6 @@ abstract interface class AgentPersonalAccessGateway {
     String personId, {
     required List<String> selectedHandles,
     required PersonalAccessOverview reviewedPreview,
-    required List<String> consumers,
   });
 }
 

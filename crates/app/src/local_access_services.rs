@@ -225,6 +225,8 @@ impl LocalAccessCommand {
                 change: Box::new(crate::PersonalAccessConfiguration {
                     connector: connector.clone(),
                     device_id: caller.device_id().into(),
+                    consumers: crate::first_party_observe::native_consumers(connector)
+                        .unwrap_or_default(),
                     change: change.clone(),
                 }),
             },
@@ -232,6 +234,8 @@ impl LocalAccessCommand {
                 change: Box::new(crate::ContactsAccessConfiguration {
                     connector: connector.clone(),
                     device_id: caller.device_id().into(),
+                    consumers: crate::first_party_observe::native_consumers(connector)
+                        .unwrap_or_default(),
                     change: change.clone(),
                 }),
             },

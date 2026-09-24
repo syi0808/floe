@@ -109,6 +109,16 @@ pub(crate) fn remote_policies(
         .collect()
 }
 
+pub(crate) fn native_consumers(connector_id: &str) -> Result<Vec<String>, AgentFailure> {
+    let consumers: &[&str] = match connector_id {
+        "attention.macos" => &["assistant", "attention.expert"],
+        "contacts.apple" | "contacts.android" => &["assistant", "contacts.expert"],
+        "health.apple" | "feasibility.apple" => &["assistant"],
+        _ => return Err(AgentFailure::InvalidInput),
+    };
+    Ok(consumers.iter().map(|value| (*value).to_owned()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

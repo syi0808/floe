@@ -205,7 +205,7 @@ void main() {
     expect(find.byKey(const ValueKey('calendar-access-setup')), findsNothing);
   });
 
-  testWidgets('device detail manages Observe through preview, review and pause', (
+  testWidgets('device detail manages one Use with Floe control', (
     tester,
   ) async {
     final access = _StubCalendarAccessGateway();
@@ -251,23 +251,27 @@ void main() {
     );
     expect(find.text('Needs review'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('device-calendar-observe-review')),
+      find.byKey(const ValueKey('device-calendar-use-with-floe')),
       findsOneWidget,
     );
 
     await tester.ensureVisible(
-      find.byKey(const ValueKey('device-calendar-observe-review')),
+      find.byKey(const ValueKey('device-calendar-use-with-floe')),
     );
-    await tester.tap(find.byKey(const ValueKey('device-calendar-observe-review')));
+    await tester.tap(
+      find.byKey(const ValueKey('device-calendar-use-with-floe')),
+    );
     await tester.pumpAndSettle();
     expect(access.calls, ['inspect', 'preview', 'review']);
     expect(access.reviewedFingerprint, 'f' * 64);
-    expect(find.text('Observing'), findsOneWidget);
+    expect(find.text('Active'), findsOneWidget);
 
     await tester.ensureVisible(
-      find.byKey(const ValueKey('device-calendar-observe-pause')),
+      find.byKey(const ValueKey('device-calendar-use-with-floe')),
     );
-    await tester.tap(find.byKey(const ValueKey('device-calendar-observe-pause')));
+    await tester.tap(
+      find.byKey(const ValueKey('device-calendar-use-with-floe')),
+    );
     await tester.pumpAndSettle();
     expect(access.calls.last, 'pause');
     expect(access.pausedGrantId, isNotNull);
@@ -707,8 +711,7 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway {
   }
 }
 
-final class _StubCalendarAccessGateway
-    implements NativeCalendarAccessGateway {
+final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
   NativeCalendarAccessOverview overview = const NativeCalendarAccessOverview(
     personId: 'person',
     provider: 'event_kit',

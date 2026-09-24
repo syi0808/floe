@@ -139,7 +139,6 @@ fn local_expert_and_access_intents_inject_only_the_admitted_device() {
         connector: "attention.macos".into(),
         change: crate::PersonalAccessChange::Review {
             expected_native_subject_fingerprint: "b".repeat(64),
-            consumers: vec!["assistant".into()],
             feasibility_query: None,
             expected_grant_id: Some(expected_grant_id),
             expected_grant_authority: Some(expected_grant_authority),
@@ -149,11 +148,11 @@ fn local_expert_and_access_intents_inject_only_the_admitted_device() {
         panic!("wrong owner action")
     };
     assert_eq!(change.device_id, caller.device_id());
+    assert_eq!(change.consumers, ["assistant", "attention.expert"]);
     let crate::PersonalAccessChange::Review {
         expected_grant_id: actual_id,
         expected_grant_authority: actual_authority,
         expected_native_subject_fingerprint,
-        consumers,
         ..
     } = change.change
     else {
@@ -162,7 +161,6 @@ fn local_expert_and_access_intents_inject_only_the_admitted_device() {
     assert_eq!(actual_id, Some(expected_grant_id));
     assert_eq!(actual_authority, Some(expected_grant_authority));
     assert_eq!(expected_native_subject_fingerprint, "b".repeat(64));
-    assert_eq!(consumers, ["assistant"]);
 }
 
 #[test]

@@ -30,7 +30,6 @@ final class _PersonalAttentionAccessCardState
   PersonalAccessOverview? overview;
   Object? failure;
   bool busy = false;
-  Set<String> selectedConsumers = {'assistant', 'attention.expert'};
 
   @override
   void initState() {
@@ -46,9 +45,6 @@ final class _PersonalAttentionAccessCardState
       if (mounted) {
         setState(() {
           overview = value;
-          if (value.consumers.isNotEmpty) {
-            selectedConsumers = value.consumers.toSet();
-          }
         });
       }
     } on Object catch (error) {
@@ -93,7 +89,6 @@ final class _PersonalAttentionAccessCardState
       return widget.gateway.reviewPersonalAttention(
         widget.personId,
         reviewedPreview: current,
-        consumers: selectedConsumers.toList()..sort(),
       );
     });
   }
@@ -126,41 +121,17 @@ final class _PersonalAttentionAccessCardState
                 : 'Review required.',
             style: FloeType.bodySmall,
           ),
-          if (current != null && current.consumers.isNotEmpty)
-            Text(
-              'Approved consumers: ${current.consumers.join(', ')}',
-              style: FloeType.bodySmall,
-            ),
-          if (current != null && current.nativeSubjectFingerprint != null) ...[
-            const SizedBox(height: FloeSpace.xs),
-            const Text('Allow attention data for:'),
-            for (final consumer in const ['assistant', 'attention.expert'])
-              FloeCheckboxTile(
-                value: selectedConsumers.contains(consumer),
-                onChanged: busy
-                    ? null
-                    : (selected) => setState(() {
-                        if (selected == true) {
-                          selectedConsumers.add(consumer);
-                        } else {
-                          selectedConsumers.remove(consumer);
-                        }
-                      }),
-                title: Text(consumer),
-              ),
-          ],
           const SizedBox(height: FloeSpace.sm),
           Row(
             children: [
               FloeButton.outlined(
-                onPressed:
-                    busy ||
-                        current?.nativeSubjectFingerprint == null ||
-                        selectedConsumers.isEmpty
+                onPressed: busy || current?.nativeSubjectFingerprint == null
                     ? null
                     : _review,
                 loading: busy,
-                child: Text(enabled ? 'Review again' : 'Review and enable'),
+                child: Text(
+                  enabled ? 'Use with Floe is on' : 'Turn on Use with Floe',
+                ),
               ),
               if (enabled) ...[
                 const SizedBox(width: FloeSpace.sm),
@@ -273,7 +244,6 @@ final class _PersonalFeasibilityAccessCardState
         widget.personId,
         query: query,
         reviewedPreview: inspected.withNativeSubjectFingerprint(fingerprint),
-        consumers: const ['assistant'],
       );
       if (mounted) setState(() => overview = value);
     } on Object catch (error) {
@@ -347,7 +317,9 @@ final class _PersonalFeasibilityAccessCardState
                   key: const ValueKey('personal-feasibility-review'),
                   onPressed: busy ? null : _review,
                   loading: busy,
-                  child: Text(enabled ? 'Review again' : 'Review and enable'),
+                  child: Text(
+                    enabled ? 'Use with Floe is on' : 'Turn on Use with Floe',
+                  ),
                 ),
               if (enabled) ...[
                 const SizedBox(width: FloeSpace.sm),
@@ -504,7 +476,9 @@ final class _PersonalWellbeingAccessCardState
                   key: const ValueKey('personal-wellbeing-review'),
                   onPressed: busy ? null : _review,
                   loading: busy,
-                  child: Text(enabled ? 'Review again' : 'Review and enable'),
+                  child: Text(
+                    enabled ? 'Use with Floe is on' : 'Turn on Use with Floe',
+                  ),
                 ),
               if (enabled) ...[
                 const SizedBox(width: FloeSpace.sm),
@@ -598,7 +572,6 @@ final class _PersonalContactsAccessCardState
         widget.personId,
         selectedHandles: selected.toList()..sort(),
         reviewedPreview: current,
-        consumers: const ['assistant'],
       );
       if (mounted) setState(() => preview = value);
     } on Object catch (error) {
