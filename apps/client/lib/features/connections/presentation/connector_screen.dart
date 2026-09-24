@@ -27,7 +27,7 @@ import 'package:floe_client/features/conversation/application/agent_controller.d
 import 'package:floe_client/features/connections/domain/agent_connections.dart';
 import 'package:floe_client/features/connections/domain/native_calendar_access.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
-import 'package:floe_client/features/settings/presentation/agent_personal_access_settings.dart';
+import 'package:floe_client/features/connections/presentation/personal_access_cards.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 

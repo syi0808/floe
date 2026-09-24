@@ -1,6 +1,5 @@
 import 'package:floe_client/features/connections/application/connector_authorization_gateway.dart';
 import 'package:floe_client/app/floe_theme.dart';
-import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/features/connections/presentation/server_connector_panel.dart';
 import 'package:floe_client/features/connections/application/remote_access_gateway.dart';
 import 'package:floe_client/features/connections/application/local_server_client.dart';
@@ -289,16 +288,6 @@ void main() {
     expect(find.byKey(const ValueKey('connection-view-preview')), findsNothing);
   });
 }
-
-const _producer = {
-  'schema_version': 1,
-  'instance_id': '00000000-0000-4000-8000-000000000020',
-  'execution_owner': '00000000-0000-4000-8000-000000000021',
-  'audience': 'floe.server:fixture',
-  'key_id': '00000000-0000-4000-8000-000000000022',
-  'public_key': 'producer',
-  'fingerprint': 'fingerprint',
-};
 
 ServerConnector _calendarConnector(String connectionId) => ServerConnector(
   id: 'calendar.google',

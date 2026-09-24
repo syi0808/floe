@@ -43,14 +43,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Data & privacy'), findsNWidgets(2));
-    expect(find.text('AI processing'), findsOneWidget);
+    expect(find.text('AI processing'), findsNothing);
     expect(
-      tester.widget<Text>(find.text('Processing locations')).style?.fontWeight,
-      FontWeight.w600,
-    );
-    expect(
-      tester.widget<Text>(find.text('On this device')).style?.fontWeight,
-      FontWeight.w500,
+      find.byKey(const ValueKey('connections-privacy-navigation')),
+      findsOneWidget,
     );
     expect(find.byKey(const ValueKey('android-data-sources')), findsNothing);
     expect(find.text('Schedule planning'), findsNothing);
@@ -79,57 +75,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Data Floe can use'), findsNothing);
-    expect(find.text('AI processing'), findsOneWidget);
+    expect(find.text('AI processing'), findsNothing);
   });
 
-  testWidgets('Android Health consent and derived refresh live in settings', (
-    tester,
-  ) async {
-    final controller = AgentController(
-      gateway: TestRegistryGateway(),
-      personId: registryPerson,
-    );
-    final androidContext = _AndroidContext();
-    addTearDown(controller.dispose);
-    await controller.load();
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: FloeTheme.light,
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: SettingsScreen(
-              client: null,
-              agentController: controller,
-              androidContext: androidContext,
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Health Connect'), findsOneWidget);
-    expect(find.text('Allow Health Connect'), findsOneWidget);
-    expect(
-      find.textContaining('Health records stay on this device'),
-      findsOneWidget,
-    );
-
-    final refresh = find.byKey(const ValueKey('android-health-refresh'));
-    await tester.ensureVisible(refresh);
-    await tester.tap(refresh);
-    await tester.pumpAndSettle();
-
-    expect(androidContext.permissionRequests, 1);
-    expect(androidContext.wellbeingReads, 1);
-    expect(find.text('Ready'), findsOneWidget);
-    expect(find.text('Refresh wellbeing'), findsOneWidget);
-  });
-
-  testWidgets('Android Calendar selection is explicit and device-local', (
+  testWidgets('Android source editors move out of Data & privacy', (
     tester,
   ) async {
     final controller = AgentController(
@@ -142,34 +91,21 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
-          body: SingleChildScrollView(
-            child: SettingsScreen(
-              client: null,
-              agentController: controller,
-              androidContext: androidContext,
-            ),
+          body: SettingsScreen(
+            client: null,
+            agentController: controller,
+            androidContext: androidContext,
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
-
-    final allow = find.byKey(const ValueKey('android-calendar-allow'));
-    await tester.ensureVisible(allow);
-    await tester.tap(allow);
-    await tester.pumpAndSettle();
-    expect(androidContext.calendarPermissionRequests, 1);
-
-    final calendar = find.byKey(const ValueKey('android-calendar-work'));
-    await tester.ensureVisible(calendar);
-    await tester.tap(calendar);
-    await tester.pumpAndSettle();
-    expect(androidContext.selected, {'work'});
-    expect(androidContext.calendarReads, 1);
-    expect(find.text('Ready'), findsOneWidget);
+    expect(find.byKey(const ValueKey('android-data-sources')), findsNothing);
+    expect(find.byKey(const ValueKey('android-calendar-allow')), findsNothing);
+    expect(find.byKey(const ValueKey('android-health-refresh')), findsNothing);
+    expect(androidContext.permissionRequests, 0);
+    expect(androidContext.calendarPermissionRequests, 0);
   });
 
   testWidgets('Apple access controls move out of Data & privacy', (
@@ -246,7 +182,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('settings-dataPrivacy')));
     await tester.pumpAndSettle();
-    expect(find.text('AI processing'), findsOneWidget);
+    expect(find.byKey(const ValueKey('connections-privacy-navigation')), findsOneWidget);
     expect(find.text('Allow all supported actions'), findsNothing);
 
     await tester.tap(find.byKey(const Key('settings-remoteServer')));
@@ -279,11 +215,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('external processing consent lives under Data & privacy', (
+  testWidgets('external model approval has no blanket Settings editor', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
     final store = MemoryServerCredentials();
     final client = _SettingsServerClient(store);
     await client.save(
@@ -301,59 +235,22 @@ void main() {
     );
     addTearDown(controller.dispose);
     await controller.load();
-
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
-          body: SingleChildScrollView(
-            child: SettingsScreen(client: client, agentController: controller),
-          ),
+          body: SettingsScreen(client: client, agentController: controller),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Paired'), findsOneWidget);
+    expect(find.text('Allow external model providers'), findsNothing);
+    expect(find.byKey(const ValueKey('external-model-consent')), findsNothing);
     expect(
-      find.byKey(const ValueKey('external-model-consent')),
+      find.byKey(const ValueKey('connections-privacy-navigation')),
       findsOneWidget,
     );
-    expect(find.text('Allow external model transfer'), findsNothing);
-    expect(find.text('Needs consent'), findsOneWidget);
-    expect(find.text('Unavailable'), findsOneWidget);
-    expect(find.text('View recent data use (1)'), findsOneWidget);
-    expect(find.text('Completed'), findsNothing);
-    expect(
-      tester.widget<Text>(find.text('Task routes')).style?.fontWeight,
-      FontWeight.w600,
-    );
-    expect(
-      tester
-          .widget<Text>(find.text('Allow external model providers'))
-          .style
-          ?.fontWeight,
-      FontWeight.w600,
-    );
-
-    final activityButton = find.byKey(
-      const ValueKey('processing-activity-open'),
-    );
-    await tester.ensureVisible(activityButton);
-    await tester.tap(activityButton);
-    await tester.pumpAndSettle();
-    expect(find.text('Recent data use'), findsOneWidget);
-    expect(find.text('Completed'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('processing-activity-close')));
-    await tester.pumpAndSettle();
-
-    final consentSwitch = find.byKey(const ValueKey('external-model-consent'));
-    await tester.ensureVisible(consentSwitch);
-    await tester.tap(consentSwitch);
-    await tester.pumpAndSettle();
-    expect((await client.connection())!.allowExternal, true);
-    expect(find.text('Needs consent'), findsNothing);
+    expect((await client.connection())!.allowExternal, false);
   });
 
   testWidgets('server connection inventory stays out of Data & privacy', (

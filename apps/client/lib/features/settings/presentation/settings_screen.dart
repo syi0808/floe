@@ -2,20 +2,15 @@ import 'package:floe_client/features/connections/application/remote_pairing_gate
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
-import 'package:floe_client/app/floe_badge.dart';
-import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/connections/domain/agent_connections.dart';
-import 'package:floe_client/features/connections/presentation/agent_connection_settings.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
@@ -29,7 +24,6 @@ import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 
 part 'data_privacy.dart';
-part 'ai_processing.dart';
 part 'action_permissions.dart';
 part 'navigation.dart';
 

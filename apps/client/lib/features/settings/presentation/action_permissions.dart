@@ -140,13 +140,3 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
     ),
   );
 }
-
-FloeBadgeTone _statusTone(String status) => switch (status) {
-  'Paired' ||
-  'Available' ||
-  'Completed' ||
-  'Preferred' => FloeBadgeTone.success,
-  'Needs consent' || 'Not paired' || 'Unavailable' => FloeBadgeTone.warning,
-  'Failed' => FloeBadgeTone.danger,
-  _ => FloeBadgeTone.neutral,
-};
