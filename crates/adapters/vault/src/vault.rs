@@ -31,6 +31,7 @@ mod expert_actions;
 mod keyring;
 mod learning;
 mod personal_grants;
+mod recipient_consents;
 mod registry;
 mod remote_authority;
 mod remote_calendar_grants;

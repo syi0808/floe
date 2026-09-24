@@ -13,6 +13,8 @@ mod memory_review;
 #[cfg(unix)]
 mod personal_grants;
 #[cfg(unix)]
+mod recipient_consents;
+#[cfg(unix)]
 mod remote_grants;
 #[cfg(unix)]
 mod task;

@@ -9,6 +9,7 @@ pub mod native_calendar;
 pub mod personal_grants;
 pub mod personal_read;
 pub mod personal_sources;
+pub mod recipient_consent;
 pub mod release;
 pub mod remote_authority;
 pub mod remote_calendar;
