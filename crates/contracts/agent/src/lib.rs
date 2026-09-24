@@ -75,8 +75,9 @@ pub use message::{
     AgentCard, AgentMessage, Artifact, ArtifactPart, MessageRole, OutcomeIssue, ToolResult,
 };
 pub use model::{
-    AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, validate_tool_input,
+    AgentDefinition, AllowedCatalog, EngineRequest, EngineResumeState, EngineStep, ModelCallOutcome,
+    ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor,
+    validate_tool_input,
 };
 pub use model_conversation::{
     ModelConversation, ModelConversationEntry, MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES,

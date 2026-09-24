@@ -260,6 +260,37 @@ pub struct ModelResponse {
     pub usage: ModelUsage,
 }
 
+/// One typed model-admission outcome: either the model answered, or the exact
+/// selected route needs contextual recipient consent before any transmission.
+///
+/// Returned inside the outer Result: hard failures (policy prohibition,
+/// transport errors, invalid input) stay Err(AgentFailure); only the
+/// recoverable consent case is Ok(NeedsUserAction). Inference derives the
+/// requirement from the actual selected candidate and the Access decision;
+/// LLM output never names the authorized recipient.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ModelCallOutcome {
+    Ready(ModelResponse),
+    NeedsUserAction(floe_context_contract::ProcessingRequirement),
+}
+
+impl ModelCallOutcome {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        match self {
+            Self::Ready(response) => {
+                if response.attempt_id.is_nil() {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                Ok(())
+            }
+            Self::NeedsUserAction(requirement) => requirement
+                .validate()
+                .map_err(|_| AgentFailure::InvalidInput),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelUsage {
@@ -275,4 +306,49 @@ pub enum EngineStep {
     },
     Tool(ToolResult),
     Delegation(Box<crate::TaskReceipt>),
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+
+    fn requirement() -> floe_context_contract::ProcessingRequirement {
+        floe_context_contract::ProcessingRequirement::try_new(
+            "model.example",
+            "server-model",
+            "everyday_assistance",
+            "conversation.root",
+            vec![floe_context_contract::DataClass::Personal],
+            vec![],
+            Uuid::new_v4(),
+            1,
+            floe_context_contract::RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn outcome_variants_round_trip_and_validate() {
+        let ready = ModelCallOutcome::Ready(ModelResponse {
+            attempt_id: Uuid::new_v4(),
+            steps: vec![],
+            usage: ModelUsage::default(),
+        });
+        assert!(ready.validate().is_ok());
+        let decoded: ModelCallOutcome =
+            serde_json::from_str(&serde_json::to_string(&ready).unwrap()).unwrap();
+        assert_eq!(decoded, ready);
+        let blocked = ModelCallOutcome::NeedsUserAction(requirement());
+        assert!(blocked.validate().is_ok());
+        let decoded: ModelCallOutcome =
+            serde_json::from_str(&serde_json::to_string(&blocked).unwrap()).unwrap();
+        assert_eq!(decoded, blocked);
+        let nil_ready = ModelCallOutcome::Ready(ModelResponse {
+            attempt_id: Uuid::nil(),
+            steps: vec![],
+            usage: ModelUsage::default(),
+        });
+        assert_eq!(nil_ready.validate(), Err(AgentFailure::InvalidInput));
+    }
 }

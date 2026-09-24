@@ -13,6 +13,7 @@ mod authorized_read;
 pub mod calendar;
 mod evidence;
 mod memory;
+mod processing;
 mod source_access;
 pub mod views;
 
@@ -24,6 +25,11 @@ pub use floe_kernel::PersonId;
 pub use memory::{
     ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
     MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
+};
+pub use processing::{
+    MAX_PROCESSING_CONSUMER_BYTES, MAX_PROCESSING_DATA_CLASSES, MAX_PROCESSING_PURPOSE_BYTES,
+    MAX_PROCESSING_REQUIREMENT_BYTES, MAX_PROCESSING_SOURCE_SCOPES, MAX_PROFILE_ID_BYTES,
+    MAX_RECIPIENT_BYTES, ProcessingRequirement, ProcessingSourceScope, RecipientLineage,
 };
 pub use source_access::{
     MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, SourceAccessBlockers, SourceAccessRequirement,
