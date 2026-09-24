@@ -1,389 +1,103 @@
 # Expert access and conversation interaction convergence
 
-- **Status:** execution plan
-- **Baseline:** `main` at `0615b343bb752da85487a1a728927f0e3affdf5b`
-- **Current execution snapshot:** code baseline `main` at `0bd102f4087584246e453293df51217054798131`. Checkpoints 01 through 04 are complete. Checkpoint 05 is next and has not started.
-- **Scope:** built-in Expert runtime, Calendar source acquisition, Expert Registry, Access/DataAccessGrant authority, connector permission product model, conversation interaction escalation, Flutter chat/connection surfaces, protocol/persistence cleanup
-- **Compatibility posture:** pre-stable internal APIs and local development data may be replaced directly. Do not add compatibility paths or migrate disposable local state merely to preserve the current Calendar vertical.
-- **Primary product target:** Apple ecosystem. Android code may be adjusted only where shared contracts require compilation; do not expand Android parity work as part of this plan.
+- **Status:** execution plan; Checkpoint 05 active, 05-A next.
+- **Original baseline:** `0615b343bb752da85487a1a728927f0e3affdf5b` (historical).
+- **Current planning baseline:** `main` at `00017e668e71e34be3d3ea5772aa1612b15c5d6c`.
+- **Completed code baseline:** Checkpoint 04 including atomic multi-view closure at `0bd102f4087584246e453293df51217054798131`; documentation closure at `00017e66`.
+- **Scope:** Expert runtime, source access, connection permission UX, Conversation-owned interaction, linked resume, and final deletion/document convergence.
+- **Product priority:** macOS/Apple. iOS device validation is deferred to active iOS development; Android parity is not part of this work.
 
-This directory is the authoritative execution plan for removing the Schedule/Calendar special path and making source-access recovery a first-class conversation flow.
+This directory is the one temporary execution plan for this refactor. Current architecture documents own durable topology; child plans own sequencing and evidence. Do not treat old code anchors inside completed checkpoints as instructions to recreate deleted paths.
 
-It is deliberately split by checkpoint because the change crosses authority, runtime, persistence, wire, provider and Flutter boundaries. Each checkpoint must converge to one canonical path before the next checkpoint depends on it. Temporary dual paths are allowed only where this plan names them explicitly and must be deleted at the checkpoint's deletion gate.
+## 1. Current state and reading order
 
-This plan is not durable architecture documentation. When implementation completes, the current architecture and product/ADR documents named in checkpoint 6 become authoritative and this directory may be removed to Git history.
+Checkpoints 01 through 04 are complete. Do not reimplement them to start Checkpoint 05.
 
-## 1. Problem statement
+| Checkpoint | State | Entry document |
+|---|---|---|
+| 01 — contracts and recoverable outcomes | Complete | [01](01-contracts-and-interaction-foundation.md) |
+| 02 — ordinary built-in Schedule runtime | Complete | [02](02-calendar-source-and-schedule-convergence.md) |
+| 03 — Registry/Access separation, including 03-E | Complete | [03](03-expert-registry-and-access-authority.md) |
+| 04 — connection permission product model | Complete | [04](04-connector-permission-product-model.md) |
+| 05 — durable interaction and linked resume | Active plan; implementation not yet certified | [05 index](05-conversation-and-flutter-interaction.md) |
+| 06 — final deletion, archive and documentation convergence | Blocked on 05 | [06](06-deletion-verification-and-doc-convergence.md) |
 
-This plan began with two conflicting models. Checkpoint 02 has now removed the Schedule runtime split; the diagrams below describe the historical defect that motivated the work. The remaining checkpoints converge Registry/Access authority, connector permission UX, Conversation interactions and final obsolete surfaces.
+For current implementation, read `AGENTS.md`, the architecture-change skill, the [05 index](05-conversation-and-flutter-interaction.md), and the next child only:
 
-The generic model was:
+1. [05-A — contracts and durable Conversation ownership](05-a-contracts-and-durable-interactions.md) — **next**.
+2. [05-B — source outcomes and trusted publication](05-b-source-outcomes-and-publication.md).
+3. [05-C — reviewed resolution and owner-operation recovery](05-c-reviewed-resolution-and-owner-operations.md).
+4. [05-D — exact-recipient consent and blocked model dispatch](05-d-processing-consent-and-inference.md).
+5. [05-E — linked fresh Run admission and recovery](05-e-linked-resume-and-recovery.md).
+6. [05-F — protocol, snapshots and Flutter interaction UI](05-f-protocol-and-flutter.md).
+7. [05-G — failure matrix, verification and documentation convergence](05-g-verification-and-convergence.md).
 
-~~~text
-Manager
-  -> generic Directory / TaskCoordinator
-  -> BuiltinExpertEndpoint
-  -> BuiltinExpertHost
-  -> provider-neutral Context views
-  -> Access authorization
-  -> provider/native adapters
-~~~
+Historical detail remains in the completed checkpoint documents. The Checkpoint 03 index links 03-A through 03-E; the Checkpoint 04 index links 04-A through 04-F and their completion SHAs. No parallel status ledger is needed.
 
-Seven built-in Experts originally used that model while Schedule used the older Calendar vertical:
+## 2. Why this work began
 
-~~~text
-Manager
-  -> Directory
-  -> ScheduleEndpoint
-  -> CalendarExpertSetup / CalendarViewBinding
-  -> calendar_grant_mappings
-  -> Calendar-specific Access + source acquisition
-  -> schedule-only Expert host / settlement
-~~~
+Schedule formerly bypassed the common built-in endpoint and coupled Calendar acquisition/authorization to Calendar-specific Registry setup, grant mappings and Flutter settings. UI Active did not imply runtime admission, and missing permission could terminate a request with no usable recovery path.
 
-That exception leaks through App, Experts, Access/Vault, Conversation history, protocol and Flutter. It creates several concrete product defects:
+That infrastructure split is gone. The remaining product objective is that a blocked source becomes an honest Manager/Expert observation, a durable user interaction, and a fresh linked Run after verified resolution.
 
-1. Schedule is registered independently from the generic built-in Expert setup.
-2. UI/Registry “Active” state can disagree with DataAccessGrant admission and current native Calendar authority.
-3. legacy/disposable local state can contain enabled Schedule Registry objects without a matching Calendar grant mapping.
-4. source permission is represented in both Expert Registry source bindings and Access/DataAccessGrant.
-5. missing permission is represented primarily as AgentFailure rather than a normal recoverable source outcome.
-6. Schedule’s capability loop hard-fails when Calendar read fails instead of returning the failed capability observation to the Expert.
-7. Manager can already continue after a failed delegated Task, but the current product contract does not promote a recoverable source denial into a typed user action.
-8. Flutter can receive failure strings but has no generic inline permission/recovery interaction.
-9. connector permission UI is fragmented between Connections, Expert-specific Calendar UI, server connector grant controls, Data & privacy and the external-model processing toggle.
-10. Conversation still depends on Schedule-owned CalendarHistoryBoundary to classify source-derived history.
+## 3. Final topology
 
-The completed design must fix the authority model and runtime path, not only the observed Calendar error.
+```text
+Manager -> ordinary BuiltinExpertEndpoint / Context tool
+        -> Context source acquisition -> Access -> provider/native boundary
 
-## 2. Final target architecture
+recoverable source or eligible processing-consent blocker
+        -> Conversation-owned interaction (trusted App composition)
+        -> settled Tool/Task/model observation + safe reference
+        -> assistant limitation + interaction message
+        -> original Run Completed
 
-### 2.1 Built-in Expert runtime
-
-Schedule is an ordinary built-in Expert.
-
-~~~text
-BuiltinExpertKind::ALL
-       |
-       +-> Schedule
-       +-> Commitments
-       +-> Communication
-       +-> Relationships
-       +-> FocusAttention
-       +-> Wellbeing
-       +-> WorkContext
-       +-> LifeLogistics
-               |
-               v
-        common setup / Registry
-               |
-               v
-        common Directory endpoint
-               |
-               v
-        BuiltinExpertEndpoint
-               |
-               v
-        per-domain dispatch()
-~~~
-
-There must be no Schedule-only App endpoint, Registry schema, Vault task settlement owner, install wire command or Flutter permission controller.
-
-Schedule-specific **judgment** remains schedule-specific. Schedule-specific **infrastructure** does not.
-
-### 2.2 Authority ownership
-
-The final authority split is:
+explicit user decision
+        -> fresh owner validation + reviewed CAS
+        -> owner mutation/reconciliation
+        -> Conversation resolution
+        -> one linked fresh Run
+```
 
 | Concern | Semantic owner |
 |---|---|
-| Expert identity, package/revision, enabled/disabled Expert | Experts / Agent Registry |
-| Connection identity, credential presence, account/resource selection, source health | Connections |
-| Whether a consumer may Observe selected data | Access / DataAccessGrant |
-| Observe source acquisition and provider-neutral View projection | Context |
-| Provider/OAuth/EventKit/native execution | provider/native adapter |
-| action/write authority and review | Actions |
-| assistant Session/Run/Manager response and assistant-triggered user interaction lifecycle | Conversation |
-| UI rendering and explicit user choice | Flutter |
+| Expert package/install/assignment/private state | Experts / Registry |
+| Connection/account/resource/system authority | Connections and real provider/native owners |
+| Observe grant and consumer-policy authority | Access / DataAccessGrant |
+| Acquisition, merge and each source dependency | Context |
+| Exact model recipient consent and dispatch/release fencing | Access, composed with Inference/provider route facts |
+| Route selection, model attempt/budget/transport policy | Inference |
+| Session, interaction lifecycle, resolution linkage, resume admission | Conversation |
+| Cross-owner orchestration and canonical first-party product policy | App |
+| Presentation and explicit user intent | Flutter |
+| External actions and uncertain-effect recovery | Actions |
 
-The same authority question must not be answered independently by two owners.
+A Conversation interaction is neither a DataAccessGrant nor a model dispatch permit. A successful resolution never authorizes reuse of old source bytes.
 
-In particular:
+## 4. Invariants carried into Checkpoint 05
 
-- Expert Registry does **not** decide whether Schedule may currently read Calendar.
-- Access does **not** reference Schedule installation IDs, assignment IDs or Registry view handles.
-- Connection selection is the maximum source scope, not a second consumer grant.
-- Observe permission never implies Act permission.
-- every successful source dependency records the **actual admitted consumer identity**. Compatibility aliases such as `calendar.expert` must not stand in for `floe.builtin.schedule` or another real consumer.
-- first-party source-consumer policy is assembled at product composition from canonical first-party declarations and passed to Access as grant scope; Access validates the scope but does not depend on the built-in Expert catalogue.
-- model processing/recipient consent remains independent from Observe permission internally even when product UI is simplified.
+- Registry remains source-independent. No `SourceGrants`, Calendar-Expert setup, `experts.calendar.*` compatibility path or `calendar.expert` proxy may return.
+- Use with Floe is a projection of current source plus grant bundle, not a persisted enable bit. Startup/inspect does not mint grants.
+- First-party consumers are App policy. Flutter/model output cannot select consumers, scope, purpose or processing restrictions.
+- Resolve compares current owners with the exact target and scope the user reviewed. Reloading current state is not permission to substitute a new expected authority.
+- Each contributing source retains its own DataAccessGrant, grant/policy/source authority and ContextDependency. Multi-source merge never synthesizes aggregate authority.
+- Unknown, unavailable and denied data are not empty successful evidence. History, compaction, proposal inspection and dispatch/release retain dependency fencing.
+- Missing eligible recipient consent is recoverable; source LocalOnly, forbidden data classes, forged identity, corruption and arbitrary policy denials are not permission buttons.
+- Observe, Act and external processing remain separate. Resolving an interaction never executes or blindly retries an external action.
+- No Run lease/deadline remains alive for human waiting. Interaction resume is not budget continuation and does not inherit a pending batch or old successful evidence.
+- Queries, previews, observer timeouts and screen disposal do not cancel Runs or mutate authority.
+- No Vault transaction spans model, provider, OAuth or native I/O.
 
-### 2.3 Source use at runtime
+## 5. Local data and compatibility
 
-All built-in Experts declare required/mandatory semantic sources, but runtime admission is performed at read time.
+Floe is pre-stable. Replace in-scope internal contracts and callers together; delete obsolete variants rather than adding v2/legacy wrappers or migration-only optional state. Fixed schema numbers are not proof of old-profile compatibility.
 
-~~~text
-Expert declaration:
-  required_sources = [...]
-  mandatory_source = ...
+Use only an explicitly selected isolated development profile for changed persistence acceptance. Old unsupported schemas fail closed. Never auto-delete a database/key after an access error, reset the normal operator profile, delete provider data, or discard uncertain external-operation records.
 
-Expert dispatch:
-  ask host for semantic source
+## 6. Completion and reporting
 
-Context:
-  resolve current connection/source
-  ask Access to authorize exact consumer/scope/purpose/processing
-  acquire source
-  return provider-neutral View + dependency
+Each child closes its owner behavior, callers, deletion gate and focused regressions before the next child starts. Passing a broad suite is not proof that the concrete failure scenarios are covered.
 
-Expert:
-  reason over View or typed unavailable/user-action outcome
-~~~
+The [05-G matrix](05-g-verification-and-convergence.md) owns Checkpoint 05 acceptance and final reporting. Report commit SHAs, runtime/authority topology, idempotency and crash results, source/recipient behavior, wire/UI coverage, residuals, exact commands and skips, and remaining blockers.
 
-The presence or absence of a current grant must not determine whether the Expert exists in Manager's catalog. An enabled Expert may be callable while one of its sources is disabled; that is how the system can explain the missing permission and create a recovery interaction.
-
-### 2.4 User-action-required is not infrastructure failure
-
-Expected recoverable states must not collapse into a hard root failure.
-
-The source boundary distinguishes at least:
-
-~~~text
-Ready(view, dependency)
-Unavailable(reason)
-NeedsUserAction(requirement)
-~~~
-
-Hard AgentFailure remains for integrity, forged identity, corrupted durable state, exhausted hard limits, cancellation/deadline and other cases in which execution itself is invalid or cannot continue safely.
-
-Examples:
-
-| Condition | Runtime semantic outcome |
-|---|---|
-| connector Observe paused | NeedsUserAction(enable source) |
-| no current OS Calendar permission | NeedsUserAction(system permission) |
-| source identity/fingerprint changed | NeedsUserAction(review changed source) |
-| OAuth credential expired | NeedsUserAction(reconnect) |
-| exact external processing recipient not approved | NeedsUserAction(processing consent) |
-| optional source temporarily down | Unavailable |
-| invalid authority signature / foreign identity | hard failure |
-| Vault unavailable/corrupt | hard failure |
-
-### 2.5 Conversation interaction lifecycle
-
-Do **not** keep a Run or Task alive indefinitely while waiting for a person.
-
-The first turn completes with an interaction request linked to the exact origin:
-
-~~~text
-session_id
-run_id / turn_id
-task_id? / call_id?
-source/connection target
-requested operation/scope
-~~~
-
-Manager produces a normal user-facing response explaining the limitation.
-
-Flutter renders a typed inline interaction card.
-
-When the user decides:
-
-1. the owner re-reads current connection/source/grant state;
-2. the mutation is admitted using fresh authority and CAS;
-3. the interaction is durably resolved;
-4. if the decision enables the blocked operation, Conversation starts a linked follow-up turn using the original user intent and explicit interaction-resume linkage;
-5. all access is reauthorized. The previous failed/blocked read is never blindly replayed as if it had succeeded.
-
-This is intentionally separate from budget continuation. Existing continuation remains execution-budget semantics.
-
-### 2.6 Connector product model
-
-The common user path becomes:
-
-~~~text
-Connect source/account
-  -> source authentication/system access
-  -> select resources
-  -> create/activate default Observe grant for Floe
-  -> connected and usable
-~~~
-
-Each connection detail exposes one simple durable control:
-
-~~~text
-Use with Floe  [on/off]
-~~~
-
-Off pauses Observe admission without destroying credentials or selected resources. On performs fresh source/grant validation.
-
-Action authority remains separate.
-
-The generic Settings-level “LLM may use this connector/data” toggle is removed. Exact processing-recipient consent remains enforced internally and is requested contextually when required.
-
-## 3. Repository baseline anchors
-
-Line numbers below refer to the baseline commit and are planning anchors; symbols are authoritative if surrounding lines move during implementation.
-
-| Area | Baseline anchor |
-|---|---|
-| built-in declaration split | crates/experts/builtin/src/catalog.rs:41, 62, 73, 141, 156 |
-| common built-in output/host | crates/experts/builtin/src/host.rs:106, 128, 233 |
-| Schedule private host loop | crates/experts/builtin/src/schedule/host.rs:38, 68, 115, 384, 395 |
-| common App Expert registration | crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:23, 29, 84, 107 |
-| common Calendar view hook | crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:407 |
-| Schedule App endpoint | crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs:17, 56, 79, 91 |
-| Schedule endpoint settlement | crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/agent.rs:48, 54, 60 |
-| Vault open / directory split | crates/app/src/vault_host.rs:195, 257 |
-| Calendar Expert worker commands | crates/app/src/vault_host.rs:1576, 1645 |
-| built-in setup helpers | crates/app/src/vault_host.rs:2521, 2570 |
-| generic Registry source-grant duplication | crates/modules/experts/src/registry/expert_setup.rs:22, 49, 236, 294, 313, 448 |
-| Calendar Expert Registry vertical | crates/modules/experts/src/registry/calendar_setup.rs:72, 125, 231, 414 |
-| Calendar Expert access vertical | crates/modules/experts/src/calendar_access.rs:74, 93 |
-| Calendar Vault grant mapping | crates/adapters/vault/src/vault/calendar_grants.rs:50, 188, 331, 1150 |
-| Schedule-only Task settlement | crates/adapters/vault/src/repositories/task.rs:13, 72, 101 |
-| Schedule-owned Conversation history boundary | crates/modules/conversation/src/turn/source_history.rs:14, 69; crates/app/src/vault_host/conversation_turn.rs:101 |
-| generic runtime tool/delegation handling | crates/runtime/agent/src/engine.rs:633, 792 |
-| conversation messages/events | crates/modules/conversation/src/turn/session.rs:124, 212 |
-| Flutter chat presentation | apps/client/lib/features/conversation/presentation/agent_panel.dart:204, 289, 456 |
-| Flutter Calendar Expert controller | apps/client/lib/features/experts/application/agent_calendar_expert_controller.dart:9, 223, 230 |
-| Flutter Calendar Expert settings | apps/client/lib/features/experts/presentation/agent_calendar_expert_dialog.dart:18 |
-
-## 4. Execution checkpoints
-
-Read and execute these files in order.
-
-1. [01 — contracts and recoverable source interaction foundation](01-contracts-and-interaction-foundation.md) — **complete**
-2. [02 — Schedule common-runtime convergence + Calendar consumer-policy prerequisite](02-calendar-source-and-schedule-convergence.md) — **complete**
-3. [03 — Expert Registry and Access authority convergence](03-expert-registry-and-access-authority.md) — **complete**
-   - [03-A — Registry source-authority removal](03-a-registry-source-authority.md)
-   - [03-B — Calendar Access persistence convergence](03-b-calendar-access-persistence.md)
-   - [03-C — App, protocol and Flutter ownership cutover](03-c-app-protocol-flutter-cutover.md)
-   - [03-D — deletion, verification and documentation convergence](03-d-deletion-verification.md)
-   - [03-E — residual authority and Calendar access closure](03-e-residual-authority-calendar-access.md) — **complete**
-4. [04 — connector permission product model](04-connector-permission-product-model.md) — **complete**
-   - [04-A — product policy and first-party consumer authority](04-a-product-policy-and-consumers.md) — **complete**
-   - [04-B — connection-level Observe projection and owner API](04-b-connection-observe-owner-api.md) — **complete**
-   - [04-C — native/device connection convergence](04-c-native-device-convergence.md) — **complete**
-   - [04-D — remote SaaS convergence and multi-source reads](04-d-remote-saas-convergence.md) — **complete**
-   - [04-E — Settings, processing, and Act separation](04-e-settings-processing-act.md) — **complete**
-   - [04-F — deletion, verification, and documentation convergence](04-f-verification-doc-convergence.md) — **complete**
-5. [05 — Conversation and Flutter interaction/resume](05-conversation-and-flutter-interaction.md) — **next**
-6. [06 — obsolete-path deletion, verification and documentation convergence](06-deletion-verification-and-doc-convergence.md)
-
-Do not skip directly to Flutter. A chat permission button is unsafe until its target and decision path are owned by the canonical Access/Connections path.
-
-Checkpoint 02 moved the narrow Calendar first-party consumer-policy prerequisite forward and is complete. Checkpoint 03-A through 03-D established the source-independent Registry and source-owned Calendar grant path, and 03-E closed the post-03-D behavioral residuals in grant selection/CAS/policy lifecycle plus the native Access management surface. The deleted Expert Calendar vertical was not reopened.
-
-Checkpoint 04 has converged the connection/access product path: default first-party Observe is connection-scoped, Use with Floe is derived from current owner state, remote multi-source reads preserve exact provenance, and Observe remains separate from Act and external-recipient authority. Checkpoint 05 may now build Conversation-owned interaction/resume on these canonical owner operations.
-
-## 5. Global implementation invariants
-
-Every checkpoint must preserve these properties.
-
-### Authorization and identity
-
-- current Person/device/connection identity is obtained from canonical owners;
-- no request supplies credentials, bearer tokens or arbitrary connection endpoints;
-- native subject/fingerprint changes fail closed and require a fresh review where policy requires it;
-- exact recipient / processing restriction remains enforced at the dispatch/release boundary;
-- every successful ContextDependency consumer equals the actual caller admitted for that read; no service alias may hide or broaden consumer identity;
-- first-party consumer policy never auto-includes extension/third-party package ids;
-- a user-interaction approval is not a source-read receipt and never bypasses fresh admission.
-
-### Provenance
-
-- every successful source result records exact ContextDependency coverage;
-- Manager/Expert must not convert denied/unavailable reads into empty evidence;
-- historical source-derived content is retained only if recorded dependencies reauthorize;
-- removing CalendarHistoryBoundary must not weaken this rule.
-
-### Persistence and CAS
-
-- interaction decisions, grant changes and connection changes use expected revision/authority semantics;
-- duplicate decision submission is idempotent or conflicts safely;
-- app restart can inspect the resolved/pending interaction without inventing a decision;
-- no global transaction is held during model/provider/native I/O.
-
-### Runtime/cancellation
-
-- child Task cancellation never cancels the parent Manager Run unless the parent explicitly cancels;
-- an interaction does not leave an executor lease or timer running while waiting for the user;
-- retry/resume uses fresh authority and stable origin linkage, not a stale source result.
-
-### External side effects
-
-- Observe grant changes never imply write authority;
-- Calendar create/update/delete continues through Actions policy/review/recovery;
-- uncertain external writes are never retried as part of interaction resume.
-
-## 6. Explicit non-goals
-
-This plan does not:
-
-- add new Android product capability;
-- make third-party Experts implicitly trusted;
-- grant connector Act permission at connection time;
-- weaken external-processing recipient consent;
-- migrate disposable old local Calendar Expert state;
-- preserve experts.calendar.* wire compatibility;
-- add a second “v2/vNext” runtime;
-- make Experts render Flutter UI;
-- make prompts encode permission workflows;
-- turn connection credentials into domain/Expert input.
-
-## 7. Local data/reset policy
-
-The current product is pre-stable and local development state is disposable. The implementation should prefer deleting the obsolete Calendar-Expert persistence shape instead of migrating it.
-
-If a changed schema cannot safely open an old development profile:
-
-1. detect the incompatible Floe-owned schema explicitly;
-2. fail with a clear development reset requirement;
-3. reset only the identified Floe-owned local profile/key slots when the operator explicitly chooses reset;
-4. never delete provider data, unrelated files, credentials whose ownership is uncertain, or unresolved external-action records.
-
-No code path may infer a new active DataAccessGrant from an old Registry enabled bit.
-
-## 8. Required reporting per checkpoint
-
-An implementation agent should report only after the checkpoint is internally converged.
-
-Use this structure:
-
-1. changed files and symbols;
-2. final owner/contract introduced or changed;
-3. callers migrated;
-4. obsolete symbols/routes deleted in this checkpoint;
-5. residual searches and remaining matches;
-6. targeted verification;
-7. broader verification required by the checkpoint;
-8. explicit blocker, if any.
-
-A checkpoint is not complete because the new path compiles. It is complete when its named old path is absent or the plan explicitly says the old path survives until the next checkpoint.
-
-## 9. Final definition of done
-
-The whole plan is complete only when all of the following are true:
-
-- Schedule is included in the same built-in setup, Directory registration and endpoint dispatch as the other seven Experts.
-- no Schedule-specific App AgentEndpoint remains.
-- no CalendarExpertSetup/CalendarExpertOverview/CalendarAccessConfiguration product contract remains.
-- Expert Registry no longer acts as a source-access authority.
-- Access/DataAccessGrant is the only consumer Observe authority.
-- canonical first-party Calendar grants authorize real approved first-party consumer identities; the legacy `calendar.expert` compatibility consumer is not production authority.
-- Access persistence does not store Expert installation/assignment IDs as grant identity.
-- disabled/review-required sources do not make an enabled Expert disappear from the Manager catalog.
-- an expected source permission problem reaches the Expert/Manager as a typed recoverable outcome rather than terminating the root turn.
-- Manager returns a natural user-facing answer for the blocked request.
-- chat can render and resolve a typed permission/recovery interaction.
-- interaction resolution revalidates source/grant state and can start a linked follow-up turn.
-- connection detail owns Use with Floe.
-- connection establishment activates the default Observe grant defined by the amended product decision.
-- external model recipient consent is no longer a disconnected Settings “LLM connector access” toggle.
-- Observe and Act remain distinct.
-- Conversation has no dependency on Schedule-specific CalendarHistoryBoundary.
-- source history is governed by recorded dependency provenance.
-- experts.calendar.* wire and Flutter agent_calendar_expert_* implementation surfaces are gone.
-- architecture docs and affected ADR/product docs describe the resulting code.
-- residual search and the full applicable Rust/FFI/Flutter/macOS gates pass.
+Checkpoint 06 follows only after 05 is complete. It owns final cross-plan deletion/archive work; it must not be used to defer broken interaction behavior or stale current architecture introduced by 05.

@@ -1,667 +1,112 @@
-# Checkpoint 05 — Conversation-owned user interaction and Flutter chat resume
-
-## Goal
-
-Complete the product path from an agent/tool source requirement to an inline Flutter chat interaction without teaching Manager or Experts anything about Flutter/navigation.
-
-The canonical flow is:
-
-~~~text
-Manager or Expert
-  -> source/capability call
-  -> Context/Access returns NeedsUserAction
-  -> host creates Conversation interaction record
-  -> Tool/Task carries interaction reference
-  -> Manager receives failed/blocked observation and answers naturally
-  -> Conversation commits assistant response + interaction message
-  -> Run completes
-  -> Flutter renders interaction card
-  -> user resolves / opens owning connection
-  -> owner performs fresh mutation/revalidation
-  -> interaction resolves
-  -> Conversation starts a linked follow-up turn
-  -> blocked work runs again under fresh authority
-~~~
-
-The original Run is not held open while waiting for the user.
-
-## Baseline anchors
-
-- crates/runtime/agent/src/engine.rs:633 — Manager execute_tool
-- crates/runtime/agent/src/engine.rs:792 — execute_delegation
-- crates/modules/experts/src/task.rs — Task terminalization on endpoint failure
-- crates/adapters/providers/src/models/wire.rs — ToolExchange/DelegationExchange rendering to model
-- crates/modules/conversation/src/turn/session.rs:124 — AgentMessage
-- crates/modules/conversation/src/turn/session.rs:212 — AgentEventKind
-- crates/modules/conversation/src/domain/mod.rs — RunState / TurnMode / RunReceipt
-- crates/modules/conversation/src/application/admission.rs — prepare/admit turn
-- crates/modules/conversation/src/application/recovery.rs — continuation/recovery
-- crates/app/src/vault_host/conversation_turn.rs — root turn preparation
-- apps/client/lib/features/conversation/domain/agent_session.dart:118+ — delegation/capability parsing
-- apps/client/lib/features/conversation/presentation/agent_panel.dart:204 — message rendering
-- apps/client/lib/features/conversation/presentation/agent_panel.dart:289 — composer/footer
-- apps/client/lib/features/conversation/presentation/agent_panel.dart:456 — top-level failure status
-- apps/client/lib/features/conversation/application/conversation_runtime_gateway.dart — Run polling
-- apps/client/lib/features/conversation/application/agent_controller.dart — controller state/actions
-
-## 1. Persist assistant-triggered interaction records under Conversation
-
-### 1.1 Why Conversation owns this record
-
-The interaction is part of a specific assistant request and has origin identity:
-
-- Session;
-- Run/turn;
-- optional delegated Task;
-- optional Tool/capability call;
-- Manager-visible source requirement.
-
-Conversation owns that lifecycle.
-
-The underlying mutation is **not** owned by Conversation:
-- Observe toggle/review -> Access/Connections;
-- system permission -> native/Connections boundary;
-- reconnect -> Connections/provider auth;
-- action approval -> Actions;
-- processing recipient consent -> Access/Inference authority.
+# Checkpoint 05 — Conversation-owned interaction and linked resume
 
-Conversation stores the request and its resolution outcome; it delegates the actual operation to the correct owner through App composition.
+- **Status:** active execution plan; no implementation completion claimed.
+- **Source baseline:** `00017e668e71e34be3d3ea5772aa1612b15c5d6c`.
+- **Prerequisite:** Checkpoints 01–04 complete, including 03-E CAS and 04 atomic multi-view grants.
+- **Next execution:** 05-A. Checkpoint 06 is blocked until 05-G passes.
 
-### 1.2 Interaction record
+This index replaces the earlier single-file sketch. Child plans are the authoritative execution sequence. Anchors below refer to the source baseline, not the planning commit that contains these files. Line ranges are inspected reading windows; symbols are authoritative as lines move.
 
-Add a durable record with at least:
+## 1. Read and execute in order
 
-~~~text
-ConversationInteraction
-  schema_version
-  id
-  person_id
-  session_id
-  origin_run_id
-  origin_turn_id
-  origin_task_id?
-  origin_call_id?
-  requirement
-  state
-  created_at
-  resolved_at?
-  resolution?
-  revision
-~~~
+| Slice | Goal | Exit gate |
+|---|---|---|
+| [05-A](05-a-contracts-and-durable-interactions.md) | Typed contracts, durable interaction/review/decision records | Origin/replay/CAS/reopen tests |
+| [05-B](05-b-source-outcomes-and-publication.md) | Preserve source blockers through trusted publication and Manager/Expert results | Direct/delegated blocked Run completes with durable reference |
+| [05-C](05-c-reviewed-resolution-and-owner-operations.md) | Resolve through canonical source/Access owners | Stale approval and response-loss recovery cannot widen/repeat mutations |
+| [05-D](05-d-processing-consent-and-inference.md) | Access-owned contextual recipient consent and typed pre-dispatch blockage | No unapproved transmission; first-model blockage still produces a usable turn |
+| [05-E](05-e-linked-resume-and-recovery.md) | Exactly one linked fresh Run admission | Resolution/admission/restart races and action-safety tests |
+| [05-F](05-f-protocol-and-flutter.md) | Owner wire, snapshot/event resync, inline cards and native recovery | Real App route → card → decision → same Session follow-up |
+| [05-G](05-g-verification-and-convergence.md) | Cross-owner crash/failure matrix, deletion and docs | All named behaviors plus applicable full gates |
 
-State:
+Read `AGENTS.md`, `.agents/skills/architecture-change/SKILL.md`, `docs/architecture/README.md`, `invariants.md` and `authority-recovery.md` first. Read other owner documents only as needed. Finish code work with the code-change-verification skill. Do not re-run completed checkpoint implementation plans as tasks.
 
-~~~text
-Pending
-Resolved
-Denied
-Cancelled
-Superseded
-~~~
+## 2. Verified baseline gaps
 
-Do not add “Executing” unless an interaction owner operation truly needs a durable in-flight state. Most connection/access commands already have their own operation identity and can be reconciled.
+| Inspected path/window | Current behavior to change |
+|---|---|
+| `crates/contracts/context/src/source_access.rs:1-158` | Six requirement kinds; optional source/connection/authority; inline flag is not enough to authorize a mutation |
+| `crates/contracts/agent/src/interaction.rs:1-44` | Pure ref exists; status uses `Allowed`; it is not durable Conversation state |
+| `crates/experts/builtin/src/shared.rs:24-39` | `optional_calendar_views` loses requirement details by mapping NeedsUserAction to Denied |
+| `crates/modules/context/src/application/tools.rs:1-310` | Direct tools still return Result<ToolResult, AgentFailure>; no trusted interaction publication boundary |
+| `crates/modules/context/src/application/remote_sources.rs:223-327` | Multi-source acquisition returns per-source AuthorizedSourceBinding; preserve this when adding typed blockers |
+| `crates/app/src/vault_host/conversation_turn/expert_dispatch.rs:95-230` | Common endpoint already binds Session/device/parent Run and wires Context/Inference; use this trust boundary |
+| `crates/modules/conversation/src/turn/session.rs:123-252` | No Interaction message; current message/event/history matches require coordinated updates |
+| `crates/modules/conversation/src/domain/mod.rs:101-290` | Working/terminal Run states; TurnMode only New/Continue; receipt linkage is continuation/retry only |
+| `crates/modules/conversation/src/domain/intent.rs:32-169` | Canonical digest and validation encode only New/Continue; resume cannot be an extra Flutter text message |
+| `crates/modules/conversation/src/application/coordinator.rs:61-290` | Admission, session revision, transcript, budget continuation and EngineResumeState are coupled |
+| `crates/adapters/vault/src/repositories/conversation.rs:1-280` | Owner repository maps admission and transcript to Vault; archive projection also needs interaction handling |
+| `crates/app/src/local_access_services.rs:20-171` | Native Calendar has reviewed expectations and owner operations; reuse rather than recreate a Calendar Expert API |
+| `crates/app/src/remote_services.rs:137-200` | ConnectionObserve command has no caller-reviewed bundle expectation; add it to the canonical owner path, not a chat-only mutation bypass |
+| `crates/app/src/connection_observe.rs:1-133` | Derived bundle projection; not an authority receipt or proof of source read admission |
+| `crates/app/src/first_party_observe.rs:1-128` | App owns real first-party consumers; native Calendar LocalOnly and remote paired-source restrictions remain authoritative |
+| `crates/modules/access/src/application/model_dispatch.rs:26-231` | Recipient, dependency and processing checks return AgentFailure; LocalOnly and forbidden-class denials must not become consent approvals |
+| `crates/modules/inference/src/application/service.rs:76-285` | Only Result<ModelResponse, AgentFailure>; pre-reserve admission, handoff and release fences; no typed recoverable model outcome |
+| `crates/adapters/providers/src/control/recipient_authority.rs:1-71` | SavedConnectionRecipientAuthority reloads legacy saved consent fields; not a contextual consent store |
+| `apps/client/lib/features/conversation/application/conversation_runtime_gateway.dart:77-270` | Standard Run polling and command recovery exist; interaction updates after Run completion need separate snapshot/refresh support |
 
-Resolution should record semantic outcome, not raw provider/native response.
+These gaps are implementation work for 05, not proof that tests were run during plan authoring. Code exploration for a slice must extend these anchors to all callers, manifests and tests before editing.
 
-### 1.3 Origin constraints
+## 3. Fixed final behavior
 
-Validate:
-- Person matches Session owner;
-- origin Run belongs to Session;
-- Task belongs to origin Run if present;
-- call id belongs to origin Run/Task if present;
-- source requirement consumer matches the caller that produced it;
-- interaction id is stable across replay of the same settled origin result.
+```text
+source/tool/Expert -> owner-produced recoverable requirement
+  -> trusted App/Conversation create-or-replay
+  -> settled safe Tool/Task reference
+  -> Manager limitation + immutable Interaction message
+  -> original Run Completed
 
-Do not create duplicate pending interactions every time the same journaled Tool/Task result is projected.
+person decision -> Conversation decision CAS
+  -> existing source/Access owner operation with reviewed target binding
+  -> fresh outcome/reconciliation -> interaction Resolved
+  -> one origin-linked fresh Run -> new tools/reads/dependencies
+```
 
-Use stable identity derived from the settled invocation identity or persist the generated id in the result/journal before it can be observed.
+If the selected model cannot be called because eligible recipient consent is missing, no unauthorized model is called to explain the denial. Conversation emits a deterministic, source-independent limitation plus the same durable interaction. This is a distinct typed expected completion, not a forged ModelResponse or a generic catch of PolicyDenied.
 
-## 2. Interaction creation boundary
+Manager natural explanation remains the ordinary path when an approved model is available. An optional blocker may coexist with useful authorized evidence; coverage of that evidence must not be changed to Independent just because a safe card is attached.
 
-### 2.1 Tool path
+## 4. Owner and authority boundaries
 
-When ContextToolService receives SourceReadOutcome::NeedsUserAction:
+Conversation owns interaction identity, origin, immutable reviewed descriptor, lifecycle, decision intent and resume linkage. Access owns actual Observe and recipient authority. Connections/provider/native owners own connection/resource/system changes. Inference selects real routes and supplies non-secret recipient facts. App composes owners. Flutter only presents the backend projection and sends an explicit decision.
 
-1. ask the injected Conversation interaction sink/port to create-or-replay the interaction for the current Run/call identity;
-2. return ToolResult with:
-   - no source payload;
-   - no dependent source coverage;
-   - bounded issue/status saying user action is required;
-   - typed UserInteractionRef artifact.
+Pure contracts may carry references and non-secret descriptors; they do not make Context, Experts or Inference depend on Conversation persistence. Introduce only a real trusted publication/owner-operation boundary, not forwarding-only compatibility layers.
 
-Do not throw AgentFailure solely for this expected condition.
+An LLM-produced id, summary, reason, inline flag or JSON artifact never authorizes creation/resolution. Validate the admitted Run/Task/call, actual consumer and owner-observed target. A syntactically valid reference to another Session is still forbidden.
 
-### 2.2 Expert path
+## 5. Deliberate lifecycle choices
 
-When a built-in Expert source read returns NeedsUserAction:
+- Original Run and Task do not wait for the person. Keep RunState free of `WaitingForUser`.
+- Use a Conversation state machine: Pending → Resolving → Resolved; Pending can also become Denied/Cancelled/Superseded/Expired. Resolving is justified by durable owner-operation recovery, not a long-lived Run.
+- Resolve/refresh are explicit commands. Get/list/inspect are read-only and never create grants, decisions or Runs.
+- No scope is silently refreshed underneath an old Allow button. Material drift invalidates that review and requires a newly presented descriptor/revision.
+- Default inline Observe approval is connection-level, including the current first-party bundle. The card discloses all affected source capabilities/resources; do not claim to approve only Calendar if the operation affects a larger bundle.
+- An unresolved target with insufficient current identity has navigation/review actions only, not inline enable.
+- Recipient consent is Access-owned, exact, time-bounded and limited to the reviewed intent lineage/scope. It never changes source ProcessingRestriction, Act, or saved global allow flags.
+- Budget continuation and interaction resume are different domain modes. New resume execution recomputes context and preserves effect safety; it does not claim old batch takeover.
 
-- the host creates/replays the Conversation interaction using Task/call origin;
-- the Expert receives ExpertCapabilityObservation::NeedsUserAction when it is in an iterative reasoning loop;
-- mandatory-source dispatch may return a deterministic blocked/no-conclusion Expert output with the same interaction artifact;
-- the resulting A2A Task is Completed when the Expert correctly reports the blocked domain judgment;
-- Task Failed remains for actual execution/integrity failure.
+## 6. Limits and multi-interaction policy
 
-This is the desired semantic difference:
+Start with explicit tested limits: at most 8 actionable interactions per Run, bounded descriptors, bounded list pagination and a 24-hour maximum pending-review lifetime. Use owner clock injection in tests. Overflow is an honest bounded limitation, never dropping requirements while claiming completion of data acquisition.
 
-~~~text
-Calendar permission is off
-  -> Expert successfully reports "cannot judge until Calendar is enabled"
-  -> Task Completed / domain status needs_user_action
+Deduplicate only identical origin and reviewed target/scope, never different accounts. Publication identity is based on the admitted invocation and canonical requirement, not projection time or a fresh UUID on replay.
 
-Vault corrupt
-  -> Expert execution failed
-  -> Task Failed
-~~~
+One origin Run has one automatic resume slot. For several cards, automatic resume waits until all relevant cards are terminal and at least one was resolved; Not now/deny is a valid terminal decision. No auto-resume occurs for all-denied groups. Later changed requirements can be surfaced by the new Run. A bounded lineage limit prevents automatic loops; reaching it requires a new explicit user request, not a new budget-continuation level.
 
-### 2.3 Multiple interactions
+If the user has since started another turn, do not silently restart an old request. Expose an explicit Continue original request action after safe current-session review. See 05-E for the atomic admission rule.
 
-One turn may create more than one interaction only if they refer to distinct blocked operations.
+## 7. Non-goals and stop conditions
 
-Bound the count tightly, for example <= 8 per Run.
+Do not restore Calendar-Expert setup/wire/UI, Registry source authority, a second Use-with-Floe bit, global model consent, arbitrary Flutter grant fields, hidden provider fallback on policy denial, or an aggregate source dependency.
 
-If several source reads hit the same connection/requirement, deduplicate by semantic target and origin lineage where safe.
+Do not turn every PolicyDenied into NeedsUserAction. Corrupt storage, forged/foreign authority, unknown provenance, prohibited classes, LocalOnly-to-external and mismatched approved recipients remain fail-closed. A source policy review, if later needed, is a separate explicit Access decision, not hidden inside recipient consent.
 
-Do not aggregate different connections into one approval.
+Do not execute Action proposals from an interaction, retry uncertain external writes, or hold a transaction during provider/model/native I/O. Keep paired-server credentials inside existing current-connection adapters.
 
-## 3. Manager model behavior
+Stop and amend the active child with the concrete failing scenario if a contract lacks required provenance, reviewed CAS, operation replay or effect deduplication. Preserve completed CP3/4 semantics; fix the narrow owner contract rather than adding an alternate chat permission system.
 
-### 3.1 Provider wire
+## 8. Completion discipline
 
-Update ToolExchange and DelegationExchange model rendering so the Manager sees:
+Each semantic slice commits its code, caller cutover, focused regression evidence, residual deletion and current architecture update together. Short compile breaks within a slice are acceptable; obsolete compatibility interfaces at the slice exit are not.
 
-- the operation did not obtain source evidence;
-- the semantic reason in bounded product language;
-- that a user action is available;
-- no secret/authority internals.
-
-Example semantic payload:
-
-~~~json
-{
-  "status": "needs_user_action",
-  "source": "calendar",
-  "reason": "observe_disabled",
-  "interaction_id": "..."
-}
-~~~
-
-Do not send:
-- fingerprint;
-- grant authority keys;
-- OAuth state;
-- provider bearer;
-- Flutter route;
-- button labels.
-
-### 3.2 Manager prompt
-
-Amend manager_role.txt minimally.
-
-The current role already says failed source-backed reads are unavailable and the Manager should state the limitation honestly.
-
-Add only the general rule:
-
-- when a host-provided user interaction is available, explain the required user decision briefly;
-- do not invent a different scope/account/action;
-- do not claim approval before the interaction resolves;
-- continue with remaining evidence when useful.
-
-Do not add Calendar-specific examples or workflow scripts.
-
-### 3.3 Run outcome
-
-A turn that produces a correct limitation response plus an interaction is normally Completed.
-
-Do not set the root Run to Failed just because the requested source requires user action.
-
-The interaction is an expected product outcome, not an execution failure.
-
-Hard root failures remain hard.
-
-## 4. Commit interaction as a first-class conversation message
-
-Add the final AgentMessage representation prepared in checkpoint 01:
-
-~~~text
-AgentMessage::Interaction {
-  turn_id,
-  interaction_id,
-  kind,
-  status
-}
-~~~
-
-Conversation commits it after the associated source/tool/task result is settled and before/with final response projection according to the existing message ordering rules.
-
-Recommended UI order in the turn:
-
-~~~text
-User
-Preamble/source technical entries as applicable
-Assistant limitation/final response
-Interaction card
-~~~
-
-If the current message commit architecture requires interaction before final answer, Flutter may reorder only presentation of messages from the same turn if the stored canonical order remains unambiguous. Prefer canonical order that matches presentation.
-
-### 4.1 Message source derivation
-
-Interaction metadata contains no source content. AgentMessage::may_derive_from_source() should therefore treat it as non-source-derived.
-
-Its origin Task/Tool may still have Unknown/Independent coverage because no successful source data was obtained.
-
-### 4.2 Event stream
-
-MessageCommitted already carries AgentMessage. Reuse it unless a separate interaction state-change event is required for updates after the Run finishes.
-
-Because interaction resolution can occur later, add a bounded runtime event or query projection for status changes, e.g.:
-
-~~~text
-InteractionUpdated
-  interaction_id
-  state
-  revision
-~~~
-
-Do not mutate an old committed message in place without a durable state record.
-
-## 5. Interaction inspect/resolve protocol
-
-Add owner-aligned App commands/queries, not Expert-specific commands.
-
-Suggested wire semantics:
-
-~~~text
-conversation.interaction.get
-conversation.interaction.resolve
-conversation.interaction.refresh
-~~~
-
-Resolve request:
-- interaction id;
-- expected interaction revision;
-- decision enum appropriate to the generic lifecycle, e.g. Approve / Deny;
-- no connection/grant/fingerprint fields copied from Flutter.
-
-The backend loads the interaction target and calls the owning source/access operation.
-
-### 5.1 Inline enable
-
-For EnableObserve:
-- load current connection;
-- validate current source;
-- activate/review the current Observe grant;
-- mark interaction Resolved only after owner mutation succeeds;
-- return effective access state.
-
-### 5.2 System permission
-
-For RequestSystemPermission, Rust cannot impersonate the user’s OS decision.
-
-The interaction projection tells Flutter the required native action class.
-
-Flow:
-
-~~~text
-Flutter button
- -> native permission request / system settings
- -> refresh connection
- -> conversation.interaction.refresh
- -> backend verifies source is now admissible
- -> interaction Resolved
-~~~
-
-Do not mark approved merely because Flutter says the dialog was shown.
-
-### 5.3 Reconnect/resource selection
-
-For Reconnect or SelectResource:
-- interaction card opens the owning connection detail;
-- after the connection operation completes, Flutter asks backend to refresh the interaction;
-- backend verifies the requirement no longer applies;
-- only then mark Resolved.
-
-No connection screen directly edits Conversation storage.
-
-### 5.4 Denial
-
-Deny:
-- mark interaction Denied;
-- do not mutate source permission;
-- do not auto-resume;
-- preserve the completed origin turn and audit identity.
-
-A later user request can create a new interaction if they ask again.
-
-## 6. Linked follow-up turn
-
-### 6.1 Do not reuse budget continuation
-
-Existing TurnMode::Continue and AgentContinuation mean “continue execution after budget/deadline soft stop”.
-
-Permission resolution is a new product event. Add an explicit interaction resume reference.
-
-Recommended domain value:
-
-~~~text
-InteractionResumeRef
-  interaction_id
-  origin_run_id
-  interaction_revision
-~~~
-
-Conversation start/admission validates:
-- interaction is Resolved;
-- origin Run belongs to the same Session/Person;
-- interaction points at that origin;
-- the resolution has not already started a successful resume command, or duplicate command identity rejoins idempotently.
-
-### 6.2 User text
-
-Do not require Flutter to invent a new user message such as “continue”.
-
-Conversation can recover the original user intent from the origin Run/turn.
-
-The new Run should have explicit mode/origin metadata so UI does not render the original user text as if the user typed it twice.
-
-Possible final shape:
-
-~~~text
-TurnMode
-  New
-  Continue(BudgetContinuationRef)
-  ResumeInteraction(InteractionResumeRef)
-~~~
-
-The new Run receives a host-scoped instruction/context event meaning “the previously blocked requirement has been resolved; continue the original request”. Do not encode this as arbitrary user text.
-
-### 6.3 Fresh execution
-
-The resume is a new Run:
-
-- Manager chooses delegation/tools again;
-- source read executes again;
-- Access reauthorizes current grant/source;
-- no old ToolResult is treated as successful;
-- new dependencies are recorded.
-
-This avoids keeping executor/deadline/budget state alive while a person decides.
-
-### 6.4 Interaction resolution races
-
-Handle:
-- source enabled from Settings/connection before user presses Allow;
-- connection removed while interaction pending;
-- source authority changed before resolve;
-- interaction clicked twice;
-- app restart between resolve and resume start;
-- resume command accepted but response lost.
-
-Use existing command/run identity and CAS/recovery rules. Persist enough linkage that restart can determine whether resume was already admitted.
-
-## 7. Flutter domain/controller
-
-### 7.1 Domain parsing
-
-In apps/client/lib/features/conversation/domain/agent_session.dart:
-
-- add AgentInteractionMessage;
-- parse interaction message kind;
-- validate UUID/status/kind;
-- do not infer target details from failure strings;
-- keep capability/delegation technical messages separately inspectable.
-
-### 7.2 Controller
-
-Add to AgentController or a focused conversation-interaction controller owned by AgentController:
-
-- inspectInteraction(id);
-- resolveInteraction(id, decision);
-- refreshInteraction(id);
-- resumeResolvedInteraction(id) when backend reports resumable;
-- busy state scoped to the interaction so the composer does not become a global error state unnecessarily.
-
-Do not route through AgentCalendarExpertController.
-
-### 7.3 Runtime gateway
-
-ConversationRuntimeGateway currently polls until AppRunState.finished.
-
-Keep that behavior. Origin turn ends before user decision.
-
-Add explicit interaction command/query methods through the same FloeClient/App read model boundary.
-
-When resolve returns a linked resume command:
-- run it using the standard conversation runtime polling;
-- stream normal run progress;
-- update the same Session;
-- preserve cancellation semantics for the new Run.
-
-## 8. Flutter presentation
-
-### 8.1 Inline card
-
-Add a generic AgentInteractionCard rendered from AgentInteractionMessage.
-
-Example states:
-
-~~~text
-Calendar access is off
-Floe needs Calendar access to answer this request.
-
-[Not now] [Allow]
-~~~
-
-For non-inline repair:
-
-~~~text
-Calendar needs attention
-Choose the calendars Floe can use.
-
-[Manage Calendar]
-~~~
-
-The copy comes from localized interaction kind/reason plus safe display metadata, not from provider error strings.
-
-### 8.2 Card actions
-
-Actions depend on host projection, not Agent choice:
-
-- inline approval;
-- deny/not now;
-- request OS permission;
-- open connection;
-- reconnect.
-
-Do not expose arbitrary URLs from model/tool output.
-
-### 8.3 Technical capability UI
-
-The existing ExpansionTile “Source” can continue to show technical source/delegation details, but recovery is no longer hidden there.
-
-Failed delegation/capability messages should not be the only visible signal.
-
-### 8.4 Footer/top-level failure cleanup
-
-agent_panel.dart baseline _status() maps top-level access_review_required/capability access errors to footer failures.
-
-After canonical source blockers migrate:
-- expected access interactions should appear as messages/cards, not controller.failure;
-- keep top-level mappings only for truly top-level failures or remove them if unreachable;
-- do not reinsert the user’s composer text simply because an expected interaction was produced. The Run completed.
-
-## 9. Action proposal coexistence
-
-AgentProposalCard is the existing pattern for “agent work creates a durable owner record and Flutter renders an inline affordance”.
-
-Keep it separate from permission interaction:
-- proposal = potential external Act;
-- permission interaction = access/recovery decision.
-
-Both may share visual primitives but not authority/state types.
-
-Do not migrate Calendar action approval into Conversation interaction just for UI uniformity.
-
-## 10. Tests
-
-### Rust Conversation
-
-1. direct Manager tool NeedsUserAction:
-   - interaction record persisted once;
-   - Manager receives observation;
-   - final answer committed;
-   - Interaction message committed;
-   - Run Completed.
-
-2. delegated Schedule NeedsUserAction:
-   - Task Completed with blocked domain result;
-   - interaction artifact/ref preserved;
-   - Manager final answer;
-   - Run Completed.
-
-3. hard source integrity failure:
-   - no interaction;
-   - correct hard failure behavior.
-
-4. deny:
-   - interaction Denied;
-   - no grant mutation;
-   - no resume Run.
-
-5. approve inline:
-   - current owner revalidated;
-   - grant active;
-   - interaction Resolved;
-   - one linked resume Run;
-   - resumed read succeeds.
-
-6. app restart:
-   - pending interaction inspectable;
-   - resolved interaction does not duplicate mutation;
-   - accepted resume command recovered by id.
-
-7. source changed before approval:
-   - old interaction becomes Superseded/NeedsReview;
-   - stale approval cannot activate.
-
-8. duplicate click:
-   - same decision is idempotent or returns current resolved state;
-   - no duplicate resume.
-
-### Model behavior
-
-Use deterministic fixture responses:
-- first Manager iteration delegates;
-- Schedule returns needs_user_action;
-- second Manager iteration answers limitation.
-Verify provider call counts and exact delegation/tool history.
-
-After resolution:
-- linked Run makes a new source read;
-- model sees successful evidence;
-- final answer does not claim data from the blocked first Run.
-
-### Flutter
-
-agent_session tests:
-- parse interaction;
-- reject malformed identity/state.
-
-agent_panel tests:
-- inline Allow/Not now card;
-- Manage connection card;
-- resolved/denied state rendering;
-- no global error badge for normal interaction.
-
-controller/runtime tests:
-- resolve -> linked resume;
-- deny -> no resume;
-- lost response recovery;
-- refresh after connection screen;
-- cancellation applies only to active linked Run.
-
-Golden:
-- update/add one focused agent-panel interaction golden after behavior tests pass.
-
-## 11. Residual audit
-
-Search expected permission handling:
-
-~~~text
-access_review_required
-consent_required
-capability_access_denied
-ReviewSource
-agentAccessReviewRequired
-recoveryAction == 'review_source'
-failureSafeActions
-AgentCalendarExpertController
-~~~
-
-For conversation source access, normal permission recovery should no longer depend on top-level AgentVaultFailureDto safe_actions.
-
-Search interaction lifecycle:
-
-~~~text
-UserInteractionRef
-AgentMessage::Interaction
-ConversationInteraction
-ResumeInteraction
-~~~
-
-Verify there is one canonical interaction record and one resume path, not artifact-only plus message-only duplicate authorities.
-
-## 12. Verification
-
-Rust:
-- targeted Conversation/Runtime/Experts/Access/Vault tests;
-- restart/replay/CAS tests;
-- cargo check --workspace --lib;
-- cargo test --workspace --no-fail-fast;
-- architecture boundary check;
-- git diff --check.
-
-FFI/protocol:
-- cargo build -p floe-ffi;
-- protocol tests;
-- C ABI/app wire tests.
-
-Flutter:
-- flutter analyze;
-- agent_session tests;
-- agent_panel tests/golden;
-- conversation_runtime_gateway tests;
-- full flutter test;
-- flutter build macos.
-
-Manual macOS acceptance on fresh dev profile:
-1. connect Calendar and turn Use with Floe Off;
-2. ask “What is on my calendar today?”;
-3. Manager responds that Calendar access is needed;
-4. inline card appears;
-5. Allow;
-6. linked follow-up runs automatically;
-7. Manager returns actual Calendar answer;
-8. turn Off again;
-9. repeat and choose Not now;
-10. no retry occurs;
-11. revoke EventKit permission, request again, use system-permission recovery, return and verify fresh read.
-
-## 13. Checkpoint exit criteria
-
-Checkpoint 05 is complete when:
-
-- agents only request sources/capabilities; they do not know Flutter/navigation;
-- a recoverable source blocker creates one durable Conversation interaction;
-- Manager receives the blocked observation and returns normal user-facing text;
-- origin Run completes instead of waiting;
-- Flutter renders a generic inline interaction card;
-- inline and connection/system recovery use owner-authorized operations;
-- resolution never bypasses fresh Access admission;
-- resolved interaction can start one linked follow-up Run with explicit resume identity;
-- duplicate/restart behavior is deterministic;
-- expected source permission no longer surfaces only as a global chat error;
-- targeted and broad Rust/FFI/Flutter/macOS gates pass.
-
-Checkpoint 06 is now pure convergence: delete old surfaces, update architecture/ADR/product docs, and prove residual absence.
+05-G is the final acceptance source. Record actual executed commands separately from agent-reported prior results. Do not certify macOS, live credentials or device tests that were not run. Only after all acceptance rows pass may the README/index say 05 complete and 06 next.
