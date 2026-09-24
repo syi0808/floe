@@ -41,6 +41,7 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0021 — Connected-domain expansion](0021-s5-5-connected-domain-expansion.md)
 - [0022 — Generalizable Agent guidance](0022-generalizable-agent-guidance.md)
 - [0023 — Page-independent assistant conversation](0023-page-independent-assistant-conversation.md)
+- [0030 — Conversation-owned durable interactions and origin-linked resume](0030-durable-interaction-and-linked-resume.md)
 
 ### Device context, connections and authority
 

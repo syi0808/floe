@@ -23,7 +23,7 @@ Conversation
 
 Responsibilities do not collapse across this chain:
 
-- Conversation owns Run/transcript/continuation.
+- Conversation owns Run/transcript/continuation and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage).
 - Context owns source-backed projection, coverage, provenance and freshness.
 - Inference owns profile/route/attempt/usage and transport retry/fallback policy.
 - Access owns exact-recipient processing/dispatch/release authority.
@@ -87,6 +87,10 @@ Context owns remote and native Calendar View acquisition and dependency reauthor
 The Expert Registry is source-independent: built-in card availability is Expert package/installation/assignment state only, and no Registry record authorizes a source read. Context/Access decide source reads at invocation time. Calendar grants select DataAccessGrant by current connection/source identity plus exact consumer, with CalendarGrantPolicy carrying consumer-policy authority and the reviewed native subject. Expert result/proposal evidence is ContextDependency observation identity, validated against the recorded dependency rather than any Registry view.
 
 Schedule request planning is provider-independent. It selects only the bounded Calendar interval and domain intent; Context resolves native or remote acquisition, while captured dependencies and Access/Inference own processing and recipient admission for model execution.
+
+### Durable interactions
+
+Conversation durably records recoverable owner requirements as interactions: the journal-verified origin (Tool call, Delegation Task or Model attempt), the owner-produced requirement, and the immutable reviewed target (exact connection/device/source, resources, capability bundle, consumer/purpose, source revision, grant expectation including expected absence, policy authority). Publication identity derives deterministically from origin plus canonical digests, so crash replay settles the same row; decisions bind the reviewed digest through compare-and-swap with identical-command rejoin. Lifecycle is Pending to Resolving to Resolved, with Denied, Cancelled, Superseded and Expired as the other terminal states; the original Run completes with its limitation instead of waiting. Session messages, transcripts and model-safe artifacts carry only the opaque interaction reference. Authority stays with Access, Connections and the provider/native owners, which re-verify current state when a decision resolves; a linked resume is a fresh Run, not budget continuation. See [ADR 0030](../decisions/0030-durable-interaction-and-linked-resume.md).
 
 ## Consequential actions
 

@@ -17,7 +17,7 @@ This is the stable semantic ownership map for the Rust workspace. Package paths 
 | Module | `floe-context` — `crates/modules/context` | authorized projections, source acquisition, provenance, coverage and freshness |
 | Module | `floe-actions` — `crates/modules/actions` | proposals, review/approval, idempotent external actions and outcome reconciliation |
 | Module | `floe-experts` — `crates/modules/experts` | Expert directory, eligibility, assignment, Task ownership and endpoint dispatch |
-| Module | `floe-conversation` — `crates/modules/conversation` | Session, root Run, transcript, continuation/replay and finalization |
+| Module | `floe-conversation` — `crates/modules/conversation` | Session, root Run, transcript, continuation/replay, finalization and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage) |
 | Extension | `floe-experts-builtin` — `crates/experts/builtin` | built-in domain Expert endpoint implementations |
 | Platform | `floe-diagnostics` — `crates/platform/diagnostics` | privacy-safe tracing, correlation and diagnostic export |
 | Platform | `floe-native` — `crates/platform/native` | native host drivers and secure-key/platform access |
