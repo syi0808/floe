@@ -3494,8 +3494,6 @@ mod tests {
             client_id: "client-1".into(),
             person_id: person.to_string(),
             device_id: device.into(),
-            allow_external: false,
-            external_recipients: vec![],
         }
     }
 

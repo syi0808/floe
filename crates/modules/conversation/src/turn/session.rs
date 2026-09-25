@@ -4,9 +4,7 @@ use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AgentFailure, ModelPlacement, SessionProtection};
-
-use floe_inference::ModelStep;
+use floe_agent_contract::{AgentFailure, ModelPlacement, ModelStep, SessionProtection};
 
 use floe_agent_contract::{AGENT_VERSION, CapabilityExecution, ProviderReplay};
 

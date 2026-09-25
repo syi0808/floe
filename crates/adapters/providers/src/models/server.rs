@@ -1,26 +1,16 @@
 use std::{
     collections::BTreeMap,
     sync::OnceLock,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
-use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{
-    AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, ModelPlacement, SessionProtection,
-    valid_context_refs,
+    AgentFailure, MAX_CONTEXT_REFS, MAX_OUTPUT_BYTES, valid_context_refs,
 };
 use floe_execution::limits::{CallLimiter, CallLimits};
-use floe_inference::{ModelRouteConfig, PurposeAvailability, RemoteRoute};
-use floe_inference::{ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
-
-pub struct ServerModelRunner {
-    route: ModelRouteConfig,
-    placement: ModelPlacement,
-    model_calls: CallLimiter,
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,20 +23,10 @@ struct PurposeInventory {
 #[serde(deny_unknown_fields)]
 struct ObservedPurpose {
     available: bool,
-    requires_external_consent: bool,
+    #[serde(rename = "requires_external_consent")]
+    _requires_external_consent: bool,
     placement: Option<String>,
     recipient: Option<String>,
-}
-
-impl ObservedPurpose {
-    fn into_availability(self) -> PurposeAvailability {
-        PurposeAvailability {
-            available: self.available,
-            requires_external_consent: self.requires_external_consent,
-            placement: self.placement,
-            recipient: self.recipient,
-        }
-    }
 }
 
 fn model_calls() -> &'static CallLimiter {
@@ -66,8 +46,7 @@ fn provider_call_limit() -> CallLimiter {
 
 /// Canonical model profile observation: saved private connection
 /// → `/v1/inference-purposes` → non-secret profile. Never calls
-/// `/v1/connectors`; that path remains a Connections/source concern for the
-/// temporary legacy source/Expert route only.
+/// `/v1/connectors`; that path remains a Connections/source concern.
 async fn fetch_canonical_model_purposes(
     base_url: &str,
     bearer_token: &str,
@@ -96,7 +75,7 @@ fn canonical_server_profile_for(
         .purposes
         .into_iter()
         .find(|(name, _)| name == purpose)
-        .map(|(_, purpose)| purpose.into_availability())
+        .map(|(_, purpose)| purpose)
         .ok_or(AgentFailure::ServerModelInvalidOutput)?;
     let (execution_location, data_recipient) = match (
         availability.placement.as_deref(),
@@ -107,7 +86,7 @@ fn canonical_server_profile_for(
             floe_inference::DataRecipient::Device,
         ),
         (Some("external"), Some(recipient))
-            if floe_inference::valid_external_recipient(recipient) =>
+            if valid_external_recipient(recipient) =>
         {
             (
                 floe_inference::ExecutionLocation::Remote,
@@ -129,12 +108,18 @@ fn canonical_server_profile_for(
     })
 }
 
+fn valid_external_recipient(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 253
+        && !value.chars().any(char::is_control)
+}
+
 /// Canonical server provider. Base URL and bearer stay private inside the
 /// prepared transport; Inference only sees non-secret profile facts.
 pub struct ServerModelProvider {
     base_url: String,
     bearer_token: String,
-    allow_external: bool,
     purpose: floe_inference::ModelPurpose,
     consumer: floe_inference::ModelConsumer,
 }
@@ -156,13 +141,18 @@ impl ServerModelProvider {
         purpose: &str,
         consumer: &str,
     ) -> Result<Self, AgentFailure> {
-        if !base_url.starts_with("http://127.0.0.1:") || bearer_token.len() < 32 {
+        if !valid_loopback_endpoint(&base_url)
+            || bearer_token.len() < 32
+            || bearer_token.len() > 256
+            || !bearer_token
+                .bytes()
+                .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
+        {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(Self {
             base_url,
             bearer_token,
-            allow_external: false,
             purpose: floe_inference::ModelPurpose::new(purpose)
                 .ok_or(AgentFailure::InvalidInput)?,
             consumer: floe_inference::ModelConsumer::new(consumer)
@@ -191,23 +181,32 @@ impl ServerModelProvider {
         purpose: &str,
         consumer: &str,
     ) -> Result<Self, AgentFailure> {
-        let provider = Self::scoped(
+        Self::scoped(
             connection.base_url.clone(),
             connection.bearer_token.clone(),
             purpose,
             consumer,
-        )?;
-        Ok(Self {
-            allow_external: connection.allow_external,
-            ..provider
-        })
+        )
     }
+}
+
+fn valid_loopback_endpoint(value: &str) -> bool {
+    let Ok(address) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    address.scheme() == "http"
+        && address.host_str() == Some("127.0.0.1")
+        && address.port().is_some_and(|port| port > 0)
+        && address.username().is_empty()
+        && address.password().is_none()
+        && address.path() == "/"
+        && address.query().is_none()
+        && address.fragment().is_none()
 }
 
 pub struct PreparedServerTransport {
     base_url: String,
     bearer_token: String,
-    allow_external: bool,
     purpose: String,
     recipient: Option<String>,
     model_calls: CallLimiter,
@@ -217,18 +216,20 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
     async fn generate(
         &self,
         request: floe_inference::CanonicalModelRequest,
+        target: floe_inference::AdmittedDispatchTarget,
     ) -> Result<floe_inference::CanonicalModelResponse, AgentFailure> {
         request.validate()?;
+        if !target.matches("server-model", self.recipient.as_deref()) {
+            return Err(AgentFailure::PolicyDenied);
+        }
         if request.cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
         }
         if request.deadline <= tokio::time::Instant::now() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        // Canonical transport never consults legacy policy/context and never
-        // performs the old `InferencePolicyDecision::authorize`: dispatch
-        // authority already arrived through the Access permit/fence, and the
-        // envelope/catalog own everything the wire may carry.
+        // Dispatch authority arrives through the consumed Access target;
+        // the envelope/catalog own everything else the wire may carry.
         let instructions = request.envelope.stable_instructions.render();
         if instructions.len() > 4096 {
             return Err(AgentFailure::BudgetExceeded);
@@ -238,8 +239,8 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
             "schema_version": 1,
             "purpose": self.purpose,
             "data_classes": request.input_data_classes,
-            "allow_external": self.allow_external,
-            "expected_recipient": self.recipient,
+            "allow_external": target.recipient().is_some(),
+            "expected_recipient": target.recipient(),
             "instructions": instructions,
             "input": input,
         });
@@ -324,7 +325,7 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
         let mut steps = Vec::with_capacity(output.output.len());
         let mut calls = 0;
         for step in output.output {
-            if matches!(step, ModelStep::Call { .. }) {
+            if matches!(step, WireStep::Call { .. }) {
                 calls += 1;
             }
             steps.push(map_canonical_step(step, &request.catalog)?);
@@ -365,7 +366,7 @@ impl floe_inference::PreparedModelTransport for PreparedServerTransport {
 }
 
 /// Canonical `/v1/agent` input from the immutable envelope and the bounded
-/// catalog. Mirrors the legacy wire shape; the only authority inputs are the
+/// catalog. The only authority inputs are the
 /// envelope (already authorized) and the catalog (already bounded).
 fn canonical_model_input(
     request: &floe_inference::CanonicalModelRequest,
@@ -462,16 +463,16 @@ fn canonical_model_input(
 /// identity resolve against the bounded catalog; the definition revision is
 /// copied from the catalog entry the wire alias matched.
 fn map_canonical_step(
-    step: ModelStep,
+    step: WireStep,
     catalog: &floe_agent_contract::AllowedCatalog,
 ) -> Result<floe_agent_contract::ModelStep, AgentFailure> {
     match step {
-        ModelStep::Answer { text } => Ok(floe_agent_contract::ModelStep::Answer {
+        WireStep::Answer { text } => Ok(floe_agent_contract::ModelStep::Answer {
             text,
             artifacts: vec![],
         }),
-        ModelStep::Preamble { text } => Ok(floe_agent_contract::ModelStep::Preamble { text }),
-        ModelStep::Call {
+        WireStep::Preamble { text } => Ok(floe_agent_contract::ModelStep::Preamble { text }),
+        WireStep::Call {
             capability_id,
             input,
         } if capability_id == tool_name(DELEGATION_CAPABILITY_ID) => {
@@ -503,7 +504,7 @@ fn map_canonical_step(
                 context_refs: delegation.context_refs,
             })
         }
-        ModelStep::Call {
+        WireStep::Call {
             capability_id,
             input,
         } => {
@@ -522,7 +523,7 @@ fn map_canonical_step(
                 input,
             })
         }
-        ModelStep::Delegate {
+        WireStep::Delegate {
             agent_id,
             message,
             context_refs,
@@ -578,7 +579,6 @@ impl floe_inference::ModelProvider for ServerModelProvider {
             transport: PreparedServerTransport {
                 base_url: self.base_url.clone(),
                 bearer_token: self.bearer_token.clone(),
-                allow_external: self.allow_external,
                 purpose: self.purpose.as_str().to_owned(),
                 recipient,
                 model_calls: model_calls().clone(),
@@ -621,27 +621,6 @@ async fn authenticated_json<Response: for<'de> Deserialize<'de>>(
     serde_json::from_slice(&body).map_err(|_| AgentFailure::ServerModelInvalidOutput)
 }
 
-impl ServerModelRunner {
-    pub fn new_model_only(route: RemoteRoute) -> Result<Self, AgentFailure> {
-        let model_route = ModelRouteConfig::from_route(&route)?;
-        let placement = if route.external {
-            ModelPlacement::Remote
-        } else {
-            ModelPlacement::DeviceLocal
-        };
-        Ok(Self {
-            route: model_route,
-            placement,
-            model_calls: model_calls().clone(),
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn model_call_limiter(&self) -> &CallLimiter {
-        &self.model_calls
-    }
-}
-
 #[derive(Deserialize)]
 struct GenerateResponse {
     schema_version: u32,
@@ -659,9 +638,23 @@ struct RoutingResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WireStep {
+    Preamble { text: String },
+    Answer { text: String },
+    Call { capability_id: String, input: String },
+    Delegate {
+        agent_id: String,
+        message: String,
+        #[serde(default)]
+        context_refs: Vec<String>,
+    },
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentOutput {
-    output: Vec<ModelStep>,
+    output: Vec<WireStep>,
     used_tokens: u64,
     #[serde(default)]
     replay: Option<serde_json::Value>,
@@ -712,199 +705,6 @@ fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailur
     Ok(())
 }
 
-fn model_input(request: &ModelTransportRequest) -> Result<serde_json::Value, AgentFailure> {
-    let mut aliases: std::collections::HashSet<_> = request
-        .capabilities
-        .iter()
-        .map(|capability| tool_name(&capability.id))
-        .collect();
-    if aliases.len() != request.capabilities.len() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    if !request.active_agents.is_empty() && !aliases.insert(tool_name(DELEGATION_CAPABILITY_ID)) {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let envelope = request.envelope.clone();
-    let mut messages = vec![json!({"role": "user", "content": json!({
-        "scoped_instructions": envelope.scoped_instructions,
-        "contextual_data": envelope.contextual_data,
-        "runtime": envelope.runtime,
-        "manifest": envelope.manifest,
-    }).to_string()})];
-    for mut message in super::wire::wire_messages(&envelope.conversation.history)
-        .into_iter()
-        .chain(super::wire::wire_messages(
-            &envelope.conversation.current_turn,
-        ))
-    {
-        rewrite_tool_calls(&mut message)?;
-        if message["role"] == "tool" {
-            let content = if message["status"] == "error" {
-                if message.get("content").is_some() {
-                    json!({"status":"error", "failure": message["failure"], "content": message["content"]})
-                } else {
-                    json!({"status":"error", "failure": message["failure"]})
-                }
-            } else {
-                json!({"status":"success", "content": message["content"]})
-            };
-            message = json!({"role":"tool", "tool_call_id":message["tool_call_id"],"content":content.to_string()});
-        }
-        messages.push(message);
-    }
-    let mut tools: Vec<_> = request.capabilities.iter().map(|capability| json!({
-        "type": "function",
-        "function": {
-            "name": tool_name(&capability.id),
-            "description": capability.id,
-            "parameters": capability.input_schema.clone().unwrap_or_else(|| json!({"type":"object","properties":{}})),
-            "strict": false
-        }
-    })).collect();
-    if !request.active_agents.is_empty() {
-        tools.push(json!({
-            "type": "function",
-            "function": {
-                "name": tool_name(DELEGATION_CAPABILITY_ID),
-                "description": "Delegate a natural-language assignment to one active Expert agent.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "agent_id": {
-                            "type": "string",
-                            "enum": request.active_agents.iter().map(|card| card.id.clone()).collect::<Vec<_>>()
-                        },
-                        "message": {"type": "string", "minLength": 1, "maxLength": 4096},
-                        "context_refs": {
-                            "type": "array",
-                            "items": {"type": "string", "maxLength": MAX_OUTPUT_BYTES},
-                            "maxItems": MAX_CONTEXT_REFS
-                        }
-                    },
-                    "required": ["agent_id", "message"],
-                    "additionalProperties": false
-                },
-                "strict": false
-            }
-        }));
-    }
-    Ok(json!({"messages": messages, "tools": tools}))
-}
-
-trait ReplayRoute {
-    fn base_url(&self) -> &str;
-    fn purpose(&self) -> &str;
-    fn external(&self) -> bool;
-}
-
-impl ReplayRoute for ModelRouteConfig {
-    fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    fn purpose(&self) -> &str {
-        &self.purpose
-    }
-
-    fn external(&self) -> bool {
-        self.external
-    }
-}
-
-impl ReplayRoute for RemoteRoute {
-    fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    fn purpose(&self) -> &str {
-        &self.purpose
-    }
-
-    fn external(&self) -> bool {
-        self.external
-    }
-}
-
-fn restore_replay<Route: ReplayRoute>(
-    replay: &[floe_agent_contract::ModelReplay],
-    route: &Route,
-    input: &mut serde_json::Value,
-) -> Result<(), AgentFailure> {
-    let mut seen = std::collections::HashSet::new();
-    let mut source = None;
-    let mut offset = 0;
-    while offset < replay.len() {
-        let first = &replay[offset].replay;
-        if first.gateway != route.base_url()
-            || first.purpose != route.purpose()
-            || first.external != route.external()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        if source.as_ref().is_some_and(|value| value != &first.source) {
-            return Err(AgentFailure::InvalidInput);
-        }
-        source = Some(first.source.clone());
-        let count = first.call_ids.len();
-        if count == 0 || count > 8 || offset + count > replay.len() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let messages = input["messages"]
-            .as_array_mut()
-            .ok_or(AgentFailure::InvalidInput)?;
-        let mut start = None;
-        let mut calls = vec![];
-        let mut results = vec![];
-        for (index, saved) in replay[offset..offset + count].iter().enumerate() {
-            let mut canonical = saved.replay.clone();
-            canonical.provider_call_id = first.provider_call_id.clone();
-            if canonical != *first
-                || saved.replay.provider_call_id != first.call_ids[index]
-                || !seen.insert(saved.call_id)
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let local_id = saved.call_id.to_string();
-            let position = messages
-                .iter()
-                .position(|message| message["tool_calls"][0]["id"] == local_id)
-                .ok_or(AgentFailure::InvalidInput)?;
-            let beginning = *start.get_or_insert(position);
-            if position != beginning + index * 2
-                || position + 1 >= messages.len()
-                || messages[position]["tool_calls"].as_array().map(Vec::len) != Some(1)
-                || messages[position + 1]["role"] != "tool"
-                || messages[position + 1]["tool_call_id"] != local_id
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let mut call = messages[position]["tool_calls"][0].clone();
-            call["id"] = json!(saved.replay.provider_call_id);
-            let mut result = messages[position + 1].clone();
-            result["tool_call_id"] = json!(saved.replay.provider_call_id);
-            calls.push(call);
-            results.push(result);
-        }
-        let mut assistant = json!({"role":"assistant", "tool_calls":calls});
-        if !first.preamble.is_empty() {
-            assistant["content"] = json!(first.preamble);
-        }
-        if !first.items.is_null() {
-            assistant["provider_items"] = first.items.clone();
-        }
-        let beginning = start.ok_or(AgentFailure::InvalidInput)?;
-        messages.splice(
-            beginning..beginning + count * 2,
-            std::iter::once(assistant).chain(results),
-        );
-        offset += count;
-    }
-    if let Some(source) = source {
-        input["replay_source"] = json!(source);
-    }
-    Ok(())
-}
-
 fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
     let result: AgentOutput =
         serde_json::from_str(output).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
@@ -913,15 +713,15 @@ fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
     }
     for step in &result.output {
         match step {
-            ModelStep::Answer { text } | ModelStep::Preamble { text }
+            WireStep::Answer { text } | WireStep::Preamble { text }
                 if !text.trim().is_empty() => {}
-            ModelStep::Call {
+            WireStep::Call {
                 capability_id,
                 input,
             } if !capability_id.is_empty()
                 && serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(input)
                     .is_ok() => {}
-            ModelStep::Delegate {
+            WireStep::Delegate {
                 agent_id,
                 message,
                 context_refs,
@@ -934,300 +734,75 @@ fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
     Ok(result)
 }
 
-impl ModelTransport for ServerModelRunner {
-    fn placement(&self) -> ModelPlacement {
-        self.placement
-    }
-
-    async fn generate(
-        &self,
-        request: ModelTransportRequest,
-    ) -> Result<ModelTransportResponse, AgentFailure> {
-        request.prompt.validate()?;
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|_| AgentFailure::StaleContext)?;
-        request.policy.authorize(
-            self.placement,
-            SessionProtection::Encrypted,
-            &request.context,
-            u64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
-        )?;
-        if request.cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let timeout = request
-            .deadline
-            .saturating_duration_since(tokio::time::Instant::now());
-        if timeout.is_zero() {
-            return Err(AgentFailure::DeadlineExceeded);
-        }
-        let mut input = model_input(&request)?;
-        self.route.admit()?;
-        restore_replay(&request.replay, &self.route, &mut input)?;
-        let body = json!({
-            "schema_version": 1,
-            "purpose": self.route.purpose,
-            "data_classes": request.policy.data_classes,
-            "allow_external": self.route.allow_external,
-            "expected_recipient": self.route.recipient,
-            "instructions": request.prompt.render(),
-            "input": input
-        });
-        if body["input"].to_string().len() > 32768 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let body = serde_json::to_vec(&body).map_err(|_| AgentFailure::InvalidInput)?;
-        let _permit = self
-            .model_calls
-            .acquire(body.len(), request.deadline, &request.cancellation)
-            .await?;
-        self.route.admit()?;
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|_| AgentFailure::StaleContext)?;
-        request.policy.authorize(
-            self.placement,
-            SessionProtection::Encrypted,
-            &request.context,
-            u64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
-        )?;
-        let timeout = request
-            .deadline
-            .saturating_duration_since(tokio::time::Instant::now());
-        if timeout.is_zero() {
-            return Err(AgentFailure::DeadlineExceeded);
-        }
-        let client = Client::builder()
-            .timeout(timeout.min(Duration::from_secs(30)))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-        let send = client
-            .post(format!(
-                "{}/v1/agent",
-                self.route.base_url.trim_end_matches('/')
-            ))
-            .bearer_auth(&self.route.bearer_token)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body)
-            .send();
-        let response = tokio::select! {
-            _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::ServerModelUnavailable })?,
-        };
-        match response.status() {
-            StatusCode::CONFLICT => return Err(AgentFailure::PolicyDenied),
-            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
-            StatusCode::FORBIDDEN => return Err(AgentFailure::ConsentRequired),
-            StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
-            status if !status.is_success() => {
-                let error: serde_json::Value = response
-                    .json()
-                    .await
-                    .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-                return Err(gateway_failure(&error));
-            }
-            _ => {}
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-        if bytes.len() > 65_536 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let response: GenerateResponse =
-            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::ServerModelUnavailable)?;
-        if response.schema_version != 1
-            || response.purpose != self.route.purpose
-            || response.trace_id.len() != 32
-            || response.routing.external_transfer != self.route.external
-            || response.routing.placement
-                != if self.route.external {
-                    "remote"
-                } else {
-                    "server_local"
-                }
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let mut output = decode_output(&response.output)?;
-        let mut call_count = 0;
-        let mut preambles = vec![];
-        for step in &mut output.output {
-            match step.clone() {
-                ModelStep::Call {
-                    capability_id,
-                    input,
-                } if capability_id == tool_name(DELEGATION_CAPABILITY_ID) => {
-                    #[derive(Deserialize)]
-                    #[serde(deny_unknown_fields)]
-                    struct DelegationInput {
-                        agent_id: String,
-                        message: String,
-                        #[serde(default)]
-                        context_refs: Vec<String>,
-                    }
-                    let delegation: DelegationInput = serde_json::from_str(&input)
-                        .map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
-                    if !valid_context_refs(&delegation.context_refs) {
-                        return Err(AgentFailure::ServerModelInvalidOutput);
-                    }
-                    if !request
-                        .active_agents
-                        .iter()
-                        .any(|card| card.id == delegation.agent_id)
-                        || delegation.message.trim().is_empty()
-                    {
-                        return Err(AgentFailure::CapabilityDenied);
-                    }
-                    *step = ModelStep::Delegate {
-                        agent_id: delegation.agent_id,
-                        message: delegation.message,
-                        context_refs: delegation.context_refs,
-                    };
-                    call_count += 1;
-                }
-                ModelStep::Call { capability_id, .. } => {
-                    let descriptor = request
-                        .capabilities
-                        .iter()
-                        .find(|capability| tool_name(&capability.id) == capability_id)
-                        .ok_or(AgentFailure::CapabilityDenied)?;
-                    *step = match step.clone() {
-                        ModelStep::Call { input, .. } => ModelStep::Call {
-                            capability_id: descriptor.id.clone(),
-                            input,
-                        },
-                        _ => unreachable!(),
-                    };
-                    call_count += 1;
-                }
-                ModelStep::Preamble { text } => preambles.push(text.clone()),
-                _ => {}
-            }
-        }
-        if serde_json::to_vec(&output.output)
-            .map_err(|_| AgentFailure::ServerModelInvalidOutput)?
-            .len()
-            > request.max_output_bytes.min(16384)
-        {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let replay = if call_count > 0 {
-            let unique: std::collections::HashSet<_> = output.call_ids.iter().collect();
-            if output.call_ids.len() != call_count
-                || unique.len() != call_count
-                || output
-                    .call_ids
-                    .iter()
-                    .any(|id| id.is_empty() || id.len() > 128)
-                || response.routing.replay_source.len() != 64
-                || !response
-                    .routing
-                    .replay_source
-                    .bytes()
-                    .all(|value| value.is_ascii_hexdigit())
-            {
-                return Err(AgentFailure::ServerModelInvalidOutput);
-            }
-            Some(floe_agent_contract::ProviderReplay {
-                gateway: self.route.base_url.clone(),
-                purpose: self.route.purpose.clone(),
-                external: self.route.external,
-                source: response.routing.replay_source,
-                provider_call_id: output.call_ids[0].clone(),
-                call_ids: output.call_ids,
-                preamble: preambles.join("\n"),
-                items: output.replay.unwrap_or(serde_json::Value::Null),
-            })
-        } else {
-            if !output.call_ids.is_empty() || output.replay.is_some() {
-                return Err(AgentFailure::ServerModelInvalidOutput);
-            }
-            None
-        };
-        Ok(ModelTransportResponse {
-            replay,
-            schema_version: AGENT_VERSION,
-            output: output.output,
-            used_tokens: output.used_tokens.max(1),
-            cost_micros: 0,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    #[test]
-    fn replay_groups_all_calls_and_results_and_rejects_partial_batches() {
-        let route = route();
-        let local_ids = [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()];
-        let base = floe_agent_contract::ProviderReplay {
-            gateway: route.base_url.clone(),
-            purpose: route.purpose.clone(),
-            external: route.external,
-            source: "a".repeat(64),
-            call_ids: vec!["provider_a".into(), "provider_b".into()],
-            provider_call_id: "provider_a".into(),
-            preamble: "Checking both.".into(),
-            items: json!([
-                {"type":"reasoning","encrypted_content":"private"},
-                {"type":"function_call","call_id":"provider_a","name":"read","arguments":"{}"},
-                {"type":"function_call","call_id":"provider_b","name":"read","arguments":"{}"}
-            ]),
-        };
-        let replay: Vec<_> = local_ids
-            .iter()
-            .enumerate()
-            .map(|(index, call_id)| {
-                let mut record = base.clone();
-                record.provider_call_id = base.call_ids[index].clone();
-                floe_agent_contract::ModelReplay {
-                    call_id: *call_id,
-                    replay: record,
-                }
-            })
-            .collect();
-        let messages: Vec<_> = local_ids.iter().flat_map(|call_id| [
-            json!({"role":"assistant","tool_calls":[{"id":call_id,"function":{"name":"read","arguments":"{}"}}]}),
-            json!({"role":"tool","tool_call_id":call_id,"content":"observed"}),
-        ]).collect();
-        let original = json!({"messages":messages});
-        let mut restored = original.clone();
-        restore_replay(&replay, &route, &mut restored).unwrap();
-        assert_eq!(restored["messages"].as_array().unwrap().len(), 3);
-        assert_eq!(
-            restored["messages"][0]["tool_calls"]
-                .as_array()
+    struct AllowDependency;
+
+    impl floe_access::DependencyResolver for AllowDependency {
+        fn authorize<'a>(
+            &'a self,
+            _dependency: &'a floe_context_contract::ContextDependency,
+            _request: &'a floe_access::DependencyAuthorization,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct AllowRecipient;
+
+    impl floe_access::ModelDispatchRecipientAuthority for AllowRecipient {
+        fn check_recipient<'a>(
+            &'a self,
+            _request: &'a floe_access::ModelDispatchRequest,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<floe_access::RecipientCheckOutcome, AgentFailure>> + Send + 'a>> {
+            Box::pin(async { Ok(floe_access::RecipientCheckOutcome::Granted) })
+        }
+    }
+
+    async fn admitted_target(
+        profile_id: &str,
+        recipient: Option<&str>,
+    ) -> floe_inference::AdmittedDispatchTarget {
+        let resolver = AllowDependency;
+        let authority = AllowRecipient;
+        let request = floe_access::ModelDispatchRequest {
+            person_id: floe_kernel::PersonId::new(),
+            projection_ref: uuid::Uuid::new_v4(),
+            projection_revision: 1,
+            coverage: floe_agent_contract::DependencyCoverage::Independent,
+            input_data_classes: vec![floe_agent_contract::DataClass::Synthetic],
+            purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
+            consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+            profile_id: profile_id.into(),
+            target: match recipient {
+                Some(recipient) => floe_access::ModelDispatchTarget::External {
+                    recipient: recipient.into(),
+                },
+                None => floe_access::ModelDispatchTarget::Device,
+            },
+            lineage: recipient.map(|_| {
+                floe_context_contract::RecipientLineage::try_new(
+                    uuid::Uuid::new_v4(),
+                    uuid::Uuid::new_v4(),
+                )
                 .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(restored["messages"][0]["content"], "Checking both.");
-        assert_eq!(restored["messages"][0]["provider_items"], base.items);
-        assert_eq!(restored["messages"][1]["tool_call_id"], "provider_a");
-        assert_eq!(restored["messages"][2]["tool_call_id"], "provider_b");
-        assert_eq!(
-            restore_replay(&replay[..1], &route, &mut original.clone()),
-            Err(AgentFailure::InvalidInput)
-        );
-        let mut altered = replay.clone();
-        altered[1].replay.items = json!([]);
-        assert_eq!(
-            restore_replay(&altered, &route, &mut original.clone()),
-            Err(AgentFailure::InvalidInput)
-        );
+            }),
+            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            cancellation: floe_execution::Cancellation::new(),
+        };
+        let permit = floe_access::admit_model_dispatch(request, &resolver, &authority)
+            .await
+            .unwrap();
+        let fence = floe_access::consume_model_dispatch(permit).await.unwrap();
+        floe_inference::AdmittedDispatchTarget::from_consumed(&fence)
     }
 
     use super::*;
 
     /// One attempt's immutable input, as the Session owner would have shaped it.
-    fn transport_request() -> ModelTransportRequest {
+    fn canonical_request() -> floe_inference::CanonicalModelRequest {
         use floe_agent_contract::prompts::{
             BEHAVIOR_KERNEL, BEHAVIOR_KERNEL_REVISION, CAPABILITY_PROTOCOL,
             CAPABILITY_PROTOCOL_REVISION, PromptAssembly, PromptComponentKind, PromptRole,
@@ -1258,33 +833,13 @@ mod tests {
             ],
         };
         prompt.validate().unwrap();
-        let policy = floe_agent_contract::InferencePolicyDecision {
-            purpose: "everyday_assistance".into(),
-            data_classes: vec![floe_agent_contract::DataClass::Synthetic],
-            allowed_placements: vec![ModelPlacement::Remote],
-            performance_class: "fast".into(),
-            projection_version: 1,
-            external_transfer_consent: floe_agent_contract::TransferConsent::Granted,
-            bounded_sensitive_projection: false,
-        };
-        let context = floe_agent_contract::AgentContext {
-            projection_version: 1,
-            persona: None,
-            optional_context_issues: vec![],
-            memories: vec![],
-            evidence: vec![],
-        };
-        ModelTransportRequest {
-            schema_version: 1,
+        floe_inference::CanonicalModelRequest {
             attempt_id: uuid::Uuid::new_v4(),
-            prompt: prompt.clone(),
-            policy: policy.clone(),
-            context: context.clone(),
             envelope: floe_agent_contract::ContextEnvelope {
                 schema_version: 1,
                 stable_instructions: prompt.clone(),
                 scoped_instructions: floe_agent_contract::ScopedInstructions {
-                    purpose: policy.purpose.clone(),
+                    purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
                     response_contract: String::new(),
                     available_capabilities: vec![],
                     active_experts: vec![],
@@ -1303,44 +858,27 @@ mod tests {
                         text: "Hello".into(),
                     }],
                 },
-                runtime: floe_agent_contract::RuntimeContext {
-                    max_output_bytes: 1024,
-                },
+                runtime: floe_agent_contract::RuntimeContext { max_output_bytes: 1024 },
                 manifest: floe_agent_contract::ContextManifest {
-                    prompt_components: prompt
-                        .components
-                        .iter()
-                        .map(|component| floe_agent_contract::PromptManifestEntry {
+                    prompt_components: prompt.components.iter().map(|component| {
+                        floe_agent_contract::PromptManifestEntry {
                             kind: component.kind,
                             source: component.source.clone(),
                             revision: component.revision,
-                        })
-                        .collect(),
+                        }
+                    }).collect(),
                     evidence: vec![],
                     memories: vec![],
                     agent_cards: vec![],
                 },
             },
-            capabilities: vec![],
-            active_agents: vec![],
-            replay: vec![],
+            catalog: floe_agent_contract::AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
+            input_data_classes: vec![floe_agent_contract::DataClass::Synthetic],
             remaining_tokens: 512,
             remaining_cost_micros: 0,
             max_output_bytes: 1024,
             deadline: tokio::time::Instant::now() + Duration::from_secs(5),
             cancellation: floe_execution::Cancellation::new(),
-        }
-    }
-
-    fn route() -> RemoteRoute {
-        RemoteRoute {
-            base_url: "http://127.0.0.1:8431".into(),
-            bearer_token: "secret_token_value_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: true,
-            allow_external: false,
-            recipient: Some("fixture.example".into()),
-            pairing: None,
         }
     }
 
@@ -1385,195 +923,6 @@ mod tests {
             }
         });
         (address, server)
-    }
-
-    #[tokio::test]
-    async fn model_only_route_ignores_source_bindings() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let mut route = route();
-        route.base_url = format!("http://{}", listener.local_addr().unwrap());
-        // A source catalog is not part of the model route, so a model-only
-        // runner never sees one.
-        let runner = ServerModelRunner::new_model_only(route).unwrap();
-        assert_eq!(runner.placement(), ModelPlacement::Remote);
-        assert!(!runner.route.allow_external);
-        assert!(
-            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
-        );
-    }
-
-    #[tokio::test]
-    async fn model_only_dispatch_uses_model_endpoint_without_source_bindings() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut config = route();
-        config.base_url = format!("http://{}", listener.local_addr().unwrap());
-        config.allow_external = true;
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = Vec::new();
-            let (header_end, content_length) = loop {
-                let mut chunk = [0_u8; 4096];
-                let count = socket.read(&mut chunk).await.unwrap();
-                assert_ne!(count, 0);
-                bytes.extend_from_slice(&chunk[..count]);
-                assert!(bytes.len() <= 65_536);
-                let text = String::from_utf8_lossy(&bytes);
-                if let Some(header_end) = text.find("\r\n\r\n") {
-                    let content_length = text[..header_end]
-                        .lines()
-                        .find_map(|line| {
-                            line.to_ascii_lowercase()
-                                .strip_prefix("content-length: ")
-                                .and_then(|value| value.parse::<usize>().ok())
-                        })
-                        .unwrap();
-                    if bytes.len() >= header_end + 4 + content_length {
-                        break (header_end, content_length);
-                    }
-                }
-            };
-            let headers = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
-            assert!(headers.starts_with("post /v1/agent http/1.1\r\n"));
-            assert!(
-                headers.contains("authorization: bearer secret_token_value_that_is_long_enough")
-            );
-            let body: serde_json::Value =
-                serde_json::from_slice(&bytes[header_end + 4..header_end + 4 + content_length])
-                    .unwrap();
-            assert_eq!(body["purpose"], "everyday_assistance");
-            assert_eq!(body["allow_external"], true);
-            assert_eq!(body["expected_recipient"], "fixture.example");
-            assert!(!body.to_string().contains("unavailable.source"));
-            let response = json!({
-                "schema_version": 1,
-                "purpose": "everyday_assistance",
-                "trace_id": "a".repeat(32),
-                "routing": {"placement": "remote", "external_transfer": true, "replay_source": ""},
-                "output": json!({"output": [{"kind": "answer", "text": "Fixture answer"}], "used_tokens": 3}).to_string()
-            }).to_string();
-            socket.write_all(format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response.len(), response
-            ).as_bytes()).await.unwrap();
-        });
-        let request = transport_request();
-        let mut denied = config.clone();
-        denied.allow_external = false;
-        assert!(matches!(
-            ServerModelRunner::new_model_only(denied)
-                .unwrap()
-                .generate(request.clone())
-                .await,
-            Err(AgentFailure::ConsentRequired)
-        ));
-        let mut missing_recipient = config.clone();
-        missing_recipient.recipient = None;
-        assert!(matches!(
-            ServerModelRunner::new_model_only(missing_recipient)
-                .unwrap()
-                .generate(request.clone())
-                .await,
-            Err(AgentFailure::InvalidInput)
-        ));
-        let response = ServerModelRunner::new_model_only(config)
-            .unwrap()
-            .generate(request)
-            .await
-            .unwrap();
-        assert_eq!(
-            response.output,
-            vec![ModelStep::Answer {
-                text: "Fixture answer".into()
-            }]
-        );
-        assert_eq!(response.used_tokens, 3);
-        server.await.unwrap();
-    }
-
-    #[test]
-    fn replay_restores_original_ids_without_runner_memory_and_rejects_foreign_routes() {
-        let route = route();
-        let call_id = uuid::Uuid::new_v4();
-        let replay = floe_agent_contract::ModelReplay {
-            call_id,
-            replay: floe_agent_contract::ProviderReplay {
-                gateway: route.base_url.clone(),
-                purpose: route.purpose.clone(),
-                external: route.external,
-                source: "a".repeat(64),
-                call_ids: vec!["original".into()],
-                preamble: String::new(),
-                provider_call_id: "original".into(),
-                items: json!([{"type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"original","name":"read","arguments":"{}"}]),
-            },
-        };
-        let original = json!({"messages":[
-            {"role":"assistant","tool_calls":[{"id":call_id.to_string(),"function":{"name":"read","arguments":"{}"}}]},
-            {"role":"tool","tool_call_id":call_id.to_string(),"content":"observed"}
-        ]});
-        let encoded = serde_json::to_string(&replay.replay).unwrap();
-        let reloaded = floe_agent_contract::ModelReplay {
-            call_id,
-            replay: serde_json::from_str(&encoded).unwrap(),
-        };
-        let mut restored = original.clone();
-        restore_replay(&[reloaded], &route, &mut restored).unwrap();
-        assert_eq!(restored["messages"][0]["tool_calls"][0]["id"], "original");
-        assert_eq!(restored["messages"][1]["tool_call_id"], "original");
-        assert_eq!(
-            restored["messages"][0]["provider_items"][0]["encrypted_content"],
-            "opaque"
-        );
-        assert_eq!(restored["replay_source"], "a".repeat(64));
-        let mut foreign = route.clone();
-        foreign.base_url = "http://127.0.0.1:9431".into();
-        assert_eq!(
-            restore_replay(
-                std::slice::from_ref(&replay),
-                &foreign,
-                &mut original.clone()
-            ),
-            Err(AgentFailure::PolicyDenied)
-        );
-        let mut orphan = replay;
-        orphan.call_id = uuid::Uuid::new_v4();
-        assert_eq!(
-            restore_replay(&[orphan], &route, &mut original.clone()),
-            Err(AgentFailure::InvalidInput)
-        );
-    }
-
-    #[test]
-    fn route_accepts_only_loopback_and_redacts_credentials() {
-        let valid = route();
-        assert!(ServerModelRunner::new_model_only(valid.clone()).is_ok());
-        let rendered = format!("{valid:?}");
-        assert!(!rendered.contains(&valid.bearer_token));
-        assert!(rendered.contains("[REDACTED]"));
-
-        for invalid in [
-            "https://127.0.0.1:8431",
-            "http://localhost:8431",
-            "http://127.0.0.1:8431/path",
-            "http://192.168.1.2:8431",
-            "http://127.0.0.1",
-            "http://127.0.0.1:8431?query=true",
-            "http://127.0.0.1:8431#fragment",
-        ] {
-            let mut candidate = route();
-            candidate.base_url = invalid.into();
-            assert!(ServerModelRunner::new_model_only(candidate.clone()).is_err());
-        }
-
-        for token in ["short".to_owned(), "x".repeat(257), " ".repeat(32)] {
-            let mut candidate = route();
-            candidate.bearer_token = token;
-            assert!(ServerModelRunner::new_model_only(candidate).is_err());
-        }
-        let mut wrong_purpose = route();
-        wrong_purpose.purpose = "other".into();
-        assert!(ServerModelRunner::new_model_only(wrong_purpose).is_err());
     }
 
     #[test]
@@ -1627,7 +976,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             output.output.as_slice(),
-            [ModelStep::Delegate { context_refs, .. }]
+            [WireStep::Delegate { context_refs, .. }]
                 if context_refs == &["turn:1".to_string(), "evidence:9".to_string()]
         ));
     }
@@ -1640,7 +989,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             output.output.as_slice(),
-            [ModelStep::Delegate { context_refs, .. }] if context_refs.is_empty()
+            [WireStep::Delegate { context_refs, .. }] if context_refs.is_empty()
         ));
     }
 
@@ -1660,8 +1009,8 @@ mod tests {
     #[test]
     fn delegate_tool_schema_carries_optional_context_refs() {
         use floe_agent_contract::AgentCard;
-        let mut request = transport_request();
-        request.active_agents = vec![AgentCard {
+        let mut request = canonical_request();
+        request.catalog.cards = vec![floe_agent_contract::AgentDefinition { card: AgentCard {
             schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
             protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
             id: "expert-a".into(),
@@ -1671,8 +1020,8 @@ mod tests {
             supported_placements: vec![floe_agent_contract::ModelPlacement::Remote],
             domain_tags: vec![],
             skills: vec![],
-        }];
-        let input = model_input(&request).unwrap();
+        }, definition_revision: 1 }];
+        let input = canonical_model_input(&request).unwrap();
         let delegate = input["tools"]
             .as_array()
             .unwrap()
@@ -1860,6 +1209,8 @@ mod tests {
             let body: serde_json::Value = serde_json::from_str(&body[..length]).unwrap();
             assert_eq!(body["schema_version"], 1);
             assert_eq!(body["purpose"], "everyday_assistance");
+            assert_eq!(body["allow_external"], false);
+            assert!(body["expected_recipient"].is_null());
             assert!(!body["instructions"].as_str().unwrap().is_empty());
             assert!(body["input"]["messages"].as_array().unwrap().len() >= 2);
             let output = json!({
@@ -1895,25 +1246,12 @@ mod tests {
         let observed = floe_inference::ModelProvider::observe_profiles(&provider).await;
         assert_eq!(observed.len(), 1);
         assert_eq!(observed[0].profile.id, "server-model");
-        let legacy = transport_request();
-        let request = floe_inference::CanonicalModelRequest {
-            attempt_id: uuid::Uuid::new_v4(),
-            envelope: legacy.envelope,
-            catalog: floe_agent_contract::AllowedCatalog {
-                cards: vec![],
-                tools: vec![],
-                revision: 1,
-            },
-            input_data_classes: vec![floe_agent_contract::DataClass::Synthetic],
-            remaining_tokens: 512,
-            remaining_cost_micros: 0,
-            max_output_bytes: 1024,
-            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
-            cancellation: floe_execution::Cancellation::new(),
-        };
+        let mut request = canonical_request();
+        request.deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let response = floe_inference::PreparedModelTransport::generate(
             &observed[0].transport,
             request,
+            admitted_target("server-model", None).await,
         )
         .await
         .unwrap();
@@ -1925,6 +1263,108 @@ mod tests {
         assert_eq!(response.used_tokens, 7);
         assert_eq!(response.cost_micros, 0);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn consumed_external_target_sets_exact_server_transfer_fence() {
+        async fn read_request(socket: &mut tokio::net::TcpStream) -> (String, String) {
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 4096];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let length = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= header_end + 4 + length {
+                        return (
+                            text[..header_end].to_owned(),
+                            text[header_end + 4..header_end + 4 + length].to_owned(),
+                        );
+                    }
+                }
+            }
+        }
+
+        async fn reply(socket: &mut tokio::net::TcpStream, body: serde_json::Value) {
+            let body = body.to_string();
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            ).as_bytes()).await.unwrap();
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let (headers, _) = read_request(&mut socket).await;
+            assert!(headers.starts_with("GET /v1/inference-purposes HTTP/1.1"));
+            reply(&mut socket, json!({
+                "schema_version": 1,
+                "purposes": {"everyday_assistance": {
+                    "available": true,
+                    "requires_external_consent": true,
+                    "placement": "external",
+                    "recipient": "fixture.example"
+                }}
+            })).await;
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let (headers, body) = read_request(&mut socket).await;
+            assert!(headers.starts_with("POST /v1/agent HTTP/1.1"));
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["allow_external"], true);
+            assert_eq!(body["expected_recipient"], "fixture.example");
+            reply(&mut socket, json!({
+                "schema_version": 1,
+                "purpose": "everyday_assistance",
+                "trace_id": "a".repeat(32),
+                "routing": {"placement": "remote", "external_transfer": true, "replay_source": ""},
+                "output": json!({"output": [{"kind": "answer", "text": "hello"}], "used_tokens": 3}).to_string()
+            })).await;
+        });
+        let provider = ServerModelProvider::new(base_url, "c".repeat(32)).unwrap();
+        let mut observed = floe_inference::ModelProvider::observe_profiles(&provider).await;
+        assert_eq!(observed.len(), 1);
+        let response = floe_inference::PreparedModelTransport::generate(
+            &observed.remove(0).transport,
+            canonical_request(),
+            admitted_target("server-model", Some("fixture.example")).await,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.used_tokens, 3);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prepared_target_mismatch_fails_before_network_handoff() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let transport = PreparedServerTransport {
+            base_url: format!("http://{}", listener.local_addr().unwrap()),
+            bearer_token: "c".repeat(32),
+            purpose: "everyday_assistance".into(),
+            recipient: Some("fixture.example".into()),
+            model_calls: model_calls().clone(),
+        };
+        let failure = floe_inference::PreparedModelTransport::generate(
+            &transport,
+            canonical_request(),
+            admitted_target("server-model", Some("different.example")).await,
+        )
+        .await
+        .err();
+        assert_eq!(failure, Some(AgentFailure::PolicyDenied));
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
     }
 
     #[test]

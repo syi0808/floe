@@ -16,16 +16,12 @@ pub use api::{
 pub use application::{
     AttemptJournal, AttemptLifecycle, AttemptUpdate, CANONICAL_MODEL_CONSUMER,
     CANONICAL_MODEL_PURPOSE, EVERYDAY_ASSISTANCE_PURPOSE, InferenceAvailability, InferenceExecutor,
-    InferenceRouter, InferenceService, ModelAttemptRecord, ModelAttemptState, ModelRouteConfig,
-    PurposeAvailability, RemoteModelConnection, RemoteRoute, RoutePairing, RoutePlanError,
+    InferenceRouter, InferenceService, ModelAttemptRecord, ModelAttemptState,
+    RemoteModelConnection, RoutePlanError,
     SavedConnectionStore, SavedServerConnection, UsageLedger, admit_saved_connection,
-    valid_external_recipient,
 };
 pub use ports::model_provider::{
-    CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,
+    AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,
     PreparedModelTransport,
-};
-pub use ports::model_transport::{
-    ModelStep, ModelTransport, ModelTransportRequest, ModelTransportResponse,
 };
 pub use transfer::{RouteRecipient, external_transfer_consent};

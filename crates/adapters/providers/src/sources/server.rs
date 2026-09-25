@@ -639,7 +639,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::models::server::ServerModelRunner;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const PERSON: &str = "00000000-0000-4000-8000-000000000001";
@@ -663,20 +662,6 @@ mod tests {
             client_id: "paired-client".into(),
             person_id: PERSON.into(),
             device_id: DEVICE.into(),
-            allow_external: false,
-            external_recipients: vec![],
-        }
-    }
-
-    fn model_route() -> floe_inference::RemoteRoute {
-        floe_inference::RemoteRoute {
-            base_url: "http://127.0.0.1:8431".into(),
-            bearer_token: "secret_token_value_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: true,
-            allow_external: false,
-            recipient: Some("fixture.example".into()),
-            pairing: None,
         }
     }
 
@@ -719,14 +704,6 @@ mod tests {
             matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
         assert!(!parent.is_cancelled());
-        let model = ServerModelRunner::new_model_only(model_route()).unwrap();
-        assert!(
-            model
-                .model_call_limiter()
-                .acquire(0, deadline, &parent)
-                .await
-                .is_ok()
-        );
         drop(active);
         assert!(
             runner

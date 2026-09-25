@@ -848,7 +848,7 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     child.result = Some(Ok(markers[5].into()));
     session.capability_executions.push(child);
     session.active_turn = Some(turn);
-    session.pending_output = Some(vec![floe_inference::ModelStep::Preamble {
+    session.pending_output = Some(vec![floe_agent_contract::ModelStep::Preamble {
         text: markers[6].into(),
     }]);
     let attempt_id = Uuid::new_v4();

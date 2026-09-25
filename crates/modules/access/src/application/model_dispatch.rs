@@ -27,6 +27,12 @@ pub struct ModelDispatchFence<'resolver, 'authority, Resolver, Authority> {
     authority: &'authority Authority,
 }
 
+impl<Resolver, Authority> ModelDispatchFence<'_, '_, Resolver, Authority> {
+    pub fn target(&self) -> (&str, &ModelDispatchTarget) {
+        (&self.request.profile_id, &self.request.target)
+    }
+}
+
 pub async fn admit_model_dispatch<'resolver, 'authority, Resolver, Authority>(
     request: ModelDispatchRequest,
     resolver: &'resolver Resolver,

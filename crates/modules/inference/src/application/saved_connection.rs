@@ -1,11 +1,18 @@
 //! Admission of a stored local-server connection into an inference route.
 //!
 //! The stored credential is only usable by the exact verified principal that
-//! saved it, and external recipients must match recorded consent exactly.
+//! saved it. Recipient approval belongs to Access contextual consent.
 
 use floe_agent_contract::AgentFailure;
 
-use crate::RemoteModelConnection;
+#[derive(Clone, Eq, PartialEq)]
+pub struct RemoteModelConnection {
+    pub base_url: String,
+    pub bearer_token: String,
+    pub client_id: String,
+    pub person_id: String,
+    pub device_id: String,
+}
 
 /// A saved connection exactly as it was persisted, before admission.
 #[derive(Clone, Eq, PartialEq)]
@@ -15,8 +22,6 @@ pub struct SavedServerConnection {
     pub client_id: String,
     pub person_id: String,
     pub device_id: String,
-    pub allow_external: bool,
-    pub external_recipients: Vec<String>,
 }
 
 impl std::fmt::Debug for SavedServerConnection {
@@ -24,18 +29,16 @@ impl std::fmt::Debug for SavedServerConnection {
         formatter
             .debug_struct("SavedServerConnection")
             .field("base_url", &self.base_url)
-            // Credentials are named but never rendered, matching RemoteRoute.
+            // Credentials are named but never rendered.
             .field("token", &"[REDACTED]")
             .field("client_id", &self.client_id)
             .field("person_id", &self.person_id)
             .field("device_id", &self.device_id)
-            .field("allow_external", &self.allow_external)
-            .field("external_recipients", &self.external_recipients)
             .finish()
     }
 }
 
-/// Bind a saved connection to the verified caller and its recorded consent.
+/// Bind a saved connection to the verified caller.
 pub fn admit_saved_connection(
     value: SavedServerConnection,
     person_id: &str,
@@ -47,20 +50,6 @@ pub fn admit_saved_connection(
         || value.client_id.is_empty()
         || value.client_id.len() > 128
         || value.client_id.chars().any(char::is_control)
-        || value.external_recipients.len() > 16
-        || value.external_recipients.iter().any(|recipient| {
-            recipient.trim() != recipient
-                || recipient.is_empty()
-                || recipient.len() > 253
-                || recipient.chars().any(char::is_control)
-        })
-        || value
-            .external_recipients
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            != value.external_recipients.len()
-        || value.allow_external != !value.external_recipients.is_empty()
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -70,8 +59,6 @@ pub fn admit_saved_connection(
         client_id: value.client_id,
         person_id: value.person_id,
         device_id: value.device_id,
-        allow_external: value.allow_external,
-        external_recipients: value.external_recipients,
     })
 }
 
@@ -89,24 +76,16 @@ mod tests {
             client_id: "paired-client".into(),
             person_id: PERSON.into(),
             device_id: DEVICE.into(),
-            allow_external: false,
-            external_recipients: vec![],
         }
     }
 
     #[test]
-    fn saved_connection_is_bound_to_verified_host_identity_and_consent() {
+    fn saved_connection_is_bound_to_verified_host_identity() {
         assert!(admit_saved_connection(saved(), PERSON, DEVICE).is_ok());
         let mut wrong_identity = saved();
         wrong_identity.device_id = "other-device".into();
         assert_eq!(
             admit_saved_connection(wrong_identity, PERSON, DEVICE).err(),
-            Some(AgentFailure::PolicyDenied)
-        );
-        let mut inconsistent_consent = saved();
-        inconsistent_consent.allow_external = true;
-        assert_eq!(
-            admit_saved_connection(inconsistent_consent, PERSON, DEVICE).err(),
             Some(AgentFailure::PolicyDenied)
         );
     }

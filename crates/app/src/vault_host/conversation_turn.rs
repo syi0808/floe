@@ -1649,8 +1649,6 @@ mod tests {
             client_id: "test-client".into(),
             person_id: person_id.to_string(),
             device_id: device_id.into(),
-            allow_external: false,
-            external_recipients: vec![],
         }
     }
 
@@ -3607,6 +3605,7 @@ mod tests {
         async fn generate(
             &self,
             _request: floe_inference::CanonicalModelRequest,
+            _target: floe_inference::AdmittedDispatchTarget,
         ) -> Result<floe_inference::CanonicalModelResponse, AgentFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(floe_inference::CanonicalModelResponse {

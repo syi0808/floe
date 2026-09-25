@@ -115,25 +115,9 @@ void main() {
         'client_id',
         'person_id',
         'device_id',
-        'allow_external',
-        'external_recipients',
       ]);
-      expect(restored?.allowExternal, isFalse);
-      final consented = saved.withExternalConsent(
-        true,
-        recipients: ['Example AI'],
-      );
-      expect(consented.allowExternal, isTrue);
-      expect(consented.coversExternalRecipient('Example AI'), isTrue);
-      await client.save(consented);
-      final restoredConsent = await client.connection();
-      expect(restoredConsent!.externalRecipients, ['Example AI']);
-      expect(
-        restoredConsent.coversExternalRecipient('Different recipient'),
-        isFalse,
-      );
-      expect(consented.toJson(), isNot(contains('model')));
-      expect(consented.toJson(), isNot(contains('inference_class')));
+      expect(restored?.toJson(), isNot(contains('model')));
+      expect(restored?.toJson(), isNot(contains('inference_class')));
       await store.delete();
       expect(await client.connection(), isNull);
     },
@@ -145,13 +129,28 @@ void main() {
         'base_url': 'http://127.0.0.1:8431',
         'token': 'a' * 52,
         'client_id': 'fixture',
-        'allow_external': false,
-        'external_recipients': <String>[],
       });
     await expectLater(
       LocalServerClient(store: store).connection(),
       throwsA(isA<ServerConnectionException>()),
     );
+  });
+
+  test('obsolete saved recipients never become connection consent', () async {
+    final store = MemoryServerCredentials()
+      ..value = jsonEncode({
+        'base_url': 'http://127.0.0.1:8431',
+        'token': 'a' * 52,
+        'client_id': 'fixture',
+        'person_id': '00000000-0000-4000-8000-000000000001',
+        'device_id': 'local-client',
+        'allow_external': true,
+        'external_recipients': ['fixture.example'],
+      });
+    final connection = await LocalServerClient(store: store).connection();
+    expect(connection!.toJson(), isNot(contains('allow_external')));
+    expect(connection.toJson(), isNot(contains('external_recipients')));
+    expect(store.value, contains('fixture.example'));
   });
 
   test('connection identity must match the active Person and device', () {

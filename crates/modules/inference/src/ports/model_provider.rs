@@ -12,6 +12,32 @@ use uuid::Uuid;
 
 use crate::api::ModelProfile;
 
+#[derive(Clone, Debug)]
+pub struct AdmittedDispatchTarget {
+    profile_id: String,
+    target: floe_access::ModelDispatchTarget,
+}
+
+impl AdmittedDispatchTarget {
+    pub fn from_consumed<Resolver, Authority>(
+        fence: &floe_access::ModelDispatchFence<'_, '_, Resolver, Authority>,
+    ) -> Self {
+        let (profile_id, target) = fence.target();
+        Self {
+            profile_id: profile_id.to_owned(),
+            target: target.clone(),
+        }
+    }
+
+    pub fn matches(&self, profile_id: &str, recipient: Option<&str>) -> bool {
+        self.profile_id == profile_id && self.target.recipient() == recipient
+    }
+
+    pub fn recipient(&self) -> Option<&str> {
+        self.target.recipient()
+    }
+}
+
 /// What one approved model attempt needs. No Session, Task, ledger,
 /// bearer or endpoint travels here.
 #[derive(Clone, Debug)]
@@ -100,6 +126,7 @@ pub trait PreparedModelTransport: Sync {
     fn generate(
         &self,
         request: CanonicalModelRequest,
+        target: AdmittedDispatchTarget,
     ) -> impl std::future::Future<Output = Result<CanonicalModelResponse, AgentFailure>> + Send;
 }
 

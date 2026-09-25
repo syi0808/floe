@@ -250,7 +250,7 @@ void main() {
       find.byKey(const ValueKey('connections-privacy-navigation')),
       findsOneWidget,
     );
-    expect((await client.connection())!.allowExternal, false);
+    expect((await client.connection())!.toJson(), isNot(contains('allow_external')));
   });
 
   testWidgets('server connection inventory stays out of Data & privacy', (

@@ -1,11 +1,10 @@
 use std::time::Duration;
 
-use floe_agent_contract::{DataClass, ModelPlacement, TransferConsent};
-use floe_context::{AgentContext, InferencePolicyDecision};
+use floe_agent_contract::{DataClass, ModelCallOutcome, ModelPort};
+use floe_context::AgentContext;
 use floe_conversation::prompts::manager_prompt;
 use floe_execution::Cancellation;
-use floe_inference::{ModelTransport, ModelTransportRequest};
-use floe_provider_adapters::models::{FoundationModelRunner, LocalModelAvailability};
+use floe_provider_adapters::models::{FoundationModelProvider, LocalModelAvailability};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -29,8 +28,8 @@ async fn main() -> std::process::ExitCode {
         );
         return std::process::ExitCode::FAILURE;
     }
-    let transport = FoundationModelRunner::synthetic();
-    let availability_of = transport.availability();
+    let provider = FoundationModelProvider::synthetic();
+    let availability_of = provider.availability();
     let availability = match availability_of {
         Ok(availability) => availability,
         Err(failure) => {
@@ -96,52 +95,63 @@ async fn main() -> std::process::ExitCode {
     let projection =
         floe_context::assemble_context_projection(floe_context::ContextProjectionInput {
             role: floe_context::ContextProjectionRole::Manager,
-            purpose: "synthetic-local-model-smoke",
+            purpose: floe_inference::CANONICAL_MODEL_PURPOSE,
             response_contract: floe_conversation::MANAGER_OUTPUT_CONTRACT,
             correction: None,
             prompt: prompt.clone(),
             conversation,
             agent_context: &context,
-            catalog: &Default::default(),
+            catalog: &floe_agent_contract::AllowedCatalog {
+                cards: vec![],
+                tools: vec![],
+                revision: 1,
+            },
             active_experts: &[],
             authorized_history_dependencies: &[],
             input_data_classes: vec![DataClass::Synthetic],
             max_output_bytes: 16384,
         })
         .unwrap();
-    let request = ModelTransportRequest {
+    let ledger = floe_execution::budget::BudgetLedger::new(
+        floe_execution::budget::BudgetConfig::new(8192, 1_000_000),
+        floe_execution::budget::ModelUsage::default(),
+    );
+    let scope = floe_execution::ExecutionScope::root(
+        Cancellation::default(),
+        tokio::time::Instant::now() + Duration::from_secs(30),
+        ledger.work_lease(),
+        floe_kernel::TraceContext::new(turn_id),
+    );
+    let service = floe_inference::InferenceService::new(
+        provider,
+        learner::SmokeResolver,
+        learner::SmokeAuthority,
+    );
+    let request = floe_agent_contract::ModelRequest {
         attempt_id: Uuid::new_v4(),
-        envelope: projection.envelope,
-        replay: vec![],
-        schema_version: 1,
-        prompt,
-        policy: InferencePolicyDecision {
-            purpose: "synthetic-local-model-smoke".into(),
-            data_classes: vec![DataClass::Synthetic],
-            allowed_placements: vec![ModelPlacement::DeviceLocal],
-            performance_class: "fast".into(),
-            projection_version: 1,
-            external_transfer_consent: TransferConsent::NotGranted,
-            bounded_sensitive_projection: false,
+        principal: floe_kernel::PersonId::new().to_string(),
+        projection,
+        catalog: floe_agent_contract::AllowedCatalog {
+            cards: vec![],
+            tools: vec![],
+            revision: 1,
         },
-        context,
-        capabilities: vec![],
-        active_agents: vec![],
-        remaining_tokens: 4096,
-        remaining_cost_micros: 0,
-        max_output_bytes: 16384,
-        deadline: tokio::time::Instant::now() + Duration::from_secs(30),
-        cancellation: Cancellation::default(),
+        purpose: floe_inference::CANONICAL_MODEL_PURPOSE.into(),
+        consumer: floe_inference::CANONICAL_MODEL_CONSUMER.into(),
+        preferred_profile_id: Some("foundation-device".into()),
+        replay: vec![],
+        lineage: None,
     };
-    match transport.generate(request).await {
-        Ok(response) => {
+    match service.generate(request, &scope).await {
+        Ok(ModelCallOutcome::Ready(response)) => {
             println!(
                 "{}",
-                json!({"schema_version":1,"status":"passed","output":response.output,
-                "reserved_tokens":response.used_tokens,"cost_micros":response.cost_micros,"personal_data":false})
+                json!({"schema_version":1,"status":"passed","output":response.steps,
+                "reserved_tokens":response.usage.tokens,"cost_micros":response.usage.cost_micros,"personal_data":false})
             );
             std::process::ExitCode::SUCCESS
         }
+        Ok(ModelCallOutcome::NeedsUserAction(_)) => std::process::ExitCode::FAILURE,
         Err(failure) => {
             println!(
                 "{}",

@@ -72,10 +72,11 @@ impl floe_inference::PreparedModelTransport for PreparedRootTransport {
     async fn generate(
         &self,
         request: floe_inference::CanonicalModelRequest,
+        target: floe_inference::AdmittedDispatchTarget,
     ) -> Result<floe_inference::CanonicalModelResponse, AgentFailure> {
         match self {
-            Self::Foundation(transport) => transport.generate(request).await,
-            Self::Server(transport) => transport.generate(request).await,
+            Self::Foundation(transport) => transport.generate(request, target).await,
+            Self::Server(transport) => transport.generate(request, target).await,
         }
     }
 }
@@ -126,8 +127,6 @@ mod tests {
             client_id: "paired-client".into(),
             person_id: PERSON.into(),
             device_id: DEVICE.into(),
-            allow_external: true,
-            external_recipients: vec!["partner.example".into()],
         }
     }
 
@@ -171,10 +170,8 @@ mod tests {
     }
 
     #[test]
-    fn device_only_connection_still_admits_server() {
-        let mut local = saved();
-        local.allow_external = false;
-        local.external_recipients = vec![];
+    fn paired_connection_admits_server_without_recipient_approval() {
+        let local = saved();
         let admitted = RootModelProvider::from_current_connection(
             &crate::control::CurrentSavedConnectionStore::fixed(Some(local)),
             PERSON,

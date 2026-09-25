@@ -15,6 +15,7 @@ use crate::ports::model_provider::{
 };
 
 pub const CANONICAL_MODEL_PURPOSE: &str = "everyday_assistance";
+pub const EVERYDAY_ASSISTANCE_PURPOSE: &str = CANONICAL_MODEL_PURPOSE;
 pub const CANONICAL_MODEL_CONSUMER: &str = "conversation.root";
 
 const MAX_ATTEMPT_TOKENS: u64 = 4_096;
@@ -52,7 +53,6 @@ impl InferenceAvailability {
 /// transport retry/fallback and model budget settlement. Access owns
 /// exact-recipient dispatch authority. Provider owns transport/credentials.
 ///
-/// The root path never adapts back into the legacy `ModelTransport`.
 pub struct InferenceService<Provider, Resolver, Authority> {
     provider: Provider,
     resolver: Resolver,
@@ -104,7 +104,7 @@ where
         Box::pin(async move {
             // Purpose/consumer must agree across the canonical chain. The root
             // uses one purpose and one consumer; App no longer invents another
-            // through legacy policy.
+            // through a second policy route.
             if request.purpose != CANONICAL_MODEL_PURPOSE
                 || request.consumer != CANONICAL_MODEL_CONSUMER
             {
@@ -275,7 +275,10 @@ where
         };
         canonical.validate()?;
         attempt.mark_dispatched();
-        let provider_response = candidate.transport.generate(canonical).await;
+        let provider_response = candidate
+            .transport
+            .generate(canonical, crate::AdmittedDispatchTarget::from_consumed(&fence))
+            .await;
         let provider_response = match provider_response {
             Ok(response) => response,
             Err(failure) => {
@@ -609,6 +612,7 @@ mod tests {
         async fn generate(
             &self,
             request: CanonicalModelRequest,
+            _target: crate::AdmittedDispatchTarget,
         ) -> Result<CanonicalModelResponse, AgentFailure> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.seen_attempt.lock().unwrap().push(request.attempt_id);
@@ -653,8 +657,9 @@ mod tests {
         async fn generate(
             &self,
             request: CanonicalModelRequest,
+            target: crate::AdmittedDispatchTarget,
         ) -> Result<CanonicalModelResponse, AgentFailure> {
-            (**self).generate(request).await
+            (**self).generate(request, target).await
         }
     }
 

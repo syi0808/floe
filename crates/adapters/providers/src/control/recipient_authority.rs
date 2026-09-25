@@ -3,9 +3,7 @@
 //! Each [`ModelConnectionAdmission::admit`] call reloads the current saved
 //! connection and binds it to the verified person/device with
 //! [`admit_saved_connection`]. Admission carries pairing identity only
-//! (person/device/client): recorded global consent flags are accepted as
-//! stored shape but never consulted, because they are not product
-//! authorization. Contextual consent lives in the Access-owned consent
+//! (person/device/client). Contextual consent lives in the Access-owned consent
 //! store, consulted by [`ContextualRecipientAuthority`] alongside this
 //! admission. Credentials are never returned or logged; malformed,
 //! foreign or absent state fails closed.
@@ -160,8 +158,6 @@ mod tests {
             client_id: "paired-client".into(),
             person_id: PERSON.into(),
             device_id: DEVICE.into(),
-            allow_external: true,
-            external_recipients: vec![RECIPIENT.into()],
         }
     }
 
@@ -190,21 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn recorded_consent_flags_are_never_consulted() {
-        // Admission carries pairing identity only. Revoked global flags,
-        // changed recipient lists, and empty recipients still admit: exact
-        // contextual consent lives in the Access-owned consent store, which
-        // ContextualRecipientAuthority consults alongside this admission.
-        let mut revoked = saved();
-        revoked.allow_external = false;
-        revoked.external_recipients = vec![];
-        assert_eq!(admission_for(Some(revoked)).admit().unwrap(), pairing());
-        let mut replaced = saved();
-        replaced.external_recipients = vec!["someone-else.example".into()];
-        assert_eq!(admission_for(Some(replaced)).admit().unwrap(), pairing());
-    }
-
-    #[test]
     fn saved_connection_rebound_to_another_person_or_device_denies() {
         let mut foreign_person = saved();
         foreign_person.person_id = "00000000-0000-4000-8000-000000000002".into();
@@ -222,25 +203,14 @@ mod tests {
 
     #[test]
     fn malformed_stored_connection_fails_closed() {
-        // Duplicate recipients violate admission invariants.
         let mut duplicated = saved();
-        duplicated.external_recipients = vec![RECIPIENT.into(), RECIPIENT.into()];
+        duplicated.client_id = "".into();
         assert_eq!(
             admission_for(Some(duplicated)).admit().err(),
             Some(AgentFailure::PolicyDenied)
         );
-        // allow_external inconsistent with the recipient list violates
-        // admission invariants.
-        let mut inconsistent = saved();
-        inconsistent.allow_external = true;
-        inconsistent.external_recipients = vec![];
-        assert_eq!(
-            admission_for(Some(inconsistent)).admit().err(),
-            Some(AgentFailure::PolicyDenied)
-        );
-        // Untrimmed recipient violates admission invariants.
         let mut untrimmed = saved();
-        untrimmed.external_recipients = vec![" partner.example".into()];
+        untrimmed.client_id = " paired-client".into();
         assert_eq!(
             admission_for(Some(untrimmed)).admit().err(),
             Some(AgentFailure::PolicyDenied)
@@ -412,6 +382,7 @@ mod tests {
     #[derive(Clone)]
     struct TestTransport {
         calls: Arc<AtomicUsize>,
+        seen_targets: Arc<Mutex<Vec<Option<String>>>>,
         tokens: u64,
         cost: u64,
     }
@@ -420,6 +391,7 @@ mod tests {
         fn answer() -> Self {
             Self {
                 calls: Arc::new(AtomicUsize::new(0)),
+                seen_targets: Arc::new(Mutex::new(Vec::new())),
                 tokens: 10,
                 cost: 5,
             }
@@ -434,7 +406,13 @@ mod tests {
         async fn generate(
             &self,
             _request: CanonicalModelRequest,
+            target: floe_inference::AdmittedDispatchTarget,
         ) -> Result<CanonicalModelResponse, AgentFailure> {
+            assert!(target.matches("server", Some(RECIPIENT)));
+            self.seen_targets
+                .lock()
+                .unwrap()
+                .push(target.recipient().map(str::to_owned));
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(CanonicalModelResponse {
                 output: vec![ModelStep::Answer {
@@ -612,6 +590,76 @@ mod tests {
             TraceContext::new(Uuid::new_v4()).with_run_id(RunId::new()),
         );
         (ledger, scope)
+    }
+
+    #[tokio::test]
+    async fn saved_pairing_alone_cannot_approve_external_dispatch() {
+        let person = PersonId::new();
+        let mut saved = saved();
+        saved.person_id = person.to_string();
+        let consents = MemoryConsents::default();
+        let authority = ContextualRecipientAuthority::new(
+            &consents,
+            SavedConnectionAdmission::new(
+                FixedSavedConnectionStore::fixed(Some(saved)),
+                person.to_string(),
+                DEVICE.into(),
+            ),
+            FixedClock { now: grant_now() },
+        );
+        let transport = TestTransport::answer();
+        let service = InferenceService::new(
+            TestProvider {
+                profiles: vec![(external_profile(), transport.clone())],
+            },
+            AllowResolver,
+            authority,
+        );
+        let mut request = model_request(projection(), lineage());
+        request.principal = person.to_string();
+        let (ledger, scope) = scope();
+        assert!(matches!(
+            service.generate(request, &scope).await.unwrap(),
+            floe_agent_contract::ModelCallOutcome::NeedsUserAction(_)
+        ));
+        assert_eq!(transport.calls(), 0);
+        assert_eq!(ledger.snapshot().settled.tokens, 0);
+    }
+
+    #[tokio::test]
+    async fn exact_contextual_consent_produces_consumed_target() {
+        let person = PersonId::new();
+        let mut saved = saved();
+        saved.person_id = person.to_string();
+        let dispatch_lineage = lineage();
+        let consents = MemoryConsents::default();
+        grant_dispatch_consent(&consents, person, dispatch_lineage).await;
+        let authority = ContextualRecipientAuthority::new(
+            &consents,
+            SavedConnectionAdmission::new(
+                FixedSavedConnectionStore::fixed(Some(saved)),
+                person.to_string(),
+                DEVICE.into(),
+            ),
+            FixedClock { now: grant_now() },
+        );
+        let transport = TestTransport::answer();
+        let service = InferenceService::new(
+            TestProvider {
+                profiles: vec![(external_profile(), transport.clone())],
+            },
+            AllowResolver,
+            authority,
+        );
+        let mut request = model_request(projection(), dispatch_lineage);
+        request.principal = person.to_string();
+        let (_ledger, scope) = scope();
+        assert!(matches!(
+            service.generate(request, &scope).await.unwrap(),
+            floe_agent_contract::ModelCallOutcome::Ready(_)
+        ));
+        assert_eq!(transport.calls(), 1);
+        assert_eq!(transport.seen_targets.lock().unwrap().as_slice(), [Some(RECIPIENT.into())]);
     }
 
     #[tokio::test]

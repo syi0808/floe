@@ -10,8 +10,6 @@ use floe_connections::{
     PairingConfirmation, PairingConfirmationRequest, PairingIssuer, PairingStatus,
     PairingStatusRequest, ProducerIdentity, RemoteControl,
 };
-#[cfg(test)]
-use floe_inference::RemoteRoute;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
@@ -1139,21 +1137,12 @@ mod tests {
 
     use super::*;
 
-    fn route(address: std::net::SocketAddr) -> RemoteRoute {
-        RemoteRoute {
-            base_url: format!("http://127.0.0.1:{}", address.port()),
-            bearer_token: "secret_token_value_that_is_long_enough".into(),
-            purpose: "everyday_assistance".into(),
-            external: true,
-            allow_external: false,
-            recipient: Some("fixture.example".into()),
-            pairing: None,
-        }
-    }
-
     fn authorization_client(address: std::net::SocketAddr) -> RemoteAuthorizationClient {
-        let route = route(address);
-        RemoteAuthorizationClient::new(&route.base_url, &route.bearer_token).unwrap()
+        RemoteAuthorizationClient::new(
+            &format!("http://127.0.0.1:{}", address.port()),
+            "secret_token_value_that_is_long_enough",
+        )
+        .unwrap()
     }
 
     #[derive(Clone, Default)]
@@ -1880,8 +1869,6 @@ mod current_authority_tests {
             client_id: "client-1".into(),
             person_id: person.clone(),
             device_id: "device-1".into(),
-            allow_external: false,
-            external_recipients: vec![],
         };
         let store = Store {
             saved: Arc::new(Mutex::new(Some(saved))),

@@ -6,6 +6,18 @@ use std::os::unix::fs::PermissionsExt;
 
 use super::*;
 
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum WireStep {
+    Answer { text: String },
+    Call { capability_id: String, input: String },
+    Delegate {
+        agent_id: String,
+        message: String,
+        context_refs: Vec<String>,
+    },
+}
+
 #[test]
 fn production_conversation_replays_the_same_request_without_model_redispatch() {
     let connections = TestConnections::default();
@@ -27,7 +39,7 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
     );
     assert_eq!(started.failure, None, "started: {started:?}");
     let session = started.session.unwrap();
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "One durable answer".into(),
     }]);
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
@@ -131,10 +143,10 @@ fn terminal_conversation_accepts_the_next_run_without_ui_release() {
     .session
     .unwrap();
     let (mock, server) = answer_server(vec![
-        floe_inference::ModelStep::Answer {
+        WireStep::Answer {
             text: "First durable answer".into(),
         },
-        floe_inference::ModelStep::Answer {
+        WireStep::Answer {
             text: "Second durable answer".into(),
         },
     ]);
@@ -526,7 +538,7 @@ fn same_request_id_with_normalization_equivalent_text_replays_without_redispatch
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "One durable answer".into(),
     }]);
     let request_id = Uuid::new_v4();
@@ -583,7 +595,7 @@ fn same_request_id_with_different_profile_conflicts() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "One durable answer".into(),
     }]);
     let request_id = Uuid::new_v4();
@@ -638,7 +650,7 @@ fn same_request_id_with_different_continuation_claim_conflicts() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "One durable answer".into(),
     }]);
     let request_id = Uuid::new_v4();
@@ -693,7 +705,7 @@ fn same_request_id_with_connection_refresh_only_replays_without_redispatch() {
     )
     .session
     .unwrap();
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "One durable answer".into(),
     }]);
     let (refreshed_mock, idle) = answer_server(vec![]);
@@ -860,7 +872,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     );
     assert_eq!(resumed.failure, None);
     assert_eq!(resumed.session.unwrap().id, session.id);
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "General answer without experts".into(),
     }]);
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
@@ -966,7 +978,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
 
     let worker = Worker::new_with_connection_store(root, keys, connections.store()).unwrap();
     perform(&worker, person, WorkerAction::Unlock);
-    let (mock, server) = answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, server) = answer_server(vec![WireStep::Answer {
         text: "Continued once".into(),
     }]);
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
@@ -1274,14 +1286,14 @@ fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<Strin
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
         let steps = [
-            floe_inference::ModelStep::Delegate {
+            WireStep::Delegate {
                 agent_id: floe_experts_builtin::BuiltinExpertKind::Commitments
                     .package_id()
                     .into(),
                 message: "Review my commitments".into(),
                 context_refs: vec![],
             },
-            floe_inference::ModelStep::Answer {
+            WireStep::Answer {
                 text: "Mail access needs review before I can check commitments.".into(),
             },
         ];
@@ -1429,8 +1441,6 @@ fn saved_server_connection(
         client_id: "test-client".into(),
         person_id: person.to_string(),
         device_id: device.into(),
-        allow_external: false,
-        external_recipients: vec![],
     }
 }
 
@@ -1449,7 +1459,7 @@ fn canonical_inventory_body() -> String {
 }
 
 fn answer_server(
-    steps: Vec<floe_inference::ModelStep>,
+    steps: Vec<WireStep>,
 ) -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1526,8 +1536,8 @@ fn answer_server(
             }
             assert_eq!(path, "/v1/agent");
             let (index, mut step) = steps.next().expect("scripted steps peeked Some");
-            let has_call = matches!(step, floe_inference::ModelStep::Call { .. });
-            if let floe_inference::ModelStep::Call { capability_id, .. } = &mut step {
+            let has_call = matches!(step, WireStep::Call { .. });
+            if let WireStep::Call { capability_id, .. } = &mut step {
                 *capability_id = remote_tool_name(capability_id);
             }
             requests.push(format!("{headers}\r\n\r\n{body}"));
@@ -2199,7 +2209,7 @@ fn delegated_model_dispatch_uses_the_same_owner_checks_as_root() {
 }
 
 fn recording_answer_server(
-    steps: Vec<floe_inference::ModelStep>,
+    steps: Vec<WireStep>,
 ) -> (
     MockServer,
     Arc<Mutex<Vec<String>>>,
@@ -2319,7 +2329,7 @@ fn plain_turn_contacts_only_post_admission_discovery_and_transport() {
     )
     .session
     .unwrap();
-    let (mock, paths, server) = recording_answer_server(vec![floe_inference::ModelStep::Answer {
+    let (mock, paths, server) = recording_answer_server(vec![WireStep::Answer {
         text: "Hello.".into(),
     }]);
     connections.replace(Some(saved_server_connection(&mock, person, "mac-local")));
@@ -2386,8 +2396,6 @@ fn unavailable_saved_server_does_not_prevent_conversation_admission() {
         client_id: "test-client".into(),
         person_id: person.to_string(),
         device_id: "mac-local".into(),
-        allow_external: false,
-        external_recipients: vec![],
     }));
     let request = ConversationTurnRequest::new(
         session.id,
@@ -2766,14 +2774,14 @@ fn common_schedule_review_requirement_completes_root_run() {
         ))
         .unwrap();
     let (mock, server) = answer_server(vec![
-        floe_inference::ModelStep::Delegate {
+        WireStep::Delegate {
             agent_id: floe_experts_builtin::BuiltinExpertKind::Schedule
                 .package_id()
                 .into(),
             message: "Review today".into(),
             context_refs: vec![],
         },
-        floe_inference::ModelStep::Answer {
+        WireStep::Answer {
             text: "Calendar access needs review before I can answer.".into(),
         },
     ]);
@@ -2851,11 +2859,11 @@ fn direct_attention_tool_blocked_completes_turn_with_one_durable_ref() {
     // The Manager calls the direct tool first, then explains the blocked
     // state it observed: two model iterations, one durable interaction.
     let (mock, server) = answer_server(vec![
-        floe_inference::ModelStep::Call {
+        WireStep::Call {
             capability_id: "attention.coarse.read".into(),
             input: "{}".into(),
         },
-        floe_inference::ModelStep::Answer {
+        WireStep::Answer {
             text: "Attention access needs your review before I can read it.".into(),
         },
     ]);
@@ -3027,8 +3035,6 @@ fn fixture_saved_connection(
         client_id: "test-client".into(),
         person_id: person.to_string(),
         device_id: device.into(),
-        allow_external: false,
-        external_recipients: vec![],
     }
 }
 

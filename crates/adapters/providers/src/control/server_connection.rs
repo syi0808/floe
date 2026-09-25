@@ -19,8 +19,6 @@ struct StoredServerConnection {
     client_id: String,
     person_id: String,
     device_id: String,
-    allow_external: bool,
-    external_recipients: Vec<String>,
 }
 
 /// This host's saved local-server credential, as Inference's store port.
@@ -55,7 +53,7 @@ impl std::fmt::Debug for PreparedServerSource {
         formatter
             .debug_struct("PreparedServerSource")
             .field("base_url", &self.base_url)
-            // The credential is named but never rendered, matching RemoteRoute.
+            // The credential is named but never rendered.
             .field("bearer_token", &"[REDACTED]")
             .field("client_id", &self.client_id)
             .field("person_id", &self.person_id)
@@ -121,8 +119,7 @@ impl PreparedServerSource {
     /// Bind a saved server connection to the verified caller for source use.
     ///
     /// The stored person/device must match the caller exactly; anything else
-    /// fails closed instead of downgrading. Recorded model consent is not
-    /// carried: it is irrelevant to source transport.
+    /// fails closed instead of downgrading.
     pub fn admit(
         saved: SavedServerConnection,
         person_id: &str,
@@ -206,14 +203,26 @@ pub fn load_saved_connection() -> Result<Option<SavedServerConnection>, AgentFai
         client_id: stored.client_id,
         person_id: stored.person_id,
         device_id: stored.device_id,
-        allow_external: stored.allow_external,
-        external_recipients: stored.external_recipients,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsolete_saved_recipient_list_is_not_decoded_as_authority() {
+        let old = serde_json::json!({
+            "base_url": "http://127.0.0.1:8431",
+            "token": "source_token_value_that_is_long_enough",
+            "client_id": "paired-client",
+            "person_id": "00000000-0000-4000-8000-000000000001",
+            "device_id": "local-device",
+            "allow_external": true,
+            "external_recipients": ["fixture.example"]
+        });
+        assert!(serde_json::from_value::<StoredServerConnection>(old).is_err());
+    }
 
     const PERSON: &str = "00000000-0000-4000-8000-000000000001";
     const DEVICE: &str = "local-device";
@@ -225,8 +234,6 @@ mod tests {
             client_id: "paired-client".into(),
             person_id: PERSON.into(),
             device_id: DEVICE.into(),
-            allow_external: false,
-            external_recipients: vec![],
         }
     }
 
@@ -240,12 +247,6 @@ mod tests {
         assert!(!rendered.contains("source_token_value_that_is_long_enough"));
         assert!(rendered.contains("[REDACTED]"));
 
-        // Recorded model consent is accepted as stored input but never
-        // carried: the prepared source has no consent state at all.
-        let mut consented = saved();
-        consented.allow_external = true;
-        consented.external_recipients = vec!["partner.example".into()];
-        assert!(PreparedServerSource::admit(consented, PERSON, DEVICE).is_ok());
     }
 
     #[test]

@@ -6,8 +6,7 @@ pub mod server;
 pub(crate) mod wire;
 
 pub use foundation::{
-    FoundationModelProvider, FoundationModelRunner, LocalModelAvailability,
-    PreparedFoundationTransport,
+    FoundationModelProvider, LocalModelAvailability, PreparedFoundationTransport,
 };
 pub use root::{PreparedRootTransport, RootModelProvider};
-pub use server::{PreparedServerTransport, ServerModelProvider, ServerModelRunner};
+pub use server::{PreparedServerTransport, ServerModelProvider};

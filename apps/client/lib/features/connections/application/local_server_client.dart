@@ -135,17 +135,13 @@ class ServerConnection {
     required this.clientId,
     required this.personId,
     required this.deviceId,
-    this.allowExternal = false,
-    List<String> externalRecipients = const [],
-  }) : externalRecipients = List.unmodifiable(externalRecipients);
+  });
 
   final String address;
   final String token;
   final String clientId;
   final String personId;
   final String deviceId;
-  final bool allowExternal;
-  final List<String> externalRecipients;
 
   Map<String, Object> toJson() => {
     'base_url': address,
@@ -153,27 +149,7 @@ class ServerConnection {
     'client_id': clientId,
     'person_id': personId,
     'device_id': deviceId,
-    'allow_external': allowExternal,
-    'external_recipients': externalRecipients,
   };
-
-  bool coversExternalRecipient(String? recipient) =>
-      allowExternal &&
-      recipient != null &&
-      externalRecipients.contains(recipient);
-
-  ServerConnection withExternalConsent(
-    bool value, {
-    Iterable<String> recipients = const [],
-  }) => ServerConnection(
-    address: address,
-    token: token,
-    clientId: clientId,
-    personId: personId,
-    deviceId: deviceId,
-    allowExternal: value && recipients.isNotEmpty,
-    externalRecipients: value ? ([...recipients.toSet()]..sort()) : const [],
-  );
 }
 
 enum InferencePurpose {
@@ -361,26 +337,12 @@ class LocalServerClient {
       if (!RegExp(r'^[A-Za-z0-9_-]{32,256}$').hasMatch(token)) {
         throw const FormatException();
       }
-      final recipients = List<String>.from(
-        value['external_recipients'] as List,
-      );
-      final allowExternal = value['allow_external'] as bool;
-      if (recipients.length > 16 ||
-          recipients.toSet().length != recipients.length ||
-          (allowExternal && recipients.isEmpty) ||
-          recipients.any(
-            (recipient) => recipient.trim().isEmpty || recipient.length > 253,
-          )) {
-        throw const FormatException();
-      }
       final connection = ServerConnection(
         address: address,
         token: token,
         clientId: value['client_id'] as String,
         personId: value['person_id'] as String,
         deviceId: value['device_id'] as String,
-        allowExternal: allowExternal,
-        externalRecipients: recipients,
       );
       _requireConnectionIdentity(connection);
       return connection;
@@ -794,7 +756,7 @@ class LocalServerClient {
         'schema_version': 1,
         'purpose': purpose.wireName,
         'data_classes': dataClasses,
-        'allow_external': connection.allowExternal,
+        'allow_external': false,
         'instructions': instructions,
         'input': input,
         'output_schema': outputSchema,

@@ -1559,6 +1559,7 @@ mod capture_tests {
         fn generate(
             &self,
             _: floe_inference::CanonicalModelRequest,
+            _: floe_inference::AdmittedDispatchTarget,
         ) -> impl std::future::Future<
             Output = Result<floe_inference::CanonicalModelResponse, AgentFailure>,
         > + Send {

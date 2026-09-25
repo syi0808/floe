@@ -144,7 +144,7 @@ impl LearnerModel for SmokeLearnerModel<'_> {
     }
 }
 
-struct SmokeResolver;
+pub(super) struct SmokeResolver;
 
 impl floe_access::DependencyResolver for SmokeResolver {
     fn authorize<'a>(
@@ -157,7 +157,7 @@ impl floe_access::DependencyResolver for SmokeResolver {
     }
 }
 
-struct SmokeAuthority;
+pub(super) struct SmokeAuthority;
 
 impl floe_access::ModelDispatchRecipientAuthority for SmokeAuthority {
     fn check_recipient<'a>(

@@ -291,8 +291,6 @@ async fn exercise_live_server(model: Option<String>) {
         client_id: approved.client_id.unwrap(),
         person_id: person_text.clone(),
         device_id: device.into(),
-        allow_external: false,
-        external_recipients: vec![],
     };
     let current = CurrentSavedConnectionStore::fixed(Some(saved.clone()));
     assert!(current.load().unwrap().as_ref() == Some(&saved));
@@ -326,9 +324,7 @@ async fn exercise_live_server(model: Option<String>) {
         };
         assert_eq!(requirement.recipient(), "OpenAI (Codex OAuth)");
         assert_eq!(denied.usage.attempts, 0);
-        let mut consented = saved.clone();
-        consented.allow_external = true;
-        consented.external_recipients = vec!["OpenAI (Codex OAuth)".into()];
+        let consented = saved.clone();
         Some((
             live_model::attempt_with_consent(&consented).await,
             consented,
