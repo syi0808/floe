@@ -1,31 +1,8 @@
-Map<String, Object?> expertResultFixture() => {
-  'schema_version': 1,
-  'invocation_id': 'call-1',
-  'instance_id': 'instance-fixture',
-  'person_id': 'test',
-  'assignment_id': 'schedule-fixture',
-  'package': {'kind': 'expert', 'id': 'floe.schedule', 'version': '1.0.0'},
-  'evidence_id': 'view-fixture',
-  'source_handle': 'fixture.synthetic.timeline',
-  'data_class': 'synthetic',
-  'expires_at_unix_ms': 4102444800000,
-  'insights': [
-    {
-      'kind': 'commitment',
-      'evidence_handle': 'event-fixture',
-      'untrusted_title': 'Design review',
-      'starts_at_unix_ms': 36000000,
-      'ends_at_unix_ms': 39600000,
-    },
-    {
-      'kind': 'focus_window',
-      'starts_at_unix_ms': 39600000,
-      'ends_at_unix_ms': 43200000,
-    },
-  ],
-  'action_proposals': <Object?>[],
-  'summary': 'One commitment is followed by a one-hour focus window.',
-  'model_calls': 2,
-  'state_revision': 1,
-  'view_calls': 1,
-};
+import 'dart:convert';
+import 'dart:io';
+
+Map<String, Object?> rustExpertResultFixture() => Map<String, Object?>.from(
+  jsonDecode(
+    File('../../fixtures/expert-result/schedule-v1.json').readAsStringSync(),
+  ) as Map<String, dynamic>,
+);

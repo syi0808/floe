@@ -27,7 +27,7 @@ void main() {
       personId: proposalPerson,
       allowedDataClasses: classes,
     );
-    expect(parse(proposalEvidence())!.proposal!.start!.hour, 11);
+    expect(parse(proposalEvidence())!.proposal!.start!.hour, 8);
     expect(parse(proposalEvidence(dataClass: 'personal')), isNull);
     expect(
       parse(
@@ -51,10 +51,16 @@ void main() {
         {...original, 'evidence_id': 'foreign'},
       ],
       [
-        {...original, 'ends_at_unix_ms': 43200001},
+        {
+          ...original,
+          'ends_at_unix_ms': (original['ends_at_unix_ms'] as int) + 1,
+        },
       ],
       [
-        {...original, 'starts_at_unix_ms': 39600001},
+        {
+          ...original,
+          'starts_at_unix_ms': (original['starts_at_unix_ms'] as int) + 1,
+        },
       ],
       [
         {...original, 'execute': true},

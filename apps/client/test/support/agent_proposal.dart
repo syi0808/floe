@@ -13,17 +13,10 @@ const proposalCall = '00000000-0000-4000-8000-000000000003';
 const proposalExecution = '00000000-0000-4000-8000-000000000004';
 
 Map<String, Object?> proposalEvidence({String dataClass = 'synthetic'}) =>
-    expertResultFixture()..addAll({
+    rustExpertResultFixture()..addAll({
       'person_id': proposalPerson,
       'invocation_id': proposalCall,
       'data_class': dataClass,
-      'action_proposals': [
-        {
-          'starts_at_unix_ms': 39600000,
-          'ends_at_unix_ms': 43200000,
-          'evidence_id': 'view-fixture',
-        },
-      ],
     });
 
 Map<String, dynamic> inspectionJson({String? status = 'pending'}) => {

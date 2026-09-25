@@ -90,10 +90,11 @@ final class AgentExpertResult {
           'action_proposals',
           'state_revision',
           'view_calls',
+          'model_calls',
         },
-        {'summary', 'model_calls'},
+        {'summary'},
       );
-      final modelCalls = json['model_calls'] as int? ?? 0;
+      final modelCalls = json['model_calls']! as int;
       final summary = json['summary'] == null
           ? null
           : _text(json['summary'], 2048);
@@ -102,11 +103,11 @@ final class AgentExpertResult {
           json['person_id'] != personId ||
           !['synthetic', 'personal'].contains(json['data_class']) ||
           !allowedDataClasses.contains(json['data_class']) ||
-          json['view_calls'] != 1 ||
+          (json['view_calls']! as int) < 1 ||
+          (json['view_calls']! as int) > 8 ||
           modelCalls < 0 ||
-          modelCalls == 1 ||
           modelCalls > 10 ||
-          (summary != null) != (modelCalls >= 2) ||
+          (summary != null) != (modelCalls > 0) ||
           (json['state_revision']! as int) < 1 ||
           (json['expires_at_unix_ms']! as num) < 0) {
         return null;
@@ -118,7 +119,9 @@ final class AgentExpertResult {
       _keys(package, {'kind', 'id', 'version'});
       if (package['kind'] != 'expert') return null;
       final insights = json['insights']! as List;
-      if (insights.isEmpty || insights.length > 8) return null;
+      if ((insights.isEmpty && summary == null) || insights.length > 8) {
+        return null;
+      }
       final parsed = List<AgentExpertInsight>.unmodifiable(
         insights.map(AgentExpertInsight.parse),
       );

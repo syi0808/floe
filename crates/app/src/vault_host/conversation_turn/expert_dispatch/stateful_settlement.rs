@@ -265,7 +265,9 @@ mod tests {
                 "test-device",
                 &["home".into()],
                 source_authority,
-                &crate::first_party_observe::calendar_policy().unwrap().consumers,
+                &crate::first_party_observe::calendar_policy()
+                    .unwrap()
+                    .consumers,
                 &"a".repeat(64),
                 None,
             )
@@ -367,5 +369,43 @@ mod tests {
         assert_eq!(result.package.id, BuiltinExpertKind::Schedule.package_id());
         assert_eq!(result.action_proposals.len(), 1);
         assert_eq!(result.action_proposals[0].evidence_id, observation_id);
+        let mut fixture = serde_json::to_value(&result).unwrap();
+        let fields = fixture.as_object_mut().unwrap();
+        fields.insert(
+            "invocation_id".into(),
+            serde_json::json!("00000000-0000-4000-8000-000000000003"),
+        );
+        fields.insert(
+            "instance_id".into(),
+            serde_json::json!("00000000-0000-4000-8000-000000000006"),
+        );
+        fields.insert(
+            "person_id".into(),
+            serde_json::json!("00000000-0000-4000-8000-000000000001"),
+        );
+        fields.insert(
+            "assignment_id".into(),
+            serde_json::json!("00000000-0000-4000-8000-000000000007"),
+        );
+        fields.insert(
+            "evidence_id".into(),
+            serde_json::json!("00000000-0000-4000-8000-000000000008"),
+        );
+        fields.insert(
+            "source_handle".into(),
+            serde_json::json!("calendar.observe:00000000-0000-4000-8000-000000000008"),
+        );
+        fields.insert(
+            "expires_at_unix_ms".into(),
+            serde_json::json!(4102444800000_u64),
+        );
+        fixture["action_proposals"][0]["evidence_id"] =
+            serde_json::json!("00000000-0000-4000-8000-000000000008");
+        let serialized = serde_json::to_string(&fixture).unwrap();
+        if std::env::var_os("FLOE_PRINT_EXPERT_RESULT_FIXTURE").is_some() {
+            println!("EXPERT_RESULT_FIXTURE={serialized}");
+        }
+        let tracked = include_str!("../../../../../../fixtures/expert-result/schedule-v1.json");
+        assert_eq!(serialized, tracked.trim_end());
     }
 }
