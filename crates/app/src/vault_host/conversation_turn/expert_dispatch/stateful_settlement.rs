@@ -1,14 +1,11 @@
 use std::{future::Future, pin::Pin};
 
-use floe_agent_contract::{AGENT_VERSION, AgentFailure, ExpertFocusProposal, ExpertResult};
+use floe_agent_contract::AgentFailure;
 use floe_context_contract::ContextDependency;
 use floe_experts::{AgentRegistry, PackageImplementation};
-use floe_experts_builtin::{
-    BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft,
-};
+use floe_experts_builtin::{BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use tokio::time::Instant;
-use uuid::Uuid;
 
 pub(in crate::vault_host::conversation_turn) trait StatefulExpertSettlement:
     Sync
@@ -72,50 +69,62 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                     &resolved.package.implementation,
                     PackageImplementation::Builtin { expert } if expert.as_str() == request.agent_id
                 )
-                || draft.data_class != resolved.data_class
-                || draft.expires_at_unix_ms
-                    <= u64::try_from(chrono::Utc::now().timestamp_millis())
-                        .map_err(|_| AgentFailure::StaleContext)?
                 || dependencies.is_empty()
                 || dependencies
                     .iter()
                     .any(|dependency| dependency.person_id() != request.person_id)
+                || draft.result.trim().is_empty()
+                || draft.result.len() > request.max_output_bytes
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let evidence_id = evidence_for_source(&draft.source_handle, &dependencies)?;
-            let mut result = ExpertResult {
-                schema_version: AGENT_VERSION,
-                invocation_id: request.invocation_id,
-                instance_id: registry.instance_id(),
-                person_id: request.person_id,
-                assignment_id,
-                package: resolved.package.reference.clone(),
-                evidence_id,
-                source_handle: draft.source_handle,
-                data_class: draft.data_class,
-                expires_at_unix_ms: draft.expires_at_unix_ms,
-                insights: draft.insights,
-                action_proposals: draft
-                    .action_proposals
-                    .into_iter()
-                    .map(|proposal| ExpertFocusProposal {
-                        starts_at_unix_ms: proposal.starts_at_unix_ms,
-                        ends_at_unix_ms: proposal.ends_at_unix_ms,
-                        evidence_id,
+            let state_revision = registry.complete(&resolved, request.invocation_id)?;
+            let mut artifacts = draft.artifacts;
+            super::reject_raw_action_artifacts(&artifacts)?;
+            if let Some(proposal) = draft.calendar_proposal {
+                proposal.validate()?;
+                let contributors: Vec<_> = dependencies
+                    .iter()
+                    .filter(|dependency| {
+                        dependency.person_id() == request.person_id
+                            && dependency.source().person_id() == request.person_id
+                            && dependency.consumer().identifier() == request.agent_id
+                            && dependency.operation() == floe_access::GrantOperation::Read
+                            && dependency.purpose() == floe_access::GrantPurpose::Assistant
+                            && matches!(
+                                dependency.source().connector().as_str(),
+                                "calendar.event_kit"
+                                    | "calendar.android"
+                                    | "calendar.google"
+                                    | "calendar.microsoft"
+                            )
+                            && !dependency.resources().is_empty()
+                            && dependency.expires_at() > chrono::Utc::now()
                     })
-                    .collect(),
-                summary: Some(draft.summary.clone()),
-                model_calls: draft.model_calls,
-                state_revision: 0,
-                view_calls: draft.view_calls,
-            };
-            result.state_revision = registry.complete(&resolved, request.invocation_id)?;
-            registry.validate_recorded_result(&result)?;
-            let result_data =
-                serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?;
-            if result_data.len() > request.max_output_bytes.min(16_384) {
-                return Err(AgentFailure::BudgetExceeded);
+                    .collect();
+                let [contributor] = contributors.as_slice() else {
+                    return Err(AgentFailure::PolicyDenied);
+                };
+                let coverage = floe_agent_contract::DependencyCoverage::dependent(
+                    (*contributor).clone(),
+                )
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+                let evidence = floe_actions::ExpertCalendarProposal {
+                    schema_version: 1,
+                    instance_id: registry.instance_id(),
+                    person_id: request.person_id,
+                    assignment_id,
+                    package: resolved.package.reference.clone(),
+                    task_id: request.task_id,
+                    invocation_id: request.invocation_id,
+                    state_revision,
+                    evidence_id: contributor.observation_id(),
+                    data_class: resolved.data_class,
+                    expires_at_unix_ms: u64::try_from(contributor.expires_at().timestamp_millis())
+                        .map_err(|_| AgentFailure::StaleContext)?,
+                    draft: proposal,
+                };
+                artifacts.push(evidence.artifact(coverage)?);
             }
             let settlement = registry
                 .settle_registered_expert_invocation(
@@ -124,53 +133,15 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                     assignment_id,
                     request.invocation_id,
                     dependencies,
-                    result_data,
+                    draft.result.clone(),
                 )
                 .into_endpoint_settlement()?;
-            BuiltinExpertOutput::from_result(
-                BuiltinExpertKind::from_package_id(&request.agent_id)
-                    .ok_or(AgentFailure::CapabilityDenied)?
-                    .result_artifact_name(),
-                draft.summary,
-                &result,
-            )
-            .map(|output| output.with_settlement(settlement))
+            Ok(BuiltinExpertOutput {
+                result: draft.result,
+                artifacts,
+                settlement: Some(settlement),
+            })
         })
-    }
-}
-
-/// The observation backing `source_handle`, from the captured dependencies.
-///
-/// Native Calendar views carry `calendar.observe:{observation_id}`; the exact
-/// captured dependency with that observation backs the result. Other sources
-/// must have exactly one captured dependency.
-fn evidence_for_source(
-    source_handle: &str,
-    dependencies: &[ContextDependency],
-) -> Result<Uuid, AgentFailure> {
-    if let Some(observation) = source_handle.strip_prefix("calendar.observe:") {
-        let observation_id =
-            Uuid::parse_str(observation).map_err(|_| AgentFailure::StaleContext)?;
-        if observation_id.is_nil() {
-            return Err(AgentFailure::StaleContext);
-        }
-        let matches: Vec<_> = dependencies
-            .iter()
-            .filter(|dependency| dependency.observation_id() == observation_id)
-            .collect();
-        let [dependency] = matches.as_slice() else {
-            return Err(AgentFailure::PolicyDenied);
-        };
-        Ok(dependency.observation_id())
-    } else {
-        let [dependency] = dependencies else {
-            return Err(AgentFailure::PolicyDenied);
-        };
-        let evidence_id = dependency.observation_id();
-        if evidence_id.is_nil() {
-            return Err(AgentFailure::StaleContext);
-        }
-        Ok(evidence_id)
     }
 }
 
@@ -199,15 +170,24 @@ mod tests {
         time::Duration,
     };
 
-    use floe_agent_contract::{AgentContext, DataClass, ExpertInsight};
+    use floe_agent_contract::{
+        AgentContext, AgentEndpoint, BoxFuture, DelegationExecutionContext, DelegationPort,
+        DelegationRequest, DependencyCoverage, EndpointInvocation, ExecutionScope, ExpertReport,
+        InvocationKey, TaskId, TraceContext,
+    };
     use floe_context_contract::{
         CalendarProvider, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction,
         SourceAuthority,
     };
     use floe_execution::Cancellation;
-    use floe_experts::BuiltinExpertSetup;
+    use floe_experts::{
+        A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, BuiltinExpertSetup,
+        Directory, DirectoryEntry, TaskCoordinator, task_receipt_to_a2a,
+    };
+    use floe_experts_builtin::BuiltinExpertKind;
     use floe_kernel::PersonId;
     use floe_vault::VaultKey;
+    use uuid::Uuid;
 
     #[derive(Clone, Default)]
     struct SettlementKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -237,14 +217,94 @@ mod tests {
         }
     }
 
+    struct FixtureEndpoint {
+        output: Mutex<Option<BuiltinExpertOutput>>,
+        coverage: DependencyCoverage,
+    }
+
+    impl AgentEndpoint for FixtureEndpoint {
+        fn execute<'a>(
+            &'a self,
+            invocation: EndpointInvocation,
+            _scope: &'a ExecutionScope,
+        ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
+            Box::pin(async move {
+                let mut output = self
+                    .output
+                    .lock()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                    .take()
+                    .ok_or(AgentFailure::Conflict)?;
+                for artifact in &mut output.artifacts {
+                    if artifact.coverage == DependencyCoverage::Unknown {
+                        artifact.coverage = self.coverage.clone();
+                    }
+                }
+                Ok(ExpertReport {
+                    task_id: invocation.request.task_id,
+                    principal: invocation.request.principal,
+                    agent_id: invocation.request.selected_agent_id,
+                    definition_revision: invocation.request.selected_definition_revision,
+                    result: output.result,
+                    artifacts: output.artifacts,
+                    coverage: self.coverage.clone(),
+                    settlement: output.settlement,
+                })
+            })
+        }
+    }
+
+    fn normalize_product_value(
+        value: &mut serde_json::Value,
+        ids: &mut std::collections::BTreeMap<String, String>,
+    ) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (key, field) in fields {
+                    if key == "expires_at_unix_ms" {
+                        *field = serde_json::json!(4_102_444_800_000u64);
+                    } else if key == "starts_at_unix_ms" {
+                        *field = serde_json::json!(1_800_000_000_000u64);
+                    } else if key == "ends_at_unix_ms" {
+                        *field = serde_json::json!(1_800_001_800_000u64);
+                    } else {
+                        normalize_product_value(field, ids);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    normalize_product_value(item, ids);
+                }
+            }
+            serde_json::Value::String(text) => {
+                if Uuid::parse_str(text).is_ok() {
+                    let next = ids.len() + 1;
+                    let normalized = ids
+                        .entry(text.clone())
+                        .or_insert_with(|| format!("00000000-0000-4000-8000-{next:012x}"));
+                    *text = normalized.clone();
+                } else if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
+                    && nested.is_object()
+                {
+                    normalize_product_value(&mut nested, ids);
+                    *text = serde_json::to_string(&nested).unwrap();
+                }
+            }
+            _ => {}
+        }
+    }
+
     #[tokio::test]
     async fn schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency() {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
-        let vault = EncryptedAgentVault::create(root.path(), person_id, SettlementKeys::default())
-            .await
-            .unwrap();
+        let vault = Arc::new(
+            EncryptedAgentVault::create(root.path(), person_id, SettlementKeys::default())
+                .await
+                .unwrap(),
+        );
         vault
             .install_builtin_experts_enabled(
                 BuiltinExpertSetup {
@@ -340,72 +400,202 @@ mod tests {
             cancellation: Cancellation::default(),
         };
         let window_start = 1_800_000_000_000u64;
-        let draft = floe_experts_builtin::StatefulExpertDraft {
-            source_handle: format!("calendar.observe:{observation_id}"),
-            data_class: DataClass::Personal,
-            expires_at_unix_ms: u64::try_from(
-                (observed_at + chrono::Duration::minutes(59)).timestamp_millis(),
-            )
-            .unwrap(),
-            insights: vec![ExpertInsight::FocusWindow {
+        let package = BuiltinExpertOutput::from_result(
+            "Schedule assessment",
+            floe_experts_builtin::schedule::RESULT_MEDIA_TYPE,
+            "One focus window".into(),
+            &floe_experts_builtin::schedule::ScheduleAssessment {
+                insights: vec![floe_experts_builtin::schedule::ScheduleInsight::FocusWindow {
+                    starts_at_unix_ms: window_start,
+                    ends_at_unix_ms: window_start + 1_800_000,
+                }],
+            },
+        )
+        .unwrap();
+        let draft = StatefulExpertDraft {
+            result: package.result,
+            artifacts: package.artifacts,
+            calendar_proposal: Some(floe_actions::ExpertCalendarProposalDraft {
                 starts_at_unix_ms: window_start,
                 ends_at_unix_ms: window_start + 1_800_000,
-            }],
-            action_proposals: vec![floe_experts_builtin::StatefulFocusProposal {
-                starts_at_unix_ms: window_start,
-                ends_at_unix_ms: window_start + 1_800_000,
-            }],
-            summary: "One focus window".into(),
-            model_calls: 1,
-            view_calls: 1,
+            }),
         };
         let settlement = VaultStatefulExpertSettlement { vault: &vault };
+        let duplicate_draft = StatefulExpertDraft {
+            result: draft.result.clone(),
+            artifacts: draft.artifacts.clone(),
+            calendar_proposal: draft.calendar_proposal.clone(),
+        };
+        assert_eq!(
+            StatefulExpertSettlement::settle(
+                &settlement,
+                &request,
+                duplicate_draft,
+                vec![dependency.clone(), dependency.clone()],
+            )
+            .await
+            .err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        let missing_draft = StatefulExpertDraft {
+            result: draft.result.clone(),
+            artifacts: draft.artifacts.clone(),
+            calendar_proposal: draft.calendar_proposal.clone(),
+        };
+        assert_eq!(
+            StatefulExpertSettlement::settle(&settlement, &request, missing_draft, vec![])
+                .await
+                .err(),
+            Some(AgentFailure::CapabilityDenied)
+        );
         let output =
-            StatefulExpertSettlement::settle(&settlement, &request, draft, vec![dependency])
+            StatefulExpertSettlement::settle(&settlement, &request, draft, vec![dependency.clone()])
                 .await
                 .unwrap();
-        let result: ExpertResult = serde_json::from_str(&output.data).unwrap();
-        assert_eq!(result.evidence_id, observation_id);
-        assert_eq!(result.package.id, BuiltinExpertKind::Schedule.package_id());
-        assert_eq!(result.action_proposals.len(), 1);
-        assert_eq!(result.action_proposals[0].evidence_id, observation_id);
-        let mut fixture = serde_json::to_value(&result).unwrap();
-        let fields = fixture.as_object_mut().unwrap();
-        fields.insert(
-            "invocation_id".into(),
-            serde_json::json!("00000000-0000-4000-8000-000000000003"),
+        assert_eq!(output.result, "One focus window");
+        let artifacts: Vec<_> = output
+            .artifacts
+            .iter()
+            .filter(|artifact| {
+                artifact.parts.iter().any(|part| matches!(
+                    part,
+                    floe_agent_contract::ArtifactPart::Data { media_type, .. }
+                        if media_type == floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE
+                ))
+            })
+            .collect();
+        let [artifact] = artifacts.as_slice() else {
+            panic!("exactly one Actions proposal");
+        };
+        let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
+            &artifact.coverage else {
+            panic!("exact contributor coverage");
+        };
+        let [contributor] = dependencies.as_slice() else {
+            panic!("exactly one contributor");
+        };
+        assert_eq!(contributor.observation_id(), observation_id);
+        let floe_agent_contract::ArtifactPart::Data { data, .. } = &artifact.parts[0] else {
+            panic!("typed proposal");
+        };
+        let proposal: floe_actions::ExpertCalendarProposal = serde_json::from_str(data).unwrap();
+        assert_eq!(proposal.evidence_id, observation_id);
+        assert_eq!(proposal.package.id, BuiltinExpertKind::Schedule.package_id());
+        assert_eq!(proposal.draft.starts_at_unix_ms, window_start);
+
+        let coverage = DependencyCoverage::dependent(dependency).unwrap();
+        let directory = Directory::default();
+        let card = vault
+            .enabled_builtin_expert_cards()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|card| card.id == request.agent_id)
+            .unwrap();
+        directory
+            .register(
+                DirectoryEntry {
+                    definition: floe_agent_contract::AgentDefinition {
+                        card,
+                        definition_revision: 1,
+                    },
+                    reviewed: true,
+                    enabled: true,
+                    admitted_principals: vec![person_id.to_string()],
+                    purposes: vec!["everyday-assistance".into()],
+                },
+                Arc::new(FixtureEndpoint {
+                    output: Mutex::new(Some(output)),
+                    coverage: coverage.clone(),
+                }),
+            )
+            .unwrap();
+        let repository = Arc::new(floe_vault::VaultTaskRepository::new(Arc::clone(&vault)));
+        let (coordinator, recovered) = TaskCoordinator::activate(
+            directory,
+            repository,
+            "everyday-assistance",
+            floe_agent_contract::MAX_OUTPUT_BYTES,
+        )
+        .await
+        .unwrap();
+        assert!(recovered.is_empty());
+        let task_id = TaskId::from_uuid(request.task_id).unwrap();
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(50_000, 100_000),
+            Default::default(),
         );
-        fields.insert(
-            "instance_id".into(),
-            serde_json::json!("00000000-0000-4000-8000-000000000006"),
+        let scope = ExecutionScope::root(
+            Cancellation::default(),
+            Instant::now() + Duration::from_secs(5),
+            ledger.work_lease(),
+            TraceContext::new(Uuid::new_v4()).with_task_id(task_id),
         );
-        fields.insert(
-            "person_id".into(),
-            serde_json::json!("00000000-0000-4000-8000-000000000001"),
-        );
-        fields.insert(
-            "assignment_id".into(),
-            serde_json::json!("00000000-0000-4000-8000-000000000007"),
-        );
-        fields.insert(
-            "evidence_id".into(),
-            serde_json::json!("00000000-0000-4000-8000-000000000008"),
-        );
-        fields.insert(
-            "source_handle".into(),
-            serde_json::json!("calendar.observe:00000000-0000-4000-8000-000000000008"),
-        );
-        fields.insert(
-            "expires_at_unix_ms".into(),
-            serde_json::json!(4102444800000_u64),
-        );
-        fixture["action_proposals"][0]["evidence_id"] =
-            serde_json::json!("00000000-0000-4000-8000-000000000008");
-        let serialized = serde_json::to_string(&fixture).unwrap();
-        if std::env::var_os("FLOE_PRINT_EXPERT_RESULT_FIXTURE").is_some() {
-            println!("EXPERT_RESULT_FIXTURE={serialized}");
+        let receipt = coordinator
+            .delegate(
+                DelegationRequest {
+                    task_id,
+                    parent_run_id: None,
+                    principal: person_id.to_string(),
+                    invocation_key: InvocationKey::from_uuid(request.invocation_id).unwrap(),
+                    selected_agent_id: request.agent_id.clone(),
+                    selected_definition_revision: 1,
+                    message: request.assignment.clone(),
+                    context_refs: vec![],
+                    execution_context: DelegationExecutionContext {
+                        session_id: Uuid::new_v4(),
+                        device_id: "test-device".into(),
+                        agent_context: request.context.clone(),
+                        max_output_bytes: request.max_output_bytes,
+                    },
+                },
+                &scope,
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.snapshot.state, floe_agent_contract::TaskState::Completed);
+        assert_eq!(receipt.snapshot.coverage, coverage);
+        assert!(receipt.snapshot.artifacts.iter().all(|artifact| artifact.coverage != DependencyCoverage::Unknown));
+        let context_id = Uuid::new_v4();
+        let product = task_receipt_to_a2a(
+            A2ASendMessageRequest {
+                usage: Default::default(),
+                schema_version: 1,
+                person_id,
+                session_id: Uuid::new_v4(),
+                parent_turn_id: Uuid::new_v4(),
+                agent_id: request.agent_id.clone(),
+                message: A2AMessage {
+                    message_id: Uuid::new_v4(),
+                    context_id,
+                    task_id: Some(request.task_id),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: request.assignment.clone(),
+                    }],
+                },
+                max_output_bytes: request.max_output_bytes,
+                deadline: Instant::now() + Duration::from_secs(5),
+                cancellation: Cancellation::default(),
+            },
+            receipt,
+        )
+        .unwrap();
+        let mut value = serde_json::to_value(floe_conversation::AgentMessage::Delegation {
+            turn_id: Uuid::new_v4(),
+            task: product,
+        })
+        .unwrap();
+        normalize_product_value(&mut value, &mut std::collections::BTreeMap::new());
+        let encoded = format!("{}\n", serde_json::to_string(&value).unwrap());
+        if std::env::var_os("FLOE_PRINT_EXPERT_REPORT_FIXTURE").is_some() {
+            println!("DELEGATION_FIXTURE={encoded}");
+            return;
         }
-        let tracked = include_str!("../../../../../../fixtures/expert-result/schedule-v1.json");
-        assert_eq!(serialized, tracked.trim_end());
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/expert-report/delegation-v1.json"
+        );
+        assert_eq!(encoded, std::fs::read_to_string(path).unwrap());
     }
 }

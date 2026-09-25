@@ -259,13 +259,13 @@ mod tests {
             PERSON,
             DEVICE,
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         )
         .unwrap();
         let availability = floe_inference::InferenceAvailability::observe(
             &provider,
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         )
         .await;
         assert!(

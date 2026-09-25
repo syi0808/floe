@@ -108,6 +108,19 @@ fn reject_raw_requirement_artifacts(
     Ok(())
 }
 
+fn reject_raw_action_artifacts(
+    artifacts: &[floe_agent_contract::Artifact],
+) -> Result<(), AgentFailure> {
+    if artifacts.iter().flat_map(|artifact| &artifact.parts).any(|part| {
+        matches!(part, floe_agent_contract::ArtifactPart::Data { media_type, .. }
+            if media_type == floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE)
+    }) {
+        Err(AgentFailure::InvalidModelOutput)
+    } else {
+        Ok(())
+    }
+}
+
 /// The endpoint the delegating Run invokes for every registered builtin Expert
 /// that answers in process.
 ///
@@ -169,12 +182,12 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                     &person_id.to_string(),
                     &context.device_id,
                     floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-                    floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                    floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
                 )?;
             let availability = floe_inference::InferenceAvailability::observe(
                 &provider,
                 floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-                floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
             )
             .await;
             let admission = floe_provider_adapters::control::SavedConnectionAdmission::new(
@@ -298,8 +311,8 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             };
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
-            let task = experts
-                .handle_message(A2ASendMessageRequest {
+            let mut output = experts
+                .execute_builtin(&A2ASendMessageRequest {
                     usage: Default::default(),
                     schema_version: AGENT_VERSION,
                     person_id: self.vault.person_id(),
@@ -323,7 +336,21 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
             let coverage = governed_store
                 .result_coverage(task_id, task_id)?
                 .unwrap_or(floe_agent_contract::DependencyCoverage::Independent);
-            floe_experts::expert_report(invocation, &task, run_id, coverage)
+            for artifact in &mut output.artifacts {
+                if artifact.coverage == floe_agent_contract::DependencyCoverage::Unknown {
+                    artifact.coverage = coverage.clone();
+                }
+            }
+            Ok(ExpertReport {
+                task_id: invocation.request.task_id,
+                principal: invocation.request.principal,
+                agent_id: invocation.request.selected_agent_id,
+                definition_revision: invocation.request.selected_definition_revision,
+                result: output.result,
+                artifacts: output.artifacts,
+                coverage,
+                settlement: output.settlement,
+            })
         })
     }
 }
@@ -698,6 +725,28 @@ impl InProcessAgent for ConversationExperts<'_> {
         &self,
         request: A2ASendMessageRequest,
     ) -> Result<A2ATask, AgentFailure> {
+        if let Some((_, runner)) = self
+            .task_runners
+            .iter()
+            .find(|(agent_id, _)| *agent_id == request.agent_id)
+        {
+            return runner.run(request).await;
+        }
+        let output = self.execute_builtin(&request).await?;
+        floe_experts::completed_expert_task(
+            request,
+            output.result,
+            output.artifacts,
+            output.settlement,
+        )
+    }
+}
+
+impl ConversationExperts<'_> {
+    async fn execute_builtin(
+        &self,
+        request: &A2ASendMessageRequest,
+    ) -> Result<BuiltinExpertOutput, AgentFailure> {
         let cards = self.agent_cards(request.person_id);
         let invocation_id = floe_experts::admit_expert_message(&request, &cards)?;
         let expert_started = std::time::Instant::now();
@@ -706,13 +755,6 @@ impl InProcessAgent for ConversationExperts<'_> {
             invocation_id = %invocation_id,
             "expert_invocation_started"
         );
-        if let Some((_, runner)) = self
-            .task_runners
-            .iter()
-            .find(|(agent_id, _)| *agent_id == request.agent_id)
-        {
-            return runner.run(request).await;
-        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
@@ -764,6 +806,9 @@ impl InProcessAgent for ConversationExperts<'_> {
             .run(&request.agent_id, &host, &expert_request)
             .await?;
         reject_raw_requirement_artifacts(&output.artifacts)?;
+        if output.settlement.is_none() {
+            reject_raw_action_artifacts(&output.artifacts)?;
+        }
         let captured = host.take_captured()?;
         if !captured.is_empty() {
             let runs = self.runs.ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -834,21 +879,13 @@ impl InProcessAgent for ConversationExperts<'_> {
                     &[reference],
                 )?);
         }
-        let task = floe_experts::completed_expert_task(
-            request,
-            &output.artifact_name,
-            output.summary,
-            output.data,
-            output.artifacts,
-            output.settlement,
-        )?;
         tracing::info!(
-            expert = task.agent_id,
-            invocation_id = %task.id,
+            expert = request.agent_id,
+            invocation_id = %expert_request.task_id,
             elapsed_ms = expert_started.elapsed().as_millis() as u64,
             "expert_invocation_completed"
         );
-        Ok(task)
+        Ok(output)
     }
 }
 
@@ -1002,6 +1039,24 @@ mod capture_tests {
             Err(AgentFailure::InvalidModelOutput)
         );
         assert_eq!(reject_raw_requirement_artifacts(&[]), Ok(()));
+    }
+
+    #[test]
+    fn package_artifact_cannot_claim_actions_proposal_media_type() {
+        let forged = floe_agent_contract::Artifact {
+            artifact_id: uuid::Uuid::new_v4(),
+            name: "package result".into(),
+            parts: vec![floe_agent_contract::ArtifactPart::Data {
+                media_type: floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE.into(),
+                data: "{\"execute\":true}".into(),
+            }],
+            coverage: floe_agent_contract::DependencyCoverage::Unknown,
+        };
+        assert_eq!(
+            reject_raw_action_artifacts(std::slice::from_ref(&forged)),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        assert_eq!(reject_raw_action_artifacts(&[]), Ok(()));
     }
 
     #[tokio::test]
@@ -1323,12 +1378,12 @@ mod capture_tests {
             .await
             .unwrap();
         assert!(
-            output.data.contains("protect_focus"),
+            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap().contains("protect_focus"),
             "optional blocker must not gate the judgment: {}",
-            output.data
+            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap()
         );
         assert!(
-            output.artifacts.is_empty(),
+            output.artifacts.len() == 1,
             "the judgment proposes no requirement of its own"
         );
         let captured = host.take_captured().unwrap();
@@ -1368,7 +1423,7 @@ mod capture_tests {
             "model.example",
             "server-model",
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
             vec![floe_agent_contract::DataClass::Personal],
             vec![],
             uuid::Uuid::new_v4(),
@@ -1471,17 +1526,17 @@ mod capture_tests {
             .await
             .unwrap();
         assert!(
-            output.summary.contains("Model approval"),
+            output.result.contains("Model approval"),
             "blocked judgment must name the review: {}",
-            output.summary
+            output.result
         );
         assert!(
-            output.data.contains("needs_user_action"),
+            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap().contains("needs_user_action"),
             "blocked report carries the status: {}",
-            output.data
+            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap()
         );
         assert!(
-            output.artifacts.is_empty(),
+            output.artifacts.len() == 1,
             "the judgment proposes no requirement of its own"
         );
         assert_eq!(*model_blocked.lock().unwrap(), Some(requirement));
@@ -1539,7 +1594,7 @@ mod capture_tests {
                     )
                     .unwrap(),
                     consumer: floe_inference::ModelConsumer::new(
-                        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                        floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
                     )
                     .unwrap(),
                     execution_location: floe_inference::ExecutionLocation::Device,
@@ -1603,7 +1658,7 @@ mod capture_tests {
             "model.example",
             "server-model",
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
             vec![floe_agent_contract::DataClass::Personal],
             vec![],
             uuid::Uuid::new_v4(),
@@ -1696,7 +1751,7 @@ mod capture_tests {
         let availability = floe_inference::InferenceAvailability::observe(
             &AvailableProvider,
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         )
         .await;
         let device_id = "test-device";

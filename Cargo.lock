@@ -990,6 +990,7 @@ name = "floe-experts-builtin"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-actions",
  "floe-agent-contract",
  "floe-agent-runtime",
  "floe-context-contract",

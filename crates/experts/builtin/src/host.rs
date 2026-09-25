@@ -8,10 +8,12 @@
 
 use std::{future::Future, pin::Pin};
 
-use floe_agent_contract::DataClass;
 use floe_agent_contract::PersonId;
-use floe_agent_contract::{AgentContext, Artifact, EndpointSettlement, InferencePolicyDecision};
-use floe_agent_contract::{AgentFailure, ExpertInsight, ExpertModel};
+use floe_agent_contract::{
+    AgentContext, Artifact, ArtifactPart, DependencyCoverage, EndpointSettlement,
+    InferencePolicyDecision,
+};
+use floe_agent_contract::{AgentFailure, ExpertModel};
 use floe_context_contract::SourceReadOutcome;
 use floe_context_contract::{
     AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView,
@@ -116,29 +118,15 @@ impl BuiltinExpertRequest {
 /// The Expert names its own result artifact; the common path carries the name
 /// it was given rather than deriving one from the agent id.
 pub struct BuiltinExpertOutput {
-    pub artifact_name: String,
-    pub summary: String,
-    pub data: String,
+    pub result: String,
     pub artifacts: Vec<Artifact>,
     pub settlement: Option<EndpointSettlement>,
 }
 
-#[derive(serde::Serialize)]
-pub struct StatefulFocusProposal {
-    pub starts_at_unix_ms: u64,
-    pub ends_at_unix_ms: u64,
-}
-
-#[derive(serde::Serialize)]
 pub struct StatefulExpertDraft {
-    pub source_handle: String,
-    pub data_class: DataClass,
-    pub expires_at_unix_ms: u64,
-    pub insights: Vec<ExpertInsight>,
-    pub action_proposals: Vec<StatefulFocusProposal>,
-    pub summary: String,
-    pub model_calls: u32,
-    pub view_calls: u32,
+    pub result: String,
+    pub artifacts: Vec<Artifact>,
+    pub calendar_proposal: Option<floe_actions::ExpertCalendarProposalDraft>,
 }
 
 /// Why a mandatory source left an Expert with no judgment to make.
@@ -159,17 +147,36 @@ pub struct BlockedExpertResult {
 }
 
 impl BuiltinExpertOutput {
-    /// A serialized Expert result and the summary the Task carries beside it.
+    pub fn data_part(&self, media_type: &str) -> Option<&str> {
+        self.artifacts.iter().flat_map(|artifact| &artifact.parts).find_map(|part| {
+            match part {
+                ArtifactPart::Data { media_type: found, data } if found == media_type => {
+                    Some(data.as_str())
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// Serialize a package-owned result as an unsettled domain artifact.
     pub fn from_result<Result_: serde::Serialize>(
         artifact_name: &str,
-        summary: String,
+        media_type: &str,
+        result_text: String,
         result: &Result_,
     ) -> Result<Self, AgentFailure> {
         Ok(Self {
-            artifact_name: artifact_name.to_owned(),
-            summary,
-            data: serde_json::to_string(result).map_err(|_| AgentFailure::InvalidModelOutput)?,
-            artifacts: vec![],
+            result: result_text,
+            artifacts: vec![Artifact {
+                artifact_id: Uuid::new_v4(),
+                name: artifact_name.to_owned(),
+                parts: vec![ArtifactPart::Data {
+                    media_type: media_type.to_owned(),
+                    data: serde_json::to_string(result)
+                        .map_err(|_| AgentFailure::InvalidModelOutput)?,
+                }],
+                coverage: DependencyCoverage::Unknown,
+            }],
             settlement: None,
         })
     }
@@ -180,6 +187,7 @@ impl BuiltinExpertOutput {
     /// itself proposes no requirement.
     pub fn from_blocked(
         artifact_name: &str,
+        media_type: &str,
         status: BlockedExpertStatus,
         summary: String,
     ) -> Result<Self, AgentFailure> {
@@ -188,6 +196,7 @@ impl BuiltinExpertOutput {
         }
         Self::from_result(
             artifact_name,
+            media_type,
             summary.clone(),
             &BlockedExpertResult {
                 schema_version: floe_agent_contract::AGENT_VERSION,
@@ -198,7 +207,7 @@ impl BuiltinExpertOutput {
     }
 
     pub fn with_artifacts(mut self, artifacts: Vec<Artifact>) -> Self {
-        self.artifacts = artifacts;
+        self.artifacts.extend(artifacts);
         self
     }
 

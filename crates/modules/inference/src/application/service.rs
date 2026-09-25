@@ -1450,7 +1450,7 @@ mod tests {
                 scoped_profile(
                     "device",
                     "expert-delegation",
-                    "experts.builtin",
+                    "experts.delegated",
                     ExecutionLocation::Device,
                     DataRecipient::Device,
                     true,
@@ -1461,7 +1461,7 @@ mod tests {
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
         let request = domain_request(
             "expert-delegation",
-            "experts.builtin",
+            "experts.delegated",
             projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
             None,
         );
@@ -1483,7 +1483,7 @@ mod tests {
                     scoped_profile(
                         "device",
                         "expert-delegation",
-                        "experts.builtin",
+                        "experts.delegated",
                         ExecutionLocation::Device,
                         DataRecipient::Device,
                         true,
@@ -1494,7 +1494,7 @@ mod tests {
                     scoped_profile(
                         "server",
                         "expert-delegation",
-                        "experts.builtin",
+                        "experts.delegated",
                         ExecutionLocation::Remote,
                         DataRecipient::external("ext").unwrap(),
                         true,
@@ -1506,7 +1506,7 @@ mod tests {
         let service = InferenceService::new(provider, AllowResolver, AllowAuthority);
         let request = domain_request(
             "expert-delegation",
-            "experts.builtin",
+            "experts.delegated",
             projection(DependencyCoverage::Independent, vec![DataClass::Personal]),
             None,
         );

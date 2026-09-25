@@ -285,9 +285,9 @@ async fn personal_experts_combine_typed_views_with_bounded_provenance() {
     assert_eq!(wellbeing.source_handles.len(), 2);
     assert_eq!(wellbeing.expires_at_unix_ms, NOW + 180_000);
     let calls = model.calls.lock().unwrap();
-    assert_eq!(calls[0].prompt.role, PromptRole::RelationshipsExpert);
-    assert_eq!(calls[1].prompt.role, PromptRole::FocusAttentionExpert);
-    assert_eq!(calls[2].prompt.role, PromptRole::WellbeingExpert);
+    assert_eq!(calls[0].prompt.role, PromptRole::Expert);
+    assert_eq!(calls[1].prompt.role, PromptRole::Expert);
+    assert_eq!(calls[2].prompt.role, PromptRole::Expert);
     assert_eq!(calls[0].requirement, ExpertModelRequirement::Any);
     assert_eq!(calls[1].requirement, ExpertModelRequirement::DeviceOnly);
     assert_eq!(calls[2].requirement, ExpertModelRequirement::Any);
@@ -511,7 +511,7 @@ async fn blocked_model_call_passes_the_requirement_through_untouched() {
         "model.example",
         "server-model",
         "everyday_assistance",
-        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         vec![floe_agent_contract::DataClass::Personal],
         vec![],
         Uuid::new_v4(),

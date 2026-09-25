@@ -24,7 +24,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         SourceReadOutcome::Ready(view) => view,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-                crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Contacts are temporarily unavailable, so there is no relationship assessment."
                     .into(),
@@ -36,6 +37,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::NeedsUserAction,
                 "Contacts access needs your review, so there is no relationship assessment.".into(),
             );
@@ -57,6 +59,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         ExpertJudgment::Blocked(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::NeedsUserAction,
                 "Model approval needs your review, so there is no relationship assessment.".into(),
             );
@@ -64,6 +67,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     };
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+        super::RESULT_MEDIA_TYPE,
         result.summary.clone(),
         &result,
     )

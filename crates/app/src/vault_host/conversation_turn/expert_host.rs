@@ -378,7 +378,7 @@ impl floe_agent_contract::ExpertModel for ExpertModelHost<'_> {
                         projection,
                         catalog,
                         purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
-                        consumer: floe_agent_contract::EXPERT_INFERENCE_CONSUMER.into(),
+                        consumer: floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
                         preferred_profile_id: None,
                         replay: vec![],
                         lineage: self.lineage,
@@ -457,7 +457,7 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
                         projection,
                         catalog,
                         purpose: floe_inference::EVERYDAY_ASSISTANCE_PURPOSE.into(),
-                        consumer: floe_agent_contract::EXPERT_INFERENCE_CONSUMER.into(),
+                        consumer: floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
                         preferred_profile_id: None,
                         replay: vec![],
                         lineage: self.lineage,
@@ -1950,7 +1950,7 @@ mod tests {
         );
         assert_eq!(
             calls[0].0.consumer,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER
         );
         assert_eq!(
             calls[0].1,
@@ -1965,7 +1965,7 @@ mod tests {
             "model.example",
             "server-model",
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
             vec![floe_agent_contract::DataClass::Personal],
             vec![],
             Uuid::new_v4(),

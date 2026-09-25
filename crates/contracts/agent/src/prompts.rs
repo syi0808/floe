@@ -21,14 +21,7 @@ pub const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
 #[serde(rename_all = "snake_case")]
 pub enum PromptRole {
     Manager,
-    ScheduleExpert,
-    CommitmentsExpert,
-    CommunicationExpert,
-    RelationshipsExpert,
-    FocusAttentionExpert,
-    WellbeingExpert,
-    WorkContextExpert,
-    LifeLogisticsExpert,
+    Expert,
     Learner,
 }
 
@@ -136,14 +129,13 @@ impl PromptAssembly {
 
 /// Assemble a role prompt from the shared kernel, the role text and the protocol.
 pub fn expert_prompt(
-    role: PromptRole,
     source: &str,
     revision: u64,
     content: &str,
 ) -> PromptAssembly {
     PromptAssembly {
         schema_version: AGENT_VERSION,
-        role,
+        role: PromptRole::Expert,
         components: vec![
             product_component(
                 PromptComponentKind::BehaviorKernel,

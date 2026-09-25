@@ -1,18 +1,18 @@
-use floe_agent_contract::{
-    AgentFailure, ExpertInsight, ExpertModelOutcome, ExpertModelRequirement,
-};
-use floe_context_contract::{CalendarContextView, DataClass, calendar_context_evidence};
+use floe_agent_contract::{AgentFailure, ExpertModelOutcome, ExpertModelRequirement};
+use floe_context_contract::{CalendarContextView, calendar_context_evidence};
 use uuid::Uuid;
 
 use crate::prompts::schedule_expert_prompt;
 use crate::shared::{ExpertJudgment, run_expert_model};
-use crate::{BuiltinExpertHost, BuiltinExpertRequest, StatefulExpertDraft, StatefulFocusProposal};
+use crate::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft};
+use floe_actions::ExpertCalendarProposalDraft;
+use super::{ScheduleAssessment, ScheduleInsight, RESULT_MEDIA_TYPE};
 
 pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
     views: &[CalendarContextView],
-    view_calls: u32,
+    _view_calls: u32,
     propose_focus: bool,
 ) -> Result<ExpertJudgment<StatefulExpertDraft>, AgentFailure> {
     let first = views.first().ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -54,7 +54,7 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
     items.sort_by_key(|item| (item.starts_at_unix_ms, item.ends_at_unix_ms));
     let mut insights = Vec::new();
     for item in items.iter().take(if propose_focus { 7 } else { 8 }) {
-        insights.push(ExpertInsight::Commitment {
+        insights.push(ScheduleInsight::Commitment {
             evidence_handle: Uuid::new_v5(&request.invocation_id, item.evidence_handle.as_bytes()),
             untrusted_title: item.untrusted_title.clone(),
             starts_at_unix_ms: u64::try_from(item.starts_at_unix_ms)
@@ -63,7 +63,7 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
                 .map_err(|_| AgentFailure::InvalidInput)?,
         });
     }
-    let mut action_proposals = Vec::new();
+    let mut action_proposal = None;
     if propose_focus {
         if views.len() != 1 {
             return Err(AgentFailure::CapabilityUnavailable);
@@ -83,37 +83,33 @@ pub async fn judge<Host: BuiltinExpertHost + ?Sized>(
         }
         match window {
             Some((starts_at_unix_ms, ends_at_unix_ms)) => {
-                insights.push(ExpertInsight::FocusWindow {
+                insights.push(ScheduleInsight::FocusWindow {
                     starts_at_unix_ms: u64::try_from(starts_at_unix_ms)
                         .map_err(|_| AgentFailure::InvalidInput)?,
                     ends_at_unix_ms: u64::try_from(ends_at_unix_ms)
                         .map_err(|_| AgentFailure::InvalidInput)?,
                 });
-                action_proposals.push(StatefulFocusProposal {
+                action_proposal = Some(ExpertCalendarProposalDraft {
                     starts_at_unix_ms: u64::try_from(starts_at_unix_ms)
                         .map_err(|_| AgentFailure::InvalidInput)?,
                     ends_at_unix_ms: u64::try_from(ends_at_unix_ms)
                         .map_err(|_| AgentFailure::InvalidInput)?,
                 });
             }
-            None => insights.push(ExpertInsight::NoFocusWindow),
+            None => insights.push(ScheduleInsight::NoFocusWindow),
         }
     }
+    let assessment = ScheduleAssessment { insights };
+    assessment.validate()?;
+    let output = BuiltinExpertOutput::from_result(
+        "Schedule assessment",
+        RESULT_MEDIA_TYPE,
+        summary.to_owned(),
+        &assessment,
+    )?;
     Ok(ExpertJudgment::Decided(StatefulExpertDraft {
-        source_handle: first.source_handle.clone(),
-        data_class: DataClass::Personal,
-        expires_at_unix_ms: u64::try_from(
-            views
-                .iter()
-                .map(|view| view.expires_at_unix_ms)
-                .min()
-                .unwrap_or_default(),
-        )
-        .map_err(|_| AgentFailure::InvalidInput)?,
-        insights,
-        action_proposals,
-        summary: summary.to_owned(),
-        model_calls: 1,
-        view_calls,
+        result: output.result,
+        artifacts: output.artifacts,
+        calendar_proposal: action_proposal,
     }))
 }

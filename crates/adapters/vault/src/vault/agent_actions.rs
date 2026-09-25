@@ -328,6 +328,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(|_| AgentFailure::StorageUnavailable)?;
         let result = async {
             self.ensure_agent_action_schema(&transaction).await?;
+            let origin = envelope
+                .action
+                .agent_origin
+                .as_ref()
+                .ok_or(AgentFailure::Conflict)?;
+            let registry = floe_experts::AgentRegistry::restore(
+                self.registry_on(&transaction)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?,
+                self.vault_id,
+            )?;
+            registry.validate_settled_invocation(
+                origin.instance_id,
+                self.person_id,
+                origin.assignment_id,
+                &origin.package,
+                origin.state_revision,
+                origin.data_class,
+            )?;
+            registry.validate_active_assignment(self.person_id, origin.assignment_id)?;
             let changed = transaction
                 .execute(
                     "INSERT INTO agent_action_envelopes (execution_id, person_id, grant_id, grant_incarnation, grant_epoch, state, digest, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

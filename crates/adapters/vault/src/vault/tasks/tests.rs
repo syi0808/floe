@@ -85,6 +85,12 @@ async fn durable_task_admission_cas_and_generation_recovery_are_fail_closed() {
         vault.admit_task(proposed.clone()).await.unwrap(),
         VaultTaskAdmission::Existing(proposed.clone())
     );
+    let mut duplicate_invocation = proposed.clone();
+    duplicate_invocation.snapshot.task_id = TaskId::new();
+    assert_eq!(
+        vault.admit_task(duplicate_invocation).await,
+        Err(AgentFailure::Conflict)
+    );
     let mut changed_retry = proposed.clone();
     changed_retry.request_digest = [8; 32];
     assert_eq!(

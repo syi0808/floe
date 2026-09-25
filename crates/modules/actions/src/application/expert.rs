@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use floe_agent_contract::ExpertResult;
 use floe_context_contract::CalendarProvider;
 use floe_context_contract::ContextDependency;
 use floe_context_contract::DataClass;
@@ -14,6 +13,7 @@ use crate::{
     ActionRepository, ActionService, AgentActionEnvelope, AgentActionOrigin, CalendarAction,
     CalendarActionPolicy, CalendarActionProvider, CalendarActionState, ExpertActionStore,
     ExpertProposalReference,
+    ExpertCalendarProposal,
 };
 
 pub struct ExpertCalendarDestination {
@@ -83,39 +83,24 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
                 }
                 let Some(action) = self
                     .repository
-                    .bounded_expert_calendar_action(evidence.person_id, evidence.invocation_id)
+                    .bounded_expert_calendar_action(evidence.person_id, evidence.task_id)
                     .await? else {
-                    return Ok(None);
-                };
-                let Some(origin) = action.agent_origin.as_ref() else {
-                    return Err(AgentFailure::Conflict);
-                };
-                validate_calendar_source_handle(
-                    &evidence.source_handle,
-                    evidence.evidence_id,
-                    action.connection_revision,
-                )?;
-                if evidence.source_handle.starts_with("calendar.observe:") {
                     let dependency = store
                         .expert_proposal_dependency(&reference, &evidence)
                         .await?;
                     if dependency.observation_id() != evidence.evidence_id {
                         return Err(AgentFailure::Conflict);
                     }
-                    self.fence.observation(&dependency)?;
-                    let connection = self
-                        .repository
-                        .calendar_connection(evidence.person_id)
-                        .await
-                        .map_err(agent_error)?
-                        .ok_or(AgentFailure::StaleContext)?;
-                    validate_context_calendar_source(&dependency, &connection, &action.calendar_id)?;
-                }
-                let proposal = &evidence.action_proposals[0];
+                    return Ok(None);
+                };
+                let Some(origin) = action.agent_origin.as_ref() else {
+                    return Err(AgentFailure::Conflict);
+                };
+                let proposal = &evidence.draft;
                 if !origin.valid_for(&action)
                     || origin.instance_id != evidence.instance_id
                     || origin.session_id != session_id
-                    || origin.invocation_id != evidence.invocation_id
+                    || origin.invocation_id != evidence.task_id
                     || origin.assignment_id != evidence.assignment_id
                     || origin.package != evidence.package
                     || origin.evidence_id != evidence.evidence_id
@@ -402,15 +387,11 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         &self,
         store: &impl ExpertActionStore,
         request: &ExpertCalendarRequest,
-        evidence: ExpertResult,
+        evidence: ExpertCalendarProposal,
         clock: &impl Fn() -> DateTime<Utc>,
     ) -> Result<CalendarAction, AgentFailure> {
         let destination = &request.destination;
-        validate_calendar_source_handle(
-            &evidence.source_handle,
-            evidence.evidence_id,
-            destination.connection_revision,
-        )?;
+        evidence.validate()?;
         if !matches!(
             (evidence.data_class, destination.provider),
             (DataClass::Synthetic, CalendarProvider::Fixture)
@@ -418,10 +399,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         ) {
             return Err(AgentFailure::PolicyDenied);
         }
-        let proposal = &evidence.action_proposals[0];
-        if proposal.evidence_id != evidence.evidence_id || evidence.evidence_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
+        let proposal = &evidence.draft;
         let schedule = TimedSchedule::new(
             timestamp(proposal.starts_at_unix_ms)?,
             timestamp(proposal.ends_at_unix_ms)?,
@@ -432,7 +410,7 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             schema_version: 1,
             instance_id: evidence.instance_id,
             session_id: request.reference.session_id,
-            invocation_id: evidence.invocation_id,
+            invocation_id: evidence.task_id,
             assignment_id: evidence.assignment_id,
             package: evidence.package.clone(),
             evidence_id: evidence.evidence_id,
@@ -440,37 +418,18 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
             data_class: evidence.data_class,
             automatic: false,
         };
-        let governed_source = evidence.source_handle.starts_with("calendar.timeline:")
-            || evidence.source_handle.starts_with("calendar.lease:")
-            || evidence.source_handle.starts_with("calendar.observe:");
-        if governed_source {
-            match store.agent_calendar_action(evidence.invocation_id).await {
-                Ok(existing) => {
-                    return matching_action(existing, &origin, destination, &schedule);
-                }
-                Err(AgentFailure::NotFound) => match self
-                    .actions()
-                    .calendar_action(evidence.person_id, evidence.invocation_id)
-                    .await
-                {
-                    Ok(_) => return Err(AgentFailure::Conflict),
-                    Err(error) if error.code == ActionErrorCode::NotFound => {}
-                    Err(error) => return Err(agent_error(error)),
-                },
-                Err(failure) => return Err(failure),
-            }
-        } else {
-            match self
+        match store.agent_calendar_action(evidence.task_id).await {
+            Ok(existing) => return matching_action(existing, &origin, destination, &schedule),
+            Err(AgentFailure::NotFound) => match self
                 .actions()
-                .calendar_action(evidence.person_id, evidence.invocation_id)
+                .calendar_action(evidence.person_id, evidence.task_id)
                 .await
             {
-                Ok(existing) => {
-                    return matching_action(existing, &origin, destination, &schedule);
-                }
+                Ok(_) => return Err(AgentFailure::Conflict),
                 Err(error) if error.code == ActionErrorCode::NotFound => {}
                 Err(error) => return Err(agent_error(error)),
-            }
+            },
+            Err(failure) => return Err(failure),
         }
         let now = clock();
         let source_expiry = timestamp(evidence.expires_at_unix_ms)?;
@@ -504,35 +463,19 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         {
             return Err(AgentFailure::StaleContext);
         }
-        let context_dependency = if evidence.source_handle.starts_with("calendar.observe:") {
-            let dependency = store
-                .expert_proposal_dependency(&request.reference, &evidence)
-                .await?;
-            self.fence.observation(&dependency)?;
-            validate_context_calendar_source(
-                &dependency,
-                &connection,
-                &destination.calendar_id,
-            )?;
-            Some(dependency)
-        } else {
-            None
-        };
+        let context_dependency = store
+            .expert_proposal_dependency(&request.reference, &evidence)
+            .await?;
+        self.fence.observation(&context_dependency)?;
+        validate_context_calendar_source(
+            &context_dependency,
+            &connection,
+            &destination.calendar_id,
+        )?;
         action.connection_revision = destination.connection_revision;
-        let authority = if evidence.source_handle.starts_with("calendar.timeline:")
-            || evidence.source_handle.starts_with("calendar.lease:")
-            || evidence.source_handle.starts_with("calendar.observe:")
-        {
-            store.agent_action_policy().await?
-        } else {
-            self.actions()
-                .action_authority(evidence.person_id)
-                .await
-                .map_err(agent_error)?
-                .calendar_create
-        };
-        action.id = evidence.invocation_id;
-        action.execution_id = evidence.invocation_id;
+        let authority = store.agent_action_policy().await?;
+        action.id = evidence.task_id;
+        action.execution_id = evidence.task_id;
         action.expires_at = action.expires_at.min(source_expiry);
         action.agent_origin = Some(AgentActionOrigin {
             automatic: authority == ActionAuthorityMode::Allow,
@@ -548,24 +491,6 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
                 reason: ActionBlockReason::PolicyDenied,
             },
         };
-        if evidence.source_handle.starts_with("calendar.timeline:")
-            || evidence.source_handle.starts_with("calendar.lease:")
-            || evidence.source_handle.starts_with("calendar.observe:")
-        {
-            let dependency = match context_dependency {
-                Some(dependency) => dependency,
-                None => store
-                    .expert_proposal_dependency(&request.reference, &evidence)
-                    .await?,
-            };
-            store
-                .store_agent_action_envelope(AgentActionEnvelope {
-                    action: action.clone(),
-                    dependency,
-                    write_approval: authority == ActionAuthorityMode::Allow,
-                })
-                .await?;
-        }
         let publish_time = clock();
         if publish_time < now || publish_time >= action.expires_at {
             return Err(AgentFailure::StaleContext);
@@ -576,48 +501,22 @@ impl<'a, Repository: ActionRepository + ?Sized, Fence: ObservationFence>
         if Instant::now() >= request.deadline {
             return Err(AgentFailure::DeadlineExceeded);
         }
+        store
+            .store_agent_action_envelope(AgentActionEnvelope {
+                action: action.clone(),
+                dependency: context_dependency,
+                write_approval: authority == ActionAuthorityMode::Allow,
+            })
+            .await?;
         match self.repository.save_calendar_action(&action, None).await {
             Ok(()) => Ok(action),
             Err(error) if error.code == ActionErrorCode::Conflict => {
-                let existing = if governed_source {
-                    store.agent_calendar_action(evidence.invocation_id).await?
-                } else {
-                    self.actions()
-                        .calendar_action(evidence.person_id, evidence.invocation_id)
-                        .await
-                        .map_err(agent_error)?
-                };
+                let existing = store.agent_calendar_action(evidence.task_id).await?;
                 matching_action(existing, &origin, destination, &schedule)
             }
             Err(error) => Err(agent_error(error)),
         }
     }
-}
-
-pub fn validate_calendar_source_handle(
-    source_handle: &str,
-    evidence_id: Uuid,
-    connection_revision: u64,
-) -> Result<(), AgentFailure> {
-    if evidence_id.is_nil() {
-        return Err(AgentFailure::StaleContext);
-    }
-    if let Some(revision) = source_handle.strip_prefix("calendar.timeline:") {
-        if revision != format!("{}:{}", evidence_id, connection_revision) {
-            return Err(AgentFailure::StaleContext);
-        }
-    } else if let Some(observation_id) = source_handle.strip_prefix("calendar.lease:") {
-        let parsed = Uuid::parse_str(observation_id).map_err(|_| AgentFailure::StaleContext)?;
-        if parsed.is_nil() || parsed != evidence_id {
-            return Err(AgentFailure::StaleContext);
-        }
-    } else if let Some(observation_id) = source_handle.strip_prefix("calendar.observe:") {
-        let parsed = Uuid::parse_str(observation_id).map_err(|_| AgentFailure::StaleContext)?;
-        if parsed.is_nil() || parsed != evidence_id {
-            return Err(AgentFailure::StaleContext);
-        }
-    }
-    Ok(())
 }
 
 fn validate_context_calendar_source(
@@ -680,34 +579,4 @@ fn timestamp(milliseconds: u64) -> Result<DateTime<Utc>, AgentFailure> {
 
 fn agent_error(error: ActionError) -> AgentFailure {
     AgentFailure::from(error)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn context_calendar_handle_requires_a_real_observation_identity() {
-        let observation = Uuid::new_v4();
-        assert!(validate_calendar_source_handle(
-            &format!("calendar.observe:{observation}"),
-            observation,
-            1,
-        )
-        .is_ok());
-        for handle in ["calendar.observe:invalid", "calendar.observe:00000000-0000-0000-0000-000000000000"] {
-            assert_eq!(
-                validate_calendar_source_handle(handle, observation, 1),
-                Err(AgentFailure::StaleContext)
-            );
-        }
-        assert_eq!(
-            validate_calendar_source_handle(
-                &format!("calendar.observe:{observation}"),
-                Uuid::new_v4(),
-                1,
-            ),
-            Err(AgentFailure::StaleContext)
-        );
-    }
 }

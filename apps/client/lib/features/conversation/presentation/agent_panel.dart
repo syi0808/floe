@@ -12,7 +12,6 @@ import 'package:floe_client/app/floe_mascot.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
-import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
@@ -256,7 +255,9 @@ class _AgentPanelState extends State<AgentPanel> {
                 ),
               ),
             ),
-            if (widget.controller.expertResult(message)?.proposal != null) ...[
+            if (message.hasArtifactMediaType(
+              'application/vnd.floe.actions.calendar-proposal+json;version=1',
+            )) ...[
               const SizedBox(height: FloeSpace.md),
               AgentProposalCard(
                 controller: widget.controller,
@@ -269,31 +270,8 @@ class _AgentPanelState extends State<AgentPanel> {
       };
 
   String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {
-    final result = widget.controller.expertResult(message);
-    if (result == null) {
-      final output = message.output;
-      return output == null || output.trimLeft().startsWith('{')
-          ? strings.agentConversationSourceUnavailable
-          : output;
-    }
-    String clock(DateTime time) =>
-        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-    return [
-      strings.agentExpertSource(agentCapabilityTitle(result.expert)),
-      for (final insight in result.insights)
-        switch (insight.kind) {
-          'commitment' => strings.agentConversationCommitment(
-            insight.title!,
-            clock(insight.start!),
-            clock(insight.end!),
-          ),
-          'focus_window' => strings.agentConversationFocusTime(
-            clock(insight.start!),
-            clock(insight.end!),
-          ),
-          _ => strings.agentExpertNoFocus,
-        },
-    ].join('\n');
+    final output = message.output;
+    return output ?? strings.agentConversationSourceUnavailable;
   }
 
   Widget _composer(AppLocalizations strings, AgentController controller) {

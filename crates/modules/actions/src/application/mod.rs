@@ -3,6 +3,6 @@ mod service;
 
 pub use expert::{
     ExpertActionService, ExpertCalendarDestination, ExpertCalendarInspection,
-    ExpertCalendarRequest, ObservationFence, validate_calendar_source_handle,
+    ExpertCalendarRequest, ObservationFence,
 };
 pub use service::ActionService;

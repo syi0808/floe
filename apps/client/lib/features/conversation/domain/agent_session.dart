@@ -153,27 +153,47 @@ final class AgentCapabilityMessage extends AgentMessage {
           'cancelled',
           'rejected',
         }.contains(state) ||
-        task['artifacts'] is! List) {
+        task['artifacts'] is! List ||
+        (task['artifacts'] as List).length > 16) {
       throw const FormatException('Invalid Agent delegation.');
     }
-    final outputs = <String>[];
-    for (final artifact in task['artifacts']! as List) {
-      final parts = _object(artifact)['parts'];
-      if (parts is! List) {
+    final result = task['result'];
+    if (state == 'completed') {
+      if (failure != null || result is! String || result.trim().isEmpty || result.length > 16384) {
+        throw const FormatException('Invalid completed Agent delegation.');
+      }
+    } else if (result != null) {
+      throw const FormatException('Invalid incomplete Agent delegation.');
+    }
+    if ((state == 'submitted' || state == 'working') && failure != null ||
+        (state == 'failed' || state == 'rejected' || state == 'cancelled') &&
+            failure == null) {
+      throw const FormatException('Invalid Agent delegation failure.');
+    }
+    final artifacts = <AgentArtifact>[];
+    for (final raw in task['artifacts']! as List) {
+      final artifact = _object(raw);
+      final parts = artifact['parts'];
+      if (artifact['artifact_id'] is! String || artifact['name'] is! String ||
+          (artifact['name'] as String).isEmpty || parts is! List || parts.length > 16) {
         throw const FormatException('Invalid Agent delegation artifact.');
       }
+      final mediaTypes = <String>[];
       for (final part in parts) {
         final value = _object(part);
-        if (value['kind'] == 'data' &&
-            value['media_type'] ==
-                'application/vnd.floe.expert-result+json;version=1' &&
-            value['data'] is String) {
-          outputs.add(value['data']! as String);
+        if (value['kind'] == 'data') {
+          if (value['media_type'] is! String || value['data'] is! String ||
+              (value['data'] as String).length > 16384) {
+            throw const FormatException('Invalid Agent delegation artifact data.');
+          }
+          mediaTypes.add(value['media_type'] as String);
+        } else if (value['kind'] != 'text' || value['text'] is! String ||
+            (value['text'] as String).length > 16384) {
+          throw const FormatException('Invalid Agent delegation artifact part.');
         }
       }
-    }
-    if (state == 'completed' && (failure != null || outputs.length != 1)) {
-      throw const FormatException('Invalid completed Agent delegation.');
+      artifacts.add(AgentArtifact(artifact['artifact_id'] as String,
+          artifact['name'] as String, List.unmodifiable(mediaTypes)));
     }
     return AgentCapabilityMessage.fromJson({
       'turn_id': json['turn_id'],
@@ -181,12 +201,13 @@ final class AgentCapabilityMessage extends AgentMessage {
       'capability_id': 'floe.a2a.delegate',
       'input': task['agent_id'],
       'result': state == 'completed'
-          ? {'Ok': outputs.single}
+          ? {'Ok': result}
           : {'Err': failure ?? 'invalid_model_output'},
-    });
+    }, artifacts: List.unmodifiable(artifacts), isDelegation: true);
   }
 
-  AgentCapabilityMessage.fromJson(Map<String, Object?> json)
+  AgentCapabilityMessage.fromJson(Map<String, Object?> json,
+      {this.artifacts = const [], this.isDelegation = false})
     : callId = json['call_id']! as String,
       capabilityId = json['capability_id']! as String,
       input = json['input']! as String,
@@ -203,8 +224,22 @@ final class AgentCapabilityMessage extends AgentMessage {
   final String callId;
   final String capabilityId;
   final String input;
+  final List<AgentArtifact> artifacts;
+  final bool isDelegation;
+
+  bool hasArtifactMediaType(String mediaType) => artifacts.any(
+    (artifact) => artifact.mediaTypes.contains(mediaType),
+  );
   final String? output;
   final String? failure;
+}
+
+final class AgentArtifact {
+  const AgentArtifact(this.id, this.name, this.mediaTypes);
+
+  final String id;
+  final String name;
+  final List<String> mediaTypes;
 }
 
 final class AgentOutcome {

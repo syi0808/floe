@@ -897,6 +897,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_builtin_consumer_approval_does_not_authorize_delegated_expert() {
+        let store = MemoryStore::new();
+        let base = consent();
+        let review = RecipientConsent::try_new(
+            base.person_id,
+            &base.device_id,
+            &base.client_id,
+            &base.recipient,
+            &base.profile_id,
+            &base.purpose,
+            "experts.builtin",
+            base.input_data_classes.clone(),
+            base.source_scopes.clone(),
+            base.lineage,
+            base.projection_ref,
+            base.projection_revision,
+            base.created_at,
+        )
+        .unwrap();
+        let granted = grant_recipient_consent(&store, review).await.unwrap();
+        let admission = FakeAdmission::live(granted.person_id());
+        let clock = ManualClock::at(now());
+        let authority = ContextualRecipientAuthority::new(&store, &admission, &clock);
+        let mut request = dispatch_request(&granted);
+        request.consumer = "experts.delegated".into();
+        assert_eq!(
+            authority.check_recipient(&request).await,
+            Ok(crate::ports::model_dispatch::RecipientCheckOutcome::Missing)
+        );
+    }
+
+    #[tokio::test]
     async fn authority_treats_revoked_and_expired_as_missing() {
         let store = MemoryStore::new();
         let review = consent();

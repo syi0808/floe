@@ -934,6 +934,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
+            for message in &terminal.appended_messages {
+                if let AgentMessage::Delegation { turn_id, task } = message {
+                    transaction
+                        .execute(
+                            "INSERT INTO agent_task_delegations (task_id, session_id, turn_id) VALUES (?, ?, ?)",
+                            (task.id.to_string(), session.id.to_string(), turn_id.to_string()),
+                        )
+                        .await
+                        .map_err(|_| AgentFailure::Conflict)?;
+                }
+            }
             session.messages.extend(terminal.appended_messages);
             session.active_turn = None;
             session.continuation = (terminal.output.is_none()

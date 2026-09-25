@@ -169,8 +169,8 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
             communication.assessments[0].draft.is_some()
         );
         let calls = model.calls.lock().unwrap();
-        assert_eq!(calls[0].prompt.role, PromptRole::CommitmentsExpert);
-        assert_eq!(calls[1].prompt.role, PromptRole::CommunicationExpert);
+        assert_eq!(calls[0].prompt.role, PromptRole::Expert);
+        assert_eq!(calls[1].prompt.role, PromptRole::Expert);
         assert_eq!(calls[0].requirement, ExpertModelRequirement::RemoteOnly);
         assert_eq!(calls[1].requirement, ExpertModelRequirement::RemoteOnly);
         for call in calls.iter() {
@@ -449,7 +449,7 @@ fn blocked_requirement() -> floe_context_contract::ProcessingRequirement {
         "model.example",
         "server-model",
         "everyday_assistance",
-        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         vec![DataClass::Personal],
         vec![],
         Uuid::new_v4(),

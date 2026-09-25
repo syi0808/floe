@@ -152,7 +152,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 // The host publishes the model requirement it captured; the
                 // report proposes no requirement of its own.
                 return BuiltinExpertOutput::from_blocked(
-                    BuiltinExpertKind::Schedule.result_artifact_name(),
+BuiltinExpertKind::Schedule.result_artifact_name(),
+super::RESULT_MEDIA_TYPE,
                     BlockedExpertStatus::NeedsUserAction,
                     "Model approval needs your review, so there is no schedule assessment.".into(),
                 );
@@ -167,9 +168,16 @@ fn blocked(
     result: BlockedResult,
     artifacts: Vec<Artifact>,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
+    let result_text = match &result {
+        BlockedResult::Unavailable { .. } =>
+            "Calendar information is not available for this Schedule task.",
+        BlockedResult::NeedsUserAction =>
+            "Calendar access needs your review before this Schedule task can continue.",
+    };
     BuiltinExpertOutput::from_result(
         BuiltinExpertKind::Schedule.result_artifact_name(),
-        "Calendar information is not available for this Schedule task.".into(),
+        super::RESULT_MEDIA_TYPE,
+        result_text.into(),
         &result,
     )
     .map(|output| output.with_artifacts(artifacts))
@@ -364,11 +372,11 @@ mod tests {
             draft: crate::StatefulExpertDraft,
         ) -> Acquiring<'a, BuiltinExpertOutput> {
             Box::pin(async move {
-                BuiltinExpertOutput::from_result(
-                    BuiltinExpertKind::Schedule.result_artifact_name(),
-                    draft.summary.clone(),
-                    &draft,
-                )
+                Ok(BuiltinExpertOutput {
+                    result: draft.result,
+                    artifacts: draft.artifacts,
+                    settlement: None,
+                })
             })
         }
 
@@ -451,7 +459,7 @@ mod tests {
         for scenario in [Scenario::Complete, Scenario::Paginated] {
             let host = Host::new(scenario);
             let output = dispatch(&host, &request()).await.unwrap();
-            assert!(output.summary.contains("appointment"));
+            assert!(output.result.contains("appointment"));
             assert_eq!(host.model.0.load(Ordering::SeqCst), 1);
             let queries = host.queries.lock().unwrap();
             assert!(queries.iter().all(|query| {
@@ -473,12 +481,12 @@ mod tests {
             let result = dispatch(&host, &request()).await;
             assert_eq!(host.model.0.load(Ordering::SeqCst), 0);
             match host.scenario {
-                Scenario::Unavailable => assert!(result.unwrap().data.contains("unavailable")),
+                Scenario::Unavailable => assert!(result.unwrap().data_part(crate::schedule::RESULT_MEDIA_TYPE).unwrap().contains("unavailable")),
                 Scenario::NeedsUserAction => {
                     let output = result.unwrap();
-                    assert!(output.data.contains("needs_user_action"));
+                    assert!(output.data_part(crate::schedule::RESULT_MEDIA_TYPE).unwrap().contains("needs_user_action"));
                     assert!(
-                        output.artifacts.is_empty(),
+                        output.artifacts.len() == 1,
                         "blocked reports propose no requirement of their own"
                     );
                 }

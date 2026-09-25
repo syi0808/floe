@@ -1117,7 +1117,7 @@ mod tests {
             base_url,
             "a".repeat(32),
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         )
         .unwrap();
         let observed = provider.observe_profiles().await;
@@ -1128,7 +1128,7 @@ mod tests {
         );
         assert_eq!(
             observed[0].profile.consumer.as_str(),
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER
         );
         server.await.unwrap();
     }

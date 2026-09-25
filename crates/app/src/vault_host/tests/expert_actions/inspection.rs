@@ -57,8 +57,8 @@ async fn inspection_of_unprepared_evidence_does_not_publish_initialize_or_modify
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), registry);
     let fixture = fixture.reopen().await;
     assert_eq!(fixture.inspect().await.unwrap(), None);
-    let action = fixture.prepare().await.unwrap();
-    assert_eq!(fixture.inspect().await.unwrap(), Some(action));
+    assert_eq!(fixture.prepare().await, Err(AgentFailure::StaleContext));
+    assert_eq!(fixture.inspect().await.unwrap(), None);
 }
 
 #[tokio::test]
@@ -187,29 +187,32 @@ async fn inspection_rejects_cross_person_copied_and_uncommitted_receipts() {
     );
     for forged in [false, true] {
         let mut copied = fixture.vault.create_session().await.unwrap();
-        copied.data_classes.push(DataClass::Synthetic);
-        let mut evidence = fixture.evidence.clone();
+        copied.data_classes.push(DataClass::Personal);
+        let mut snapshot = fixture.snapshot.clone();
         if forged {
-            evidence.invocation_id = Uuid::new_v4();
+            snapshot.task_id = floe_agent_contract::TaskId::from_uuid(Uuid::new_v4()).unwrap();
         }
         copied.revision = 1;
         copied
             .messages
-            .push(delegation_message(Uuid::new_v4(), &evidence));
+            .push(delegation_message(Uuid::new_v4(), &snapshot));
+        if !forged {
+            assert_eq!(
+                fixture.vault.compare_and_swap(&copied, 0).await,
+                Err(AgentFailure::Conflict)
+            );
+            continue;
+        }
         fixture.vault.compare_and_swap(&copied, 0).await.unwrap();
         let mut request = fixture.inspection();
         request.reference.session_id = copied.id;
-        request.reference.invocation_id = evidence.invocation_id;
+        request.reference.invocation_id = snapshot.task_id.as_uuid();
         assert_eq!(
             fixture
                 .core
                 .inspect_expert_calendar_action(&fixture.vault, request)
                 .await,
-            Err(if forged {
-                AgentFailure::NotFound
-            } else {
-                AgentFailure::Conflict
-            })
+            Err(AgentFailure::NotFound)
         );
     }
 }

@@ -15,7 +15,7 @@ mod task;
 pub use a2a::{
     A2A_PROTOCOL_VERSION, A2AArtifact, A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ARouter,
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard,
-    EXPERT_RESULT_MEDIA_TYPE, InProcessA2ATransport, InProcessAgent, NoA2AHost,
+    InProcessA2ATransport, InProcessAgent, NoA2AHost,
 };
 pub use builtin_setup::{
     BoxFuture, BuiltinExpertRefresh, BuiltinExpertStore, ExpertRefreshOutcome,
@@ -24,18 +24,17 @@ pub use builtin_setup::{
 pub use directory::{Directory, DirectoryEntry, DirectoryQuery};
 pub use dispatch::{
     ExpertDispatchTable, ExpertRun, TaskCoverageRecorder, admit_expert_message,
-    completed_expert_task, expert_report, record_task_coverage, task_receipt_to_a2a,
+    completed_expert_task, record_task_coverage, task_receipt_to_a2a,
 };
 /// What one Expert is asked to do and what it answers are contract values; what
 /// this module adds is the registry that admits an invocation and records it.
 pub use floe_agent_contract::{
-    ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertResult,
-    MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
+    ExpertBudget, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
 };
 pub use registry::{
     AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
     BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, ExpertMetadata,
-    ExpertPackaging, ExpertPrivateState, ExpertRule, ExpertSetupSpec, NoSetupValidator,
+    ExpertPackaging, ExpertPrivateState, ExpertSetupSpec, NoSetupValidator,
     PackageAssignment, PackageImplementation, PackageInstallation, RegistryConfiguration,
     RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, ResolvedExpert,
     SetupValidator, eligible_cards_for_availability,

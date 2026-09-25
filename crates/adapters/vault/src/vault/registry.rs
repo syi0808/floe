@@ -1,61 +1,12 @@
 use floe_access::DependencyCoverage;
 use floe_agent_contract::{TaskId, TaskSnapshot, TaskState};
-use floe_conversation::AgentMessage;
-use floe_experts::{AgentRegistry, ExpertResult, RegistrySnapshot};
+use floe_experts::{AgentRegistry, RegistrySnapshot};
 use turso::transaction::TransactionBehavior;
 
 use super::tasks::VaultTaskRecord;
 use super::*;
 
 const MAX_REGISTRY_BYTES: usize = 262_144;
-
-fn expert_identity_matches(
-    current: &RegistrySnapshot,
-    staged: &RegistrySnapshot,
-    result: &ExpertResult,
-) -> bool {
-    let current_assignment = current
-        .assignments
-        .iter()
-        .find(|assignment| assignment.id == result.assignment_id);
-    let staged_assignment = staged
-        .assignments
-        .iter()
-        .find(|assignment| assignment.id == result.assignment_id);
-    let (Some(current_assignment), Some(staged_assignment)) =
-        (current_assignment, staged_assignment)
-    else {
-        return false;
-    };
-    if current_assignment.person_id != staged_assignment.person_id
-        || current_assignment.installation_id != staged_assignment.installation_id
-        || current_assignment.enabled != staged_assignment.enabled
-        || current_assignment.granted_tool_assignments != staged_assignment.granted_tool_assignments
-    {
-        return false;
-    }
-    let current_installation = current
-        .installations
-        .iter()
-        .find(|installation| installation.id == current_assignment.installation_id);
-    let staged_installation = staged
-        .installations
-        .iter()
-        .find(|installation| installation.id == staged_assignment.installation_id);
-    let (Some(current_installation), Some(staged_installation)) =
-        (current_installation, staged_installation)
-    else {
-        return false;
-    };
-    if current_installation.package != staged_installation.package
-        || current_installation.enabled != staged_installation.enabled
-    {
-        return false;
-    }
-    // Evidence identity is source-observation based and validated by
-    // Access/Context, never by Registry view state.
-    !result.evidence_id.is_nil()
-}
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn builtin_expert_overview(
@@ -298,7 +249,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let result = async {
             if self.registry_on(&transaction).await?.is_some() { return Err(AgentFailure::Conflict); }
             transaction.execute("CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
-            transaction.execute("CREATE TABLE agent_expert_receipts (invocation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, registry_revision INTEGER NOT NULL)", ()).await.map_err(storage)?;
             transaction.execute("INSERT INTO agent_expert_registry VALUES (1, ?, ?)",
                 (integer(snapshot.revision)?, payload)).await.map_err(storage)?;
             let changed = transaction.execute("UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1", ()).await.map_err(storage)?;
@@ -657,198 +607,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub async fn commit_expert_session(
-        &self,
-        session: &AgentSession,
-        previous_revision: u64,
-        expected_registry_revision: u64,
-        staged: &RegistrySnapshot,
-    ) -> Result<RegistrySnapshot, AgentFailure> {
-        self.commit_expert_session_with_hook(
-            session,
-            previous_revision,
-            expected_registry_revision,
-            staged,
-            std::future::ready(Ok(())),
-        )
-        .await
-    }
-
-    pub async fn commit_expert_session_with_hook(
-        &self,
-        session: &AgentSession,
-        previous_revision: u64,
-        expected_registry_revision: u64,
-        staged: &RegistrySnapshot,
-        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
-    ) -> Result<RegistrySnapshot, AgentFailure> {
-        self.commit_expert_session_inner(
-            session,
-            previous_revision,
-            expected_registry_revision,
-            staged,
-            None,
-            None,
-            after_registry_write,
-        )
-        .await
-    }
-
-    pub async fn commit_expert_session_scoped_with_hook(
-        &self,
-        session: &AgentSession,
-        previous_revision: u64,
-        expected_registry_revision: u64,
-        staged: &RegistrySnapshot,
-        assignment_id: uuid::Uuid,
-        evidence_id: uuid::Uuid,
-        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
-    ) -> Result<RegistrySnapshot, AgentFailure> {
-        self.commit_expert_session_inner(
-            session,
-            previous_revision,
-            expected_registry_revision,
-            staged,
-            Some((assignment_id, evidence_id)),
-            None,
-            after_registry_write,
-        )
-        .await
-    }
-
-    pub async fn commit_expert_session_scoped_with_coverage_hook(
-        &self,
-        session: &AgentSession,
-        previous_revision: u64,
-        expected_registry_revision: u64,
-        staged: &RegistrySnapshot,
-        assignment_id: uuid::Uuid,
-        evidence_id: uuid::Uuid,
-        turn_id: Uuid,
-        coverage: DependencyCoverage,
-        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
-    ) -> Result<RegistrySnapshot, AgentFailure> {
-        if turn_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.commit_expert_session_inner(
-            session,
-            previous_revision,
-            expected_registry_revision,
-            staged,
-            Some((assignment_id, evidence_id)),
-            Some((turn_id, coverage)),
-            after_registry_write,
-        )
-        .await
-    }
-
-    async fn commit_expert_session_inner(
-        &self,
-        session: &AgentSession,
-        previous_revision: u64,
-        expected_registry_revision: u64,
-        staged: &RegistrySnapshot,
-        scope: Option<(uuid::Uuid, uuid::Uuid)>,
-        coverage: Option<(Uuid, DependencyCoverage)>,
-        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
-    ) -> Result<RegistrySnapshot, AgentFailure> {
-        self.payload(session)?;
-        if previous_revision.checked_add(1) != Some(session.revision) {
-            return Err(AgentFailure::Conflict);
-        }
-        self.registry_payload(staged)?;
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
-            let mut candidate = session.clone();
-            let previous = self.session_on(&transaction, session.id).await?;
-            let stored = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
-            if scope.is_none() && stored.revision != expected_registry_revision {
-                return Err(AgentFailure::Conflict);
-            }
-            if previous.data_classes.iter().any(|class| !session.data_classes.contains(class)) {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            if previous.scope != session.scope || previous.revision != previous_revision
-                || session.messages.len() < previous.messages.len()
-                || session.messages.len() > previous.messages.len() + 1
-                || session.messages[..previous.messages.len()] != previous.messages {
-                return Err(AgentFailure::Conflict);
-            }
-            let mut next = stored.clone();
-            if let Some(AgentMessage::Delegation { turn_id, task }) = session.messages.get(previous.messages.len())
-                && let Some(output) = task.data_part(floe_experts::EXPERT_RESULT_MEDIA_TYPE) {
-                    let receipt: ExpertResult = serde_json::from_str(output).map_err(|_| AgentFailure::InvalidInput)?;
-                    let call_id = task.id;
-                    if previous.active_turn != Some(*turn_id) || session.active_turn != previous.active_turn
-                        || receipt.invocation_id != call_id || receipt.person_id != self.person_id
-                        || !session.data_classes.contains(&receipt.data_class) {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    if let Some((assignment_id, evidence_id)) = scope
-                        && (assignment_id != receipt.assignment_id || evidence_id != receipt.evidence_id)
-                    {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    if !expert_identity_matches(&stored, staged, &receipt) {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    let mut duplicate = transaction.query("SELECT 1 FROM agent_expert_receipts WHERE invocation_id = ?", [call_id.to_string()]).await.map_err(storage)?;
-                    if duplicate.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
-                    drop(duplicate);
-                    let mut registry = AgentRegistry::restore(stored.clone(), self.vault_id)?;
-                    if scope.is_some() {
-                        registry.record_result_current(&receipt)?;
-                    } else {
-                        registry.record_result(expected_registry_revision, &receipt)?;
-                    }
-                    next = registry.snapshot();
-                    if scope.is_none() && next != *staged {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    let registry_revision = if scope.is_some() {
-                        stored.revision
-                    } else {
-                        expected_registry_revision
-                    };
-                    self.update_registry(&transaction, registry_revision, next.revision, self.registry_payload(&next)?).await?;
-                    transaction.execute("INSERT INTO agent_expert_receipts VALUES (?, ?, ?, ?)",
-                        (call_id.to_string(), session.id.to_string(), receipt.assignment_id.to_string(), integer(next.revision)?)).await.map_err(storage)?;
-            }
-            after_registry_write.await?;
-            if let Some((turn_id, coverage)) = coverage {
-                self.validate_context_dependency_coverage_in_transaction(&transaction, &coverage)
-                    .await?;
-                super::context_dependencies::merge_context_dependency_coverage(
-                    &transaction,
-                    self.person_id,
-                    session.id,
-                    turn_id,
-                    coverage,
-                )
-                .await?;
-            }
-            self.sanitize_session_for_context_cleanup(&transaction, &mut candidate)
-                .await?;
-            let payload = self.payload(&candidate)?;
-            let changed = transaction.execute("UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
-                (integer(session.revision)?, payload, session.id.to_string(), integer(previous_revision)?)).await.map_err(storage)?;
-            if changed != 1 { return Err(AgentFailure::Conflict); }
-            self.check_access()?;
-            Ok(next)
-        }.await;
-        let finish = if scope.is_some() {
-            self.finish_registry_transaction_checked(transaction, result)
-                .await
-        } else {
-            self.finish_registry_transaction(transaction, result).await
-        };
-        finish
-    }
 
     pub(super) async fn finish_registry_transaction<T>(
         &self,
@@ -965,7 +723,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(unavailable)?;
         drop(identity);
         if version == 1 {
-            let mut existing = connection.query("SELECT name FROM sqlite_schema WHERE name IN ('agent_expert_registry', 'agent_expert_receipts')", ()).await.map_err(unavailable)?;
+            let mut existing = connection.query("SELECT name FROM sqlite_schema WHERE name = 'agent_expert_registry'", ()).await.map_err(unavailable)?;
             if existing.next().await.map_err(unavailable)?.is_some() {
                 return Err(AgentFailure::VaultUnavailable);
             }
@@ -987,7 +745,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if integer(snapshot.revision)? != row.get::<i64>(0).map_err(unavailable)? {
             return Err(AgentFailure::VaultUnavailable);
         }
-        connection.query("SELECT invocation_id, session_id, assignment_id, registry_revision FROM agent_expert_receipts LIMIT 0", ()).await.map_err(unavailable)?;
         Ok(Some(snapshot))
     }
 

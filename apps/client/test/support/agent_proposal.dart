@@ -1,23 +1,39 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 import 'agent_vault_gateway.dart';
-import 'expert_result.dart';
 
 const proposalPerson = '00000000-0000-4000-8000-000000000001';
 const proposalSession = '00000000-0000-4000-8000-000000000002';
 const proposalCall = '00000000-0000-4000-8000-000000000003';
 const proposalExecution = '00000000-0000-4000-8000-000000000004';
 
-Map<String, Object?> proposalEvidence({String dataClass = 'synthetic'}) =>
-    rustExpertResultFixture()..addAll({
-      'person_id': proposalPerson,
-      'invocation_id': proposalCall,
-      'data_class': dataClass,
-    });
+Map<String, Object?> proposalDelegation() => {
+  'kind': 'delegation',
+  'turn_id': 'turn-1',
+  'task': {
+    'id': proposalCall,
+    'agent_id': 'floe.builtin.schedule',
+    'state': 'completed',
+    'result': 'One focus window is available for review.',
+    'failure': null,
+    'artifacts': [
+      {
+        'artifact_id': proposalExecution,
+        'name': 'Calendar proposal',
+        'parts': [
+          {
+            'kind': 'data',
+            'media_type': 'application/vnd.floe.actions.calendar-proposal+json;version=1',
+            'data': '{}',
+          },
+        ],
+      },
+    ],
+  },
+};
 
 Map<String, dynamic> inspectionJson({String? status = 'pending'}) => {
   'schema_version': 1,
@@ -31,6 +47,8 @@ Map<String, dynamic> inspectionJson({String? status = 'pending'}) => {
           'execution_id': proposalExecution,
           'status': status,
           'expires_at': '2050-01-01T00:00:00Z',
+          'starts_at': '2050-01-02T08:00:00Z',
+          'ends_at': '2050-01-02T09:00:00Z',
         },
 };
 
@@ -48,14 +66,7 @@ class TestProposalGateway extends TestVaultGateway
       'last_outcome': {'status': 'completed'},
       'data_classes': [dataClass],
       'messages': [
-        {
-          'kind': 'capability',
-          'turn_id': 'turn-1',
-          'call_id': proposalCall,
-          'capability_id': 'expert.schedule',
-          'input': '{"kind":"propose_focus","focus_minutes":60}',
-          'result': {'Ok': jsonEncode(proposalEvidence(dataClass: dataClass))},
-        },
+        proposalDelegation(),
       ],
     };
   }

@@ -228,6 +228,8 @@ pub struct AgentProposalActionDto {
     pub execution_id: String,
     pub status: AgentProposalStatusDto,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub starts_at: chrono::DateTime<chrono::Utc>,
+    pub ends_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

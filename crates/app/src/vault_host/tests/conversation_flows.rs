@@ -2123,7 +2123,7 @@ fn delegated_model_dispatch_uses_the_same_owner_checks_as_root() {
             &person.to_string(),
             "mac-local",
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         )
         .unwrap();
     let admission = floe_provider_adapters::control::SavedConnectionAdmission::new(
@@ -2670,15 +2670,15 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     inventory_server.join().unwrap();
     let report = report.unwrap();
     assert!(
-        report.result.contains("needs_user_action"),
+        report.result.contains("needs your review"),
         "{}",
         report.result
     );
     assert!(report.settlement.is_none());
-    assert_eq!(report.artifacts.len(), 1);
-    let data = report.artifacts[0]
-        .parts
+    assert_eq!(report.artifacts.len(), 2);
+    let data = report.artifacts
         .iter()
+        .flat_map(|artifact| &artifact.parts)
         .find_map(|part| match part {
             floe_agent_contract::ArtifactPart::Data { media_type, data }
                 if media_type == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE =>

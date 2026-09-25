@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, future::Future};
 
 use chrono::{DateTime, Utc};
-use floe_agent_contract::ExpertResult;
+use crate::ExpertCalendarProposal;
 use floe_context_contract::ContextDependency;
 use floe_day::{CalendarConnection, CalendarMirror, Event, PersonId};
 use floe_kernel::AgentFailure;
@@ -121,7 +121,7 @@ pub trait ExpertActionStore {
     async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
-        evidence: &floe_agent_contract::ExpertResult,
+        evidence: &ExpertCalendarProposal,
     ) -> Result<ContextDependency, AgentFailure>;
     /// Record the durable pre-dispatch intent for one action.
     ///
@@ -167,14 +167,14 @@ pub trait ExpertActionStore {
     async fn with_expert_proposal<ResultValue, Publish>(
         &self,
         reference: &ExpertProposalReference,
-        publish: impl FnOnce(ExpertResult) -> Publish,
+        publish: impl FnOnce(ExpertCalendarProposal) -> Publish,
     ) -> Result<ResultValue, AgentFailure>
     where
         Publish: Future<Output = Result<ResultValue, AgentFailure>>;
     async fn with_recorded_expert_proposal<ResultValue, Inspect>(
         &self,
         reference: &ExpertProposalReference,
-        inspect: impl FnOnce(ExpertResult) -> Inspect,
+        inspect: impl FnOnce(ExpertCalendarProposal) -> Inspect,
     ) -> Result<ResultValue, AgentFailure>
     where
         Inspect: Future<Output = Result<ResultValue, AgentFailure>>;

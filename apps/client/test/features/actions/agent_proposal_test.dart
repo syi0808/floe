@@ -3,10 +3,8 @@ import 'package:floe_client/app/runtime/local_owner_gateways.dart';
 import '../../support/app_wire_transport.dart';
 
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
-import 'package:floe_client/features/experts/domain/agent_expert_result.dart';
 
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
@@ -17,60 +15,33 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/agent_proposal.dart';
 
 void main() {
-  test('proposal evidence matches one exact focus insight and explicit session class', () {
-    AgentExpertResult? parse(
-      Map<String, Object?> evidence, {
-      List<String> classes = const ['synthetic'],
-    }) => AgentExpertResult.tryParse(
-      jsonEncode(evidence),
-      callId: proposalCall,
-      personId: proposalPerson,
-      allowedDataClasses: classes,
-    );
-    expect(parse(proposalEvidence())!.proposal!.start!.hour, 8);
-    expect(parse(proposalEvidence(dataClass: 'personal')), isNull);
-    expect(
-      parse(
-        proposalEvidence(dataClass: 'personal'),
-        classes: ['personal'],
-      )!.proposal,
-      isNotNull,
-    );
-    expect(
-      parse(
-        proposalEvidence(dataClass: 'raw_sensitive'),
-        classes: ['raw_sensitive'],
-      ),
-      isNull,
-    );
-    final original =
-        (proposalEvidence()['action_proposals'] as List).single as Map;
-    for (final proposals in [
-      [original, original],
-      [
-        {...original, 'evidence_id': 'foreign'},
-      ],
-      [
-        {
-          ...original,
-          'ends_at_unix_ms': (original['ends_at_unix_ms'] as int) + 1,
-        },
-      ],
-      [
-        {
-          ...original,
-          'starts_at_unix_ms': (original['starts_at_unix_ms'] as int) + 1,
-        },
-      ],
-      [
-        {...original, 'execute': true},
-      ],
-    ]) {
-      expect(
-        parse(proposalEvidence()..['action_proposals'] = proposals),
-        isNull,
-      );
-    }
+  test('only an Actions artifact marks a delegation as reviewable', () {
+    final delegation = proposalDelegation();
+    final message = AgentCapabilityMessage.fromDelegation(delegation);
+    expect(message.hasArtifactMediaType(
+      'application/vnd.floe.actions.calendar-proposal+json;version=1',
+    ), true);
+    final task = Map<String, Object?>.from(delegation['task'] as Map);
+    task['artifacts'] = [
+      {
+        'artifact_id': proposalExecution,
+        'name': 'Package result',
+        'parts': [
+          {
+            'kind': 'data',
+            'media_type': 'application/vnd.floe.expert.schedule+json;version=1',
+            'data': '{"execute":true}',
+          },
+        ],
+      },
+    ];
+    final inert = AgentCapabilityMessage.fromDelegation({
+      ...delegation,
+      'task': task,
+    });
+    expect(inert.hasArtifactMediaType(
+      'application/vnd.floe.actions.calendar-proposal+json;version=1',
+    ), false);
   });
 
   test('native inspection distinguishes explicit absence, malformed response and failures', () async {
@@ -240,14 +211,14 @@ void main() {
     addTearDown(controller.dispose);
     await controller.load();
     final message = controller.messages.single as AgentCapabilityMessage;
-    expect(controller.expertResult(message)!.proposal, isNotNull);
+    expect(controller.canInspectProposal(message), isTrue);
     await controller.inspectProposal(message);
     gateway.inspectionGate = Completer<void>();
     final inspection = controller.inspectProposal(message);
     final locking = controller.closeView();
     expect(controller.messages, isEmpty);
     expect(controller.proposalFor(proposalCall), isNull);
-    expect(controller.expertResult(message), isNull);
+    expect(controller.canInspectProposal(message), isFalse);
     expect(gateway.locks, 0);
     gateway.inspectionGate!.complete();
     await inspection;

@@ -168,8 +168,8 @@ async fn work_and_life_experts_return_source_linked_advice_without_action_author
     assert_eq!(logistics.preparations[0].urgency, LogisticsUrgency::Soon);
     assert!(logistics.preparations[0].requires_approval);
     let calls = model.calls.lock().unwrap();
-    assert_eq!(calls[0].prompt.role, PromptRole::WorkContextExpert);
-    assert_eq!(calls[1].prompt.role, PromptRole::LifeLogisticsExpert);
+    assert_eq!(calls[0].prompt.role, PromptRole::Expert);
+    assert_eq!(calls[1].prompt.role, PromptRole::Expert);
     assert_eq!(calls[0].requirement, ExpertModelRequirement::RemoteOnly);
     assert_eq!(calls[1].requirement, ExpertModelRequirement::RemoteOnly);
     assert!(calls.iter().all(|call| call.assignment.trim().len() > 0));
@@ -293,7 +293,7 @@ async fn blocked_model_call_passes_the_requirement_through_untouched() {
         "model.example",
         "server-model",
         "everyday_assistance",
-        floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+        floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         vec![floe_agent_contract::DataClass::Personal],
         vec![],
         Uuid::new_v4(),

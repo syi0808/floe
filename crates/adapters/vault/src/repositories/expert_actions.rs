@@ -6,11 +6,10 @@ use chrono::{DateTime, Utc};
 use floe_access::ContextDependency;
 use floe_actions::{
     ActionAuthorityMode, AgentActionAdmission, AgentActionEnvelope, CalendarAction,
-    CalendarActionState, ExpertActionStore, ExpertProposalReference,
+    CalendarActionState, ExpertActionStore, ExpertProposalReference, ExpertCalendarProposal,
 };
 use floe_agent_contract::AgentFailure;
 use floe_execution::Cancellation;
-use floe_experts::ExpertResult;
 use uuid::Uuid;
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
@@ -23,7 +22,7 @@ impl<Keys: VaultKeyProvider> ExpertActionStore for EncryptedAgentVault<Keys> {
     async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
-        evidence: &ExpertResult,
+        evidence: &ExpertCalendarProposal,
     ) -> Result<ContextDependency, AgentFailure> {
         EncryptedAgentVault::expert_proposal_dependency(self, reference, evidence).await
     }
@@ -98,7 +97,7 @@ impl<Keys: VaultKeyProvider> ExpertActionStore for EncryptedAgentVault<Keys> {
     async fn with_expert_proposal<ResultValue, Publish>(
         &self,
         reference: &ExpertProposalReference,
-        publish: impl FnOnce(ExpertResult) -> Publish,
+        publish: impl FnOnce(ExpertCalendarProposal) -> Publish,
     ) -> Result<ResultValue, AgentFailure>
     where
         Publish: Future<Output = Result<ResultValue, AgentFailure>>,
@@ -109,7 +108,7 @@ impl<Keys: VaultKeyProvider> ExpertActionStore for EncryptedAgentVault<Keys> {
     async fn with_recorded_expert_proposal<ResultValue, Inspect>(
         &self,
         reference: &ExpertProposalReference,
-        inspect: impl FnOnce(ExpertResult) -> Inspect,
+        inspect: impl FnOnce(ExpertCalendarProposal) -> Inspect,
     ) -> Result<ResultValue, AgentFailure>
     where
         Inspect: Future<Output = Result<ResultValue, AgentFailure>>,

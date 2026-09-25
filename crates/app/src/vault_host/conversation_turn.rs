@@ -8,7 +8,7 @@ use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
 #[cfg(test)]
-use floe_experts::{A2ATaskState, EXPERT_RESULT_MEDIA_TYPE};
+use floe_experts::A2ATaskState;
 #[cfg(test)]
 use floe_experts_builtin::{
     BuiltinExpertKind, commitments::CommitmentsExpertResult,
@@ -1377,6 +1377,7 @@ mod tests {
                     state: A2ATaskState::Completed,
                     history: vec![request.message],
                     artifacts: vec![],
+                    result: Some("Synthetic result".into()),
                     failure: None,
                     settlement: None,
                 })
@@ -2703,7 +2704,7 @@ mod tests {
             .unwrap();
         assert_eq!(task.id, task_id);
         assert_eq!(task.state, A2ATaskState::Completed);
-        let data = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
+        let data = task.data_part(floe_experts_builtin::commitments::RESULT_MEDIA_TYPE).unwrap();
         let result: CommitmentsExpertResult = serde_json::from_str(data).unwrap();
         assert_eq!(result.findings.len(), 1);
         // The Expert asked for remote execution through shared Inference with
@@ -2717,7 +2718,7 @@ mod tests {
         );
         assert_eq!(
             calls[0].0.consumer,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER
         );
         assert_eq!(
             calls[0].1,
@@ -2941,7 +2942,7 @@ mod tests {
             .await
             .unwrap();
         let result: CommitmentsExpertResult =
-            serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
+            serde_json::from_str(task.data_part(floe_experts_builtin::commitments::RESULT_MEDIA_TYPE).unwrap()).unwrap();
         assert_eq!(result.findings.len(), 4);
         let calls = executor.calls();
         assert_eq!(calls.len(), 1);
@@ -3120,7 +3121,12 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            results.push(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap().to_owned());
+            let media_type = match task.agent_id.as_str() {
+                "floe.builtin.work-context" => floe_experts_builtin::work_context::RESULT_MEDIA_TYPE,
+                "floe.builtin.life-logistics" => floe_experts_builtin::life_logistics::RESULT_MEDIA_TYPE,
+                _ => unreachable!(),
+            };
+            results.push(task.data_part(media_type).unwrap().to_owned());
         }
         let work: WorkContextExpertResult = serde_json::from_str(&results[0]).unwrap();
         let logistics: LifeLogisticsExpertResult = serde_json::from_str(&results[1]).unwrap();
@@ -3546,7 +3552,7 @@ mod tests {
                             )
                             .unwrap(),
                             consumer: floe_inference::ModelConsumer::new(
-                                floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+                                floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
                             )
                             .unwrap(),
                             execution_location: location,
@@ -3565,7 +3571,7 @@ mod tests {
         floe_inference::InferenceAvailability::observe(
             &Provider { device, remote },
             floe_inference::EVERYDAY_ASSISTANCE_PURPOSE,
-            floe_agent_contract::EXPERT_INFERENCE_CONSUMER,
+            floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER,
         )
         .await
     }

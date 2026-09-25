@@ -227,6 +227,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?;
         connection.execute("CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(unavailable)?;
+        connection.execute("CREATE TABLE agent_task_delegations (task_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_id TEXT NOT NULL)", ()).await.map_err(unavailable)?;
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
@@ -310,6 +311,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 "SELECT id, revision, payload FROM agent_sessions LIMIT 0",
                 (),
             )
+            .await
+            .map_err(unavailable)?;
+        connection
+            .query("SELECT task_id, session_id, turn_id FROM agent_task_delegations LIMIT 0", ())
             .await
             .map_err(unavailable)?;
         vault.initialize_session_archive().await?;
@@ -594,6 +599,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 session_revision: candidate.revision,
             };
             for message in &candidate.messages[stored.messages.len()..] {
+                if let floe_conversation::AgentMessage::Delegation { turn_id, task } = message {
+                    transaction
+                        .execute(
+                            "INSERT INTO agent_task_delegations (task_id, session_id, turn_id) VALUES (?, ?, ?)",
+                            (task.id.to_string(), candidate.id.to_string(), turn_id.to_string()),
+                        )
+                        .await
+                        .map_err(|_| AgentFailure::Conflict)?;
+                }
                 if turns.insert(message.turn_id()) {
                     let turn_coverage = coverage
                         .get(&message.turn_id())

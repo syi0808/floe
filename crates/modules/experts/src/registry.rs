@@ -59,16 +59,9 @@ pub struct BuiltinExpertAssignmentReceipt {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ExpertRule {
-    FindFocusWindow { minimum_minutes: u16 },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageImplementation {
     TimelineRead { data_class: DataClass },
     Builtin { expert: AgentId },
-    Declarative { rules: Vec<ExpertRule> },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -136,18 +129,6 @@ impl AgentPackage {
                     && !matches!(data_class, DataClass::Credential | DataClass::DeviceOnlyRaw) => {}
             PackageImplementation::Builtin { .. } if self.reference.kind == PackageKind::Expert => {
                 self.validate_requirements()?;
-            }
-            PackageImplementation::Declarative { rules }
-                if self.reference.kind == PackageKind::Expert && rules.len() == 1 =>
-            {
-                self.validate_requirements()?;
-                for rule in rules {
-                    match rule {
-                        ExpertRule::FindFocusWindow { minimum_minutes }
-                            if (1..=240).contains(minimum_minutes) => {}
-                        _ => return Err(AgentFailure::InvalidInput),
-                    }
-                }
             }
             _ => return Err(AgentFailure::CapabilityDenied),
         }
@@ -272,6 +253,54 @@ pub struct ResolvedExpert {
 }
 
 impl AgentRegistry {
+    pub fn validate_settled_invocation(
+        &self,
+        instance_id: Uuid,
+        person_id: PersonId,
+        assignment_id: Uuid,
+        package: &PackageRef,
+        state_revision: u64,
+        data_class: DataClass,
+    ) -> Result<(), AgentFailure> {
+        if instance_id != self.instance_id() || state_revision == 0 {
+            return Err(AgentFailure::NotFound);
+        }
+        let assignment = self.assignment(person_id, assignment_id)?;
+        if state_revision > assignment.private_state.revision {
+            return Err(AgentFailure::Conflict);
+        }
+        let installation = self.installation(assignment.installation_id)?;
+        let installed = self.package(&installation.package)?;
+        if &installed.reference != package || package.kind != PackageKind::Expert {
+            return Err(AgentFailure::Conflict);
+        }
+        let [required_tool] = installed.required_tools.as_slice() else {
+            return Err(AgentFailure::Conflict);
+        };
+        let PackageImplementation::TimelineRead {
+            data_class: installed_class,
+        } = self.package(required_tool)?.implementation else {
+            return Err(AgentFailure::Conflict);
+        };
+        if installed_class != data_class {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
+    pub fn validate_active_assignment(
+        &self,
+        person_id: PersonId,
+        assignment_id: Uuid,
+    ) -> Result<(), AgentFailure> {
+        let assignment = self.assignment(person_id, assignment_id)?;
+        let installation = self.installation(assignment.installation_id)?;
+        if !assignment.enabled || !installation.enabled {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        self.validate_tool_linkage(assignment)
+    }
+
     pub fn overview(&self, person_id: PersonId) -> RegistryOverview {
         RegistryOverview {
             schema_version: AGENT_VERSION,
@@ -506,166 +535,6 @@ impl AgentRegistry {
             .clone())
     }
 
-    pub fn record_result(
-        &mut self,
-        expected_revision: u64,
-        result: &crate::ExpertResult,
-    ) -> Result<(), AgentFailure> {
-        let resolved = self.resolve_result(expected_revision, result)?;
-        if result.state_revision
-            != resolved
-                .assignment
-                .private_state
-                .revision
-                .checked_add(1)
-                .ok_or(AgentFailure::BudgetExceeded)?
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.complete(&resolved, result.invocation_id)?;
-        Ok(())
-    }
-
-    pub fn record_result_current(
-        &mut self,
-        result: &crate::ExpertResult,
-    ) -> Result<(), AgentFailure> {
-        let resolved = self.resolve_result(self.revision(), result)?;
-        if result.state_revision
-            != resolved
-                .assignment
-                .private_state
-                .revision
-                .checked_add(1)
-                .ok_or(AgentFailure::BudgetExceeded)?
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        self.complete(&resolved, result.invocation_id)?;
-        Ok(())
-    }
-
-    pub fn validate_recorded_result(
-        &self,
-        result: &crate::ExpertResult,
-    ) -> Result<(), AgentFailure> {
-        let resolved = self.resolve_result(self.revision(), result)?;
-        if result.state_revision == 0
-            || result.state_revision > resolved.assignment.private_state.revision
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-
-    pub fn validate_historical_result(
-        &self,
-        result: &crate::ExpertResult,
-    ) -> Result<(), AgentFailure> {
-        if result.schema_version != AGENT_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        if result.instance_id != self.instance_id() {
-            return Err(AgentFailure::NotFound);
-        }
-        let assignment = self.assignment(result.person_id, result.assignment_id)?;
-        let installation = self.installation(assignment.installation_id)?;
-        let package = self.package(&installation.package)?;
-        if package.reference.kind != PackageKind::Expert || package.required_tools.len() != 1 {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let PackageImplementation::TimelineRead { data_class } =
-            self.package(&package.required_tools[0])?.implementation
-        else {
-            return Err(AgentFailure::CapabilityDenied);
-        };
-        let resolved = ResolvedExpert {
-            registry_revision: self.revision(),
-            package: package.clone(),
-            assignment: assignment.clone(),
-            data_class,
-        };
-        Self::validate_result_content(result, &resolved)?;
-        if result.state_revision == 0 || result.state_revision > assignment.private_state.revision {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-
-    fn resolve_result(
-        &self,
-        expected_revision: u64,
-        result: &crate::ExpertResult,
-    ) -> Result<ResolvedExpert, AgentFailure> {
-        if result.schema_version != AGENT_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        let expected_expert = AgentId::try_new(result.package.id.clone())
-            .ok_or(AgentFailure::InvalidInput)?;
-        let resolved = self.resolve_builtin(
-            result.instance_id,
-            result.person_id,
-            result.assignment_id,
-            expected_revision,
-            &expected_expert,
-        )?;
-        Self::validate_result_content(result, &resolved)?;
-        Ok(resolved)
-    }
-
-    fn validate_result_content(
-        result: &crate::ExpertResult,
-        resolved: &ResolvedExpert,
-    ) -> Result<(), AgentFailure> {
-        if result.package != resolved.package.reference
-            || result.data_class != resolved.data_class
-            || result.evidence_id.is_nil()
-            || !(1..=8).contains(&result.view_calls)
-            || (result.insights.is_empty() && result.summary.is_none())
-            || result.insights.len() > 8
-            || result.action_proposals.len() > 1
-            || result.model_calls > 10
-            || result
-                .summary
-                .as_ref()
-                .is_some_and(|summary| summary.trim().is_empty() || summary.len() > 2048)
-            || (result.summary.is_some() != (result.model_calls > 0))
-            || (matches!(
-                resolved.package.implementation,
-                PackageImplementation::Declarative { .. }
-            ) && result.model_calls != 0)
-            || result.source_handle.trim().is_empty()
-            || result.source_handle.len() > 128
-            || result.insights.iter().any(|insight| match insight {
-                crate::ExpertInsight::Commitment {
-                    untrusted_title,
-                    starts_at_unix_ms,
-                    ends_at_unix_ms,
-                    ..
-                } => {
-                    untrusted_title.len() > 256
-                        || !valid_interval(*starts_at_unix_ms, *ends_at_unix_ms)
-                }
-                crate::ExpertInsight::FocusWindow {
-                    starts_at_unix_ms,
-                    ends_at_unix_ms,
-                } => !valid_interval(*starts_at_unix_ms, *ends_at_unix_ms),
-                crate::ExpertInsight::NoFocusWindow => false,
-            })
-            || result.action_proposals.iter().any(|proposal| {
-                proposal.evidence_id != result.evidence_id
-                    || !result
-                        .insights
-                        .contains(&crate::ExpertInsight::FocusWindow {
-                            starts_at_unix_ms: proposal.starts_at_unix_ms,
-                            ends_at_unix_ms: proposal.ends_at_unix_ms,
-                        })
-            })
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
 
     /// Resolve one built-in assignment to the Expert it installs.
     ///
@@ -696,7 +565,6 @@ impl AgentRegistry {
         }
         match &package.implementation {
             PackageImplementation::Builtin { expert } if expert == expected_expert => {}
-            PackageImplementation::Declarative { .. } => {}
             _ => return Err(AgentFailure::CapabilityDenied),
         }
         self.validate_tool_linkage(assignment)?;
@@ -831,9 +699,6 @@ fn valid_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
 }
 
-fn valid_interval(start: u64, end: u64) -> bool {
-    end > start && end - start <= 86_400_000
-}
 
 /// Validation of Expert-specific durable setup recorded in a registry snapshot.
 ///
@@ -881,93 +746,6 @@ impl AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExpertFocusProposal, ExpertInsight, ExpertResult};
-
-    fn fixture_result(evidence_id: Uuid, proposal_evidence: Uuid) -> ExpertResult {
-        ExpertResult {
-            schema_version: AGENT_VERSION,
-            invocation_id: Uuid::new_v4(),
-            instance_id: Uuid::new_v4(),
-            person_id: PersonId::new(),
-            assignment_id: Uuid::new_v4(),
-            package: PackageRef {
-                kind: PackageKind::Expert,
-                id: "floe.builtin.schedule".into(),
-                version: "1.0.0".into(),
-            },
-            evidence_id,
-            source_handle: format!("calendar.observe:{evidence_id}"),
-            data_class: DataClass::Personal,
-            expires_at_unix_ms: u64::MAX,
-            insights: vec![ExpertInsight::FocusWindow {
-                starts_at_unix_ms: 1,
-                ends_at_unix_ms: 2,
-            }],
-            action_proposals: vec![ExpertFocusProposal {
-                starts_at_unix_ms: 1,
-                ends_at_unix_ms: 2,
-                evidence_id: proposal_evidence,
-            }],
-            summary: Some("fixture".into()),
-            model_calls: 1,
-            state_revision: 1,
-            view_calls: 1,
-        }
-    }
-
-    #[test]
-    fn result_content_requires_matching_non_nil_evidence_identity() {
-        let registry = AgentRegistry::new(Uuid::new_v4());
-        let package = AgentPackage {
-            schema_version: AGENT_VERSION,
-            reference: PackageRef {
-                kind: PackageKind::Expert,
-                id: "floe.builtin.schedule".into(),
-                version: "1.0.0".into(),
-            },
-            publisher: "floe".into(),
-            implementation: PackageImplementation::Builtin {
-                expert: AgentId::try_new("floe.builtin.schedule").unwrap(),
-            },
-            expert_metadata: None,
-            required_tools: vec![],
-            state_schema_version: 1,
-        };
-        let resolved = ResolvedExpert {
-            registry_revision: 0,
-            package,
-            assignment: PackageAssignment {
-                id: Uuid::new_v4(),
-                person_id: PersonId::new(),
-                installation_id: Uuid::new_v4(),
-                enabled: true,
-                granted_tool_assignments: vec![],
-                private_state: ExpertPrivateState::default(),
-            },
-            data_class: DataClass::Personal,
-        };
-        let _ = &registry;
-        let evidence_id = Uuid::new_v4();
-        assert!(AgentRegistry::validate_result_content(
-            &fixture_result(evidence_id, evidence_id),
-            &resolved,
-        )
-        .is_ok());
-        assert_eq!(
-            AgentRegistry::validate_result_content(
-                &fixture_result(Uuid::nil(), Uuid::nil()),
-                &resolved,
-            ),
-            Err(AgentFailure::InvalidInput)
-        );
-        assert_eq!(
-            AgentRegistry::validate_result_content(
-                &fixture_result(evidence_id, Uuid::new_v4()),
-                &resolved,
-            ),
-            Err(AgentFailure::InvalidInput)
-        );
-    }
 
     #[test]
     fn settlement_names_the_invoked_assignment_and_stages_the_current_snapshot() {

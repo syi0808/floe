@@ -10,14 +10,15 @@ mod ports;
 
 pub use application::{
     ActionService, ExpertActionService, ExpertCalendarDestination, ExpertCalendarInspection,
-    ExpertCalendarRequest, ObservationFence, validate_calendar_source_handle,
+    ExpertCalendarRequest, ObservationFence,
 };
 pub use domain::{
     ActionAuthority, ActionAuthorityMode, ActionBlockReason, ActionFailure, AgentActionAdmission,
     AgentActionEnvelope, AgentActionOrigin, CalendarAction, CalendarActionPolicy,
     CalendarActionState, CalendarCreateReceipt, CalendarMutation, CalendarPreflight,
     ExpertProposalReference, MAX_AGENT_ACTION_BYTES, action_policy_mode_name, action_state_name,
-    valid_action_digest,
+    valid_action_digest, EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE, ExpertCalendarProposal,
+    ExpertCalendarProposalDraft,
 };
 pub use ports::{
     ActionError, ActionErrorCode, ActionRepository, CalendarActionProvider, ExpertActionStore,

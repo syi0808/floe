@@ -20,12 +20,12 @@ use crate::{
     prompts::PromptAssembly,
 };
 
-/// The consumer delegated built-in Experts share on canonical Inference.
+/// The consumer delegated Experts share on canonical Inference.
 ///
 /// Experts run under the everyday-assistance purpose with their own consumer,
 /// never as `conversation.root`: the root profile stays root-only while the
 /// product purpose still describes delegated Expert work.
-pub const EXPERT_INFERENCE_CONSUMER: &str = "experts.builtin";
+pub const DELEGATED_EXPERT_INFERENCE_CONSUMER: &str = "experts.delegated";
 
 /// What execution class an Expert requires.
 ///

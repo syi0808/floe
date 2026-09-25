@@ -45,11 +45,10 @@ pub use envelope::{
     MemoryManifestEntry, PromptManifestEntry, RuntimeContext, ScopedInstructions,
 };
 pub use expert::{
-    ExpertBudget, ExpertFocusProposal, ExpertInput, ExpertInsight, ExpertResult,
-    MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
+    ExpertBudget, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
 };
 pub use expert_model::{
-    CapabilityDescriptor, EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation, ExpertModel,
+    CapabilityDescriptor, DELEGATED_EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation, ExpertModel,
     ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement, ExpertReasoner,
     ExpertReasoningStep, ExpertStep, ExpertStepOutcome, ExpertStepResult, ExpertTranscriptEntry,
 };

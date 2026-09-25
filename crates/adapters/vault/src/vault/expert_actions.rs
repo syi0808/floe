@@ -2,104 +2,73 @@ use std::future::Future;
 
 use floe_access::DependencyCoverage;
 use floe_conversation::AgentMessage;
-use floe_experts::{AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertResult};
+use floe_experts::AgentRegistry;
 use turso::transaction::TransactionBehavior;
-use uuid::Uuid;
 
 use super::*;
-use floe_actions::ExpertProposalReference;
-
-enum ProposalUse {
-    Publish,
-    Inspect,
-}
+use floe_actions::{
+    ExpertCalendarProposal, ExpertProposalReference, EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE,
+};
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(crate) async fn expert_proposal_dependency(
         &self,
         reference: &ExpertProposalReference,
-        evidence: &ExpertResult,
+        evidence: &ExpertCalendarProposal,
     ) -> Result<floe_access::ContextDependency, AgentFailure> {
         if reference.person_id != self.person_id
             || evidence.person_id != self.person_id
-            || evidence.invocation_id != reference.invocation_id
+            || evidence.task_id != reference.invocation_id
         {
             return Err(AgentFailure::NotFound);
         }
-        let session = self.load(self.person_id, reference.session_id).await?;
-        let turn_id = session
-            .messages
-            .iter()
-            .find_map(|message| match message {
-                AgentMessage::Delegation { task, .. } if task.id == reference.invocation_id => {
-                    Some(message.turn_id())
-                }
-                _ => None,
-            })
-            .ok_or(AgentFailure::NotFound)?;
-        let coverage = self
-            .read_turn_coverage(reference.session_id, turn_id)
-            .await?;
-        let DependencyCoverage::Dependent { dependencies } = coverage else {
+        let task_id = floe_agent_contract::TaskId::from_uuid(reference.invocation_id)
+            .ok_or(AgentFailure::InvalidInput)?;
+        let task = self.task(task_id).await?.ok_or(AgentFailure::NotFound)?;
+        if task.snapshot.state != floe_agent_contract::TaskState::Completed
+            || task.snapshot.agent_id != evidence.package.id
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let DependencyCoverage::Dependent { dependencies } = &task.snapshot.coverage else {
             return Err(AgentFailure::PolicyDenied);
         };
-        let dependency = if let Some(observation_id) = evidence
-            .source_handle
-            .strip_prefix("calendar.observe:")
-        {
-            let observation_id = Uuid::parse_str(observation_id)
-                .map_err(|_| AgentFailure::StaleContext)?;
-            let matches: Vec<_> = dependencies
-                .iter()
-                .filter(|dependency| dependency.observation_id() == observation_id)
-                .collect();
-            let [dependency] = matches.as_slice() else {
-                return Err(AgentFailure::PolicyDenied);
-            };
-            (*dependency).clone()
-        } else {
-            let [dependency] = dependencies.as_slice() else {
-                return Err(AgentFailure::PolicyDenied);
-            };
-            dependency.clone()
+        let matches: Vec<_> = dependencies
+            .iter()
+            .filter(|dependency| dependency.observation_id() == evidence.evidence_id)
+            .collect();
+        let [dependency] = matches.as_slice() else {
+            return Err(AgentFailure::PolicyDenied);
         };
+        let dependency = (*dependency).clone();
         if dependency.person_id() != self.person_id
             || dependency.source().person_id() != self.person_id
             || dependency.consumer().identifier() != evidence.package.id
             || dependency.operation() != floe_access::GrantOperation::Read
+            || dependency.purpose() != floe_access::GrantPurpose::Assistant
             || dependency.expires_at() <= chrono::Utc::now()
             || dependency.resources().is_empty()
+            || !matches!(
+                dependency.source().connector().as_str(),
+                "calendar.event_kit"
+                    | "calendar.android"
+                    | "calendar.google"
+                    | "calendar.microsoft"
+            )
         {
             return Err(AgentFailure::PolicyDenied);
         }
         let grant = self.get_data_access_grant(dependency.grant_id()).await?;
-        if grant.authority() != dependency.grant_authority()
-            || grant.source() != dependency.source()
-            || grant.state() != floe_access::GrantState::Active
-            || grant.review_required()
-            || dependency
-                .resources()
-                .iter()
-                .any(|resource| !grant.scope().resources().contains(resource))
-        {
+        floe_access::validate_grant_dependency(&grant, &dependency)?;
+        let policy = self
+            .calendar_grant_policy(dependency.grant_id())
+            .await
+            .map_err(|error| match error {
+                AgentFailure::AccessReviewRequired => AgentFailure::PolicyDenied,
+                other => other,
+            })?;
+        if policy.consumer_policy != dependency.consumer_policy() {
             return Err(AgentFailure::PolicyDenied);
-        }
-        if dependency
-            .source()
-            .connector()
-            .as_str()
-            .starts_with("calendar.")
-        {
-            let policy = self
-                .calendar_grant_policy(dependency.grant_id())
-                .await
-                .map_err(|error| match error {
-                    AgentFailure::AccessReviewRequired => AgentFailure::PolicyDenied,
-                    other => other,
-                })?;
-            if policy.consumer_policy != dependency.consumer_policy() {
-                return Err(AgentFailure::PolicyDenied);
-            }
         }
         Ok(dependency)
     }
@@ -107,32 +76,32 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(crate) async fn with_expert_proposal<ResultValue, Publish>(
         &self,
         reference: &ExpertProposalReference,
-        publish: impl FnOnce(ExpertResult) -> Publish,
+        publish: impl FnOnce(ExpertCalendarProposal) -> Publish,
     ) -> Result<ResultValue, AgentFailure>
     where
         Publish: Future<Output = Result<ResultValue, AgentFailure>>,
     {
-        self.with_proposal_evidence(reference, ProposalUse::Publish, publish)
+        self.with_proposal_evidence(reference, true, publish)
             .await
     }
 
     pub(crate) async fn with_recorded_expert_proposal<ResultValue, Inspect>(
         &self,
         reference: &ExpertProposalReference,
-        inspect: impl FnOnce(ExpertResult) -> Inspect,
+        inspect: impl FnOnce(ExpertCalendarProposal) -> Inspect,
     ) -> Result<ResultValue, AgentFailure>
     where
         Inspect: Future<Output = Result<ResultValue, AgentFailure>>,
     {
-        self.with_proposal_evidence(reference, ProposalUse::Inspect, inspect)
+        self.with_proposal_evidence(reference, false, inspect)
             .await
     }
 
     async fn with_proposal_evidence<ResultValue, Operation>(
         &self,
         reference: &ExpertProposalReference,
-        usage: ProposalUse,
-        operation: impl FnOnce(ExpertResult) -> Operation,
+        require_active: bool,
+        operation: impl FnOnce(ExpertCalendarProposal) -> Operation,
     ) -> Result<ResultValue, AgentFailure>
     where
         Operation: Future<Output = Result<ResultValue, AgentFailure>>,
@@ -151,78 +120,142 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .registry_on(&transaction)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
+            let task_id = floe_agent_contract::TaskId::from_uuid(reference.invocation_id)
+                .ok_or(AgentFailure::InvalidInput)?;
+            let mut binding = transaction
+                .query(
+                    "SELECT session_id, turn_id FROM agent_task_delegations WHERE task_id = ?",
+                    [reference.invocation_id.to_string()],
+                )
+                .await
+                .map_err(storage)?;
+            let bound_turn = binding
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::NotFound)?;
+            let recorded_session = bound_turn.get::<String>(0).map_err(storage)?;
+            let bound_turn = bound_turn.get::<String>(1).map_err(storage)?;
+            if recorded_session != reference.session_id.to_string() {
+                return Err(AgentFailure::Conflict);
+            }
+            if binding.next().await.map_err(storage)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            drop(binding);
+            let recorded = self
+                .task_on(&transaction, task_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            let task_snapshot = &recorded.snapshot;
+            if task_snapshot.state != floe_agent_contract::TaskState::Completed
+                || task_snapshot.task_id != task_id
+                || task_snapshot.principal != reference.person_id.to_string()
+            {
+                return Err(AgentFailure::Conflict);
+            }
             let outputs: Vec<_> = session
                 .messages
                 .iter()
                 .filter_map(|message| match message {
-                    AgentMessage::Delegation { task, .. }
-                        if task.id == reference.invocation_id =>
+                    AgentMessage::Delegation { turn_id, task }
+                        if task.id == reference.invocation_id
+                            && turn_id.to_string() == bound_turn
+                            && task.state == floe_experts::A2ATaskState::Completed =>
                     {
-                        task.data_part(EXPERT_RESULT_MEDIA_TYPE)
+                        Some(task)
                     }
                     _ => None,
                 })
+                .flat_map(|task| &task.artifacts)
+                .flat_map(|artifact| {
+                    artifact.parts.iter().filter_map(move |part| match part {
+                        floe_experts::A2APart::Data { media_type, data }
+                            if media_type == EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE =>
+                        {
+                            Some((artifact.artifact_id, data.as_str()))
+                        }
+                        _ => None,
+                    })
+                })
                 .collect();
-            let [output] = outputs.as_slice() else {
+            let [(artifact_id, output)] = outputs.as_slice() else {
                 return Err(AgentFailure::NotFound);
             };
             if output.len() > 16_384 {
                 return Err(AgentFailure::BudgetExceeded);
             }
-            let evidence: ExpertResult =
+            let evidence: ExpertCalendarProposal =
                 serde_json::from_str(output).map_err(|_| AgentFailure::InvalidInput)?;
-            if evidence.invocation_id != reference.invocation_id
+            evidence.validate()?;
+            if evidence.task_id != reference.invocation_id
+                || recorded.invocation_key.as_uuid() != evidence.invocation_id
                 || evidence.person_id != reference.person_id
-                || evidence.action_proposals.len() != 1
+                || task_snapshot.agent_id != evidence.package.id
                 || !session.data_classes.contains(&evidence.data_class)
             {
                 return Err(AgentFailure::InvalidInput);
             }
-            let mut receipts = transaction
-                .query(
-                    "SELECT session_id, assignment_id, registry_revision FROM agent_expert_receipts WHERE invocation_id = ?",
-                    [reference.invocation_id.to_string()],
-                )
-                .await
-                .map_err(storage)?;
-            let receipt = receipts.next().await.map_err(storage)?.ok_or(AgentFailure::NotFound)?;
-            let revision = receipt.get::<i64>(2).map_err(storage)?;
-            if receipt.get::<String>(0).map_err(storage)? != reference.session_id.to_string()
-                || receipt.get::<String>(1).map_err(storage)? != evidence.assignment_id.to_string()
-                || revision <= 0
-                || u64::try_from(revision).map_err(|_| AgentFailure::InvalidInput)? > snapshot.revision
-            {
+            let trusted: Vec<_> = task_snapshot
+                .artifacts
+                .iter()
+                .filter(|artifact| artifact.artifact_id == *artifact_id)
+                .collect();
+            let [trusted] = trusted.as_slice() else {
+                return Err(AgentFailure::Conflict);
+            };
+            let trusted_parts: Vec<_> = trusted
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    floe_agent_contract::ArtifactPart::Data { media_type, data }
+                        if media_type == EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE => Some(data),
+                    _ => None,
+                })
+                .collect();
+            if trusted_parts.as_slice() != [output] {
                 return Err(AgentFailure::Conflict);
             }
-            drop(receipts);
+            let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
+                &trusted.coverage else {
+                return Err(AgentFailure::PolicyDenied);
+            };
+            let [contributor] = dependencies.as_slice() else {
+                return Err(AgentFailure::PolicyDenied);
+            };
+            if contributor.observation_id() != evidence.evidence_id {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let floe_agent_contract::DependencyCoverage::Dependent {
+                dependencies: report_dependencies,
+            } = &task_snapshot.coverage else {
+                return Err(AgentFailure::PolicyDenied);
+            };
+            if !report_dependencies.contains(contributor) {
+                return Err(AgentFailure::PolicyDenied);
+            }
             let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
-            // Registry validates Expert identity/private-state settlement only.
-            // Source evidence is validated against the recorded ContextDependency.
-            if evidence.evidence_id.is_nil()
-                || evidence.action_proposals.iter().any(|proposal| {
-                    proposal.evidence_id != evidence.evidence_id
-                })
-            {
-                return Err(AgentFailure::InvalidInput);
+            registry.validate_settled_invocation(
+                evidence.instance_id,
+                evidence.person_id,
+                evidence.assignment_id,
+                &evidence.package,
+                evidence.state_revision,
+                evidence.data_class,
+            )?;
+            if require_active {
+                registry.validate_active_assignment(
+                    evidence.person_id,
+                    evidence.assignment_id,
+                )?;
             }
-            match usage {
-                ProposalUse::Publish => {
-                    registry.validate_recorded_result(&evidence)?;
-                }
-                ProposalUse::Inspect => registry.validate_historical_result(&evidence)?,
-            }
-            if evidence.source_handle.starts_with("calendar.observe:") {
-                let dependency = self.expert_proposal_dependency(reference, &evidence).await?;
-                if dependency.observation_id() != evidence.evidence_id {
-                    return Err(AgentFailure::Conflict);
-                }
-            }
-            self.check_access()?;
-            let value = operation(evidence).await?;
-            self.check_access()?;
-            Ok(value)
+            Ok(evidence)
         }
         .await;
-        self.finish_registry_transaction(transaction, result).await
+        let evidence = self.finish_registry_transaction(transaction, result).await?;
+        self.check_access()?;
+        let value = operation(evidence).await?;
+        self.check_access()?;
+        Ok(value)
     }
 }

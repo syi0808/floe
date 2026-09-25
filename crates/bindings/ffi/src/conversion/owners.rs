@@ -18,6 +18,8 @@ fn calendar_action(action: floe_app::CalendarAction) -> AgentProposalActionDto {
         action_id: action.id.to_string(),
         execution_id: action.execution_id.to_string(),
         expires_at: action.expires_at,
+        starts_at: action.schedule.starts_at,
+        ends_at: action.schedule.ends_at,
         status: match action.state {
             CalendarActionState::Pending => AgentProposalStatusDto::Pending,
             CalendarActionState::Approved => AgentProposalStatusDto::Approved,

@@ -2,6 +2,7 @@ mod action;
 mod authority;
 mod envelope;
 mod origin;
+mod expert_proposal;
 
 pub use action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionState,
@@ -13,3 +14,6 @@ pub use envelope::{
     action_state_name, valid_action_digest,
 };
 pub use origin::{AgentActionOrigin, ExpertProposalReference};
+pub use expert_proposal::{
+    EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE, ExpertCalendarProposal, ExpertCalendarProposalDraft,
+};

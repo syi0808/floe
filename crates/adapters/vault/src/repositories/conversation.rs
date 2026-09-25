@@ -887,7 +887,7 @@ fn terminal_messages(
             EngineStep::Delegation(receipt) => {
                 messages.push(AgentMessage::Delegation {
                     turn_id: run_id.as_uuid(),
-                    task: legacy_task(run_id, receipt)?,
+                    task: project_task(run_id, receipt)?,
                 });
                 project_refs(
                     &mut messages,
@@ -902,38 +902,16 @@ fn terminal_messages(
     Ok(messages)
 }
 
-fn legacy_task(run_id: RunId, receipt: &TaskReceipt) -> Result<A2ATask, AgentFailure> {
+fn project_task(run_id: RunId, receipt: &TaskReceipt) -> Result<A2ATask, AgentFailure> {
     receipt
         .snapshot
         .validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
-    let mut artifacts = receipt
+    let artifacts = receipt
         .snapshot
         .artifacts
         .iter()
-        .map(legacy_artifact)
+        .map(project_artifact)
         .collect::<Result<Vec<_>, _>>()?;
-    if receipt.snapshot.state == TaskState::Completed {
-        let result = receipt
-            .snapshot
-            .result
-            .as_ref()
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        let summary = serde_json::from_str::<floe_experts::ExpertResult>(result)
-            .ok()
-            .and_then(|result| result.summary)
-            .unwrap_or_else(|| "Expert task completed".into());
-        artifacts.push(A2AArtifact {
-            artifact_id: Uuid::new_v5(&receipt.task_id.as_uuid(), b"expert-result"),
-            name: "Expert result".into(),
-            parts: vec![
-                A2APart::Text { text: summary },
-                A2APart::Data {
-                    media_type: floe_experts::EXPERT_RESULT_MEDIA_TYPE.into(),
-                    data: result.clone(),
-                },
-            ],
-        });
-    }
     Ok(A2ATask {
         id: receipt.task_id.as_uuid(),
         context_id: run_id.as_uuid(),
@@ -950,12 +928,13 @@ fn legacy_task(run_id: RunId, receipt: &TaskReceipt) -> Result<A2ATask, AgentFai
         },
         history: vec![],
         artifacts,
+        result: receipt.snapshot.result.clone(),
         failure: receipt.snapshot.issue,
         settlement: None,
     })
 }
 
-fn legacy_artifact(artifact: &ContractArtifact) -> Result<A2AArtifact, AgentFailure> {
+fn project_artifact(artifact: &ContractArtifact) -> Result<A2AArtifact, AgentFailure> {
     artifact.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
     Ok(A2AArtifact {
         artifact_id: artifact.artifact_id,

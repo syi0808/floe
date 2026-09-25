@@ -13,7 +13,6 @@ use floe_inference::UsageLedger;
 use floe_agent_contract::AGENT_VERSION;
 
 pub use floe_agent_contract::{A2A_PROTOCOL_VERSION, AgentCard};
-pub const EXPERT_RESULT_MEDIA_TYPE: &str = "application/vnd.floe.expert-result+json;version=1";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,24 +77,42 @@ pub struct A2ATask {
     pub history: Vec<A2AMessage>,
     pub artifacts: Vec<A2AArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<AgentFailure>,
     #[serde(skip)]
     pub settlement: Option<floe_agent_contract::EndpointSettlement>,
 }
 
 impl A2ATask {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        let valid_state = match self.state {
+            A2ATaskState::Submitted | A2ATaskState::Working => {
+                self.result.is_none() && self.failure.is_none()
+            }
+            A2ATaskState::Completed => {
+                self.result
+                    .as_deref()
+                    .is_some_and(|result| bounded_text(result, floe_agent_contract::MAX_OUTPUT_BYTES))
+                    && self.failure.is_none()
+            }
+            A2ATaskState::Failed | A2ATaskState::Cancelled | A2ATaskState::Rejected => {
+                self.result.is_none() && self.failure.is_some()
+            }
+        };
+        if !valid_state {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        Ok(())
+    }
+
     pub fn result_text(&self) -> Result<&str, AgentFailure> {
         if self.state != A2ATaskState::Completed || self.failure.is_some() {
             return Err(self.failure.unwrap_or(AgentFailure::InvalidModelOutput));
         }
-        self.artifacts
-            .iter()
-            .flat_map(|artifact| &artifact.parts)
-            .find_map(|part| match part {
-                A2APart::Text { text } => Some(text.as_str()),
-                A2APart::Data { .. } => None,
-            })
-            .filter(|text| bounded_text(text, 4096))
+        self.result
+            .as_deref()
+            .filter(|text| bounded_text(text, floe_agent_contract::MAX_OUTPUT_BYTES))
             .ok_or(AgentFailure::InvalidModelOutput)
     }
 
@@ -216,6 +233,7 @@ impl<Agent: InProcessAgent> A2AHost for InProcessA2ATransport<'_, Agent> {
             state: A2ATaskState::Submitted,
             history: vec![request.message.clone()],
             artifacts: vec![],
+            result: None,
             failure: None,
             settlement: None,
         };
@@ -250,6 +268,7 @@ impl<Agent: InProcessAgent> A2AHost for InProcessA2ATransport<'_, Agent> {
         }
         match result {
             Ok(task) => {
+                task.validate()?;
                 stored.task = task.clone();
                 Ok(task)
             }
@@ -415,6 +434,7 @@ mod tests {
                         text: "The schedule has room.".into(),
                     }],
                 }],
+                result: Some("The schedule has room.".into()),
                 failure: None,
                 settlement: None,
             })

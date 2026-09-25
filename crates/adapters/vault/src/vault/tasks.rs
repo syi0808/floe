@@ -7,7 +7,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MAX_TASK_RECORD_BYTES: usize = 128 * 1024;
 const MAX_TASK_ROWS: i64 = 4_096;
 
@@ -275,9 +275,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             transaction
                 .execute(
-                    "INSERT INTO agent_tasks (task_id, person_id, state, aggregate_revision, executor_generation, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO agent_tasks (task_id, invocation_key, person_id, state, aggregate_revision, executor_generation, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         task_id.as_uuid().to_string(),
+                        proposed.invocation_key.as_uuid().to_string(),
                         self.person_id.to_string(),
                         state_name(proposed.snapshot.state),
                         integer(proposed.aggregate_revision)?,
@@ -286,7 +287,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ),
                 )
                 .await
-                .map_err(storage)?;
+                .map_err(|error| match error {
+                    turso::Error::Constraint(_) => AgentFailure::Conflict,
+                    other => storage(other),
+                })?;
             self.check_access()?;
             Ok(VaultTaskAdmission::Created(proposed))
         }
@@ -359,7 +363,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<Option<VaultTaskRecord>, AgentFailure> {
         let mut rows = connection
             .query(
-                "SELECT person_id, state, aggregate_revision, executor_generation, payload FROM agent_tasks WHERE task_id = ? AND length(CAST(payload AS BLOB)) <= 131072",
+                "SELECT invocation_key, person_id, state, aggregate_revision, executor_generation, payload FROM agent_tasks WHERE task_id = ? AND length(CAST(payload AS BLOB)) <= 131072",
                 [task_id.as_uuid().to_string()],
             )
             .await
@@ -368,13 +372,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Ok(None);
         };
         let record: VaultTaskRecord =
-            serde_json::from_str(&row.get::<String>(4).map_err(storage)?).map_err(unavailable)?;
+            serde_json::from_str(&row.get::<String>(5).map_err(storage)?).map_err(unavailable)?;
         record.validate(self.person_id).map_err(unavailable)?;
         if record.snapshot.task_id != task_id
-            || row.get::<String>(0).map_err(storage)? != self.person_id.to_string()
-            || row.get::<String>(1).map_err(storage)? != state_name(record.snapshot.state)
-            || row.get::<i64>(2).map_err(storage)? != integer(record.aggregate_revision)?
-            || row.get::<i64>(3).map_err(storage)? != integer(record.executor_generation)?
+            || row.get::<String>(0).map_err(storage)? != record.invocation_key.as_uuid().to_string()
+            || row.get::<String>(1).map_err(storage)? != self.person_id.to_string()
+            || row.get::<String>(2).map_err(storage)? != state_name(record.snapshot.state)
+            || row.get::<i64>(3).map_err(storage)? != integer(record.aggregate_revision)?
+            || row.get::<i64>(4).map_err(storage)? != integer(record.executor_generation)?
             || rows.next().await.map_err(storage)?.is_some()
         {
             return Err(AgentFailure::VaultUnavailable);
@@ -410,7 +415,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
                 (),
             )
             .await
@@ -424,7 +429,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "CREATE TABLE agent_tasks (task_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('submitted', 'working', 'completed', 'failed', 'rejected', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072))",
+                "CREATE TABLE agent_tasks (task_id TEXT PRIMARY KEY, invocation_key TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('submitted', 'working', 'completed', 'failed', 'rejected', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072))",
                 (),
             )
             .await
@@ -438,7 +443,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_task_schema (id, version) VALUES (1, 1)",
+                "INSERT INTO agent_task_schema (id, version) VALUES (1, 2)",
                 (),
             )
             .await
@@ -478,7 +483,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     }
     transaction
         .query(
-            "SELECT task_id, person_id, state, aggregate_revision, executor_generation, payload FROM agent_tasks LIMIT 0",
+            "SELECT task_id, invocation_key, person_id, state, aggregate_revision, executor_generation, payload FROM agent_tasks LIMIT 0",
             (),
         )
         .await

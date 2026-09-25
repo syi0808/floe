@@ -24,8 +24,11 @@ class AgentProposalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final proposal = controller.expertResult(message)?.proposal;
-    if (proposal == null) return const SizedBox.shrink();
+    if (!message.hasArtifactMediaType(
+      'application/vnd.floe.actions.calendar-proposal+json;version=1',
+    )) {
+      return const SizedBox.shrink();
+    }
     final strings = AppLocalizations.of(context);
     final inspection = controller.proposalFor(message.callId);
     final action = inspection?.action;
@@ -52,13 +55,13 @@ class AgentProposalCard extends StatelessWidget {
         children: [
           Text(strings.agentProposalTitle, style: FloeType.controlLabel),
           const SizedBox(height: 8),
-          Text(
-            strings.agentProposalInterval(
-              date.format(proposal.start!.toLocal()),
-              date.format(proposal.end!.toLocal()),
-            ),
-          ),
-          const SizedBox(height: 8),
+          if (action != null) ...[
+            Text(strings.agentProposalInterval(
+              date.format(action.startsAt.toLocal()),
+              date.format(action.endsAt.toLocal()),
+            )),
+            const SizedBox(height: 8),
+          ],
           Semantics(
             liveRegion: true,
             child: Align(

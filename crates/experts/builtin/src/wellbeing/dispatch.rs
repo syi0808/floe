@@ -18,7 +18,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         SourceReadOutcome::Ready(view) => view,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-                crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Wellbeing is temporarily unavailable, so there is no wellbeing assessment.".into(),
             );
@@ -29,6 +30,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 .map_err(|_| AgentFailure::StaleContext)?;
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::NeedsUserAction,
                 "Wellbeing access needs your review, so there is no wellbeing assessment.".into(),
             );
@@ -55,6 +57,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         ExpertJudgment::Blocked(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::NeedsUserAction,
                 "Model approval needs your review, so there is no wellbeing assessment.".into(),
             );
@@ -62,6 +65,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     };
     BuiltinExpertOutput::from_result(
         crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+        super::RESULT_MEDIA_TYPE,
         result.summary.clone(),
         &result,
     )

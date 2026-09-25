@@ -311,14 +311,21 @@ mod tests {
     use super::*;
     use crate::BuiltinExpertKind;
 
+    fn first_data(output: &BuiltinExpertOutput) -> &str {
+        match &output.artifacts[0].parts[0] {
+            floe_agent_contract::ArtifactPart::Data { data, .. } => data,
+            _ => panic!("expected package data"),
+        }
+    }
+
     fn assert_blocked(output: &BuiltinExpertOutput, status: &str, host: &ScriptedHost) {
         assert!(
-            output.data.contains(status),
+            first_data(output).contains(status),
             "blocked report must name {status}: {}",
-            output.data
+            first_data(output)
         );
         assert!(
-            output.artifacts.is_empty(),
+            output.artifacts.len() == 1,
             "blocked reports propose no requirement of their own"
         );
         assert_eq!(
@@ -413,9 +420,9 @@ mod tests {
         // The judgment succeeds over admitted evidence: the optional blocker
         // is preserved by the host, not by failing or by relabelling.
         assert!(
-            output.data.contains("protect_focus"),
+            first_data(&output).contains("protect_focus"),
             "optional blocker must not gate the judgment: {}",
-            output.data
+            first_data(&output)
         );
         assert_eq!(host.model.calls.load(Ordering::SeqCst), 1);
     }

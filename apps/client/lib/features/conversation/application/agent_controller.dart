@@ -13,7 +13,6 @@ import 'package:floe_client/features/conversation/domain/agent_interaction.dart'
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/knowledge/presentation/agent_memory_review.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
-import 'package:floe_client/features/experts/domain/agent_expert_result.dart';
 import 'package:floe_client/features/actions/domain/agent_proposal.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -513,21 +512,6 @@ final class AgentController extends ChangeNotifier {
     _interactionFailures.clear();
   }
 
-  AgentExpertResult? expertResult(AgentCapabilityMessage message) {
-    final classes = session?.dataClasses ?? const <String>[];
-    if (classes.length != 1 ||
-        classes.single == 'personal' &&
-            (!usesVault || vaultState != AgentVaultState.ready || _sealed)) {
-      return null;
-    }
-    return AgentExpertResult.tryParse(
-      message.output,
-      callId: message.callId,
-      personId: personId,
-      allowedDataClasses: classes,
-    );
-  }
-
   bool canInspectProposal(AgentCapabilityMessage message) =>
       usesVault &&
       owners.proposals != null &&
@@ -539,16 +523,15 @@ final class AgentController extends ChangeNotifier {
       !needsRecovery &&
       vaultState == AgentVaultState.ready &&
       session?.personId == personId &&
+      message.isDelegation &&
       session!.messages
               .whereType<AgentCapabilityMessage>()
-              .where(
-                (saved) =>
-                    saved.callId == message.callId &&
-                    saved.output == message.output,
-              )
+              .where((saved) => identical(saved, message))
               .length ==
           1 &&
-      expertResult(message)?.proposal != null;
+      message.hasArtifactMediaType(
+        'application/vnd.floe.actions.calendar-proposal+json;version=1',
+      );
 
   Future<void> inspectProposal(AgentCapabilityMessage message) async {
     if (!canInspectProposal(message)) return;

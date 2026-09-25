@@ -6,14 +6,12 @@
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{
-    AgentFailure, Artifact, ArtifactPart, BoxFuture, DependencyCoverage, EndpointInvocation,
-    EndpointSettlement, ExpertReport, USER_INTERACTION_MEDIA_TYPE, UserInteractionRef,
+    AgentFailure, Artifact, ArtifactPart, BoxFuture, DependencyCoverage, EndpointSettlement,
 };
 use uuid::Uuid;
 
 use crate::{
     A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
-    EXPERT_RESULT_MEDIA_TYPE,
 };
 
 /// How many Experts one host may register.
@@ -110,28 +108,17 @@ pub fn admit_expert_message(
 /// Assemble the completed Task that carries one Expert's result.
 pub fn completed_expert_task(
     request: A2ASendMessageRequest,
-    artifact_name: &str,
-    summary: String,
-    data: String,
-    auxiliary_artifacts: Vec<Artifact>,
+    result: String,
+    artifacts: Vec<Artifact>,
     settlement: Option<EndpointSettlement>,
 ) -> Result<A2ATask, AgentFailure> {
-    let auxiliary_artifacts = auxiliary_artifacts
+    if result.trim().is_empty() || result.len() > request.max_output_bytes {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    let artifacts = artifacts
         .iter()
         .map(contract_artifact_to_a2a)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut artifacts = vec![A2AArtifact {
-        artifact_id: Uuid::new_v4(),
-        name: artifact_name.into(),
-        parts: vec![
-            A2APart::Text { text: summary },
-            A2APart::Data {
-                media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
-                data,
-            },
-        ],
-    }];
-    artifacts.extend(auxiliary_artifacts);
     if let Some(settlement) = &settlement {
         settlement.validate()?;
     }
@@ -142,23 +129,13 @@ pub fn completed_expert_task(
         state: A2ATaskState::Completed,
         history: vec![request.message],
         artifacts,
+        result: Some(result),
         failure: None,
         settlement,
     })
 }
-
 fn contract_artifact_to_a2a(artifact: &Artifact) -> Result<A2AArtifact, AgentFailure> {
     artifact.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
-    if artifact.coverage != DependencyCoverage::Independent {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    if artifact.parts.iter().any(|part| {
-        matches!(part,
-            ArtifactPart::Data { media_type, .. } if media_type == EXPERT_RESULT_MEDIA_TYPE
-        )
-    }) {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
     let parts = artifact
         .parts
         .iter()
@@ -177,111 +154,6 @@ fn contract_artifact_to_a2a(artifact: &Artifact) -> Result<A2AArtifact, AgentFai
     })
 }
 
-fn auxiliary_artifact_from_a2a(artifact: &A2AArtifact) -> Result<Artifact, AgentFailure> {
-    let parts = artifact
-        .parts
-        .iter()
-        .map(|part| match part {
-            A2APart::Text { text } => ArtifactPart::Text { text: text.clone() },
-            A2APart::Data { media_type, data } => ArtifactPart::Data {
-                media_type: media_type.clone(),
-                data: data.clone(),
-            },
-        })
-        .collect::<Vec<_>>();
-    let artifact = Artifact {
-        artifact_id: artifact.artifact_id,
-        name: artifact.name.clone(),
-        parts,
-        coverage: DependencyCoverage::Independent,
-    };
-    artifact.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
-    for part in &artifact.parts {
-        if let ArtifactPart::Data { media_type, data } = part {
-            if media_type == EXPERT_RESULT_MEDIA_TYPE {
-                return Err(AgentFailure::InvalidModelOutput);
-            }
-            if media_type == USER_INTERACTION_MEDIA_TYPE {
-                let reference: UserInteractionRef =
-                    serde_json::from_str(data).map_err(|_| AgentFailure::InvalidModelOutput)?;
-                reference.validate()?;
-            }
-        }
-    }
-    Ok(artifact)
-}
-
-/// Turn a settled Task into the report the delegating Run receives.
-///
-/// The Task must be the one that was requested, for the agent that was
-/// selected, and must actually have completed; anything else is invalid model
-/// output rather than an empty success.
-pub fn expert_report(
-    invocation: EndpointInvocation,
-    task: &A2ATask,
-    parent_context_id: Uuid,
-    coverage: DependencyCoverage,
-) -> Result<ExpertReport, AgentFailure> {
-    if task.id != invocation.request.task_id.as_uuid()
-        || task.context_id != parent_context_id
-        || task.agent_id != invocation.request.selected_agent_id
-        || task.state != A2ATaskState::Completed
-        || task.failure.is_some()
-    {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    let mut artifact_ids = std::collections::HashSet::new();
-    if task
-        .artifacts
-        .iter()
-        .any(|artifact| !artifact_ids.insert(artifact.artifact_id))
-    {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    let primary = task
-        .artifacts
-        .iter()
-        .filter(|artifact| {
-            artifact.parts.iter().any(|part| {
-                matches!(part,
-                    A2APart::Data { media_type, .. } if media_type == EXPERT_RESULT_MEDIA_TYPE
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    let [primary] = primary.as_slice() else {
-        return Err(AgentFailure::InvalidModelOutput);
-    };
-    let result = primary
-        .parts
-        .iter()
-        .filter_map(|part| match part {
-            A2APart::Data { media_type, data } if media_type == EXPERT_RESULT_MEDIA_TYPE => {
-                Some(data)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let [result] = result.as_slice() else {
-        return Err(AgentFailure::InvalidModelOutput);
-    };
-    let artifacts = task
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.artifact_id != primary.artifact_id)
-        .map(auxiliary_artifact_from_a2a)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ExpertReport {
-        task_id: invocation.request.task_id,
-        principal: invocation.request.principal,
-        agent_id: invocation.request.selected_agent_id,
-        definition_revision: invocation.request.selected_definition_revision,
-        result: (*result).clone(),
-        artifacts,
-        coverage,
-        settlement: task.settlement.clone(),
-    })
-}
 
 /// Who records how a delegated result depends on the sources behind it.
 pub trait TaskCoverageRecorder: Send + Sync {
@@ -324,7 +196,6 @@ pub fn record_task_coverage(
 /// usable result is a storage failure rather than an empty success.
 pub fn task_receipt_to_a2a(
     request: A2ASendMessageRequest,
-    artifact_name: &str,
     receipt: floe_agent_contract::TaskReceipt,
 ) -> Result<A2ATask, AgentFailure> {
     use floe_agent_contract::TaskState;
@@ -337,39 +208,14 @@ pub fn task_receipt_to_a2a(
         TaskState::Cancelled => A2ATaskState::Cancelled,
         TaskState::Failed | TaskState::TimedOut | TaskState::Interrupted => A2ATaskState::Failed,
     };
+    receipt.snapshot.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
     let artifacts = if receipt.snapshot.state == TaskState::Completed {
-        let result = receipt
+        receipt
             .snapshot
-            .result
-            .as_deref()
-            .ok_or(AgentFailure::StorageUnavailable)?;
-        let report: crate::ExpertResult =
-            serde_json::from_str(result).map_err(|_| AgentFailure::StorageUnavailable)?;
-        let mut artifacts = vec![A2AArtifact {
-            artifact_id: Uuid::new_v4(),
-            name: artifact_name.into(),
-            parts: vec![
-                A2APart::Text {
-                    text: report
-                        .summary
-                        .clone()
-                        .ok_or(AgentFailure::InvalidModelOutput)?,
-                },
-                A2APart::Data {
-                    media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
-                    data: result.into(),
-                },
-            ],
-        }];
-        artifacts.extend(
-            receipt
-                .snapshot
-                .artifacts
-                .iter()
-                .map(contract_artifact_to_a2a)
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        artifacts
+            .artifacts
+            .iter()
+            .map(contract_artifact_to_a2a)
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         vec![]
     };
@@ -380,6 +226,7 @@ pub fn task_receipt_to_a2a(
         state,
         history: vec![request.message],
         artifacts,
+        result: receipt.snapshot.result,
         failure: receipt.snapshot.issue,
         settlement: None,
     })
@@ -389,9 +236,10 @@ pub fn task_receipt_to_a2a(
 mod tests {
     use super::*;
     use floe_agent_contract::{
-        AgentContext, DataClass, DelegationExecutionContext, DelegationRequest, InvocationKey,
-        PackageKind, PackageRef, TaskId, TaskReceipt, TaskSnapshot, TaskState, UserInteractionKind,
-        UserInteractionStatus,
+        AgentContext, DelegationExecutionContext, DelegationRequest, EndpointInvocation,
+        ExpertReport, InvocationKey, TaskId, TaskReceipt, TaskSnapshot, TaskState,
+        UserInteractionKind, UserInteractionRef, UserInteractionStatus,
+        USER_INTERACTION_MEDIA_TYPE,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
@@ -466,120 +314,51 @@ mod tests {
     }
 
     #[test]
-    fn completed_task_preserves_interaction_and_optional_settlement() {
+    fn canonical_report_rejects_unknown_coverage_and_duplicate_artifacts() {
         let request = request();
         let invocation = invocation(&request);
-        let context_id = request.message.context_id;
+        let artifact = interaction_artifact();
+        let mut report = ExpertReport {
+            task_id: invocation.request.task_id,
+            principal: invocation.request.principal.clone(),
+            agent_id: invocation.request.selected_agent_id.clone(),
+            definition_revision: invocation.request.selected_definition_revision,
+            result: "Blocked".into(),
+            artifacts: vec![artifact.clone()],
+            coverage: DependencyCoverage::Independent,
+            settlement: None,
+        };
+        assert!(report.validate(&invocation, 4096).is_ok());
+        report.artifacts[0].coverage = DependencyCoverage::Unknown;
+        assert!(report.validate(&invocation, 4096).is_err());
+        report.artifacts[0].coverage = DependencyCoverage::Independent;
+        report.artifacts.push(artifact);
+        assert!(report.validate(&invocation, 4096).is_err());
+    }
+
+    #[test]
+    fn completed_task_projects_generic_result_without_coverage() {
+        let request = request();
         let interaction = interaction_artifact();
         let settlement = EndpointSettlement::try_new("schedule", "payload").unwrap();
         let task = completed_expert_task(
             request,
-            "Schedule",
             "Blocked".into(),
-            "{}".into(),
             vec![interaction.clone()],
             Some(settlement.clone()),
         )
         .unwrap();
-        let report = expert_report(
-            invocation,
-            &task,
-            context_id,
-            DependencyCoverage::Independent,
-        )
-        .unwrap();
-        assert_eq!(report.artifacts, vec![interaction]);
-        assert_eq!(report.settlement, Some(settlement));
-        assert!(
-            serde_json::to_value(&report)
-                .unwrap()
-                .get("settlement")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn completed_task_requires_one_primary_and_valid_interaction() {
-        let request = request();
-        let invocation = invocation(&request);
-        let context_id = request.message.context_id;
-        let mut task = completed_expert_task(
-            request,
-            "Schedule",
-            "Blocked".into(),
-            "{}".into(),
-            vec![interaction_artifact()],
-            None,
-        )
-        .unwrap();
-        let primary = task.artifacts.remove(0);
-        assert!(
-            expert_report(
-                invocation.clone(),
-                &task,
-                context_id,
-                DependencyCoverage::Independent
-            )
-            .is_err()
-        );
-        task.artifacts.insert(0, primary);
-        let mut duplicate = task.artifacts[0].clone();
-        duplicate.artifact_id = Uuid::new_v4();
-        task.artifacts.push(duplicate);
-        assert!(
-            expert_report(
-                invocation.clone(),
-                &task,
-                context_id,
-                DependencyCoverage::Independent
-            )
-            .is_err()
-        );
-        task.artifacts.pop();
-        let mut malformed = interaction_artifact();
-        malformed.parts = vec![ArtifactPart::Data {
-            media_type: USER_INTERACTION_MEDIA_TYPE.into(),
-            data: "{}".into(),
-        }];
-        task.artifacts
-            .push(contract_artifact_to_a2a(&malformed).unwrap());
-        assert!(
-            expert_report(
-                invocation,
-                &task,
-                context_id,
-                DependencyCoverage::Independent
-            )
-            .is_err()
-        );
+        assert_eq!(task.result_text().unwrap(), "Blocked");
+        assert_eq!(task.artifacts.len(), 1);
+        assert_eq!(task.artifacts[0].artifact_id, interaction.artifact_id);
+        assert_eq!(task.settlement, Some(settlement));
+        assert!(serde_json::to_value(&task).unwrap().get("settlement").is_none());
     }
 
     #[test]
     fn completed_receipt_preserves_auxiliary_artifact() {
         let request = request();
         let artifact = interaction_artifact();
-        let result = crate::ExpertResult {
-            schema_version: AGENT_VERSION,
-            invocation_id: request.message.task_id.unwrap(),
-            instance_id: Uuid::new_v4(),
-            person_id: request.person_id,
-            assignment_id: Uuid::new_v4(),
-            package: PackageRef {
-                kind: PackageKind::Expert,
-                id: request.agent_id.clone(),
-                version: "1".into(),
-            },
-            evidence_id: Uuid::new_v4(),
-            source_handle: "calendar".into(),
-            data_class: DataClass::Personal,
-            expires_at_unix_ms: 1,
-            insights: vec![],
-            action_proposals: vec![],
-            summary: Some("Blocked".into()),
-            model_calls: 1,
-            state_revision: 1,
-            view_calls: 0,
-        };
         let task_id = TaskId::from_uuid(request.message.task_id.unwrap()).unwrap();
         let receipt = TaskReceipt {
             task_id,
@@ -590,18 +369,16 @@ mod tests {
                 agent_id: request.agent_id.clone(),
                 definition_revision: 1,
                 state: TaskState::Completed,
-                result: Some(serde_json::to_string(&result).unwrap()),
+                result: Some("Blocked".into()),
                 artifacts: vec![artifact.clone()],
                 coverage: DependencyCoverage::Independent,
                 issue: None,
             },
             replay: None,
         };
-        let task = task_receipt_to_a2a(request, "Schedule", receipt).unwrap();
-        assert_eq!(task.artifacts.len(), 2);
-        assert_eq!(
-            auxiliary_artifact_from_a2a(&task.artifacts[1]).unwrap(),
-            artifact
-        );
+        let task = task_receipt_to_a2a(request, receipt).unwrap();
+        assert_eq!(task.result.as_deref(), Some("Blocked"));
+        assert_eq!(task.artifacts.len(), 1);
+        assert_eq!(task.artifacts[0].artifact_id, artifact.artifact_id);
     }
 }

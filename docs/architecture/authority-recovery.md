@@ -33,6 +33,8 @@ A broader follow-up request cannot silently reuse evidence whose coverage is too
 
 When one logical view reads multiple connected sources, each source retains its own grant, grant authority, consumer-policy authority, source authority and `ContextDependency`. Context may merge bounded payloads, but it cannot manufacture an aggregate grant or dependency or drop a contributing dependency from model coverage.
 
+Expert package artifacts retain exact internal coverage in `ExpertReport` and the durable `TaskSnapshot`; their A2A, Conversation and Flutter projections omit grant/source authority. A completed Task has a bounded text result, but that result does not replace provenance or encode package schema. Unknown coverage cannot cross the completed report/Task boundary.
+
 ## Validated pending work is durable work
 
 The Agent Runtime validates a complete model-produced batch before executing side effects. Once a validated batch is durable, crash recovery must continue that batch rather than ask the model for a different plan.
@@ -73,6 +75,8 @@ Consequential external effects require:
 3. durable pre-dispatch execution intent;
 4. idempotency/stable execution identity;
 5. reconciliation when the provider may have succeeded but the response is lost.
+
+For delegated Calendar proposals, Actions owns the proposal schema and media type. The saved delegation must match the exact durable Task and contain exactly one Actions proposal artifact; executable-looking package JSON is inert. Vault checks the artifact's exact contributor against Task coverage and the settled Registry instance, assignment, package and invocation, then revalidates the current source/grant/policy fence. A source Read grant or proposal artifact is never Act authority. Approval and durable pre-dispatch intent remain separate from publication, and lost-response recovery keeps uncertain writes for reconciliation.
 
 An unknown outcome is never retried as a blind create/write. Recovery performs a bounded lookup/reconciliation path and preserves uncertainty when identity cannot be proven.
 

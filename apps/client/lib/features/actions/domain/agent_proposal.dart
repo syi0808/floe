@@ -36,8 +36,10 @@ final class AgentProposalAction {
     : id = _uuid(json['action_id']),
       executionId = _uuid(json['execution_id']),
       status = CalendarActionStatus.values.byName(json['status'] as String),
-      expiresAt = DateTime.parse(json['expires_at'] as String) {
-    if (!expiresAt.isUtc) {
+      expiresAt = DateTime.parse(json['expires_at'] as String),
+      startsAt = DateTime.parse(json['starts_at'] as String),
+      endsAt = DateTime.parse(json['ends_at'] as String) {
+    if (!expiresAt.isUtc || !startsAt.isUtc || !endsAt.isUtc || !endsAt.isAfter(startsAt)) {
       throw const FormatException('Proposal expiry must have a UTC offset');
     }
   }
@@ -46,6 +48,8 @@ final class AgentProposalAction {
   final String executionId;
   final CalendarActionStatus status;
   final DateTime expiresAt;
+  final DateTime startsAt;
+  final DateTime endsAt;
 }
 
 String _uuid(Object? value) {

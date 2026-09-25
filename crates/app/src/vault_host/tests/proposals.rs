@@ -1,12 +1,12 @@
 use chrono::TimeZone;
-use floe_actions::{ExpertCalendarDestination, ExpertCalendarRequest};
-use floe_agent_contract::{DataClass, ExpertFocusProposal, ExpertInsight, ExpertResult};
-use floe_context_contract::CalendarProvider;
+use floe_actions::{ExpertCalendarDestination, ExpertCalendarProposal, ExpertCalendarProposalDraft, ExpertCalendarRequest};
+use floe_agent_contract::DataClass;
+use floe_context_contract::{CalendarProvider, ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, ProcessingRestriction};
 use floe_conversation::AgentMessage;
-use floe_day::CalendarRange;
+use floe_day::{CalendarRange, CalendarSelection};
 use floe_experts::{AgentRegistry, RegistryConfiguration, RegistryConfigurationTarget};
 
-use super::expert_evidence::delegation_message;
+use super::expert_evidence::{delegation_message, record_proposal_task};
 use super::*;
 
 fn fixture_now() -> chrono::DateTime<chrono::Utc> {
@@ -18,18 +18,23 @@ async fn seed(
     person: PersonId,
     keys: Keys,
     core: &FloeCore,
-) -> (AgentSession, ExpertResult) {
+) -> (AgentSession, ExpertCalendarProposal) {
     let vault = EncryptedAgentVault::create(root, person, keys)
         .await
         .unwrap();
-    // A synthetic Schedule-like package so the recorded evidence carries
-    // Synthetic data for the Fixture provider destination.
     let host = super::schedule_host::TestScheduleHost::new_with_instance(
         person,
         vault.registry_instance_id(),
     )
     .unwrap();
-    let seeded = host.snapshot().unwrap();
+    let mut seeded = host.snapshot().unwrap();
+    for package in &mut seeded.packages {
+        if let floe_experts::PackageImplementation::TimelineRead { data_class } =
+            &mut package.implementation
+        {
+            *data_class = DataClass::Personal;
+        }
+    }
     vault.initialize_expert_registry(&seeded).await.unwrap();
     let expert_assignment_id = seeded
         .assignments
@@ -44,11 +49,17 @@ async fn seed(
         timezone_offset_seconds: 0,
         end_timezone_offset_seconds: None,
     };
-    core.select_calendar(
+    core.set_calendar_scope(
         person,
-        CalendarProvider::Fixture,
-        "test-calendar".into(),
-        "Synthetic".into(),
+        "eventkit-connection".into(),
+        1,
+        "test-device".into(),
+        CalendarProvider::EventKit,
+        vec![CalendarSelection {
+            calendar_id: "home".into(),
+            calendar_name: "Home".into(),
+        }],
+        floe_context_contract::CalendarScope::Selected,
     )
     .await
     .unwrap();
@@ -61,12 +72,6 @@ async fn seed(
     core.import_calendar(person, revision, day.clone(), vec![], now)
         .await
         .unwrap();
-    let revision = core
-        .calendar_connection(person)
-        .await
-        .unwrap()
-        .unwrap()
-        .revision;
     let snapshot = vault.expert_registry().await.unwrap().unwrap();
     let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
     let registry_revision = registry.revision();
@@ -81,36 +86,95 @@ async fn seed(
         )
         .unwrap();
     let evidence_id = Uuid::new_v4();
-    let evidence = ExpertResult {
+    let invocation_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let state_revision = registry.complete(&resolved, invocation_id).unwrap();
+    let connection = core.calendar_connection(person).await.unwrap().unwrap();
+    let fingerprint = "a".repeat(64);
+    vault
+        .review_native_calendar_grant(
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            &["home".into()],
+            connection.source_authority,
+            &[GrantConsumer::builtin(resolved.package.reference.id.clone()).unwrap()],
+            &fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+    let consumer = GrantConsumer::builtin(resolved.package.reference.id.clone()).unwrap();
+    let admission = vault
+        .authorize_current_native_calendar_grant(
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            &["home".into()],
+            connection.source_authority,
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            consumer.clone(),
+            ProcessingRestriction::LocalOnly,
+            Some(&fingerprint),
+        )
+        .await
+        .unwrap();
+    let observed_at = chrono::Utc::now();
+    let dependency = ContextDependency::try_new(
+        person,
+        admission.grant_id,
+        admission.authority,
+        admission.source.clone(),
+        admission.scope.resources().to_vec(),
+        admission.scope.categories().to_vec(),
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        consumer,
+        ProcessingRestriction::LocalOnly,
+        admission.consumer_policy,
+        evidence_id,
+        vec![1],
+        Uuid::new_v4(),
+        core.lease_registry.process_incarnation(),
+        observed_at,
+        observed_at + chrono::Duration::hours(1),
+    )
+    .unwrap();
+    core.lease_registry
+        .retain_observation(
+            dependency.clone(),
+            fingerprint,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(3600),
+        )
+        .unwrap();
+    let evidence = ExpertCalendarProposal {
         schema_version: 1,
-        invocation_id: Uuid::new_v4(),
+        task_id,
+        invocation_id,
         instance_id: vault.registry_instance_id(),
         person_id: person,
         assignment_id: expert_assignment_id,
         package: resolved.package.reference.clone(),
         evidence_id,
-        source_handle: format!("calendar.timeline:{evidence_id}:{revision}"),
-        data_class: DataClass::Synthetic,
+        data_class: DataClass::Personal,
         expires_at_unix_ms: (now + chrono::Duration::minutes(2)).timestamp_millis() as u64,
-        insights: vec![ExpertInsight::FocusWindow {
+        draft: ExpertCalendarProposalDraft {
             starts_at_unix_ms: (now + chrono::Duration::minutes(5)).timestamp_millis() as u64,
             ends_at_unix_ms: (now + chrono::Duration::minutes(65)).timestamp_millis() as u64,
-        }],
-        action_proposals: vec![ExpertFocusProposal {
-            starts_at_unix_ms: (now + chrono::Duration::minutes(5)).timestamp_millis() as u64,
-            ends_at_unix_ms: (now + chrono::Duration::minutes(65)).timestamp_millis() as u64,
-            evidence_id,
-        }],
-        summary: Some("Synthetic proposal recorded.".into()),
-        model_calls: 2,
-        state_revision: 1,
-        view_calls: 1,
+        },
+        state_revision,
     };
-    registry
-        .record_result(registry_revision, &evidence)
-        .unwrap();
+    let terminal = record_proposal_task(
+        &vault,
+        registry_revision,
+        registry.snapshot(),
+        &evidence,
+        dependency,
+    )
+    .await;
     let mut session = vault.create_session().await.unwrap();
-    session.data_classes.push(DataClass::Synthetic);
+    session.data_classes.push(DataClass::Personal);
     let turn_id = Uuid::new_v4();
     session.active_turn = Some(turn_id);
     session.revision = 1;
@@ -122,11 +186,8 @@ async fn seed(
     session.revision = 2;
     session
         .messages
-        .push(delegation_message(turn_id, &evidence));
-    vault
-        .commit_expert_session(&session, 1, registry_revision, &registry.snapshot())
-        .await
-        .unwrap();
+        .push(delegation_message(turn_id, &terminal));
+    vault.compare_and_swap(&session, 1).await.unwrap();
     session.revision = 3;
     session.active_turn = None;
     session.last_outcome = Some(AgentOutcome::Completed);
@@ -177,11 +238,11 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
                 reference: ExpertProposalReference {
                     person_id: person,
                     session_id: session.id,
-                    invocation_id: evidence.invocation_id,
+                    invocation_id: evidence.task_id,
                 },
                 destination: ExpertCalendarDestination {
-                    provider: CalendarProvider::Fixture,
-                    calendar_id: "test-calendar".into(),
+                    provider: CalendarProvider::EventKit,
+                    calendar_id: "home".into(),
                     connection_revision: revision,
                     timezone: "Asia/Seoul".into(),
                 },
@@ -191,7 +252,7 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
             fixture_now,
         )
         .await,
-        Err(AgentFailure::StaleContext),
+        Err(AgentFailure::PolicyDenied),
     );
     assert_eq!(vault.load(person, session.id).await.unwrap(), session);
     assert!(
@@ -223,11 +284,11 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     let reference = ExpertProposalReference {
         person_id: person,
         session_id: session.id,
-        invocation_id: evidence.invocation_id,
+        invocation_id: evidence.task_id,
     };
     let inspect = || WorkerAction::InspectProposal {
         session_id: session.id,
-        invocation_id: evidence.invocation_id,
+        invocation_id: evidence.task_id,
     };
     let worker = Worker::with_core(
         root.clone(),
@@ -262,8 +323,8 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
             ExpertCalendarRequest {
                 reference,
                 destination: ExpertCalendarDestination {
-                    provider: CalendarProvider::Fixture,
-                    calendar_id: "test-calendar".into(),
+                    provider: CalendarProvider::EventKit,
+                    calendar_id: "home".into(),
                     connection_revision: connection.revision,
                     timezone: "Asia/Seoul".into(),
                 },
