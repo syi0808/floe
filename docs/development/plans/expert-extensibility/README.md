@@ -2,7 +2,7 @@
 
 ## Authority, baseline and scope
 
-This is the authoritative, task-specific execution plan for the next Expert extensibility change. It is a target and an ordered cutover, **not a claim that the target architecture is implemented**. The six companion documents own checkpoint instructions; this file alone owns overall status and sequencing. Do not create another status file or parallel migration plan.
+This is the authoritative, task-specific execution plan for the next Expert extensibility change. It is a target and an ordered cutover, **not a claim that the target architecture is implemented**. The seven companion documents own checkpoint instructions; this file alone owns overall status and sequencing. Do not create another status file or parallel migration plan.
 
 - Source baseline: `43005508338d7ae38d3247910361c733d7cdfe98` on `main`, rechecked on 2026-09-25.
 - Earlier investigation baseline: `6bbaebd3d64efa3ab8a9127b0a20905921d27d7c`. Do not execute its obsolete Calendar/Schedule migration assumptions.
@@ -74,7 +74,7 @@ macOS is the acceptance platform for this task. Android parity is out of scope. 
 
 | Checkpoint | Document / responsibility | Status | Completion evidence |
 |---|---|---|---|
-| 00 | Baseline, reproducible findings and owner contract decisions below | Not started | None |
+| 00 | [Baseline, reproducible findings and owner contract decisions](00-baseline-and-contract-freeze.md) | Not started | None |
 | 01 | [Current contract regressions](01-contract-regressions.md) | Not started | None |
 | 02 | [Prompt, result and settlement contracts](02-result-and-prompt-contracts.md) | Not started | None |
 | 03 | [Generic Registry and runtime registration](03-registry-and-runtime.md) | Not started | None |
@@ -87,6 +87,8 @@ Order is `00 -> 01 -> 02 -> 03 -> 04 -> 05 -> 06`. Substeps are commit boundarie
 A checkpoint closes only after canonical implementation, caller migration, replacement tests, obsolete code/test deletion, residual audit and matching current architecture updates. 04 must include working product setup and recovery; a backend-only binding type is not completion. 03 may still use the one current source-selection implementation until 04 replaces it; this is an explicit remaining behavior, not a second compatibility route or completed binding support.
 
 ## 00: executable baseline and contract freeze
+
+Detailed execution: [00-baseline-and-contract-freeze.md](00-baseline-and-contract-freeze.md).
 
 Before implementation:
 
