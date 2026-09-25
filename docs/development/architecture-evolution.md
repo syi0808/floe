@@ -43,7 +43,7 @@ Use the lightest process that matches the architectural impact.
 
 A change is local when it stays inside one existing owner, does not alter a public or persisted contract, does not change dependency direction and does not require caller migration.
 
-Examples include an internal algorithm fix, a private helper refactor or a local UI behavior adjustment.
+Examples include an internal algorithm fix, a private helper implementation cleanup or a local UI behavior adjustment.
 
 Local changes may be implemented directly and then verified.
 
@@ -234,7 +234,7 @@ The change is complete when the system has converged, not merely when the new pa
 
 ## Continuous convergence
 
-Do not postpone architectural cleanup until another large refactor.
+Do not postpone architectural cleanup to a later dedicated cleanup effort.
 
 A feature may temporarily increase complexity while being built, but completion should return the affected area to a single coherent design. Repeating this after every architecture-affecting feature is cheaper than allowing compatibility layers and duplicate authority to become the next feature's baseline.
 
