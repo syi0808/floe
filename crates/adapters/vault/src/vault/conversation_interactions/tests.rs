@@ -68,6 +68,7 @@ fn target() -> ReviewedTarget {
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,

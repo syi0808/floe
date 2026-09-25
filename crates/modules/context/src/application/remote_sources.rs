@@ -1354,6 +1354,7 @@ mod remote_view_tests {
         person_id: PersonId,
         sources: Vec<SourceFixture>,
         reads: AtomicUsize,
+        rotated_source_authority: bool,
     }
 
     impl ViewFixture {
@@ -1362,6 +1363,7 @@ mod remote_view_tests {
                 person_id,
                 sources: Vec::new(),
                 reads: AtomicUsize::new(0),
+                rotated_source_authority: false,
             }
         }
 
@@ -1453,7 +1455,11 @@ mod remote_view_tests {
                 connection_id: connection_id.into(),
                 connection_revision: 7,
                 execution_owner: "server-owner".into(),
-                source_authority: grant.source().source_authority(),
+                source_authority: if self.rotated_source_authority {
+                    SourceAuthority::new()
+                } else {
+                    grant.source().source_authority()
+                },
                 resource: remote_view_resource(view_id, connection_id),
                 provider_identity: "account".into(),
             }
@@ -1790,25 +1796,34 @@ mod remote_view_tests {
 
     #[tokio::test]
     async fn exact_target_with_wrong_scope_is_never_ready() {
-        for (categories, purpose, processing) in [
+        for (categories, operations, purpose, processing) in [
             (
                 vec![GrantDataCategory::Derived],
+                vec![GrantOperation::Read],
                 GrantPurpose::Assistant,
                 ProcessingRestriction::LocalOnly,
             ),
             (
                 vec![GrantDataCategory::Content],
+                vec![GrantOperation::Read],
                 GrantPurpose::Scheduling,
                 ProcessingRestriction::LocalOnly,
             ),
             (
                 vec![GrantDataCategory::Content],
+                vec![GrantOperation::Read],
                 GrantPurpose::Assistant,
                 ProcessingRestriction::approved_recipient(
                     "model",
                     vec![GrantDataCategory::Content],
                 )
                 .unwrap(),
+            ),
+            (
+                vec![GrantDataCategory::Content],
+                vec![GrantOperation::Suggestion],
+                GrantPurpose::Assistant,
+                ProcessingRestriction::LocalOnly,
             ),
         ] {
             let mut fixture = ViewFixture::new(PersonId::new());
@@ -1817,7 +1832,7 @@ mod remote_view_tests {
             let scope = GrantScope::try_new(
                 source.grant.scope().resources().to_vec(),
                 categories,
-                vec![GrantOperation::Read],
+                operations,
                 vec![purpose],
                 vec![GrantConsumer::builtin("assistant").unwrap()],
                 processing,
@@ -1841,6 +1856,34 @@ mod remote_view_tests {
             );
             assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn changed_source_incarnation_never_reads_payload() {
+        let mut fixture = ViewFixture::new(PersonId::new());
+        fixture.add_source("shared", true);
+        fixture.rotated_source_authority = true;
+        assert!(matches!(
+            read_mail(&fixture).await,
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn foreign_person_grant_is_never_adopted() {
+        let mut fixture = ViewFixture::new(PersonId::new());
+        fixture.add_source("shared", true);
+        fixture.person_id = PersonId::new();
+        let outcome = read_mail(&fixture).await.unwrap();
+        let SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+            panic!("foreign grant must not be ready");
+        };
+        assert_eq!(
+            blockers.blockers()[0].reason(),
+            SourceAccessRequirementKind::SelectResource
+        );
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

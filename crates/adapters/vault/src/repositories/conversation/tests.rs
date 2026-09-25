@@ -67,7 +67,8 @@ impl floe_context::DependencyResolver for AcceptCoverage {
         &'a self,
         _dependency: &'a floe_agent_contract::ContextDependency,
         _request: &'a floe_context::DependencyAuthorization,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
         Box::pin(async { Ok(()) })
     }
 }
@@ -1913,6 +1914,7 @@ fn interaction_target() -> floe_conversation::ReviewedTarget {
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
@@ -2521,6 +2523,7 @@ fn vault_record(
             reviewed_native_subject: None,
             members: vec![floe_conversation::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
+                policy_fingerprint: "a".repeat(64),
                 resource: "personal".into(),
                 source_revision: None,
                 expected_grant: floe_conversation::ExpectedGrantState::Absent,
