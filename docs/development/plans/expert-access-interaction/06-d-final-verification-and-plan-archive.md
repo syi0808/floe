@@ -203,6 +203,31 @@ rg -n 'expert-access-interaction' README.md docs AGENTS.md .agents
 
 Expected links: zero.
 
+## Verification record (2026-09-25)
+
+Source after semantic commits: 06-A `04dba03a`; 06-B `36f404d7`, `7a59f47c`; 06-C `2794b27b`, `5832a575`. The 06-D audit reopened 06-C for a positive Go fixture using the removed Calendar consumer and 06-B for direct contextual-consent revoke races. Both fixes were committed in their owning semantic stages before final gates.
+
+Residuals: R1 has only explicit legacy Calendar rejection fixtures and the current `CalendarAccessConfiguration` owner command; R2/R3/R8/R9/R10 removed-symbol/link searches are zero. R4 uses recorded `projection_coverage` and current resolver. R5 has only canonical `PreparedModelTransport`. R6 has old saved fields only in negative fixtures and request-scoped server fields. R7 has durable interaction/resume symbols, no `WaitingForUser` or fake event route.
+
+Direct acceptance evidence:
+
+- A01: `review_then_enable_binds_gmail_bundle_atomically`, `inspect_connected_calendar_without_grant_needs_review`.
+- A02: `calendar_review_and_pause_use_current_grant_authority`, Flutter connection controls, no saved-recipient fields or ActionAuthority mutation.
+- A03: `admitted_sources_keep_their_own_bindings`, `communication_merge_is_bounded_deterministic_and_partial`, `sibling_resources_complete_independent_reads_and_rechecks`.
+- A04: `direct_attention_tool_blocked_completes_turn_with_one_durable_ref`, `production_builtin_expert_completes_blocked_task_with_durable_ref`.
+- A05: `same_command_different_digest_conflicts_without_mutation`, `native_commit_then_crash_reopens_and_resolves_without_second_advance`.
+- A06: `missing_consent_returns_requirement_with_zero_transport_calls`, `exact_contextual_consent_produces_consumed_target`, `external_recipient_mismatch_is_denied`, `authority_treats_revoked_and_expired_as_missing`.
+- A07: `worker_resolve_drives_auto_child_and_rejoins_retry`, `linked_resume_runs_original_intent_with_marker_and_no_user_restatement`.
+- A08: Independent/current/revoked/Unknown/multi-source pending-batch tests in Conversation; H01/H02 below.
+- A09: `resume_child_never_redrives_origin_settled_tool_effect` plus `native_executor_uses_rust_ledger_and_lookup_only_after_response_loss`; Action effects remain in the separate idempotent Actions owner.
+- A10: `reopen_recovers_every_state_and_rejoins_decisions`, `resume_slot_survives_vault_reopen_and_rejoins`, `consent_survives_vault_reopen`.
+- A11: `legacy_grant_mapping_tables_are_rejected_not_migrated_on_reopen`, `obsolete_saved_recipient_list_is_not_decoded_as_authority`.
+- A12: `disconnect_and_reconnect_are_durable_and_never_restore_old_views`, `revoked_grant_cannot_release_a_recorded_answer`, `sibling_resources_bind_independently`.
+
+Direct crash-boundary evidence: H01 `revoked_pending_answer_never_executes_or_recalls_model`; H02 `revoked_after_pending_answer_execution_suppresses_terminal_output`; H03 `contextual_consent_revoked_before_consume_never_reaches_transport`; H04 `contextual_consent_revoked_after_handoff_suppresses_output_and_keeps_usage`; H05 `obsolete_saved_recipient_list_is_not_decoded_as_authority` plus Flutter's preserved old-credential negative fixture and no keychain deletion path. These five tests were also run as individual filtered commands.
+
+Final gates: `cargo check --workspace --lib` passed; `RUST_TEST_THREADS=1 cargo test --workspace --no-fail-fast` passed (1,177 passed, 0 failed, 2 ignored); `cargo build -p floe-ffi` passed; `python3 tools/architecture/check_boundaries.py` passed; `git diff --check` passed. `flutter analyze`, `flutter test` (366 passed), `flutter build macos --debug` and `flutter build macos` passed. The changed Go test required and passed `go test -race ./...` and `go vet ./...`. EventKit response-loss and live Codex OAuth tests remain ignored for missing explicit authorization/runtime credentials; iOS and Android validation are out of scope. A parallel-only App test run hit Vault-job timeout assertions; the required full workspace gate passed with serial Rust test threads. No normal user data was reset; tests used isolated stores.
+
 ## 9. Final report
 
 1. 06-A/06-B/06-C semantic SHA(s).
