@@ -31,11 +31,6 @@ use crate::local_context::LocalContextHost;
 /// How long the device is given to answer for its own calendar subject.
 const SUBJECT_DEADLINE: Duration = Duration::from_secs(30);
 
-pub(super) fn calendar_first_party_consumers()
--> Result<Vec<floe_access::GrantConsumer>, AgentFailure> {
-    Ok(crate::first_party_observe::calendar_policy()?.consumers)
-}
-
 /// The window one device probe must finish inside.
 pub(super) fn subject_window(cancellation: Cancellation) -> RemoteCallWindow {
     RemoteCallWindow {
@@ -292,7 +287,7 @@ mod tests {
 
     #[test]
     fn calendar_consumers_are_derived_from_builtin_declarations() {
-        let consumers = calendar_first_party_consumers().unwrap();
+        let consumers = crate::first_party_observe::calendar_policy().unwrap().consumers;
         let expected = BuiltinExpertKind::ALL
             .into_iter()
             .filter(|kind| {
@@ -340,7 +335,7 @@ mod tests {
             SourceAuthority::new(),
         )
         .unwrap();
-        let consumers = calendar_first_party_consumers().unwrap();
+        let consumers = crate::first_party_observe::calendar_policy().unwrap().consumers;
         let scope = floe_access::remote_calendar_scope("primary", &consumers).unwrap();
         let mut grant = DataAccessGrant::new(
             GrantId::new(),
@@ -566,7 +561,7 @@ where
                     &device_id,
                     &calendar_ids,
                     current.source_authority,
-                    &calendar_first_party_consumers()?,
+                    &crate::first_party_observe::calendar_policy()?.consumers,
                     &expected_native_subject_fingerprint,
                     expected_grant,
                 )
@@ -614,94 +609,6 @@ where
             overview(person_id, &current, Some(&grant), vault).await
         }
     }
-}
-
-pub(super) async fn set_calendar_observe<Keys, Subject>(
-    core: &FloeCore,
-    vault: &EncryptedAgentVault<Keys>,
-    subject: &Subject,
-    person_id: PersonId,
-    device_id: String,
-    reviewed: crate::ConnectionObserveOverview,
-    enabled: bool,
-    cancellation: Cancellation,
-) -> Result<crate::ConnectionObserveOverview, AgentFailure>
-where
-    Keys: VaultKeyProvider,
-    Subject: NativeCalendarSubjectSource,
-{
-    let current = apply_calendar_access(
-        core,
-        vault,
-        subject,
-        person_id,
-        device_id.clone(),
-        CalendarAccessChange::Inspect,
-        cancellation.clone(),
-    )
-    .await?;
-    let current_projection = crate::ConnectionObserveOverview::from_calendar(current.clone());
-    if current_projection != reviewed {
-        return Err(AgentFailure::Conflict);
-    }
-    let changed = if enabled {
-        let connection = usable_native_connection(core, person_id).await?;
-        let calendar_ids = connection
-            .calendars
-            .iter()
-            .map(|calendar| calendar.calendar_id.clone())
-            .collect::<Vec<_>>();
-        let fresh = preview_native_calendar_subject(
-            &CoreCalendarConnections { core, person_id },
-            subject,
-            &NativeCalendarSourceRequest {
-                person_id,
-                provider: connection.provider,
-                device_id: device_id.clone(),
-                calendar_ids: calendar_ids.clone(),
-                connection_scope: connection.scope,
-                source_authority: Some(connection.source_authority),
-                reviewed_native_subject_fingerprint: None,
-                connection_id: Some(connection.connection_id.clone()),
-            },
-            &subject_window(cancellation.clone()),
-        )
-        .await?;
-        apply_calendar_access(
-            core,
-            vault,
-            subject,
-            person_id,
-            device_id,
-            CalendarAccessChange::Review {
-                connection_id: connection.connection_id,
-                calendar_ids,
-                expected_source_authority: connection.source_authority,
-                expected_native_subject_fingerprint: fresh.native_subject_fingerprint,
-                expected_grant_id: current.grant_id,
-                expected_grant_authority: current.grant_authority,
-            },
-            cancellation,
-        )
-        .await?
-    } else {
-        apply_calendar_access(
-            core,
-            vault,
-            subject,
-            person_id,
-            device_id,
-            CalendarAccessChange::Pause {
-                grant_id: current.grant_id.ok_or(AgentFailure::AccessReviewRequired)?,
-                expected_grant_authority: current
-                    .grant_authority
-                    .ok_or(AgentFailure::AccessReviewRequired)?,
-            },
-            cancellation,
-        )
-        .await?
-    };
-    Ok(crate::ConnectionObserveOverview::from_calendar(changed))
 }
 
 async fn usable_native_connection(

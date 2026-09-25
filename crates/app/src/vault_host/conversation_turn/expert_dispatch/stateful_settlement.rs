@@ -265,7 +265,7 @@ mod tests {
                 "test-device",
                 &["home".into()],
                 source_authority,
-                &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+                &crate::first_party_observe::calendar_policy().unwrap().consumers,
                 &"a".repeat(64),
                 None,
             )

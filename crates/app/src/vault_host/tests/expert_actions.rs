@@ -488,7 +488,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
             "test-device",
             &["home".into()],
             source_authority,
-            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+            &crate::first_party_observe::calendar_policy().unwrap().consumers,
             &"a".repeat(64),
             None,
         )
@@ -1223,7 +1223,7 @@ impl GovernedFocus {
                 "test-device",
                 &["home".into()],
                 connection.source_authority,
-                &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+                &crate::first_party_observe::calendar_policy().unwrap().consumers,
                 &fingerprint,
                 None,
             )
@@ -1473,7 +1473,7 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             "test-device",
             &["home".into()],
             fixture.admission.source.source_authority(),
-            &crate::vault_host::calendar_access::calendar_first_party_consumers().unwrap(),
+            &crate::first_party_observe::calendar_policy().unwrap().consumers,
             &"b".repeat(64),
             Some((fixture.admission.grant_id, authority)),
         )

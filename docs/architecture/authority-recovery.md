@@ -9,7 +9,7 @@ These are durable architectural safety properties, not a progress checklist.
 - Context may acquire/project only evidence authorized for the current Person, source, scope and freshness requirements.
 - Inference may choose an approved model route, but route selection cannot enlarge data authority.
 - Saved provider credentials remain private to credential/provider boundaries and are not product-wire or Conversation inputs. The narrow exception is newly issued approved-pairing output for secure persistence, never a subsequent request input; token-bearing Debug/diagnostics are redacted.
-- Root, built-in Expert and Schedule composition share one host-scoped current-connection store. Provider adapters bind loaded credentials to the verified person/device; exact-recipient authority reloads current state at admission, handoff and post-response revalidation. A prepared transport or availability observation never substitutes for those checks.
+- Root, built-in Expert and Schedule composition share one host-scoped current-connection store. Provider adapters bind loaded credentials to the verified person/device; the saved pairing contains no recipient approval. Exact-recipient authority reloads current state at admission, handoff and post-response revalidation. Only a consumed Access fence produces the prepared transport target. External server requests then carry request-scoped `allow_external=true` and the exact `expected_recipient`; local requests carry `allow_external=false` and no external recipient. A prepared transport or availability observation never substitutes for those checks.
 - Pairing setup accepts only a bounded loopback endpoint and pairing evidence. Person/device come from AppHost's verified `CallerContext`, never a product route bundle; Connections/key-holder validation binds the exact pending pairing ID, signed challenge and owner issuer. Remote authority and Calendar/View grant services prepare transports from the same current store through provider-owned exact person/device admission. Access still validates producer/source/revision/provider/recipient/grant evidence; model consent and source catalogs are not pairing/grant request fields.
 - Revocation prevents later admission or release. It cannot retroactively recall data already transmitted or a provider effect already accepted.
 - Source revocation, pause and drift affect Access authority and later dependency admission only. They never mutate Expert Registry state; a Registry revision change is never required to block, and never sufficient to admit, a source read.
@@ -33,6 +33,8 @@ When one logical view reads multiple connected sources, each source retains its 
 ## Validated pending work is durable work
 
 The Agent Runtime validates a complete model-produced batch before executing side effects. Once a validated batch is durable, crash recovery must continue that batch rather than ask the model for a different plan.
+
+`ValidatedModelBatch.projection_coverage` records the exact source provenance of pending work. Conversation reauthorizes that stored coverage through the current `DependencyResolver` immediately before pending execution and again before terminal output release. Stale or Unknown dependencies suppress the stored step or answer; neither message shape nor Expert/capability identity can reconstruct missing provenance.
 
 Stable identities bind:
 

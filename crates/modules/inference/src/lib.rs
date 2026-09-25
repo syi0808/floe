@@ -7,7 +7,6 @@
 mod api;
 mod application;
 mod ports;
-mod transfer;
 
 pub use api::{
     DataRecipient, ExecutionLocation, InferenceExecutionConstraint, ModelCapabilities,
@@ -24,4 +23,3 @@ pub use ports::model_provider::{
     AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, ModelProvider, PreparedModelProfile,
     PreparedModelTransport,
 };
-pub use transfer::{RouteRecipient, external_transfer_consent};

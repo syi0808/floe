@@ -5,7 +5,7 @@ use std::sync::Arc;
 use floe_context::{NativeCalendarSubjectSource, NativeSubjectObservation, NativeSubjectRequest};
 use floe_execution::Cancellation;
 
-use super::super::calendar_access::{apply_calendar_access, set_calendar_observe};
+use super::super::calendar_access::apply_calendar_access;
 use super::*;
 use crate::{CalendarAccessChange, CalendarAccessOverview, CalendarAccessState, CalendarSelection};
 
@@ -128,22 +128,6 @@ impl Fixture {
         })
     }
 
-    fn set_observe(
-        &self,
-        reviewed: crate::ConnectionObserveOverview,
-        enabled: bool,
-    ) -> Result<crate::ConnectionObserveOverview, AgentFailure> {
-        self.runtime.block_on(set_calendar_observe(
-            &self.core,
-            &self.vault,
-            &self.subject,
-            self.person,
-            self.device_id.clone(),
-            reviewed,
-            enabled,
-            Cancellation::default(),
-        ))
-    }
 }
 
 #[test]
@@ -168,19 +152,27 @@ fn connection_projection_inspection_never_creates_a_grant() {
 }
 
 #[test]
-fn connection_set_enabled_freshly_reviews_and_cas_pauses() {
+fn calendar_review_and_pause_use_current_grant_authority() {
     let fixture = Fixture::new();
-    let inspected = crate::ConnectionObserveOverview::from_calendar(
-        fixture.apply(CalendarAccessChange::Inspect).unwrap(),
-    );
-    let active = fixture.set_observe(inspected.clone(), true).unwrap();
-    assert_eq!(active.status, crate::ConnectionObserveStatus::Active);
+    let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
+    let active = fixture
+        .review(&inspected, &["home".to_owned()], &"a".repeat(64))
+        .unwrap();
+    assert_eq!(active.state, CalendarAccessState::Active);
     assert_eq!(
-        fixture.set_observe(inspected, false),
+        fixture.apply(CalendarAccessChange::Pause {
+            grant_id: active.grant_id.unwrap(),
+            expected_grant_authority: floe_access::GrantAuthority::new(),
+        }),
         Err(AgentFailure::Conflict)
     );
-    let paused = fixture.set_observe(active, false).unwrap();
-    assert_eq!(paused.status, crate::ConnectionObserveStatus::Paused);
+    let paused = fixture
+        .apply(CalendarAccessChange::Pause {
+            grant_id: active.grant_id.unwrap(),
+            expected_grant_authority: active.grant_authority.unwrap(),
+        })
+        .unwrap();
+    assert_eq!(paused.state, CalendarAccessState::Paused);
 }
 
 #[test]

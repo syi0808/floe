@@ -67,3 +67,5 @@ Internal Action intent and execution records remain durable safety mechanisms, n
 Intelligence may request work but does not provide its own authority, approval, provider permission, policy snapshot or execution receipt. Automatic authority can skip the human decision only when an explicit rule allows it; it never skips fresh validation, provider preconditions, idempotency or reconciliation.
 
 Closing a review is neither approval nor rejection. An uncertain provider result leads to lookup/reconciliation rather than blind retry.
+
+A blocked request completes with the Manager's honest limitation and an inline **Review request**. The person can choose **Not now** or a safe backend-projected action; neither dismissing nor leaving the card grants approval. Verified owner resolution may start one linked follow-up in the same conversation. That follow-up is a fresh Run and does not duplicate the original user text. Source or processing review is not an Action proposal and never authorizes a consequential effect.

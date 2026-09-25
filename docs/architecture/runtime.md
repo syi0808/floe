@@ -18,7 +18,7 @@ Conversation
   -> Inference ModelPort
   -> InferenceService
   -> Access dispatch admission/fence
-  -> Provider model transport
+  -> PreparedModelTransport with consumed dispatch target
 ```
 
 Responsibilities do not collapse across this chain:
@@ -35,13 +35,13 @@ Product Run snapshots project model-attempt and delegated-Task references from C
 durable intent journal. The refs remain derived read data: FFI does not manufacture them, and
 Inference and Experts retain ownership of attempt and Task semantics.
 
-The canonical `InferenceService : ModelPort` production cutover is complete and is the current General Conversation reality. App and Provider composition do not own model semantics.
+`InferenceService : ModelPort` is the General Conversation model path. App and Provider composition do not own model semantics. The prepared provider receives a target derived only from the consumed Access fence; an external server request carries `allow_external=true` and the exact `expected_recipient`, while local requests carry neither external approval nor recipient.
 
 ### Host composition
 
 `ConversationTurnRequest` carries only session/revision, text, profile intent, continuation/retry intent and the verified device identity. It has no credential source or lookup semantics.
 
-The Vault worker owns one shared `CurrentSavedConnectionStore`, cloned into the open Vault and its root, built-in Expert and Schedule compositions. Production binds the host keychain; tests inject a fixed or mutable store at worker construction. Provider-owned `RootModelProvider::from_current_connection[_scoped]` and `ServerSourceClient::from_current_connection` load and admit the current connection against the verified person/device, returning opaque capabilities. App neither materializes saved credentials nor selects model placement. Recipient authority composes the Access-owned consent store with pairing admission over this store plus a clock, reloaded at every fence rather than trusting the prepared transport's snapshot; recorded global consent flags are stored shape only and never consulted as authority.
+The Vault worker owns one shared `CurrentSavedConnectionStore`, cloned into the open Vault and its root, built-in Expert and Schedule compositions. Production binds the host keychain; tests inject a fixed or mutable store at worker construction. Provider-owned `RootModelProvider::from_current_connection[_scoped]` and `ServerSourceClient::from_current_connection` load and admit the current connection against the verified person/device, returning opaque capabilities. App neither materializes saved credentials nor selects model placement. Recipient authority composes the Access-owned consent store with pairing admission over this store plus a clock, reloaded at every fence rather than trusting the prepared transport's snapshot. Saved pairing credentials contain no recipient approval.
 
 `InferenceAvailability` observes execution classes for a purpose/consumer through the same candidate rules used for execution. Experts owns card eligibility against that non-secret observation. Availability is not dispatch authorization: actual execution still runs the canonical Inference/Access checks. Remote source capability is observed independently of model availability; source catalogs remain lazy and never participate in profile discovery or selection.
 
@@ -93,6 +93,8 @@ Schedule request planning is provider-independent. It selects only the bounded C
 ### Durable interactions
 
 Conversation durably records recoverable owner requirements as interactions: the journal-verified origin (Tool call, Delegation Task or Model attempt), the owner-produced requirement, and the immutable reviewed target (exact connection/device/source, resources, capability bundle, consumer/purpose, source revision, grant expectation including expected absence, policy authority). Publication identity derives deterministically from origin plus canonical digests, so crash replay settles the same row; decisions bind the reviewed digest through compare-and-swap with identical-command rejoin. Lifecycle is Pending to Resolving to Resolved, with Denied, Cancelled, Superseded and Expired as the other terminal states; the original Run completes with its limitation instead of waiting. Session messages, transcripts and model-safe artifacts carry only the opaque interaction reference. Authority stays with Access, Connections and the provider/native owners, which re-verify current state when a decision resolves; a linked resume is a fresh Run, not budget continuation. It admits through one atomically bound per-origin slot, dispatches under origin-carried lineage so origin-reviewed grants still scope it, and re-scopes any fresh blockage review to the attempting Run. Flutter decides through versioned commands carrying only the decision and the reviewed digest; snapshots carry safe review identity plus backend-projected actions, never authority. See [ADR 0030](../decisions/0030-durable-interaction-and-linked-resume.md).
+
+Budget Continue instead replays the exact validated batch and cursor without model recall. The batch's stored `projection_coverage` is its source provenance: Conversation reauthorizes every recorded dependency against the current resolver before a pending step executes and again before terminal output release. Stale or Unknown coverage blocks stored steps and answers; message shape, Expert identity and capability names never substitute for provenance.
 
 ## Consequential actions
 
@@ -147,7 +149,7 @@ Flutter binds the two remote owner entry points through the app-lifetime `Native
 
 The local C ABI consists only of open, command/query/events v2, remote pairing/access v2, protocol version and string/handle free. Old Day/Actions/LocalContext/AgentVault/fixture entry points and their wire envelopes are deleted, not aliased. Conversation sessions use their canonical admitted owner service. Internal `WorkerAction::ConversationTurn` and other private owner machinery remain.
 
-The legacy Conversation AgentRuntime/ModelRunner/TransportModelRunner branch and its envelope/recovery adapters are deleted after caller-zero proof. Canonical ConversationService, Engine, Inference, provider transports and Session storage remain. Live shared Expert host composition is named `expert_host`, with no compatibility re-export. Flutter tests use pure product-interface fakes; native smoke uses direct provider transport or canonical Inference, never a synthetic production Conversation runtime. App wire 2, protocol 1 and Conversation storage 7 remain unchanged; old local profiles/binaries are not implied compatible.
+ConversationService, Engine, Inference, prepared provider transports and Session storage form one runtime path. Live shared Expert host composition is named `expert_host`. Flutter tests use pure product-interface fakes; native smoke uses canonical Inference. App wire 2, protocol 1 and Conversation storage 7 remain unchanged; old local profiles/binaries are not implied compatible.
 
 ## Local Go server
 

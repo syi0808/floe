@@ -11,13 +11,13 @@ This is the stable semantic ownership map for the Rust workspace. Package paths 
 | Runtime | `floe-agent-runtime` — `crates/runtime/agent` | role-neutral LLM / Tool / Delegate loop |
 | Module | `floe-access` — `crates/modules/access` | grants, authority, exact recipients, dispatch/release admission and revocation fences |
 | Module | `floe-connections` — `crates/modules/connections` | Connection, OAuth and pairing lifecycle |
-| Module | `floe-inference` — `crates/modules/inference` | model profiles/routes, model attempts, approved dispatch and model usage ownership |
+| Module | `floe-inference` — `crates/modules/inference` | model profiles/routes, model attempts, Access-consumed dispatch through `ModelProvider`/`PreparedModelTransport`, and model usage ownership |
 | Module | `floe-knowledge` — `crates/modules/knowledge` | Memory, Playbook records and bounded learning |
 | Module | `floe-day` — `crates/modules/day` | Calendar mirror, Tasks, Notes and Day-domain state/projection |
 | Module | `floe-context` — `crates/modules/context` | authorized projections, source acquisition, provenance, coverage and freshness |
 | Module | `floe-actions` — `crates/modules/actions` | proposals, review/approval, idempotent external actions and outcome reconciliation |
 | Module | `floe-experts` — `crates/modules/experts` | Expert directory, eligibility, assignment, Task ownership and endpoint dispatch |
-| Module | `floe-conversation` — `crates/modules/conversation` | Session, root Run, transcript, continuation/replay, finalization and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage) |
+| Module | `floe-conversation` — `crates/modules/conversation` | Session, root Run, transcript, exact validated-batch continuation and coverage reauthorization, finalization and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage) |
 | Extension | `floe-experts-builtin` — `crates/experts/builtin` | built-in domain Expert endpoint implementations |
 | Platform | `floe-diagnostics` — `crates/platform/diagnostics` | privacy-safe tracing, correlation and diagnostic export |
 | Platform | `floe-native` — `crates/platform/native` | native host drivers and secure-key/platform access |

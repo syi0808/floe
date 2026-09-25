@@ -1,6 +1,6 @@
 # ADR 0028: Pairing-integrated authority and connection-scoped permissions
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-13
 - **Amends:** ADR 0010 pairing experience and ADR 0027 consent presentation
 - **Extends:** ADR 0025 Person-owned connection boundaries
@@ -202,7 +202,7 @@ Settings → Permissions
 - Connection details own one **Use with Floe** control; raw grant preview, consumer selection and Settings source editors are removed.
 - App derives the exact first-party consumer set, Access owns its grants, and Context keeps every contributing source dependency through bounded multi-source merge.
 - Data & privacy explains the boundaries and points to Connections; it is not a second grant editor.
-- The generic external-model toggle is removed. Exact-recipient enforcement remains fail-closed until a contextual approval path exists.
+- The generic external-model toggle is removed. Contextual exact-recipient approval belongs to Access and is never inferred from pairing or saved connection state.
 
 Existing local development state may be reset. No compatibility flow is required solely to preserve
 disposable pairings or grants. Migration must not reinterpret an old pairing as proof that a particular

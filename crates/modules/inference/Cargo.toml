@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-chrono.workspace = true
 floe-access = { path = "../access" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context-contract = { path = "../../contracts/context" }
@@ -18,5 +17,5 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-floe-execution = { path = "../../runtime/execution" }
+chrono.workspace = true
 floe-kernel = { path = "../../contracts/kernel" }

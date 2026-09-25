@@ -10,6 +10,8 @@ The Manager may decide to answer directly, delegate, ask for evidence, defer or 
 
 Experts are not connector wrappers or provider-specific Tools. They receive bounded context and apply an independent domain perspective through the A2A Task lifecycle.
 
+Experts declare semantic source needs; Context acquires bounded evidence and Access authorizes the actual consumer against current source authority. A blocked source produces a typed no-conclusion result and durable review interaction, not disappearance of the Expert from the Registry. Source approval and model-recipient approval remain separate from Expert identity and Action authority.
+
 Representative judgment domains are:
 
 | Domain | Perspective |

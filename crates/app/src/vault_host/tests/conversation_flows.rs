@@ -3158,13 +3158,66 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
 
 // ---- linked resume (05-E) ----
 
-use super::super::conversation_turn::{
-    AutoResumeOutcome, ResumeTurnRequest, maybe_auto_resume, run, run_resume,
-};
+use super::super::conversation_turn::{ResumeTurnRequest, evaluate_auto_resume, run, run_resume};
 use super::super::interaction_owners::HostInteractionOwners;
 use crate::vault_host::interaction_resolution::{
     ResolveInteractionCommand, ResolveOutcome, resolve_interaction,
 };
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_evaluated_resume(
+    core: &FloeCore,
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &LocalContextHost,
+    task_coordinator: &floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
+    conversation_repository: &Arc<floe_vault::VaultConversationRepository<Keys>>,
+    run_cancellations: &Arc<floe_conversation::RunCancellationRegistry>,
+    connections: &floe_provider_adapters::control::CurrentSavedConnectionStore,
+    person_id: PersonId,
+    session_id: Uuid,
+    origin_run_id: floe_kernel::RunId,
+    device_id: &str,
+    cancellation: floe_execution::Cancellation,
+    emit: impl FnMut(floe_conversation::AgentEvent) + Send,
+) -> Result<Option<floe_conversation::RunReceipt>, AgentFailure> {
+    let Some(claim) = evaluate_auto_resume(
+        conversation_repository,
+        person_id,
+        session_id,
+        origin_run_id,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let mut child = None;
+    let result = run_resume(
+        core,
+        vault,
+        local_context,
+        task_coordinator,
+        conversation_repository,
+        run_cancellations,
+        connections,
+        person_id,
+        floe_conversation::resume_command_id(origin_run_id)?,
+        &ResumeTurnRequest {
+            session_id,
+            expected_revision: claim.expected_revision,
+            device_id: device_id.to_owned(),
+            resume: claim.link,
+        },
+        cancellation,
+        |receipt: &floe_conversation::RunReceipt| child = Some(receipt.clone()),
+        emit,
+    )
+    .await;
+    match result {
+        Ok(_) => child.map(Some).ok_or(AgentFailure::StorageUnavailable),
+        Err(AgentFailure::Conflict) => Ok(None),
+        Err(failure) => Err(failure),
+    }
+}
 
 struct StubCalendarSubject;
 
@@ -3460,7 +3513,7 @@ async fn allow_resolves_and_auto_child_runs_authorized_under_origin_lineage() {
         floe_conversation::ReviewedTarget::RecipientConsent(_)
     ));
 
-    let outcome = maybe_auto_resume(
+    let outcome = drive_evaluated_resume(
         &harness.core,
         &harness.vault,
         &harness.local,
@@ -3477,7 +3530,7 @@ async fn allow_resolves_and_auto_child_runs_authorized_under_origin_lineage() {
     )
     .await
     .unwrap();
-    let AutoResumeOutcome::Admitted { child, .. } = outcome else {
+    let Some(child) = outcome else {
         panic!("resolved group admits its automatic child");
     };
     assert_eq!(child.resume_of, Some(origin.run_id));
@@ -3555,7 +3608,7 @@ async fn deny_all_suppresses_automatic_child_without_dispatch() {
     .unwrap();
     assert!(matches!(outcome, ResolveOutcome::Denied { .. }));
 
-    let outcome = maybe_auto_resume(
+    let outcome = drive_evaluated_resume(
         &harness.core,
         &harness.vault,
         &harness.local,
@@ -3572,10 +3625,7 @@ async fn deny_all_suppresses_automatic_child_without_dispatch() {
     )
     .await
     .unwrap();
-    assert!(matches!(
-        outcome,
-        AutoResumeOutcome::Suppressed(floe_conversation::ResumeSuppression::NothingResolved)
-    ));
+    assert!(outcome.is_none());
     assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
     harness.finish().await;
 }
@@ -3648,7 +3698,7 @@ async fn newer_turn_suppresses_auto_but_explicit_continue_claims() {
     );
     assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 0);
 
-    let outcome = maybe_auto_resume(
+    let outcome = drive_evaluated_resume(
         &harness.core,
         &harness.vault,
         &harness.local,
@@ -3665,10 +3715,7 @@ async fn newer_turn_suppresses_auto_but_explicit_continue_claims() {
     )
     .await
     .unwrap();
-    assert!(matches!(
-        outcome,
-        AutoResumeOutcome::Suppressed(floe_conversation::ResumeSuppression::NewerTurn)
-    ));
+    assert!(outcome.is_none());
 
     // The explicit Continue claims the same origin slot at the current
     // revision and runs authorized.
@@ -3759,7 +3806,7 @@ async fn revoked_consent_blocks_child_fresh_without_stale_release() {
         .await
         .unwrap();
 
-    let outcome = maybe_auto_resume(
+    let outcome = drive_evaluated_resume(
         &harness.core,
         &harness.vault,
         &harness.local,
@@ -3776,7 +3823,7 @@ async fn revoked_consent_blocks_child_fresh_without_stale_release() {
     )
     .await
     .unwrap();
-    let AutoResumeOutcome::Admitted { child, .. } = outcome else {
+    let Some(child) = outcome else {
         panic!("revocation does not suppress admission; it denies dispatch");
     };
     // The child re-checks live authority: blocked again, honestly, with a
@@ -3835,7 +3882,7 @@ async fn pairing_removed_after_allow_fails_child_fresh_without_dispatch() {
     // even prepare its route and fails fresh — the recorded grant never
     // releases a dispatch without its pairing.
     let removed = floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None);
-    let outcome = maybe_auto_resume(
+    let outcome = drive_evaluated_resume(
         &harness.core,
         &harness.vault,
         &harness.local,
@@ -3852,7 +3899,7 @@ async fn pairing_removed_after_allow_fails_child_fresh_without_dispatch() {
     )
     .await
     .unwrap();
-    let AutoResumeOutcome::Admitted { child, .. } = outcome else {
+    let Some(child) = outcome else {
         panic!("pairing loss does not suppress admission; it denies dispatch");
     };
     let child = floe_conversation::ConversationRepository::load_receipt(

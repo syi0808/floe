@@ -1,6 +1,6 @@
 # ADR 0027: Separate connection authority, AI grants and observations
 
-- **Status:** proposed; common design direction, runtime not implemented
+- **Status:** accepted
 - **Date:** 2026-09-12
 - **Extends:** ADR 0024 observation/lease semantics, ADR 0025 Person ownership and ADR 0026 credential ownership
 
@@ -16,7 +16,7 @@ changes. Other connectors expose lifecycle, freshness and provider revisions thr
 paths. A global revision rename or automatic rebinding would either keep conflating data and
 authority or risk silently enlarging user consent.
 
-## Proposed decision
+## Decision
 
 1. Keep one Person-owned connection identity for a specific source account and execution owner.
    Replacing account, tenant or owner creates a new identity rather than inheriting old grants.
@@ -66,6 +66,6 @@ by server Calendar/Mail and the remaining context domains. The design does not c
 connectors have the reported Calendar bug, nor that cross-device authorization has shipped.
 
 - [Semantic contract](../product/integrations-and-privacy.md)
-- [Runtime, migration and conformance plan](../architecture/authority-recovery.md)
+- [Current authority and recovery invariants](../architecture/authority-recovery.md)
 
 Runtime changes, live acceptance evidence and rollout approval remain separate work.
