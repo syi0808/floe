@@ -1,7 +1,7 @@
 //! The remote source views a Person can be reading, and what a read of one has
 //! to satisfy.
 //!
-//! Which views exist, which connector may serve each of them, how a view's
+//! Which views exist, how a view's
 //! resource handle is named, and what a query and an answer must look like are
 //! Context's: they decide what an authorized projection of a remote source is.
 //! Access decides whether the Person granted it; the host only carries the call.
@@ -48,18 +48,6 @@ pub fn split_remote_view_resource<'a>(
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(view_id)
-}
-
-/// Whether this connector may serve this view.
-///
-/// A mail view only ever comes from a mail connector; nothing else is a
-/// communication source, however the grant is worded.
-pub fn remote_view_connector_admissible(view_id: &str, connector: &str) -> bool {
-    match view_id {
-        MAIL_VIEW => matches!(connector, "gmail" | "microsoft.mail"),
-        WORK_VIEW | LOGISTICS_VIEW => true,
-        _ => false,
-    }
 }
 
 /// What a grant for this view covers.

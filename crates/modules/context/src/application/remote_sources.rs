@@ -17,7 +17,7 @@ use floe_access::{
 use floe_agent_contract::{AgentFailure, BoxFuture, PersonId};
 use floe_context_contract::{
     AuthorizedSourceBinding, CALENDAR_CONTEXT_VIEW_ID, CalendarContextView, CalendarViewQuery,
-    ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,
+    ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, GrantScope,
     MAX_CALENDAR_CONTEXT_BYTES, MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ProcessingRestriction,
     ResourceHandle, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
     SourceReadOutcome, SourceUnavailable, validate_calendar_context_view_for_query,
@@ -26,9 +26,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::application::remote_views::{
-    LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, merge_remote_views,
-    remote_view_connector_admissible, remote_view_dependency, remote_view_resource,
-    split_remote_view_resource, validate_remote_view, validate_remote_view_query,
+    LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, merge_remote_views, remote_view_data_category,
+    remote_view_dependency, remote_view_resource, split_remote_view_resource, validate_remote_view,
+    validate_remote_view_query,
 };
 
 /// The read a remote transport performs once the grant has admitted it.
@@ -205,13 +205,6 @@ pub async fn read_remote_calendar_view(
     Ok((view, dependency, binding.grant.scope().clone()))
 }
 
-/// The resource handle a grant must name to admit this view from this source.
-pub fn remote_view_grant_resource(view_id: &str, source: &GrantSourceBinding) -> Option<String> {
-    (is_remote_view(view_id)
-        && remote_view_connector_admissible(view_id, source.connector().as_str()))
-    .then(|| remote_view_resource(view_id, source.connection_id().as_str()))
-}
-
 fn check_window(window: &RemoteCallWindow) -> Result<(), AgentFailure> {
     if window.cancellation.is_cancelled() {
         return Err(AgentFailure::Cancelled);
@@ -242,11 +235,12 @@ fn remote_grant_admits(
     grant.source().person_id() == person_id
         && grant.state() == GrantState::Active
         && !grant.review_required()
-        && grant.scope().operations().contains(&GrantOperation::Read)
-        && grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        && grant.scope().operations() == [GrantOperation::Read]
+        && grant.scope().purposes() == [GrantPurpose::Assistant]
         && grant.scope().consumers().contains(consumer)
         && grant.scope().resources().len() == 1
         && grant.scope().resources()[0].as_str() == expected_resource
+        && grant.scope().processing() == &ProcessingRestriction::LocalOnly
 }
 
 /// One concrete blocker for a known source that does not admit this read.
@@ -293,8 +287,8 @@ fn remote_source_blocker(
 ///
 /// A paused grant is re-enableable, an active-but-mismatched grant needs drift
 /// review, and a revoked or foreign grant is not this read's. Two live grants
-/// over the same source are a duplicate authority the review cannot pick
-/// between, so the read fails closed with no card.
+/// naming the same connection and requested resource are ambiguous authority;
+/// distinct view resources on one connection are independent targets.
 fn classify_remote_sources(
     grants: &[DataAccessGrant],
     person_id: PersonId,
@@ -307,7 +301,10 @@ fn classify_remote_sources(
         .filter(|grant| {
             grant.state() != GrantState::Revoked
                 && grant.source().person_id() == person_id
-                && remote_view_connector_admissible(view_id, grant.source().connector().as_str())
+                && grant.scope().resources().iter().any(|resource| {
+                    resource.as_str()
+                        == remote_view_resource(view_id, grant.source().connection_id().as_str())
+                })
         })
         .collect();
     known.sort_by(|left, right| {
@@ -321,18 +318,20 @@ fn classify_remote_sources(
             })
             .then_with(|| left.id().cmp(&right.id()))
     });
-    if known
-        .windows(2)
-        .any(|pair| pair[0].source() == pair[1].source())
-    {
+    if known.windows(2).any(|pair| {
+        pair[0].source().person_id() == pair[1].source().person_id()
+            && pair[0].source().connector() == pair[1].source().connector()
+            && pair[0].source().connection_id() == pair[1].source().connection_id()
+    }) {
         return Err(AgentFailure::Conflict);
     }
     let mut admitted = Vec::with_capacity(known.len());
     let mut blocked = Vec::with_capacity(known.len());
     for grant in known {
-        let expected =
-            remote_view_resource(view_id, grant.source().connection_id().as_str());
-        if remote_grant_admits(grant, person_id, consumer, &expected) {
+        let expected = remote_view_resource(view_id, grant.source().connection_id().as_str());
+        if remote_grant_admits(grant, person_id, consumer, &expected)
+            && grant.scope().categories() == [remote_view_data_category(view_id)]
+        {
             admitted.push((*grant).clone());
             continue;
         }
@@ -341,7 +340,9 @@ fn classify_remote_sources(
         } else {
             SourceAccessRequirementKind::ReviewChangedSource
         };
-        blocked.push(remote_source_blocker(grant, view_id, source_id, consumer, reason)?);
+        blocked.push(remote_source_blocker(
+            grant, view_id, source_id, consumer, reason,
+        )?);
     }
     Ok((admitted, blocked))
 }
@@ -405,8 +406,7 @@ async fn read_one_remote_source(
             window,
         )
         .await?;
-    let (value, observed, expires) =
-        validate_remote_view(view_id, raw, now, max_items, max_bytes)?;
+    let (value, observed, expires) = validate_remote_view(view_id, raw, now, max_items, max_bytes)?;
     let dependency = remote_view_dependency(
         person_id,
         &binding.grant,
@@ -1327,7 +1327,6 @@ mod calendar_tests {
 
 #[cfg(test)]
 mod remote_view_tests {
-    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use floe_access::{
@@ -1336,8 +1335,8 @@ mod remote_view_tests {
         RemoteProducerIdentity, RemoteViewSourceReference, SignedSourcePreview,
     };
     use floe_context_contract::{
-        CommunicationView, ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer,
-        ProcessingRestriction, ResourceHandle, SourceAuthority,
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, ProcessingRestriction,
+        ResourceHandle, SourceAuthority,
     };
     use floe_execution::Cancellation;
     use tokio::time::{Duration, Instant};
@@ -1347,13 +1346,13 @@ mod remote_view_tests {
     struct SourceFixture {
         grant: DataAccessGrant,
         policy: ConsumerPolicyAuthority,
-        view: CommunicationView,
+        view: Value,
         expired_credential: bool,
     }
 
     struct ViewFixture {
         person_id: PersonId,
-        sources: HashMap<String, SourceFixture>,
+        sources: Vec<SourceFixture>,
         reads: AtomicUsize,
     }
 
@@ -1361,12 +1360,16 @@ mod remote_view_tests {
         fn new(person_id: PersonId) -> Self {
             Self {
                 person_id,
-                sources: HashMap::new(),
+                sources: Vec::new(),
                 reads: AtomicUsize::new(0),
             }
         }
 
         fn add_source(&mut self, connection_id: &str, active: bool) {
+            self.add_view_source(connection_id, MAIL_VIEW, active);
+        }
+
+        fn add_view_source(&mut self, connection_id: &str, view_id: &str, active: bool) {
             let authority = SourceAuthority::new();
             let source = GrantSourceBinding::try_new(
                 self.person_id,
@@ -1376,49 +1379,72 @@ mod remote_view_tests {
                 authority,
             )
             .unwrap();
-            let resource = remote_view_resource(MAIL_VIEW, connection_id);
+            let resource = remote_view_resource(view_id, connection_id);
             let scope = GrantScope::try_new(
                 vec![ResourceHandle::try_new(&resource).unwrap()],
-                vec![GrantDataCategory::Derived],
+                vec![remote_view_data_category(view_id)],
                 vec![GrantOperation::Read],
                 vec![GrantPurpose::Assistant],
                 vec![GrantConsumer::builtin("assistant").unwrap()],
                 ProcessingRestriction::LocalOnly,
             )
             .unwrap();
-            let mut grant =
-                DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source.clone(), scope.clone())
-                    .unwrap();
+            let mut grant = DataAccessGrant::new(
+                GrantId::new(),
+                Uuid::new_v4(),
+                source.clone(),
+                scope.clone(),
+            )
+            .unwrap();
             if active {
                 grant
                     .activate_review(grant.authority(), source, scope)
                     .unwrap();
             }
             let now = Utc::now().timestamp_millis();
-            self.sources.insert(
-                connection_id.to_owned(),
-                SourceFixture {
-                    grant,
-                    policy: ConsumerPolicyAuthority::new(),
-                    view: CommunicationView {
-                        schema_version: floe_agent_contract::AGENT_VERSION,
-                        view_id: MAIL_VIEW.into(),
-                        source_handle: format!("mail:{connection_id}"),
-                        observed_at_unix_ms: now - 1,
-                        expires_at_unix_ms: now + 60_000,
-                        coverage_complete: true,
-                        next_cursor: None,
-                        items: vec![],
-                    },
-                    expired_credential: false,
-                },
-            );
+            let view = match view_id {
+                MAIL_VIEW => serde_json::json!({
+                    "schema_version": floe_agent_contract::AGENT_VERSION,
+                    "view_id": MAIL_VIEW,
+                    "source_handle": format!("mail:{connection_id}"),
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 60_000,
+                    "coverage_complete": true,
+                    "next_cursor": null,
+                    "items": [],
+                }),
+                LOGISTICS_VIEW => serde_json::json!({
+                    "schema_version": floe_agent_contract::AGENT_VERSION,
+                    "view_id": LOGISTICS_VIEW,
+                    "source_handle": format!("logistics:{connection_id}"),
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 60_000,
+                    "coverage_complete": true,
+                    "items": [],
+                }),
+                _ => unreachable!(),
+            };
+            self.sources.push(SourceFixture {
+                grant,
+                policy: ConsumerPolicyAuthority::new(),
+                view,
+                expired_credential: false,
+            });
         }
 
-        fn reference(&self, connection_id: &str) -> RemoteViewSourceReference {
-            let grant = &self.sources[connection_id].grant;
+        fn reference(&self, view_id: &str, connection_id: &str) -> RemoteViewSourceReference {
+            let grant = &self
+                .sources
+                .iter()
+                .find(|source| {
+                    source.grant.scope().resources().iter().any(|resource| {
+                        resource.as_str() == remote_view_resource(view_id, connection_id)
+                    })
+                })
+                .unwrap()
+                .grant;
             RemoteViewSourceReference {
-                view_id: MAIL_VIEW.into(),
+                view_id: view_id.into(),
                 person_id: self.person_id.to_string(),
                 client_id: "client".into(),
                 device_id: "device".into(),
@@ -1428,7 +1454,7 @@ mod remote_view_tests {
                 connection_revision: 7,
                 execution_owner: "server-owner".into(),
                 source_authority: grant.source().source_authority(),
-                resource: remote_view_resource(MAIL_VIEW, connection_id),
+                resource: remote_view_resource(view_id, connection_id),
                 provider_identity: "account".into(),
             }
         }
@@ -1482,13 +1508,22 @@ mod remote_view_tests {
         ) -> BoxFuture<'a, Result<Value, AgentFailure>> {
             Box::pin(async move {
                 self.reads.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(read.view_id, MAIL_VIEW);
-                let connection = read.resource.strip_prefix("mail.communication:").unwrap();
-                let source = &self.sources[connection];
+                let source = self
+                    .sources
+                    .iter()
+                    .find(|source| {
+                        source
+                            .grant
+                            .scope()
+                            .resources()
+                            .iter()
+                            .any(|resource| resource.as_str() == read.resource)
+                    })
+                    .unwrap();
                 if source.expired_credential {
                     return Err(AgentFailure::CredentialExpired);
                 }
-                serde_json::to_value(&source.view).map_err(|_| AgentFailure::InvalidInput)
+                Ok(source.view.clone())
             })
         }
     }
@@ -1506,7 +1541,7 @@ mod remote_view_tests {
             _: RemotePairingIdentity<'a>,
             query: RemoteSourceQuery<'a>,
         ) -> BoxFuture<'a, Result<RemoteViewSourceReference, AgentFailure>> {
-            let reference = self.reference(query.connection_id);
+            let reference = self.reference(query.view_id, query.connection_id);
             Box::pin(async move { Ok(reference) })
         }
 
@@ -1514,7 +1549,11 @@ mod remote_view_tests {
             &'a self,
             _: usize,
         ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
-            let grants = self.sources.values().map(|source| source.grant.clone()).collect();
+            let grants = self
+                .sources
+                .iter()
+                .map(|source| source.grant.clone())
+                .collect();
             Box::pin(async move { Ok(grants) })
         }
 
@@ -1591,20 +1630,23 @@ mod remote_view_tests {
 
         fn view_grant_binding<'a>(
             &'a self,
-            _: &'a str,
+            view_id: &'a str,
             connector: &'a str,
             connection_id: &'a str,
             source_authority: SourceAuthority,
         ) -> BoxFuture<'a, Result<RemoteGrantBinding, AgentFailure>> {
             let found = self
                 .sources
-                .values()
+                .iter()
                 .map(|source| (source.grant.clone(), source.policy))
                 .find(|(grant, _)| {
                     let source = grant.source();
                     source.connector().as_str() == connector
                         && source.connection_id().as_str() == connection_id
                         && source.source_authority() == source_authority
+                        && grant.scope().resources().iter().any(|resource| {
+                            resource.as_str() == remote_view_resource(view_id, connection_id)
+                        })
                 });
             Box::pin(async move {
                 found
@@ -1630,6 +1672,13 @@ mod remote_view_tests {
     async fn read_mail(
         fixture: &ViewFixture,
     ) -> Result<SourceReadOutcome<(Value, Vec<AuthorizedSourceBinding>)>, AgentFailure> {
+        read_view(fixture, MAIL_VIEW).await
+    }
+
+    async fn read_view(
+        fixture: &ViewFixture,
+        view_id: &str,
+    ) -> Result<SourceReadOutcome<(Value, Vec<AuthorizedSourceBinding>)>, AgentFailure> {
         let person_text = fixture.person_id.to_string();
         let window = RemoteCallWindow {
             deadline: Instant::now() + Duration::from_secs(5),
@@ -1644,19 +1693,154 @@ mod remote_view_tests {
                 client_id: "client",
                 device_id: "device",
             },
-            MAIL_VIEW,
+            view_id,
             "assistant",
-            serde_json::json!({
-                "schema_version": floe_agent_contract::AGENT_VERSION,
-                "query": "",
-                "cursor": 0,
-                "limit": 25,
-            }),
+            if view_id == MAIL_VIEW {
+                serde_json::json!({
+                    "schema_version": floe_agent_contract::AGENT_VERSION,
+                    "query": "",
+                    "cursor": 0,
+                    "limit": 25,
+                })
+            } else {
+                serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION})
+            },
             &window,
             Uuid::new_v4(),
             &[7; 32],
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn same_connection_mail_and_logistics_grants_are_not_duplicate_authority() {
+        let mut fixture = ViewFixture::new(PersonId::new());
+        fixture.add_view_source("shared", MAIL_VIEW, true);
+        fixture.add_view_source("shared", LOGISTICS_VIEW, true);
+        assert!(matches!(
+            read_mail(&fixture).await.unwrap(),
+            SourceReadOutcome::Ready(_)
+        ));
+        assert!(matches!(
+            read_view(&fixture, LOGISTICS_VIEW).await.unwrap(),
+            SourceReadOutcome::Ready(_)
+        ));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn work_view_ignores_unrelated_mail_grants() {
+        let mut fixture = ViewFixture::new(PersonId::new());
+        fixture.add_source("shared", true);
+        let outcome = read_view(&fixture, WORK_VIEW).await.unwrap();
+        let SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+            panic!("no work target");
+        };
+        assert_eq!(
+            blockers.blockers()[0].reason(),
+            SourceAccessRequirementKind::SelectResource
+        );
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn duplicate_exact_target_fails_before_payload_io() {
+        let mut fixture = ViewFixture::new(PersonId::new());
+        fixture.add_source("shared", true);
+        fixture.add_source("shared", true);
+        assert!(matches!(
+            read_mail(&fixture).await,
+            Err(AgentFailure::Conflict)
+        ));
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn exact_target_with_wrong_consumer_is_a_review_blocker() {
+        let mut fixture = ViewFixture::new(PersonId::new());
+        fixture.add_source("shared", true);
+        let source = &mut fixture.sources[0];
+        let scope = GrantScope::try_new(
+            source.grant.scope().resources().to_vec(),
+            source.grant.scope().categories().to_vec(),
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![GrantConsumer::builtin("schedule").unwrap()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        source
+            .grant
+            .activate_review(
+                source.grant.authority(),
+                source.grant.source().clone(),
+                scope,
+            )
+            .unwrap();
+        let outcome = read_mail(&fixture).await.unwrap();
+        let SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+            panic!("wrong consumer");
+        };
+        assert_eq!(
+            blockers.blockers()[0].reason(),
+            SourceAccessRequirementKind::ReviewChangedSource
+        );
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn exact_target_with_wrong_scope_is_never_ready() {
+        for (categories, purpose, processing) in [
+            (
+                vec![GrantDataCategory::Derived],
+                GrantPurpose::Assistant,
+                ProcessingRestriction::LocalOnly,
+            ),
+            (
+                vec![GrantDataCategory::Content],
+                GrantPurpose::Scheduling,
+                ProcessingRestriction::LocalOnly,
+            ),
+            (
+                vec![GrantDataCategory::Content],
+                GrantPurpose::Assistant,
+                ProcessingRestriction::approved_recipient(
+                    "model",
+                    vec![GrantDataCategory::Content],
+                )
+                .unwrap(),
+            ),
+        ] {
+            let mut fixture = ViewFixture::new(PersonId::new());
+            fixture.add_source("shared", true);
+            let source = &mut fixture.sources[0];
+            let scope = GrantScope::try_new(
+                source.grant.scope().resources().to_vec(),
+                categories,
+                vec![GrantOperation::Read],
+                vec![purpose],
+                vec![GrantConsumer::builtin("assistant").unwrap()],
+                processing,
+            )
+            .unwrap();
+            source
+                .grant
+                .activate_review(
+                    source.grant.authority(),
+                    source.grant.source().clone(),
+                    scope,
+                )
+                .unwrap();
+            let outcome = read_mail(&fixture).await.unwrap();
+            let SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+                panic!("mismatched scope must block");
+            };
+            assert_eq!(
+                blockers.blockers()[0].reason(),
+                SourceAccessRequirementKind::ReviewChangedSource
+            );
+            assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]
@@ -1673,10 +1857,7 @@ mod remote_view_tests {
         let blocker = &blockers.blockers()[0];
         assert_eq!(blocker.source_id(), "floe.source.mail");
         assert_eq!(blocker.connection_id().unwrap().as_str(), "b-connection");
-        assert_eq!(
-            blocker.reason(),
-            SourceAccessRequirementKind::EnableObserve
-        );
+        assert_eq!(blocker.reason(), SourceAccessRequirementKind::EnableObserve);
         assert!(blocker.inline_resolution());
         // Classification runs before any read: no payload was fetched, so no
         // partial aggregate and no failed-acquisition dependency can leak.
@@ -1734,7 +1915,12 @@ mod remote_view_tests {
         let mut fixture = ViewFixture::new(person_id);
         fixture.add_source("a-connection", true);
         fixture.add_source("b-connection", true);
-        fixture.sources.get_mut("b-connection").unwrap().expired_credential = true;
+        fixture
+            .sources
+            .iter_mut()
+            .find(|source| source.grant.source().connection_id().as_str() == "b-connection")
+            .unwrap()
+            .expired_credential = true;
         let outcome = read_mail(&fixture).await.unwrap();
         let SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
             panic!("an expired credential must block, not truncate");
