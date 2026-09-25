@@ -75,7 +75,7 @@ macOS is the acceptance platform for this task. Android parity is out of scope. 
 | Checkpoint | Document / responsibility | Status | Completion evidence |
 |---|---|---|---|
 | 00 | [Baseline, reproducible findings and owner contract decisions](00-baseline-and-contract-freeze.md) | Complete | `b9617d578a2bf8e442e6d2cc26593e7cb4165cfd`; R1.1/R1.2/R2 red and R3 Rust-green/Dart-red commands and results in [00](00-baseline-and-contract-freeze.md) |
-| 01 | [Current contract regressions](01-contract-regressions.md) | Not started | None |
+| 01 | [Current contract regressions](01-contract-regressions.md) | Complete | Exact target and multi-grant fixture `109fe443e76a01fcabafbe22e4e97f3d12ffd172`; Rust-generated result/client contract `7911651b119b4eae36eaa04a306ba7fc61448481`; Manager policy and reviewed fingerprint `7249130843bbdd377004ccaf4e3a2478b8`; authority regressions `e8e60c2ad3fa71c51bc7fc6e5b9a843c83bf39cf`; current architecture `d2818e076fdc80b70014ac8c889b6a7e55759ed3`; Flutter golden assertion disabled by request and full suite passed `38105fb3520c6157129216b7fe15464bde4a2a22`. |
 | 02 | [Prompt, result and settlement contracts](02-result-and-prompt-contracts.md) | Not started | None |
 | 03 | [Generic Registry and runtime registration](03-registry-and-runtime.md) | Not started | None |
 | 04 | [Binding, authority, interaction and product cutover](04-binding-and-product-cutover.md) | Not started | None |
