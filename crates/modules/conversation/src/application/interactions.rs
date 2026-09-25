@@ -496,6 +496,7 @@ mod tests {
             reviewed_native_subject: None,
             members: vec![crate::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
+                policy_fingerprint: "a".repeat(64),
                 resource: "personal".into(),
                 source_revision: None,
                 expected_grant: crate::ExpectedGrantState::Absent,

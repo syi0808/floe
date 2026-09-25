@@ -184,6 +184,7 @@ impl ExpectedGrantState {
 #[serde(deny_unknown_fields)]
 pub struct ReviewedBundleMember {
     pub member_id: String,
+    pub policy_fingerprint: String,
     pub resource: String,
     pub source_revision: Option<AuthorityRevision>,
     pub expected_grant: ExpectedGrantState,
@@ -194,6 +195,11 @@ impl ReviewedBundleMember {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if validate_identifier(&self.member_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
             || validate_identifier(&self.resource, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            || self.policy_fingerprint.len() != 64
+            || !self
+                .policy_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -631,9 +637,7 @@ pub struct InteractionResumeRef {
 
 impl InteractionResumeRef {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if !self.origin_run_id.is_valid()
-            || self.lineage == 0
-            || self.lineage > MAX_RESUME_LINEAGE
+        if !self.origin_run_id.is_valid() || self.lineage == 0 || self.lineage > MAX_RESUME_LINEAGE
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -809,6 +813,7 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             bytes.extend_from_slice(&member_count.to_be_bytes());
             for member in &target.members {
                 append_str(&mut bytes, &member.member_id);
+                append_str(&mut bytes, &member.policy_fingerprint);
                 append_str(&mut bytes, &member.resource);
                 match &member.source_revision {
                     Some(revision) => {
@@ -871,8 +876,7 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             let scope_count = u64::try_from(target.source_scopes.len()).unwrap_or(u64::MAX);
             bytes.extend_from_slice(&scope_count.to_be_bytes());
             for scope in &target.source_scopes {
-                let encoded =
-                    serde_json::to_vec(scope).map_err(|_| AgentFailure::InvalidInput)?;
+                let encoded = serde_json::to_vec(scope).map_err(|_| AgentFailure::InvalidInput)?;
                 append_bytes(&mut bytes, &encoded);
             }
             bytes.extend_from_slice(target.lineage.session_id().as_bytes());
@@ -1069,6 +1073,7 @@ mod tests {
     pub(crate) fn member(member_id: &str, resource: &str) -> ReviewedBundleMember {
         ReviewedBundleMember {
             member_id: member_id.into(),
+            policy_fingerprint: "a".repeat(64),
             resource: resource.into(),
             source_revision: None,
             expected_grant: ExpectedGrantState::Absent,
@@ -1163,6 +1168,17 @@ mod tests {
     #[test]
     fn digests_distinguish_targets_and_expected_absence() {
         let base = canonical_target_digest(&target()).unwrap();
+        let mut changed_policy = target();
+        let ReviewedTarget::InlineObserve(inline) = &mut changed_policy else {
+            panic!("test target is inline");
+        };
+        inline.members[0].policy_fingerprint = "b".repeat(64);
+        assert_ne!(canonical_target_digest(&changed_policy).unwrap(), base);
+        let ReviewedTarget::InlineObserve(inline) = &mut changed_policy else {
+            panic!("test target is inline");
+        };
+        inline.members[0].policy_fingerprint = "B".repeat(64);
+        assert!(canonical_target_digest(&changed_policy).is_err());
         let mut absent = target();
         let ReviewedTarget::InlineObserve(inline) = &mut absent else {
             panic!("test target is inline");
@@ -1216,10 +1232,7 @@ mod tests {
             &mismatched.target_digest,
         )
         .unwrap();
-        assert_eq!(
-            mismatched.validate(),
-            Err(AgentFailure::StorageUnavailable)
-        );
+        assert_eq!(mismatched.validate(), Err(AgentFailure::StorageUnavailable));
     }
 
     pub(crate) fn consent_target() -> RecipientConsentTarget {
@@ -1241,8 +1254,8 @@ mod tests {
     fn consent_target_validates_digest_binds_and_round_trips() {
         let target = consent_target();
         assert!(target.validate().is_ok());
-        let digest = canonical_target_digest(&ReviewedTarget::RecipientConsent(target.clone()))
-            .unwrap();
+        let digest =
+            canonical_target_digest(&ReviewedTarget::RecipientConsent(target.clone())).unwrap();
         assert_ne!(digest, [0; 32]);
         let decoded: RecipientConsentTarget =
             serde_json::from_str(&serde_json::to_string(&target).unwrap()).unwrap();
@@ -1267,8 +1280,7 @@ mod tests {
             digest
         );
         let mut changed = target.clone();
-        changed.lineage =
-            RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        changed.lineage = RecipientLineage::try_new(Uuid::new_v4(), Uuid::new_v4()).unwrap();
         assert_ne!(
             canonical_target_digest(&ReviewedTarget::RecipientConsent(changed)).unwrap(),
             digest

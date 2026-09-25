@@ -62,45 +62,70 @@ fn manager_tool(id: &str, description: &str, input_schema: &str) -> ToolDescript
     }
 }
 
+struct ManagerToolSpec {
+    id: &'static str,
+    description: &'static str,
+    input_schema: &'static str,
+    remote_view: Option<&'static str>,
+}
+
+const MANAGER_TOOLS: [ManagerToolSpec; 7] = [
+    ManagerToolSpec {
+        id: PEOPLE_IDENTITY_READ,
+        description: "Read the identities of the Person's selected contacts.",
+        input_schema: EMPTY_INPUT_SCHEMA,
+        remote_view: None,
+    },
+    ManagerToolSpec {
+        id: SCHEDULE_FEASIBILITY_READ,
+        description: "Read whether the Person can still make a planned event.",
+        input_schema: EMPTY_INPUT_SCHEMA,
+        remote_view: None,
+    },
+    ManagerToolSpec {
+        id: ATTENTION_COARSE_READ,
+        description: "Read the Person's coarse attention state.",
+        input_schema: EMPTY_INPUT_SCHEMA,
+        remote_view: None,
+    },
+    ManagerToolSpec {
+        id: WELLBEING_DERIVED_READ,
+        description: "Read the Person's derived capacity today.",
+        input_schema: EMPTY_INPUT_SCHEMA,
+        remote_view: None,
+    },
+    ManagerToolSpec {
+        id: MAIL_COMMUNICATION_READ,
+        description: "Search the Person's connected mail.",
+        input_schema: MAIL_INPUT_SCHEMA,
+        remote_view: Some(crate::MAIL_VIEW),
+    },
+    ManagerToolSpec {
+        id: WORK_CONTEXT_READ,
+        description: "Read the Person's connected work context.",
+        input_schema: EMPTY_INPUT_SCHEMA,
+        remote_view: Some(crate::WORK_VIEW),
+    },
+    ManagerToolSpec {
+        id: LIFE_LOGISTICS_READ,
+        description: "Read the Person's connected logistics context.",
+        input_schema: EMPTY_INPUT_SCHEMA,
+        remote_view: Some(crate::LOGISTICS_VIEW),
+    },
+];
+
+pub fn manager_direct_remote_view(view_id: &str) -> bool {
+    MANAGER_TOOLS
+        .iter()
+        .any(|tool| tool.remote_view == Some(view_id))
+}
+
 /// The seven Manager tools, always and regardless of model route.
 pub fn manager_tool_descriptors() -> Vec<ToolDescriptor> {
-    vec![
-        manager_tool(
-            PEOPLE_IDENTITY_READ,
-            "Read the identities of the Person's selected contacts.",
-            EMPTY_INPUT_SCHEMA,
-        ),
-        manager_tool(
-            SCHEDULE_FEASIBILITY_READ,
-            "Read whether the Person can still make a planned event.",
-            EMPTY_INPUT_SCHEMA,
-        ),
-        manager_tool(
-            ATTENTION_COARSE_READ,
-            "Read the Person's coarse attention state.",
-            EMPTY_INPUT_SCHEMA,
-        ),
-        manager_tool(
-            WELLBEING_DERIVED_READ,
-            "Read the Person's derived capacity today.",
-            EMPTY_INPUT_SCHEMA,
-        ),
-        manager_tool(
-            MAIL_COMMUNICATION_READ,
-            "Search the Person's connected mail.",
-            MAIL_INPUT_SCHEMA,
-        ),
-        manager_tool(
-            WORK_CONTEXT_READ,
-            "Read the Person's connected work context.",
-            EMPTY_INPUT_SCHEMA,
-        ),
-        manager_tool(
-            LIFE_LOGISTICS_READ,
-            "Read the Person's connected logistics context.",
-            EMPTY_INPUT_SCHEMA,
-        ),
-    ]
+    MANAGER_TOOLS
+        .iter()
+        .map(|tool| manager_tool(tool.id, tool.description, tool.input_schema))
+        .collect()
 }
 
 /// The Manager tools, bound to one Person and device.
@@ -298,8 +323,7 @@ where
                     SourceReadOutcome::Ready((view, dependency)) => {
                         Ok(SourceReadOutcome::Ready(Self::result(
                             call,
-                            &serde_json::to_value(&view)
-                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
                             dependency,
                         )?))
                     }
@@ -331,8 +355,7 @@ where
                     SourceReadOutcome::Ready((view, dependency)) => {
                         Ok(SourceReadOutcome::Ready(Self::result(
                             call,
-                            &serde_json::to_value(&view)
-                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
                             dependency,
                         )?))
                     }
@@ -362,8 +385,7 @@ where
                     SourceReadOutcome::Ready((view, dependency)) => {
                         Ok(SourceReadOutcome::Ready(Self::result(
                             call,
-                            &serde_json::to_value(&view)
-                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
                             dependency,
                         )?))
                     }
@@ -395,8 +417,7 @@ where
                     SourceReadOutcome::Ready((view, dependency)) => {
                         Ok(SourceReadOutcome::Ready(Self::result(
                             call,
-                            &serde_json::to_value(&view)
-                                .map_err(|_| AgentFailure::InvalidInput)?,
+                            &serde_json::to_value(&view).map_err(|_| AgentFailure::InvalidInput)?,
                             dependency,
                         )?))
                     }
@@ -1170,12 +1191,7 @@ mod tests {
         )
         .unwrap();
         let scope = scope();
-        ready(
-            &service,
-            &call(MAIL_COMMUNICATION_READ, "{}"),
-            &scope,
-        )
-        .await;
+        ready(&service, &call(MAIL_COMMUNICATION_READ, "{}"), &scope).await;
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].0, "mail.communication");
@@ -1325,13 +1341,8 @@ mod tests {
         let source =
             floe_access::attention_source(person_id, DEVICE, SourceAuthority::new()).unwrap();
         let scope_fixture = scope_fixture(floe_access::ATTENTION_RESOURCE);
-        let paused = DataAccessGrant::new(
-            GrantId::new(),
-            Uuid::new_v4(),
-            source,
-            scope_fixture,
-        )
-        .unwrap();
+        let paused =
+            DataAccessGrant::new(GrantId::new(), Uuid::new_v4(), source, scope_fixture).unwrap();
         assert_eq!(paused.state(), floe_access::GrantState::Paused);
         let mut records = FixtureRecords::new(person_id);
         records.grants = vec![paused.clone()];
@@ -1404,9 +1415,7 @@ mod tests {
 
         struct CorruptRecords;
         impl PersonalGrantRecords for CorruptRecords {
-            fn grants<'a>(
-                &'a self,
-            ) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
+            fn grants<'a>(&'a self) -> BoxFuture<'a, Result<Vec<DataAccessGrant>, AgentFailure>> {
                 Box::pin(async { Err(AgentFailure::StorageUnavailable) })
             }
 
@@ -1456,5 +1465,4 @@ mod tests {
             Some(AgentFailure::StorageUnavailable)
         );
     }
-
 }

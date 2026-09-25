@@ -421,6 +421,7 @@ final _uuidPattern = RegExp(
 final class ConnectionObserveMember {
   const ConnectionObserveMember({
     required this.viewId,
+    required this.policyFingerprint,
     required this.resource,
     required this.producerFingerprint,
     required this.sourceAuthority,
@@ -433,6 +434,7 @@ final class ConnectionObserveMember {
   });
 
   final String viewId;
+  final String policyFingerprint;
   final String resource;
   final String producerFingerprint;
   final ObserveAuthority sourceAuthority;
@@ -448,6 +450,7 @@ final class ConnectionObserveMember {
     final value = Map<String, Object?>.from(raw);
     const fields = {
       'view_id',
+      'policy_fingerprint',
       'resource',
       'producer_fingerprint',
       'source_authority',
@@ -480,8 +483,13 @@ final class ConnectionObserveMember {
         (grantId == null && grantAuthority == null && policy == null) ||
         (grantId != null && grantAuthority != null && policy != null);
     if (!coherent) throw const FormatException('Invalid observe member');
+    final policyFingerprint = text('policy_fingerprint');
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(policyFingerprint)) {
+      throw const FormatException('Invalid observe member');
+    }
     return ConnectionObserveMember(
       viewId: text('view_id'),
+      policyFingerprint: policyFingerprint,
       resource: text('resource'),
       producerFingerprint: text('producer_fingerprint'),
       sourceAuthority: ObserveAuthority.fromJson(
@@ -508,6 +516,7 @@ final class ConnectionObserveMember {
 
   Map<String, Object?> toJson() => {
     'view_id': viewId,
+    'policy_fingerprint': policyFingerprint,
     'resource': resource,
     'producer_fingerprint': producerFingerprint,
     'source_authority': sourceAuthority.toJson(),

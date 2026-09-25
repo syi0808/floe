@@ -530,6 +530,9 @@ where
         };
         Ok(LiveMember {
             member_id: member_id.to_owned(),
+            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                connector, member_id,
+            )?,
             resource: resource.to_owned(),
             source_revision,
             live_grants: grants
@@ -922,7 +925,10 @@ where
     /// person/device. Recorded global consent flags are accepted as stored
     /// shape but never consulted for authority.
     fn live_client_id(&self, person_id: &str, device_id: &str) -> Result<String, AgentFailure> {
-        let stored = self.connections.load().map_err(|_| AgentFailure::PolicyDenied)?;
+        let stored = self
+            .connections
+            .load()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
         let Some(saved) = stored else {
             return Err(AgentFailure::PolicyDenied);
         };
@@ -1243,7 +1249,9 @@ fn compare_fresh_reviewed(
         else {
             return Err(AgentFailure::AccessReviewRequired);
         };
-        if current.resource != member.resource || current.producer_fingerprint != reviewed_producer
+        if current.resource != member.resource
+            || current.producer_fingerprint != reviewed_producer
+            || current.policy_fingerprint != member.policy_fingerprint
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
@@ -1300,6 +1308,11 @@ mod tests {
         let source = authority();
         floe_conversation::ReviewedBundleMember {
             member_id: "mail.communication".into(),
+            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                "gmail",
+                "mail.communication",
+            )
+            .unwrap(),
             resource: "mail.communication:connection".into(),
             source_revision: Some(floe_conversation::AuthorityRevision {
                 incarnation: source.incarnation(),
@@ -1328,6 +1341,11 @@ mod tests {
     fn fresh_member(source: SourceAuthority) -> crate::RemoteObserveMemberExpectation {
         crate::RemoteObserveMemberExpectation {
             view_id: "mail.communication".into(),
+            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                "gmail",
+                "mail.communication",
+            )
+            .unwrap(),
             resource: "mail.communication:connection".into(),
             producer_fingerprint: "producer".into(),
             source_authority: source,

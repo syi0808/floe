@@ -8,9 +8,9 @@ use floe_agent_contract::prompts::{
 };
 use floe_agent_contract::{
     AgentMessage, AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture,
-    ContextEnvelope, ContextManifest, ContextualData, DataClass, DelegationPort,
-    DelegationRequest, DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent,
-    ModelCallOutcome, ModelConversation, ModelConversationEntry, ModelPort, ModelProjectionPort,
+    ContextEnvelope, ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
+    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelCallOutcome,
+    ModelConversation, ModelConversationEntry, ModelPort, ModelProjectionPort,
     ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage, ProjectionRef,
     RoleSpec, RuntimeContext, ScopedInstructions, TaskReceipt, ToolCall, ToolDescriptor, ToolPort,
     ToolResult, ValidatedModelBatch,
@@ -708,7 +708,8 @@ impl floe_context::DependencyResolver for AcceptCoverage {
         &'a self,
         _dependency: &'a floe_agent_contract::ContextDependency,
         _request: &'a floe_context::DependencyAuthorization,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
         Box::pin(async { Ok(()) })
     }
 }
@@ -1474,7 +1475,8 @@ impl floe_context::DependencyResolver for SequencedCoverage {
         &'a self,
         _dependency: &'a floe_agent_contract::ContextDependency,
         _request: &'a floe_context::DependencyAuthorization,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>>
+    {
         let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let reject = self.reject_at == Some(call);
         Box::pin(async move {
@@ -2574,6 +2576,7 @@ fn resume_target() -> crate::ReviewedTarget {
         reviewed_native_subject: None,
         members: vec![crate::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
             expected_grant: crate::ExpectedGrantState::Absent,

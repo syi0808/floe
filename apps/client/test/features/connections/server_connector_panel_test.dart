@@ -260,6 +260,7 @@ void main() {
           'view_id': 'calendar.timeline',
           'resource': 'primary',
           'producer_fingerprint': 'fp',
+          'policy_fingerprint': 'a' * 64,
           'source_authority': {
             'incarnation': '00000000-0000-4000-8000-0000000000a1',
             'epoch': 3,
@@ -320,6 +321,7 @@ void main() {
     expect(actions[2]['enabled'], true);
     final echoed = (actions[2]['expected'] as Map)['members'] as List;
     expect(echoed.single['view_id'], 'calendar.timeline');
+    expect(echoed.single['policy_fingerprint'], 'a' * 64);
   });
 
   testWidgets('dismissing the review enables nothing', (tester) async {
@@ -338,6 +340,7 @@ void main() {
                 'view_id': 'calendar.timeline',
                 'resource': 'primary',
                 'producer_fingerprint': 'fp',
+                'policy_fingerprint': 'a' * 64,
                 'source_authority': {
                   'incarnation': '00000000-0000-4000-8000-0000000000a1',
                   'epoch': 3,

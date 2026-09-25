@@ -138,6 +138,7 @@ pub trait RemotePairingCommands {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteObserveMemberExpectation {
     pub view_id: String,
+    pub policy_fingerprint: String,
     pub resource: String,
     pub producer_fingerprint: String,
     pub source_authority: crate::SourceAuthority,

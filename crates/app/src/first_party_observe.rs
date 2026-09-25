@@ -2,6 +2,7 @@ use floe_access::GrantConsumer;
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::{GrantDataCategory, GrantPurpose};
 use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SourceProcessingPolicy {
@@ -39,12 +40,95 @@ fn policy(
     categories: Vec<GrantDataCategory>,
     source_processing: SourceProcessingPolicy,
 ) -> Result<FirstPartyObservePolicy, AgentFailure> {
+    let mut consumers = builtin_consumers(source)?;
+    if floe_context::manager_direct_remote_view(view_id) {
+        consumers.push(
+            GrantConsumer::builtin(floe_context::ASSISTANT_CONSUMER)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        );
+        consumers.sort();
+        consumers.dedup();
+    }
     Ok(FirstPartyObservePolicy {
         view_id,
-        consumers: builtin_consumers(source)?,
+        consumers,
         categories,
         purpose: GrantPurpose::Assistant,
         source_processing,
+    })
+}
+
+pub(crate) fn policy_fingerprint(policy: &FirstPartyObservePolicy) -> Result<String, AgentFailure> {
+    let mut consumers: Vec<&str> = policy
+        .consumers
+        .iter()
+        .map(GrantConsumer::identifier)
+        .collect();
+    consumers.sort_unstable();
+    let mut categories = policy.categories.clone();
+    categories.sort();
+    if policy.view_id.is_empty()
+        || policy.view_id.len() > 128
+        || consumers.is_empty()
+        || consumers.windows(2).any(|pair| pair[0] == pair[1])
+        || categories.is_empty()
+        || categories.windows(2).any(|pair| pair[0] == pair[1])
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let representation = serde_json::to_vec(&(
+        "floe.first-party-observe-policy.sha256.v1",
+        policy.view_id,
+        consumers,
+        categories,
+        policy.purpose,
+        match policy.source_processing {
+            SourceProcessingPolicy::LocalOnly => "local-only",
+            SourceProcessingPolicy::PairedSourceRecipient => "paired-source-recipient",
+        },
+    ))
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    if representation.len() > 4096 {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(format!("{:x}", Sha256::digest(representation)))
+}
+
+pub(crate) fn member_policy_fingerprint(
+    connector_id: &str,
+    view_id: &str,
+) -> Result<String, AgentFailure> {
+    if let Some(policy) = remote_policies(connector_id)?
+        .into_iter()
+        .find(|policy| policy.view_id == view_id)
+    {
+        return policy_fingerprint(&policy);
+    }
+    let native_view = match connector_id {
+        floe_access::ATTENTION_CONNECTOR => floe_access::ATTENTION_CONNECTOR,
+        floe_access::WELLBEING_CONNECTOR => floe_access::WELLBEING_CONNECTOR,
+        "calendar.event_kit" => "calendar.timeline",
+        _ => return Err(AgentFailure::InvalidInput),
+    };
+    if view_id != native_view {
+        return Err(AgentFailure::InvalidInput);
+    }
+    if view_id == "calendar.timeline" {
+        return policy_fingerprint(&calendar_policy()?);
+    }
+    let mut consumers = native_consumers(connector_id)?
+        .into_iter()
+        .map(GrantConsumer::builtin)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    consumers.sort();
+    consumers.dedup();
+    policy_fingerprint(&FirstPartyObservePolicy {
+        view_id: native_view,
+        consumers,
+        categories: vec![GrantDataCategory::Derived],
+        purpose: GrantPurpose::Assistant,
+        source_processing: SourceProcessingPolicy::LocalOnly,
     })
 }
 
@@ -153,18 +237,26 @@ mod tests {
         );
         assert_eq!(
             ids(&gmail[0]),
-            ["floe.builtin.commitments", "floe.builtin.communication"]
+            [
+                "assistant",
+                "floe.builtin.commitments",
+                "floe.builtin.communication"
+            ]
         );
-        assert_eq!(ids(&gmail[1]), ["floe.builtin.life-logistics"]);
+        assert_eq!(ids(&gmail[1]), ["assistant", "floe.builtin.life-logistics"]);
         assert_eq!(
             ids(&remote_policies("github.issues").unwrap()[0]),
-            ["floe.builtin.focus-attention", "floe.builtin.work-context"]
+            [
+                "assistant",
+                "floe.builtin.focus-attention",
+                "floe.builtin.work-context"
+            ]
         );
         assert!(remote_policies("unknown.connector").unwrap().is_empty());
     }
 
     #[test]
-    fn policy_never_default_grants_extensions_or_assistant_wildcards() {
+    fn policy_never_default_grants_extensions_or_wildcards() {
         for connector in [
             "gmail",
             "microsoft.mail",
@@ -177,10 +269,36 @@ mod tests {
             "calendar.microsoft",
         ] {
             for policy in remote_policies(connector).unwrap() {
-                assert!(policy.consumers.iter().all(|consumer| {
-                    matches!(consumer, GrantConsumer::Builtin(id) if id.starts_with("floe.builtin."))
-                }));
+                assert!(policy.consumers.iter().all(|consumer| matches!(consumer, GrantConsumer::Builtin(id) if id == "assistant" || id.starts_with("floe.builtin."))));
+                assert_eq!(
+                    policy
+                        .consumers
+                        .iter()
+                        .any(|consumer| consumer.identifier() == "assistant"),
+                    floe_context::manager_direct_remote_view(policy.view_id)
+                );
             }
         }
+    }
+
+    #[test]
+    fn fingerprint_binds_exact_prospective_policy_scope() {
+        let policy = remote_policies("microsoft.mail").unwrap().remove(0);
+        let fingerprint = policy_fingerprint(&policy).unwrap();
+        assert_eq!(fingerprint.len(), 64);
+        let mut changed = policy.clone();
+        changed
+            .consumers
+            .retain(|consumer| consumer.identifier() != "assistant");
+        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        let mut changed = policy.clone();
+        changed.categories = vec![GrantDataCategory::Derived];
+        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        let mut changed = policy.clone();
+        changed.purpose = GrantPurpose::Scheduling;
+        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
+        let mut changed = policy.clone();
+        changed.source_processing = SourceProcessingPolicy::LocalOnly;
+        assert_ne!(policy_fingerprint(&changed).unwrap(), fingerprint);
     }
 }

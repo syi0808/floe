@@ -57,6 +57,14 @@ pub(crate) fn validate_observe_expectation(
     }
     let mut previous: Option<&str> = None;
     for member in &expected.members {
+        if member.policy_fingerprint.len() != 64
+            || !member
+                .policy_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         for value in [
             &member.view_id,
             &member.resource,
@@ -161,6 +169,16 @@ where
     reviewed_views.sort();
     if policy_views != reviewed_views {
         return Err(AgentFailure::InvalidInput);
+    }
+    for policy in &policies {
+        let reviewed = expected
+            .members
+            .iter()
+            .find(|member| member.view_id == policy.view_id)
+            .ok_or(AgentFailure::InvalidInput)?;
+        if reviewed.policy_fingerprint != crate::first_party_observe::policy_fingerprint(policy)? {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
     }
     let calendar = policies.len() == 1 && policies[0].view_id == "calendar.timeline";
     if calendar != (ctx.resource.is_some()) {
@@ -395,6 +413,7 @@ where
     };
     Ok(crate::RemoteObserveMemberExpectation {
         view_id: policy.view_id.to_owned(),
+        policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
         resource,
         producer_fingerprint: preview.producer.fingerprint,
         source_authority: preview.reference.source_authority,
@@ -438,6 +457,7 @@ where
     .await?;
     Ok(crate::RemoteObserveMemberExpectation {
         view_id: policy.view_id.to_owned(),
+        policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
         resource: resource.to_owned(),
         producer_fingerprint: preview.producer.fingerprint,
         source_authority: preview.reference.source_authority,

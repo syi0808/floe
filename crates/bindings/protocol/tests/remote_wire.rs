@@ -40,6 +40,7 @@ fn observe_member(view_id: &str, resource: &str) -> Value {
         "view_id": view_id,
         "resource": resource,
         "producer_fingerprint": "fp",
+        "policy_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "source_authority": authority(),
         "connection_revision": 11,
         "provider_identity": "google:subject-a",
@@ -54,8 +55,7 @@ fn observe_member(view_id: &str, resource: &str) -> Value {
 fn observe_review_and_echoed_enable_roundtrip() {
     let connection = Uuid::new_v4();
     let review = json!({"kind": "connection_observe_review", "connector_id": "gmail", "connection_id": connection});
-    let decoded: RemoteAccessRequestDto =
-        serde_json::from_value(envelope(review)).unwrap();
+    let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(review)).unwrap();
     assert_eq!(decoded.validate(), Ok(()));
 
     let resource = format!("mail.communication:{connection}");
@@ -67,8 +67,7 @@ fn observe_review_and_echoed_enable_roundtrip() {
         "enabled": true,
         "expected": bundle,
     });
-    let decoded: RemoteAccessRequestDto =
-        serde_json::from_value(envelope(enable)).unwrap();
+    let decoded: RemoteAccessRequestDto = serde_json::from_value(envelope(enable)).unwrap();
     assert_eq!(decoded.validate(), Ok(()));
 
     // An incoherent grant triple never validates.
@@ -103,8 +102,24 @@ fn observe_review_and_echoed_enable_roundtrip() {
     let bundle = decoded.reviewed_bundle.unwrap();
     assert_eq!(bundle.members.len(), 1);
     assert_eq!(bundle.members[0].view_id, "mail.communication");
+    assert_eq!(bundle.members[0].policy_fingerprint, "a".repeat(64));
     assert_eq!(bundle.members[0].connection_revision, Some(11));
     assert_eq!(bundle.members[0].expected_grant_id, None);
+    let mut invalid = observe_member("mail.communication", &resource);
+    invalid["policy_fingerprint"] = json!("A".repeat(64));
+    let enable = json!({
+        "kind": "connection_observe",
+        "connector_id": "gmail",
+        "connection_id": connection,
+        "enabled": true,
+        "expected": {"members": [invalid]},
+    });
+    assert!(
+        serde_json::from_value::<RemoteAccessRequestDto>(envelope(enable))
+            .unwrap()
+            .validate()
+            .is_err()
+    );
 }
 
 #[test]

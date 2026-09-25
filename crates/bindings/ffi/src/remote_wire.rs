@@ -238,6 +238,7 @@ fn observe_expectation(
             .iter()
             .map(|member| floe_app::RemoteObserveMemberExpectation {
                 view_id: member.view_id.clone(),
+                policy_fingerprint: member.policy_fingerprint.clone(),
                 resource: member.resource.clone(),
                 producer_fingerprint: member.producer_fingerprint.clone(),
                 source_authority: member.source_authority,
@@ -261,6 +262,7 @@ fn observe_expectation_dto(
             .iter()
             .map(|member| ConnectionObserveMemberDto {
                 view_id: member.view_id.clone(),
+                policy_fingerprint: member.policy_fingerprint.clone(),
                 resource: member.resource.clone(),
                 producer_fingerprint: member.producer_fingerprint.clone(),
                 source_authority: member.source_authority,

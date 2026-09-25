@@ -101,7 +101,8 @@ pub use application::source_view::SourceView;
 pub use application::tools::{
     ATTENTION_COARSE_READ, ContextToolService, LIFE_LOGISTICS_READ, MAIL_COMMUNICATION_READ,
     MANAGER_TOOL_DEFINITION_REVISION, PEOPLE_IDENTITY_READ, SCHEDULE_FEASIBILITY_READ,
-    WELLBEING_DERIVED_READ, WORK_CONTEXT_READ, manager_tool_descriptors,
+    WELLBEING_DERIVED_READ, WORK_CONTEXT_READ, manager_direct_remote_view,
+    manager_tool_descriptors,
 };
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{

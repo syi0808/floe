@@ -50,6 +50,7 @@ pub enum RemoteAccessOperationDto {
 #[serde(deny_unknown_fields)]
 pub struct ConnectionObserveMemberDto {
     pub view_id: String,
+    pub policy_fingerprint: String,
     pub resource: String,
     pub producer_fingerprint: String,
     pub source_authority: SourceAuthority,
@@ -127,6 +128,14 @@ fn validate_observe_expectation(
     }
     let mut previous: Option<&str> = None;
     for member in &expected.members {
+        if member.policy_fingerprint.len() != 64
+            || !member
+                .policy_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("operation.expected.member.policy_fingerprint");
+        }
         for value in [
             member.view_id.as_str(),
             member.resource.as_str(),

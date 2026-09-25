@@ -190,6 +190,7 @@ fn inline_target_from_snapshot(
         .into_iter()
         .map(|member| floe_conversation::ReviewedBundleMember {
             member_id: member.member_id,
+            policy_fingerprint: member.policy_fingerprint,
             resource: member.resource,
             source_revision: member.source_revision.map(|authority| {
                 floe_conversation::AuthorityRevision {
@@ -635,6 +636,7 @@ mod tests {
         crate::vault_host::review_snapshot::InlineReviewSnapshot {
             members: vec![crate::vault_host::review_snapshot::SnapshotMember {
                 member_id: "attention.macos".into(),
+                policy_fingerprint: "a".repeat(64),
                 resource: "attention.coarse".into(),
                 source_revision: None,
                 expected_grant: None,

@@ -572,6 +572,7 @@ fn reviewed_target() -> floe_conversation::InlineObserveTarget {
         reviewed_native_subject: Some("subject".into()),
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
@@ -584,6 +585,7 @@ fn live_precondition() -> LiveInlineState {
     LiveInlineState {
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
             live_grants: vec![],
@@ -606,6 +608,7 @@ fn live_satisfied() -> LiveInlineState {
     LiveInlineState {
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: None,
             live_grants: vec![LiveGrant {
@@ -966,6 +969,7 @@ async fn fresh_approve_on_unchanged_live_grant_rereviews_and_resolves() {
     let live = LiveInlineState {
         members: vec![LiveMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: Some(source),
             live_grants: vec![LiveGrant {
@@ -1676,6 +1680,11 @@ impl HostFixture {
                 .iter()
                 .map(|calendar| floe_conversation::ReviewedBundleMember {
                     member_id: "calendar.timeline".into(),
+                    policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                        "calendar.event_kit",
+                        "calendar.timeline",
+                    )
+                    .unwrap(),
                     resource: calendar.calendar_id.clone(),
                     source_revision: Some(floe_conversation::AuthorityRevision {
                         incarnation: live.source_authority.incarnation(),
@@ -2218,6 +2227,11 @@ async fn personal_attention_allow_resolves() {
         reviewed_native_subject: Some(NATIVE_FINGERPRINT.into()),
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: floe_access::ATTENTION_CONNECTOR.into(),
+            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                floe_access::ATTENTION_CONNECTOR,
+                floe_access::ATTENTION_CONNECTOR,
+            )
+            .unwrap(),
             resource: floe_access::ATTENTION_RESOURCE.into(),
             source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
@@ -2505,6 +2519,92 @@ impl floe_access::RemoteGrantTransport for ScriptedRemoteTransport {
     }
 }
 
+impl floe_context::RemoteViewTransport for ScriptedRemoteTransport {
+    fn read_admitted_view<'a>(
+        &'a self,
+        read: floe_context::AdmittedRemoteRead<'a>,
+        _: &'a floe_access::RemoteCallWindow,
+    ) -> BoxFuture<'a, Result<serde_json::Value, AgentFailure>> {
+        Box::pin(async move {
+            let now = chrono::Utc::now().timestamp_millis();
+            Ok(serde_json::json!({
+                "schema_version": floe_agent_contract::AGENT_VERSION,
+                "view_id": read.view_id,
+                "source_handle": format!("mail:{}", read.resource),
+                "observed_at_unix_ms": now - 1_000,
+                "expires_at_unix_ms": now + 60_000,
+                "coverage_complete": true,
+                "next_cursor": null,
+                "items": [],
+            }))
+        })
+    }
+}
+
+struct ProductMailReader<'a> {
+    vault: &'a EncryptedAgentVault<Keys>,
+    transport: &'a ScriptedRemoteTransport,
+    person_id: PersonId,
+}
+
+impl floe_context::SourceReader for ProductMailReader<'_> {
+    fn read<'a>(
+        &'a self,
+        request: &'a floe_context::SourceReadRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let person_text = self.person_id.to_string();
+            match floe_context::read_remote_view(
+                self.vault,
+                self.transport,
+                self.person_id,
+                floe_access::RemotePairingIdentity {
+                    person_id: &person_text,
+                    client_id: REMOTE_CLIENT_ID,
+                    device_id: DEVICE,
+                },
+                request.source().as_str(),
+                request.consumer().identifier(),
+                request.query().clone(),
+                &floe_access::RemoteCallWindow {
+                    deadline: request.deadline(),
+                    cancellation: request.cancellation().clone(),
+                },
+                request.process_incarnation_id(),
+                request.query_fingerprint(),
+            )
+            .await?
+            {
+                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
+                    Ok(floe_context_contract::SourceReadOutcome::Ready(
+                        floe_context::SourceRead::with_bindings(
+                            request.source().clone(),
+                            payload,
+                            bindings,
+                        ),
+                    ))
+                }
+                floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
+                    floe_context_contract::SourceReadOutcome::Unavailable(reason),
+                ),
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
+                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+                ),
+            }
+        })
+    }
+}
+
 struct RemoteFixture {
     base: Fixture,
     core: crate::FloeCore,
@@ -2583,6 +2683,7 @@ impl RemoteFixture {
             .iter()
             .map(|policy| floe_conversation::ReviewedBundleMember {
                 member_id: policy.view_id.to_owned(),
+                policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy).unwrap(),
                 resource: floe_context::remote_view_resource(policy.view_id, &self.connection_id),
                 source_revision: Some(floe_conversation::AuthorityRevision {
                     incarnation: authority.incarnation(),
@@ -2816,6 +2917,210 @@ async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
 }
 
 #[tokio::test]
+async fn gmail_reviewed_absence_policy_fingerprint_drift_supersedes() {
+    let host = RemoteFixture::open().await;
+    let mut target = host.gmail_target();
+    assert!(
+        target
+            .members
+            .iter()
+            .all(|member| member.policy_authority.is_none())
+    );
+    target.members[0].policy_fingerprint = "b".repeat(64);
+    let current = host
+        .base
+        .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
+        .await;
+    let calendar = FixtureCalendarSubject {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let personal = FixturePersonalInspector {
+        fingerprint: NATIVE_FINGERPRINT.into(),
+    };
+    let owners = host.owners(&calendar, &personal);
+    let outcome = resolve_interaction(
+        &host.base.runs,
+        &host.base.repo,
+        &owners,
+        &owners,
+        &owners,
+        &host.base.caller,
+        host.base.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &host.base.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            ResolveOutcome::Superseded {
+                reason: DriftReason::PolicyFingerprint { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert!(
+        host.base
+            .vault
+            .list_data_access_grants(128)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn gmail_connection_review_rejects_changed_policy_before_enable() {
+    let host = RemoteFixture::open().await;
+    let person_text = host.base.person.to_string();
+    let window = floe_access::RemoteCallWindow {
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        cancellation: host.base.cancellation.clone(),
+    };
+    let ctx = RemoteObserveContext {
+        core: &host.core,
+        vault: &host.base.vault,
+        person_id: host.base.person,
+        pairing: floe_access::RemotePairingIdentity {
+            person_id: &person_text,
+            device_id: DEVICE,
+            client_id: REMOTE_CLIENT_ID,
+        },
+        connector_id: "gmail",
+        connection_id: &host.connection_id,
+        resource: None,
+        window: &window,
+    };
+    let mut review = super::super::remote_observe::review_bundle(&ctx, &host.transport)
+        .await
+        .unwrap();
+    review.members[0].policy_fingerprint = "b".repeat(64);
+    assert!(matches!(
+        super::super::remote_observe::enable_bundle(&ctx, &host.transport, &review).await,
+        Err(AgentFailure::AccessReviewRequired)
+    ));
+    assert!(
+        host.base
+            .vault
+            .list_data_access_grants(128)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
+    let host = RemoteFixture::open().await;
+    let person_text = host.base.person.to_string();
+    let window = floe_access::RemoteCallWindow {
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        cancellation: host.base.cancellation.clone(),
+    };
+    let ctx = RemoteObserveContext {
+        core: &host.core,
+        vault: &host.base.vault,
+        person_id: host.base.person,
+        pairing: floe_access::RemotePairingIdentity {
+            person_id: &person_text,
+            device_id: DEVICE,
+            client_id: REMOTE_CLIENT_ID,
+        },
+        connector_id: "microsoft.mail",
+        connection_id: &host.connection_id,
+        resource: None,
+        window: &window,
+    };
+    let review = super::super::remote_observe::review_bundle(&ctx, &host.transport)
+        .await
+        .unwrap();
+    assert_eq!(review.members.len(), 1);
+    super::super::remote_observe::enable_bundle(&ctx, &host.transport, &review)
+        .await
+        .unwrap();
+    let grants = host.base.vault.list_data_access_grants(128).await.unwrap();
+    assert_eq!(grants.len(), 1);
+    assert!(
+        grants[0]
+            .scope()
+            .consumers()
+            .iter()
+            .any(|consumer| consumer.identifier() == "assistant")
+    );
+    let direct = floe_context::read_remote_view(
+        host.base.vault.as_ref(),
+        &host.transport,
+        host.base.person,
+        floe_access::RemotePairingIdentity { person_id: &person_text, client_id: REMOTE_CLIENT_ID, device_id: DEVICE },
+        floe_context::MAIL_VIEW,
+        "assistant",
+        serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION, "query": "", "cursor": 0, "limit": 25}),
+        &window,
+        Uuid::new_v4(),
+        &[7; 32],
+    ).await.unwrap();
+    assert!(
+        matches!(direct, floe_context_contract::SourceReadOutcome::Ready(_)),
+        "{direct:?}"
+    );
+    let local_context = crate::local_context::LocalContextHost::default();
+    let tools = floe_context::ContextToolService::new(
+        host.base.person,
+        DEVICE,
+        floe_vault::VaultGrantRecords::new(&host.base.vault),
+        crate::vault_host::personal_grants::native_driver(&local_context),
+        Some(ProductMailReader {
+            vault: &host.base.vault,
+            transport: &host.transport,
+            person_id: host.base.person,
+        }),
+    )
+    .unwrap();
+    let ledger = floe_execution::budget::BudgetLedger::new(
+        floe_execution::budget::BudgetConfig::new(100, 100),
+        Default::default(),
+    );
+    let scope = floe_execution::ExecutionScope::root(
+        floe_execution::Cancellation::default(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        ledger.work_lease(),
+        floe_agent_contract::TraceContext::new(Uuid::new_v4()),
+    );
+    let outcome = tools
+        .invoke_outcome(
+            &floe_agent_contract::ToolCall {
+                call_id: Uuid::new_v4(),
+                invocation_key: floe_agent_contract::InvocationKey::new(),
+                tool_id: floe_context::MAIL_COMMUNICATION_READ.into(),
+                definition_revision: floe_context::MANAGER_TOOL_DEFINITION_REVISION,
+                input: r#"{"query":""}"#.into(),
+            },
+            &scope,
+        )
+        .await
+        .unwrap();
+    let floe_context_contract::SourceReadOutcome::Ready(result) = outcome else {
+        panic!("manager mail read must be Ready");
+    };
+    let floe_agent_contract::DependencyCoverage::Dependent { dependencies } = result.coverage
+    else {
+        panic!("mail read must retain coverage");
+    };
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(dependencies[0].consumer().identifier(), "assistant");
+    assert_eq!(dependencies[0].operation(), floe_context_contract::GrantOperation::Read);
+    assert_eq!(
+        dependencies[0].resources()[0].as_str(),
+        floe_context::remote_view_resource(floe_context::MAIL_VIEW, &host.connection_id)
+    );
+}
+
+#[tokio::test]
 async fn gmail_authority_rotation_after_review_supersedes_without_mutation() {
     let host = RemoteFixture::open().await;
     let target = host.gmail_target();
@@ -2937,6 +3242,11 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                "calendar.google",
+                "calendar.timeline",
+            )
+            .unwrap(),
             resource: "primary".into(),
             source_revision: Some(floe_conversation::AuthorityRevision {
                 incarnation: authority.incarnation(),
@@ -3499,7 +3809,10 @@ async fn consent_grant_failure_fails_closed_and_refresh_reconciles() {
         &owners,
         &owners,
         &fixture.caller,
-        fixture.resolve_command(&current, floe_conversation::InteractionDecisionKind::Approve),
+        fixture.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
         &fixture.cancellation,
         NOW,
     )
@@ -3591,7 +3904,10 @@ async fn consent_wrong_device_never_grants() {
         &owners,
         &owners,
         &foreign_device,
-        fixture.resolve_command(&current, floe_conversation::InteractionDecisionKind::Approve),
+        fixture.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
         &fixture.cancellation,
         NOW,
     )

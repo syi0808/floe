@@ -32,6 +32,7 @@ use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 #[derive(Clone, Debug)]
 pub(crate) struct SnapshotMember {
     pub member_id: String,
+    pub policy_fingerprint: String,
     pub resource: String,
     pub source_revision: Option<SourceAuthority>,
     /// The reviewed grant expectation: `None` is reviewed absence.
@@ -235,6 +236,9 @@ where
         for resource in reviewed {
             members.push(SnapshotMember {
                 member_id: "calendar.timeline".to_owned(),
+                policy_fingerprint: crate::first_party_observe::policy_fingerprint(
+                    &crate::first_party_observe::calendar_policy()?,
+                )?,
                 resource,
                 source_revision: requirement.source_authority(),
                 expected_grant: expected,
@@ -306,6 +310,9 @@ where
         Ok(InlineReviewSnapshot {
             members: vec![SnapshotMember {
                 member_id: connector.to_owned(),
+                policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
+                    connector, connector,
+                )?,
                 resource: identity_resource.to_owned(),
                 source_revision: requirement.source_authority(),
                 expected_grant: expected,
@@ -386,6 +393,7 @@ where
             };
             members.push(SnapshotMember {
                 member_id: policy.view_id.to_owned(),
+                policy_fingerprint: crate::first_party_observe::policy_fingerprint(policy)?,
                 resource,
                 source_revision: requirement.source_authority(),
                 expected_grant: expected,

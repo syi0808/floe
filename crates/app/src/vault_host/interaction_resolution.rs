@@ -49,6 +49,7 @@ pub(crate) struct LiveGrant {
 #[derive(Clone, Debug)]
 pub(crate) struct LiveMember {
     pub member_id: String,
+    pub policy_fingerprint: String,
     pub resource: String,
     pub source_revision: Option<SourceAuthority>,
     pub live_grants: Vec<LiveGrant>,
@@ -80,6 +81,10 @@ pub(crate) enum DriftReason {
         resource: String,
     },
     PolicyAuthority {
+        member_id: String,
+        resource: String,
+    },
+    PolicyFingerprint {
         member_id: String,
         resource: String,
     },
@@ -135,6 +140,12 @@ pub(crate) fn compare_reviewed_live(
     let mut out_of_band = false;
     for member in &reviewed.members {
         let current = find_live_member(live, member)?;
+        if current.policy_fingerprint != member.policy_fingerprint {
+            return Err(DriftReason::PolicyFingerprint {
+                member_id: member.member_id.clone(),
+                resource: member.resource.clone(),
+            });
+        }
         // A locally unobservable source (personal, remote) skips the
         // provider-level check: the grant record, the mutation-time fresh
         // compare, and resume re-authorization are the fences there.
@@ -211,6 +222,12 @@ pub(crate) fn verify_post_mutation(
     compare_identity(reviewed, live)?;
     for member in &reviewed.members {
         let current = find_live_member(live, member)?;
+        if current.policy_fingerprint != member.policy_fingerprint {
+            return Err(DriftReason::PolicyFingerprint {
+                member_id: member.member_id.clone(),
+                resource: member.resource.clone(),
+            });
+        }
         if current.live_grants.len() != 1 {
             return Err(DriftReason::GrantState {
                 member_id: member.member_id.clone(),
@@ -840,12 +857,7 @@ where
             // reviewed content under the live pairing.
             floe_conversation::ReviewedTarget::RecipientConsent(target) => {
                 if consents
-                    .usable_consent(
-                        &target,
-                        person_id,
-                        caller.device_id(),
-                        now_unix_ms,
-                    )
+                    .usable_consent(&target, person_id, caller.device_id(), now_unix_ms)
                     .await?
                 {
                     let resolved = settle_satisfied(
@@ -931,11 +943,9 @@ where
                     },
                 })
             }
-            floe_conversation::ReviewedTarget::NavigationOnly(_) => {
-                Ok(RefreshOutcome::Terminal {
-                    interaction: current,
-                })
-            }
+            floe_conversation::ReviewedTarget::NavigationOnly(_) => Ok(RefreshOutcome::Terminal {
+                interaction: current,
+            }),
         },
         _ => Ok(RefreshOutcome::Terminal {
             interaction: current,
@@ -1503,6 +1513,7 @@ fn reviewed_member(
 ) -> floe_conversation::ReviewedBundleMember {
     floe_conversation::ReviewedBundleMember {
         member_id: current.member_id.clone(),
+        policy_fingerprint: current.policy_fingerprint.clone(),
         resource: current.resource.clone(),
         source_revision: current.source_revision.map(|authority| {
             floe_conversation::AuthorityRevision {
@@ -1651,6 +1662,7 @@ mod tests {
     ) -> floe_conversation::ReviewedBundleMember {
         floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: Some(floe_conversation::AuthorityRevision {
                 incarnation: source.incarnation(),
@@ -1688,6 +1700,7 @@ mod tests {
     ) -> LiveMember {
         LiveMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "personal".into(),
             source_revision: Some(source),
             live_grants: grants
@@ -1792,6 +1805,7 @@ mod tests {
             reviewed_member(floe_conversation::ExpectedGrantState::Absent, source, None),
             floe_conversation::ReviewedBundleMember {
                 member_id: "calendar.timeline".into(),
+                policy_fingerprint: "a".repeat(64),
                 resource: "work".into(),
                 source_revision: Some(floe_conversation::AuthorityRevision {
                     incarnation: source.incarnation(),
@@ -1805,6 +1819,7 @@ mod tests {
             live_member(vec![(id, grant_authority)], source, None),
             LiveMember {
                 member_id: "calendar.timeline".into(),
+                policy_fingerprint: "a".repeat(64),
                 resource: "work".into(),
                 source_revision: Some(source),
                 live_grants: vec![],
@@ -1818,6 +1833,7 @@ mod tests {
         // A new canonical member outside the reviewed set invalidates too.
         live.members.push(LiveMember {
             member_id: "calendar.timeline".into(),
+            policy_fingerprint: "a".repeat(64),
             resource: "family".into(),
             source_revision: Some(source),
             live_grants: vec![],
