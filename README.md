@@ -34,6 +34,8 @@ Rust owns Session/Run, Expert Task and Connection Operation semantics through th
 
 Use the repository's pinned toolchain inputs and [AGENTS.md](AGENTS.md). Rust requires 1.93 or newer and the client guide describes the Flutter/Apple build setup. Apple platforms are the current priority; dormant Android code is not a current delivery gate.
 
+The Cargo development profile omits debug information for external dependencies, while Floe crates retain full debug information for normal builds. Tests use line-level debug information for Floe crates to limit repeated test-build artifacts. When stepping through dependency internals or inspecting test-local variables, temporarily raise the relevant `Cargo.toml` profile's `debug` setting and rebuild. Turso's FTS feature is disabled because Floe does not use FTS SQL.
+
 During structural work, check the affected module and boundaries rather than starting the app or running every suite after each edit:
 
 ```sh
