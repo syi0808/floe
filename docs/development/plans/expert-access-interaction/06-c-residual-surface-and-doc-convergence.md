@@ -1,11 +1,13 @@
 # Checkpoint 06-C — residual public surface and durable documentation convergence
 
-- **Status:** blocked on 06-B.
+- **Status:** reopened by 06-D residual audit.
 - **Baseline:** 06-B completion.
 - **Goal:** remove proven caller-zero transition helpers/exports and make durable architecture/product/ADR text match final source.
 - **Exit:** 06-D is acceptance/archive only, not another semantic cleanup stage.
 
 ## 1. Caller-zero audit
+
+06-D residual audit found `server/internal/application/calendar_admission_test.go` using `calendar.expert` as a positive admission consumer. Unlike the explicit legacy rejection fixtures, that success-path fixture must use the current Schedule package identity. This test-only correction belongs to 06-C; rerun the affected Go gate before returning to 06-D.
 
 Do not delete by name alone.
 

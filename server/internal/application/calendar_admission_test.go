@@ -169,7 +169,7 @@ func TestCalendarAuthoritySignedAdmissionReadRelease(t *testing.T) {
 		"connection_revision": 1, "resources": []string{"primary"},
 		"policy":  map[string]any{"incarnation": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "epoch": 1},
 		"grant":   map[string]any{"id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "incarnation": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "epoch": 1},
-		"purpose": "everyday_assistance", "consumer": "calendar.expert", "max_items": 25, "max_bytes": 65536,
+		"purpose": "everyday_assistance", "consumer": "floe.builtin.schedule", "max_items": 25, "max_bytes": 65536,
 		"query": map[string]any{"range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25},
 	}
 	admit := fixture.call(http.MethodPost, "/v1/views/calendar.timeline/admit", admitBody, token)
