@@ -58,6 +58,20 @@ struct TestProjector;
 
 static PROJECTOR: TestProjector = TestProjector;
 
+struct AcceptCoverage;
+
+static ACCEPT_COVERAGE: AcceptCoverage = AcceptCoverage;
+
+impl floe_context::DependencyResolver for AcceptCoverage {
+    fn authorize<'a>(
+        &'a self,
+        _dependency: &'a floe_agent_contract::ContextDependency,
+        _request: &'a floe_context::DependencyAuthorization,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 impl ModelProjectionPort for TestProjector {
     fn project<'a>(
         &'a self,
@@ -536,6 +550,7 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
             turn.clone(),
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -627,6 +642,7 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -681,6 +697,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
             first_request,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &ToolThenAnswerModel::default(),
                 tools: &tools,
                 delegation: &NoDelegation,
@@ -715,6 +732,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
             second_request,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &Model::default(),
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -838,6 +856,7 @@ async fn t28_compaction_preserves_recovery_and_provenance() {
             third_request,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &Model::default(),
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -889,6 +908,7 @@ async fn finalization_commits_reply_while_encrypted_run_remains_failed() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &tools,
                 delegation: &NoDelegation,
@@ -1248,6 +1268,7 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -1510,6 +1531,7 @@ async fn child_crash_before_resume_takeover_preserves_parent_pending() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -1777,6 +1799,7 @@ async fn canonical_runtime_key_loss_recovers_confirmed_history_without_model_rep
                     turn.clone(),
                     ConversationPorts {
                         projection: &PROJECTOR,
+                        coverage_resolver: &ACCEPT_COVERAGE,
                         model: &model,
                         tools: &NoTools,
                         delegation: &NoDelegation,
@@ -1842,6 +1865,7 @@ async fn canonical_runtime_key_loss_recovers_confirmed_history_without_model_rep
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,
@@ -2460,6 +2484,7 @@ async fn run_origin(
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &NoTools,
                 delegation: &NoDelegation,

@@ -266,26 +266,6 @@ pub trait ExpertReasoner: ExpertModel {
     ) -> BoxFuture<'a, Result<ExpertStepResult, AgentFailure>>;
 }
 
-/// What counts as source-derived history in a transcript.
-///
-/// An owner that reads a source — through its own capability, or through an
-/// Expert it delegated to — knows which ids those are. Conversation knows only
-/// that once such a result is in the history, everything answered after it may
-/// be derived from it, and that a compaction summary carries no provenance at
-/// all.
-pub trait SourceHistoryBoundary: Sync {
-    /// A capability result that carried source data into the transcript.
-    fn capability_carries_source(&self, capability_id: &str) -> bool;
-
-    /// A delegated Expert that answered with source data.
-    fn delegation_carries_source(
-        &self,
-        agent_id: &str,
-        completed: bool,
-        has_artifacts: bool,
-    ) -> bool;
-}
-
 #[cfg(test)]
 mod observation_tests {
     use super::*;

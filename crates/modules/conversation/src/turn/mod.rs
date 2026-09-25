@@ -6,9 +6,5 @@ mod capability;
 #[cfg(test)]
 mod journal;
 mod session;
-mod source_history;
 
 pub use session::*;
-pub use source_history::{
-    ConservativeSourceHistoryBoundary, bounded_source_history_start, carries_source_history,
-};

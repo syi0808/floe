@@ -63,6 +63,12 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
     }
 }
 
+impl<Evidence, Resolver: DependencyResolver> ConversationModelProjection<Evidence, Resolver> {
+    pub fn coverage_resolver(&self) -> &dyn DependencyResolver {
+        &self.resolver
+    }
+}
+
 impl<Evidence, Resolver> ModelProjectionPort for ConversationModelProjection<Evidence, Resolver>
 where
     Evidence: EvidenceReader,

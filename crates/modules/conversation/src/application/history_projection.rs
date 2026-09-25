@@ -9,14 +9,11 @@ use std::collections::BTreeMap;
 
 use floe_agent_contract::{
     AgentFailure, ContextDependency, ModelConversation, ModelConversationEntry,
-    SourceHistoryBoundary,
 };
 use floe_context::{
     DependencyAuthorization, DependencyResolver, EvidenceReader, TurnCoverageDecision,
 };
 use uuid::Uuid;
-
-use crate::turn::AgentMessage;
 
 /// What a projection is applied against.
 pub struct HistoryProjection<'a> {
@@ -24,32 +21,6 @@ pub struct HistoryProjection<'a> {
     /// The turn being produced now. Its own messages are never projected away:
     /// the run is writing them, not recalling them.
     pub current_turn: Option<Uuid>,
-}
-
-/// A turn that re-admitted no dependency but still carries source-derived
-/// results is not independent: whatever it says came from somewhere this run
-/// may no longer read.
-///
-/// Which results carry source data is the owner's to say, through `boundary`.
-pub fn narrow_by_source_boundary(
-    decisions: &mut BTreeMap<Uuid, TurnCoverageDecision>,
-    messages: &[AgentMessage],
-    boundary: &dyn SourceHistoryBoundary,
-) {
-    for (turn_id, decision) in decisions.iter_mut() {
-        if !decision.authorized_dependencies.is_empty() {
-            continue;
-        }
-        let crosses = messages
-            .iter()
-            .filter(|message| message.turn_id() == *turn_id)
-            .any(|message| {
-                crate::turn::carries_source_history(std::slice::from_ref(message), boundary)
-            });
-        if crosses {
-            decision.retain_derived = false;
-        }
-    }
 }
 
 /// A typed history projection: the filtered conversation plus the exact

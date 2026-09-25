@@ -417,6 +417,31 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
             delegation_context: request.delegation_context,
             lineage: Some(lineage),
         };
+        let pending_coverage = engine_request
+            .resume
+            .as_ref()
+            .map(|resume| resume.validated_batch.projection_coverage.clone());
+        if let Some(coverage) = &pending_coverage {
+            if let Err(failure) = floe_context::revalidate_turn_coverage(
+                coverage.clone(),
+                ports.coverage_resolver,
+                &floe_context::DependencyAuthorization {
+                    deadline: engine_request.scope.deadline(),
+                    cancellation: engine_request.scope.cancellation().clone(),
+                },
+            )
+            .await
+            {
+                return self
+                    .repository
+                    .finish_run(
+                        run_id,
+                        expected_aggregate_revision,
+                        RunTerminal::from_failure(failure),
+                    )
+                    .await;
+            }
+        }
         let result = self
             .engine
             .drive(
@@ -440,7 +465,22 @@ impl<Repository: ConversationRepository + InteractionRepository> ConversationSer
                     ..
                 } = report;
                 match output {
-                    Some(output) => match report_coverage(answering_projection_coverage, &steps) {
+                    Some(output) => match async {
+                        if let Some(coverage) = &pending_coverage {
+                            floe_context::revalidate_turn_coverage(
+                                coverage.clone(),
+                                ports.coverage_resolver,
+                                &floe_context::DependencyAuthorization {
+                                    deadline: engine_request.scope.deadline(),
+                                    cancellation: engine_request.scope.cancellation().clone(),
+                                },
+                            )
+                            .await?;
+                        }
+                        report_coverage(answering_projection_coverage, &steps)
+                    }
+                    .await
+                    {
                         Ok(coverage) => RunTerminal {
                             state: RunState::Completed,
                             output: Some(output),

@@ -141,6 +141,7 @@ impl TurnRequest {
 #[derive(Clone, Copy)]
 pub struct ConversationPorts<'a> {
     pub projection: &'a dyn ModelProjectionPort,
+    pub coverage_resolver: &'a dyn floe_context::DependencyResolver,
     pub model: &'a dyn ModelPort,
     pub tools: &'a dyn ToolPort,
     pub delegation: &'a dyn DelegationPort,

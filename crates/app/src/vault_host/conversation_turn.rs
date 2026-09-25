@@ -79,7 +79,6 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
             text: &request.text,
             device_id: &request.device_id,
             continuation: request.continuation,
-            boundary: &floe_conversation::ConservativeSourceHistoryBoundary,
         },
     )
     .await?;
@@ -578,6 +577,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 },
                 floe_conversation::ConversationPorts {
                     projection: &projection_port,
+                    coverage_resolver: projection_port.coverage_resolver(),
                     model: &model_service,
                     tools: tool_port,
                     delegation: delegation_port,
@@ -1332,6 +1332,7 @@ mod tests {
                 },
                 floe_conversation::ConversationPorts {
                     projection: &projection,
+                    coverage_resolver: projection.coverage_resolver(),
                     model,
                     tools: &NoDispatch,
                     delegation: &NoDispatch,

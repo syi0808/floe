@@ -24,8 +24,7 @@ pub use cancellation::{
 pub use coordinator::{ConversationService, continuation, recover_session};
 pub use governed_session::{GovernedSessionRepository, GovernedSessionStore};
 pub use history_projection::{
-    HistoryProjection, ProjectedModelConversation, narrow_by_source_boundary,
-    project_model_conversation_history,
+    HistoryProjection, ProjectedModelConversation, project_model_conversation_history,
 };
 pub use interactions::{
     DecideInteractionCommand, PublishInteractionRequest, PublishModelRequirement,

@@ -179,8 +179,6 @@ pub struct TurnPreparationRequest<'a> {
     pub device_id: &'a str,
     /// Whether the caller says this turn continues the Session's last Run.
     pub continuation: bool,
-    /// Which results in the transcript carry source data.
-    pub boundary: &'a dyn floe_agent_contract::SourceHistoryBoundary,
 }
 
 /// The Session a prepared turn runs against, and the Run it continues.
@@ -197,9 +195,8 @@ const MAX_DEVICE_ID_BYTES: usize = 128;
 /// Whether the Session may take this turn at all is Conversation's: a scoped
 /// Session or one holding anything but the Person's own data is not a root
 /// conversation, a continuation has to meet the revision it was admitted at
-/// unless the command already exists, and a continuation whose transcript still
-/// carries source-derived history is reading something the new turn is not
-/// authorized for.
+/// unless the command already exists. Pending validated work is reauthorized
+/// against its recorded projection coverage before execution and release.
 pub async fn prepare_turn<Repository, Store>(
     repository: &Repository,
     sessions: &Store,
@@ -237,11 +234,6 @@ where
             && existing.is_none())
     {
         return Err(AgentFailure::Conflict);
-    }
-    if request.continuation
-        && crate::turn::carries_source_history(&session.messages, request.boundary)
-    {
-        return Err(AgentFailure::StaleContext);
     }
     let mode = if request.continuation {
         TurnMode::Continue(continued_run(repository, &request, &session, existing).await?)

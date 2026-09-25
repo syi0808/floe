@@ -7,13 +7,13 @@ use floe_agent_contract::prompts::{
     PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
 };
 use floe_agent_contract::{
-    AgentMessage, AllowedCatalog, AuthorizedModelProjection, BoxFuture, ContextEnvelope,
-    ContextManifest, ContextualData, DataClass, DelegationPort, DelegationRequest,
-    DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelCallOutcome,
-    ModelConversation, ModelConversationEntry, ModelPort, ModelProjectionPort,
+    AgentMessage, AllowedCatalog, AuthorizedModelProjection, BatchCursor, BoxFuture,
+    ContextEnvelope, ContextManifest, ContextualData, DataClass, DelegationPort,
+    DelegationRequest, DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent,
+    ModelCallOutcome, ModelConversation, ModelConversationEntry, ModelPort, ModelProjectionPort,
     ModelProjectionRequest, ModelRequest, ModelResponse, ModelStep, ModelUsage, ProjectionRef,
     RoleSpec, RuntimeContext, ScopedInstructions, TaskReceipt, ToolCall, ToolDescriptor, ToolPort,
-    ToolResult,
+    ToolResult, ValidatedModelBatch,
 };
 use floe_agent_runtime::FinalPayloadValidator;
 use floe_execution::{ExecutionScope, budget::BudgetConfig};
@@ -699,6 +699,20 @@ struct TestProjector;
 
 static PROJECTOR: TestProjector = TestProjector;
 
+struct AcceptCoverage;
+
+static ACCEPT_COVERAGE: AcceptCoverage = AcceptCoverage;
+
+impl floe_context::DependencyResolver for AcceptCoverage {
+    fn authorize<'a>(
+        &'a self,
+        _dependency: &'a floe_agent_contract::ContextDependency,
+        _request: &'a floe_context::DependencyAuthorization,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 fn authorized_test_projection(
     request: &ModelProjectionRequest,
     conversation: ModelConversation,
@@ -1083,6 +1097,7 @@ fn request(
 fn ports(model: &dyn ModelPort) -> ConversationPorts<'_> {
     ConversationPorts {
         projection: &PROJECTOR,
+        coverage_resolver: &ACCEPT_COVERAGE,
         model,
         tools: &NoTools,
         delegation: &NoDelegation,
@@ -1449,6 +1464,195 @@ async fn deadline_continuation_is_generation_bound_and_does_not_duplicate_the_us
     );
 }
 
+struct SequencedCoverage {
+    calls: std::sync::atomic::AtomicUsize,
+    reject_at: Option<usize>,
+}
+
+impl floe_context::DependencyResolver for SequencedCoverage {
+    fn authorize<'a>(
+        &'a self,
+        _dependency: &'a floe_agent_contract::ContextDependency,
+        _request: &'a floe_context::DependencyAuthorization,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let reject = self.reject_at == Some(call);
+        Box::pin(async move {
+            if reject {
+                Err(AgentFailure::PolicyDenied)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+async fn pending_answer_continuation(
+    coverage: DependencyCoverage,
+    reject_at: Option<usize>,
+) -> (RunReceipt, usize, usize) {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut initial = request(CommandId::new(), session_id, 0, "finish this");
+    initial.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+    let timed_out = service.run_turn(initial, ports(&model)).await.unwrap();
+    let attempt_id = Uuid::new_v4();
+    let batch = ValidatedModelBatch {
+        execution_id: Uuid::new_v4(),
+        attempt_id,
+        projection_ref: ProjectionRef::new(),
+        batch_id: Uuid::new_v4(),
+        steps: vec![ModelStep::Answer {
+            text: "stored answer".into(),
+            artifacts: vec![],
+        }],
+        catalog_revision: 1,
+        tool_revisions: vec![],
+        agent_revisions: vec![],
+        projection_coverage: coverage,
+        delegation_context: None,
+    };
+    repository.journal.events.lock().unwrap().extend([
+        JournalEvent::ModelIntent {
+            attempt_id,
+            projection_ref: batch.projection_ref,
+        },
+        JournalEvent::ModelResult {
+            attempt_id,
+            usage: ModelUsage {
+                tokens: 1,
+                cost_micros: 1,
+            },
+        },
+        JournalEvent::ValidatedBatch {
+            batch: batch.clone(),
+        },
+        JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id: batch.batch_id,
+                next_step_index: 0,
+            },
+        },
+    ]);
+    let resolver = SequencedCoverage {
+        calls: Default::default(),
+        reject_at,
+    };
+    let mut next = request(
+        CommandId::new(),
+        session_id,
+        timed_out.session_revision,
+        "finish this",
+    );
+    next.mode = crate::TurnMode::Continue(timed_out.continuation().unwrap());
+    let result = service
+        .run_turn(
+            next,
+            ConversationPorts {
+                projection: &PROJECTOR,
+                coverage_resolver: &resolver,
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    let output_events = repository
+        .journal
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| matches!(event, JournalEvent::Output { .. }))
+        .count();
+    (
+        result,
+        model.calls.load(std::sync::atomic::Ordering::SeqCst),
+        output_events,
+    )
+}
+
+#[tokio::test]
+async fn independent_pending_answer_continues_without_model_recall() {
+    let (receipt, model_calls, output_events) =
+        pending_answer_continuation(DependencyCoverage::Independent, None).await;
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(receipt.output.as_deref(), Some("stored answer"));
+    assert_eq!(receipt.coverage, DependencyCoverage::Independent);
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 1);
+}
+
+#[tokio::test]
+async fn dependent_pending_answer_reauthorizes_before_execution_and_release() {
+    let coverage = DependencyCoverage::dependent(history_dependency()).unwrap();
+    let (receipt, model_calls, output_events) =
+        pending_answer_continuation(coverage.clone(), None).await;
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(receipt.coverage, coverage);
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 1);
+}
+
+#[tokio::test]
+async fn revoked_pending_answer_never_executes_or_recalls_model() {
+    let coverage = DependencyCoverage::dependent(history_dependency()).unwrap();
+    let (receipt, model_calls, output_events) =
+        pending_answer_continuation(coverage, Some(1)).await;
+    assert_eq!(receipt.issue, Some(AgentFailure::PolicyDenied));
+    assert_eq!(receipt.output, None);
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 0);
+}
+
+#[tokio::test]
+async fn revoked_after_pending_answer_execution_suppresses_terminal_output() {
+    let coverage = DependencyCoverage::dependent(history_dependency()).unwrap();
+    let (receipt, model_calls, output_events) =
+        pending_answer_continuation(coverage, Some(2)).await;
+    assert_eq!(receipt.issue, Some(AgentFailure::PolicyDenied));
+    assert_eq!(receipt.output, None);
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 1);
+}
+
+#[tokio::test]
+async fn unknown_pending_answer_cannot_execute() {
+    let (receipt, model_calls, output_events) =
+        pending_answer_continuation(DependencyCoverage::Unknown, None).await;
+    assert_eq!(receipt.issue, Some(AgentFailure::PolicyDenied));
+    assert_eq!(receipt.output, None);
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 0);
+}
+
+#[tokio::test]
+async fn every_pending_batch_source_must_reauthorize() {
+    let coverage = DependencyCoverage::dependent(history_dependency())
+        .unwrap()
+        .merge(&DependencyCoverage::dependent(history_dependency()).unwrap())
+        .unwrap();
+    let DependencyCoverage::Dependent { dependencies } = &coverage else {
+        panic!("merged coverage must remain dependent");
+    };
+    assert_eq!(dependencies.len(), 2);
+    let (current, model_calls, output_events) =
+        pending_answer_continuation(coverage.clone(), None).await;
+    assert_eq!(current.state, RunState::Completed);
+    assert_eq!(current.coverage, coverage.clone());
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 1);
+    let (stale, model_calls, output_events) = pending_answer_continuation(coverage, Some(2)).await;
+    assert_eq!(stale.issue, Some(AgentFailure::PolicyDenied));
+    assert_eq!(model_calls, 0);
+    assert_eq!(output_events, 0);
+}
+
 #[tokio::test]
 async fn continuation_chain_preserves_ancestor_generation_and_cumulative_budget_state() {
     let repository = Arc::new(MemoryRepository::default());
@@ -1588,6 +1792,7 @@ async fn t29_finalization_is_bounded_and_accounted() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &tools,
                 delegation: &delegation,
@@ -1755,6 +1960,7 @@ async fn finalization_reserve_is_settled_once_not_double_charged() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &tools,
                 delegation: &delegation,
@@ -1825,6 +2031,7 @@ async fn consent_exhaustion_does_not_start_finalization() {
             turn,
             ConversationPorts {
                 projection: &PROJECTOR,
+                coverage_resolver: &ACCEPT_COVERAGE,
                 model: &model,
                 tools: &tools,
                 delegation: &NoDelegation,
@@ -2191,6 +2398,7 @@ async fn retained_history_answer_commits_its_dependency_until_revocation() {
             first,
             ConversationPorts {
                 projection: &projector,
+                coverage_resolver: &projector.evidence,
                 model: &tool_model,
                 tools: &tools,
                 delegation: &no_delegation,
@@ -2231,6 +2439,7 @@ async fn retained_history_answer_commits_its_dependency_until_revocation() {
             second,
             ConversationPorts {
                 projection: &projector,
+                coverage_resolver: &projector.evidence,
                 model: &answer_model,
                 tools: &tools,
                 delegation: &no_delegation,
@@ -2280,6 +2489,7 @@ async fn retained_history_answer_commits_its_dependency_until_revocation() {
             third,
             ConversationPorts {
                 projection: &projector,
+                coverage_resolver: &projector.evidence,
                 model: &answer_model,
                 tools: &tools,
                 delegation: &no_delegation,
@@ -2801,6 +3011,7 @@ async fn resume_child_never_redrives_origin_settled_tool_effect() {
     };
     let tool_ports = ConversationPorts {
         projection: &PROJECTOR,
+        coverage_resolver: &ACCEPT_COVERAGE,
         model: &model,
         tools: &tools,
         delegation: &NoDelegation,
@@ -2844,6 +3055,7 @@ async fn resume_child_never_redrives_origin_settled_tool_effect() {
     let link = origin.resume().unwrap();
     let child_ports = ConversationPorts {
         projection: &PROJECTOR,
+        coverage_resolver: &ACCEPT_COVERAGE,
         model: &model,
         tools: &tools,
         delegation: &NoDelegation,

@@ -22,7 +22,7 @@ pub use application::{
     TurnPrecheckRequest, TurnPreparationRequest,
     admit_unscoped_session, admitted_session, cancel_run_command, compact_session, continuation,
     decide_interaction, expire_interaction, get_command, get_run, get_session,
-    list_run_interactions, load_interaction, narrow_by_source_boundary, precheck_turn,
+    list_run_interactions, load_interaction, precheck_turn,
     prepare_resume, prepare_turn, project_continuation, project_model_conversation_history,
     publish_interaction,
     publish_model_requirement, read_archive, recover_session, recovered_session,
@@ -58,7 +58,6 @@ pub use ports::{
 
 pub use turn::{
     AgentBudget, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage, AgentOutcome,
-    AgentSession, AgentSessionScope, AgentUsage, ConservativeSourceHistoryBoundary,
+    AgentSession, AgentSessionScope, AgentUsage,
     DelegationExecution, DelegationExecutionState, SessionRecoveryPointer, SessionStore,
-    bounded_source_history_start, carries_source_history,
 };
