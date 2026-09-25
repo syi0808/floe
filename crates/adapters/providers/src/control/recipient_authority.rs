@@ -268,6 +268,8 @@ mod tests {
     #[derive(Default)]
     struct MemoryConsents {
         records: Mutex<HashMap<Uuid, RecipientConsent>>,
+        find_calls: AtomicUsize,
+        revoke_on_find: AtomicUsize,
     }
 
     impl RecipientConsentStore for MemoryConsents {
@@ -297,7 +299,19 @@ mod tests {
                 if consent_id.is_nil() {
                     return Err(AgentFailure::InvalidInput);
                 }
-                Ok(self.records.lock().unwrap().get(&consent_id).cloned())
+                let call = self.find_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let mut records = self.records.lock().unwrap();
+                if self.revoke_on_find.load(Ordering::SeqCst) == call {
+                    if let Some(existing) = records.get(&consent_id).cloned() {
+                        records.insert(
+                            consent_id,
+                            existing
+                                .revoked()
+                                .map_err(|_| AgentFailure::StorageUnavailable)?,
+                        );
+                    }
+                }
+                Ok(records.get(&consent_id).cloned())
             })
         }
 
@@ -359,7 +373,7 @@ mod tests {
         consents: &MemoryConsents,
         person: PersonId,
         lineage: RecipientLineage,
-    ) {
+    ) -> Uuid {
         let consent = RecipientConsent::try_new(
             person,
             DEVICE,
@@ -376,7 +390,9 @@ mod tests {
             grant_now(),
         )
         .unwrap();
+        let consent_id = consent.id();
         grant_recipient_consent(consents, consent).await.unwrap();
+        consent_id
     }
 
     #[derive(Clone)]
@@ -385,6 +401,7 @@ mod tests {
         seen_targets: Arc<Mutex<Vec<Option<String>>>>,
         tokens: u64,
         cost: u64,
+        revoke_consent: Option<(Arc<MemoryConsents>, Uuid)>,
     }
 
     impl TestTransport {
@@ -394,6 +411,7 @@ mod tests {
                 seen_targets: Arc::new(Mutex::new(Vec::new())),
                 tokens: 10,
                 cost: 5,
+                revoke_consent: None,
             }
         }
 
@@ -414,6 +432,9 @@ mod tests {
                 .unwrap()
                 .push(target.recipient().map(str::to_owned));
             self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some((consents, consent_id)) = &self.revoke_consent {
+                consents.revoke_consent(*consent_id).await?;
+            }
             Ok(CanonicalModelResponse {
                 output: vec![ModelStep::Answer {
                     text: "hello".into(),
@@ -660,6 +681,84 @@ mod tests {
         ));
         assert_eq!(transport.calls(), 1);
         assert_eq!(transport.seen_targets.lock().unwrap().as_slice(), [Some(RECIPIENT.into())]);
+    }
+
+    #[tokio::test]
+    async fn contextual_consent_revoked_before_consume_never_reaches_transport() {
+        let person = PersonId::new();
+        let mut saved = saved();
+        saved.person_id = person.to_string();
+        let dispatch_lineage = lineage();
+        let consents = MemoryConsents::default();
+        grant_dispatch_consent(&consents, person, dispatch_lineage).await;
+        consents.revoke_on_find.store(2, Ordering::SeqCst);
+        let authority = ContextualRecipientAuthority::new(
+            &consents,
+            SavedConnectionAdmission::new(
+                FixedSavedConnectionStore::fixed(Some(saved)),
+                person.to_string(),
+                DEVICE.into(),
+            ),
+            FixedClock { now: grant_now() },
+        );
+        let transport = TestTransport::answer();
+        let service = InferenceService::new(
+            TestProvider {
+                profiles: vec![(external_profile(), transport.clone())],
+            },
+            AllowResolver,
+            authority,
+        );
+        let mut request = model_request(projection(), dispatch_lineage);
+        request.principal = person.to_string();
+        let (ledger, scope) = scope();
+        assert!(matches!(
+            service.generate(request, &scope).await.unwrap(),
+            floe_agent_contract::ModelCallOutcome::NeedsUserAction(_)
+        ));
+        assert_eq!(transport.calls(), 0);
+        assert_eq!(ledger.snapshot().settled.attempts, 0);
+        assert!(consents.find_calls.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test]
+    async fn contextual_consent_revoked_after_handoff_suppresses_output_and_keeps_usage() {
+        let person = PersonId::new();
+        let mut saved = saved();
+        saved.person_id = person.to_string();
+        let dispatch_lineage = lineage();
+        let consents = Arc::new(MemoryConsents::default());
+        let consent_id = grant_dispatch_consent(&consents, person, dispatch_lineage).await;
+        let authority = ContextualRecipientAuthority::new(
+            consents.as_ref(),
+            SavedConnectionAdmission::new(
+                FixedSavedConnectionStore::fixed(Some(saved)),
+                person.to_string(),
+                DEVICE.into(),
+            ),
+            FixedClock { now: grant_now() },
+        );
+        let mut transport = TestTransport::answer();
+        transport.revoke_consent = Some((Arc::clone(&consents), consent_id));
+        let service = InferenceService::new(
+            TestProvider {
+                profiles: vec![(external_profile(), transport.clone())],
+            },
+            AllowResolver,
+            authority,
+        );
+        let mut request = model_request(projection(), dispatch_lineage);
+        request.principal = person.to_string();
+        let (ledger, scope) = scope();
+        assert_eq!(
+            service.generate(request, &scope).await.err(),
+            Some(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(transport.calls(), 1);
+        assert_eq!(ledger.snapshot().settled.tokens, 10);
+        assert_eq!(ledger.snapshot().settled.cost_micros, 5);
+        assert_eq!(ledger.snapshot().settled.attempts, 1);
+        assert!(consents.find_calls.load(Ordering::SeqCst) >= 3);
     }
 
     #[tokio::test]

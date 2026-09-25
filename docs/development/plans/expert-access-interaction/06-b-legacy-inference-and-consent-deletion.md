@@ -1,6 +1,6 @@
 # Checkpoint 06-B — legacy model transport and saved-consent deletion
 
-- **Status:** blocked on 06-A.
+- **Status:** reopened by 06-D crash-boundary audit.
 - **Baseline:** 06-A completion.
 - **Goal:** leave one production model provider path and remove obsolete saved global-recipient consent while preserving the server request-scoped transfer fence.
 - **Exit:** no legacy ModelTransport branch or saved recipient-consent state remains.
@@ -144,6 +144,8 @@ Server mapping:
 Foundation/device transport accepts only a local target.
 
 ## 6. Required scenarios
+
+06-D found that the existing pre/post-handoff tests use a synthetic recipient-authority transition or a revoked saved pairing. Add deterministic tests against the real `ContextualRecipientAuthority` and Access-owned consent store for contextual consent revocation before consume and after provider handoff. H03/H04 require this direct evidence; pairing revocation remains separately covered.
 
 M01 no contextual consent:
 - typed NeedsUserAction;
