@@ -4,6 +4,8 @@ Prerequisite: 03 complete. This checkpoint is one coordinated semantic cutover, 
 
 ## 04-A: owner model and settings operations
 
+Checkpoint 00 source-reference decision: one persisted selection entry is `(requirement_id, connection_id, connector_id, execution_owner_id, capability/view_id, canonical_resource_handle, contract_version)` with exact Person/device scope on the owning binding set; canonical ordering and uniqueness are by the full target tuple. `ConnectionId`, `ConnectorId`, `ExecutionOwnerId` and `ResourceHandle` reuse Context's bounded value validation; the source authority/incarnation is reloaded and fenced by Connections/Access at use, not copied as a standing selected permission. Neither the reference nor the binding set stores credentials, bearer, grant/authority, provider health or processing consent. A native source uses its owning source/subject identity under the same exact-target rule rather than a fabricated remote connection.
+
 Proposed owner concepts (freeze exact names/fields before implementation):
 
 ```text
@@ -28,6 +30,8 @@ Commands are CAS-protected and idempotent by exact intent: assignment, manifest 
 Defaults run only during explicit install/setup/configuration under product policy. A unique compatible candidate may be preselected and persisted without pretending that a grant exists. Ambiguous candidates require a choice. Startup inspections and task invocations never create bindings. Reinstall preserves explicit user choices; a manifest upgrade that changes a requirement needs bounded reconfiguration rather than silent widening.
 
 ## 04-B: immutable Task execution selection
+
+Checkpoint 00 pin decision: Experts persists one immutable admission selection on the Task record, keyed by exact `PackageAssignment.id`, `PackageRef` and `AgentDefinition.definition_revision`/manifest revision, per-assignment binding-set revision, and canonical sorted `requirement_id -> selected target tuples` (or a durable immutable snapshot address containing those bytes). Experts computes one selection digest over this record; the caller's `delegation_request_digest` remains separate request identity, not a second selection digest. Same-Task continuation and crash replay use the original pin, with current authority revalidation and supersession fencing. Linked resume creates a new Task admission. A later A-to-B settings change can block further use of A but never reroutes the active Task to B.
 
 Extend the existing Experts admission/repository path to resolve and persist an execution selection before any source read:
 

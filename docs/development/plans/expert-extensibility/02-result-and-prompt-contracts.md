@@ -19,6 +19,12 @@ Paths identify existing baseline anchors. Any replacement files are proposed and
 
 ## 02-A: freeze the three result boundaries
 
+Checkpoint 00 representation decision: retain `floe_agent_contract::ExpertReport` as the single generic endpoint-to-Task report (`task_id`, `principal`, `agent_id`, `definition_revision`, bounded `result` text, `artifacts`, complete `DependencyCoverage`, and optional internal settlement). `TaskSnapshot` is the durable lifecycle projection of that report, not another domain result. Experts/Task validate invocation identity, bounds, state transition and coverage before persistence; Context/Access validate each dependency's source/grant/policy provenance. Admission also pins the exact assignment/package identity so a report's agent ID alone cannot select an installation.
+
+Use existing `Artifact`/`ArtifactPart::Data` for a package-owned, schema/media-identified bounded domain payload. The package validates its own Schedule/Work/etc. semantics before publication; generic Registry validates identity, size, encoding and coverage only, and never interprets `FocusWindow` or executable-looking media types. `Artifact.coverage` names the exact contributing dependencies, not merely the report's union. Unknown payloads remain inert bounded display data.
+
+Keep `floe_actions::AgentActionOrigin` and Actions' typed proposal/inspection contract as the sole consequential proposal representation. A trusted package/host bridge passes the package-validated proposal with exact Person, invocation, assignment, package, evidence ID and contributing `ContextDependency`/target reference to Actions. Actions validates the contributor, target authority, approval and idempotent durable execution intent; it never infers the first dependency from aggregate coverage or treats a generic artifact as an instruction. Settlement must atomically stage the exact Task, assignment state and Actions intent (or use the existing durable owner outbox), with no provider write in that transaction.
+
 Before editing, specify the concrete representation and validation owner for each:
 
 | Boundary | Owns / validates |
@@ -70,6 +76,7 @@ Port 01's Rust-generated fixture across the new boundary and delete the previous
 | Existing tests / evidence | Treatment |
 |---|---|
 | Registry inline FocusWindow content tests | Move domain checks to Schedule/Actions; keep generic identity/state tests in Experts. |
+| Generic result model/view-call and summary-only assertions | Delete from universal Registry/client validation; retain execution-budget checks at the producing owner and cross-language report coverage. |
 | `apps/client/test/features/experts/agent_expert_result_test.dart` | Replace with generic artifact/result tests; remove obsolete call-count/schema assertions. |
 | `apps/client/test/features/actions/agent_proposal_test.dart` | Retain proposal safety using actual Actions DTOs. |
 | `crates/app/src/vault_host/tests/proposals.rs`, `expert_actions.rs`, `expert_actions/inspection.rs` | Rewrite fixtures at new owner boundaries; retain approval, evidence, response-loss and uncertain-write cases. |

@@ -414,3 +414,32 @@ Report exactly:
 9. the next executable checkpoint: 01, without starting it.
 
 A report that only repeats the static hypotheses does not complete 00.
+
+## Executed checkpoint 00 evidence (2026-09-25)
+
+### Repository and prerequisites
+
+At start, `git status --short --branch` was `## main...origin/main` with no user changes. Local `HEAD`, `git log -1`, and `git ls-remote origin refs/heads/main` all identified `f3476e845d3b2b112882a7047136cce991e2574e` (`docs: detail expert extensibility checkpoint 00`). Both `git diff --name-status 43005508338d7ae38d3247910361c733d7cdfe98...HEAD` and `git diff --stat` reported only `docs/README.md` plus the eight Expert-extensibility plan Markdown files: nine documentation files, 1,144 insertions, no source/manifests changed. `cargo metadata --no-deps --format-version 1` passed. `python3 tools/architecture/check_boundaries.py` passed in final mode (22 nodes, 99 edges, no errors or warnings). Toolchains: `rustc 1.93.1`, `cargo 1.93.1`, Flutter `3.47.2` stable / Dart `3.13.2`, Xcode `26.2` (build `17C52`). No prerequisite was unavailable or installed during this checkpoint.
+
+Before temporary patches, all requested targeted baseline commands passed: `cargo test -p floe-context remote_view_tests` (4 inline tests passed), `cargo test -p floe-app first_party_observe::tests` (3 passed), `cargo test -p floe-app gmail_views_allow_enables_bundle_atomically_and_resolves` (1 passed), `cargo test -p floe-app schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency` (1 passed), and `(cd apps/client && flutter test test/features/experts/agent_expert_result_test.dart)` (3 passed). The Cargo invocations also ran filtered integration-test binaries; their zero-test results were not failures.
+
+### Temporary executable findings
+
+| Finding | Exact command and temporary test | Observed result on unfixed production code |
+|---|---|
+| R1.1 | `cargo test -p floe-context same_connection_mail_and_logistics_grants_are_not_duplicate_authority -- --nocapture` | Red (exit 101): `read_mail(...).unwrap()` received `Err(Conflict)` before payload I/O. The temporary multi-grant fixture held two active, correctly resource-scoped grants on the same Person/Gmail connection and one source binding. |
+| R1.2 | `cargo test -p floe-context work_view_ignores_unrelated_mail_grants -- --nocapture` | Red (exit 101): blocker reason was `ReviewChangedSource`, not expected navigation-only `SelectResource`; payload read count remained zero. This isolated the wildcard connector classification with one unrelated Gmail mail grant, without letting the separate duplicate collision mask it. |
+| R2 | `cargo test -p floe-app manager_mail_read_requires_assistant_in_reviewed_product_policy -- --nocapture` | Red (exit 101): `NeedsUserAction` with one `floe.source.mail` / `microsoft.mail` / `mail.communication:<connection>` `ReviewChangedSource` blocker for exact `Builtin("assistant")` read. The test activated a real `remote_policies("microsoft.mail")` reviewed bundle through `resolve_interaction`/owner mutation, asserted the persisted grant consumers equal that product policy, then invoked `ContextToolService` through `read_remote_view`; provider payload I/O count was zero before the red readiness assertion. No fake assistant grant was installed. |
+| R3 producer | `cargo test -p floe-app schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency -- --nocapture` | Green temporary instrumentation: actual settled `ExpertResult` had `model_calls=1`, nonempty summary, `view_calls=1`; `serde_json::to_string(&result)` equaled the production `output.data` bytes printed below. |
+| R3 validator | `cargo test -p floe-experts result_content_requires_matching_non_nil_evidence_identity -- --nocapture` | Green temporary assertions: `validate_result_content` accepted the one-model-call fixture, the same valid fixture with `view_calls=2`, and empty insights/proposals with nonempty summary. |
+| R3 Dart | `(cd apps/client && flutter test test/features/experts/agent_expert_result_test.dart)` | Red: three temporary positive cases returned `null`: the exact Rust-serialized one-call result, a Rust-valid `model_calls=2`/`view_calls=2` variant, and a Rust-valid `model_calls=2`/summary-only variant. The first is rejected by `modelCalls == 1`, the second by `view_calls != 1`, and the third by `insights.isEmpty`; all pre-existing negative tests still passed. |
+
+The production settlement serializer emitted these bytes (run-specific UUIDs/clock; copied verbatim into the temporary Dart test before removal):
+
+```json
+{"schema_version":1,"invocation_id":"535289f1-56a9-4745-b65c-2a3b1a582903","instance_id":"d1892fb6-c005-425c-8d56-036ef0560e59","person_id":"b8698a9e-8464-4277-ba14-4a219ff90a63","assignment_id":"359f5419-20e0-4b7e-81d5-3dbe0a6038c4","package":{"kind":"expert","id":"floe.builtin.schedule","version":"1.0.0"},"evidence_id":"8e9e65f7-0c76-49ac-b103-268ad329cbfc","source_handle":"calendar.observe:8e9e65f7-0c76-49ac-b103-268ad329cbfc","data_class":"personal","expires_at_unix_ms":1790344120619,"insights":[{"kind":"focus_window","starts_at_unix_ms":1800000000000,"ends_at_unix_ms":1800001800000}],"action_proposals":[{"starts_at_unix_ms":1800000000000,"ends_at_unix_ms":1800001800000,"evidence_id":"8e9e65f7-0c76-49ac-b103-268ad329cbfc"}],"summary":"One focus window","model_calls":1,"state_revision":1,"view_calls":1}
+```
+
+The R1/R2/R3 production hypotheses held. R1.2's exact blocker and R2's exact `SourceReadOutcome` above replace the earlier tentative wording; no contrary finding required changing the target design. The existing `policy_never_default_grants_extensions_or_assistant_wildcards` test passed unchanged under `cargo test -p floe-app policy_never_default_grants_extensions_or_assistant_wildcards -- --nocapture`; its extension/wildcard denials remain valid while its blanket assistant assumption is rewritten in 01.
+
+All temporary Context/App/Experts/Dart test and instrumentation hunks were then removed selectively. The final worktree diff comprised only this evidence document and the frozen contracts/test disposition in checkpoint documents 01-04; no production or expected-red test code remained. `python3 tools/architecture/check_boundaries.py` again passed (22 nodes, 99 edges, no errors/warnings), and `git diff --check` passed. No toolchain prerequisite was unavailable. Checkpoint 01 was not started.

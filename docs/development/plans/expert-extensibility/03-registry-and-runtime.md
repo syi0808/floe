@@ -47,6 +47,8 @@ Move remaining source acquisition policy out of App to its current Context/Acces
 
 ## 03-D: exact assignment identity and atomic Directory publication
 
+Checkpoint 00 identity decision: Directory publication carries the exact `PackageAssignment.id`, installation's `PackageRef` (ID/version) and `AgentDefinition.definition_revision` alongside the endpoint. Task admission resolves that published tuple against the same Registry snapshot and persists it with the Task/invocation key; a package-ID-only or first-assignment lookup is invalid. Replace the current `DirectoryEntry` agent-ID-only key/`resolve(agent_id, definition_revision)` assumption as one cutover, rejecting ambiguous publication rather than selecting one assignment. A Registry-global revision may fence publication, but must not substitute for exact assignment and definition identity on an admitted Task.
+
 Preserve the currently supported assignment multiplicity unless a separately accepted requirement changes it. Each published agent resolves one exact admitted assignment and definition. Reject ambiguity; never `find(first)` by package ID. Configuration revisions must correspond to the actual assignment/definition used by admission, not unrelated global Registry changes.
 
 Replace unregister-all/register-all publication with an atomic validated snapshot or equivalent consistent update under the existing Directory owner. Preserve unrelated registrations, monotonic revisions and exact-definition resolution. Queries must not observe the transient empty catalog or half a bundle. Existing active Tasks keep their admitted identity; new invocations see the new callable set.
@@ -54,6 +56,8 @@ Replace unregister-all/register-all publication with an atomic validated snapsho
 Keep package/endpoint availability separate from temporary source failure. Tests must show that enabling a zero-source or unconfigured Expert advertises it, while disabling its assignment prevents new delegation.
 
 ## Dependency placement gate
+
+Checkpoint 00 decision: the generic registration descriptor and publication API are Experts-owned semantics. The current built-in crate has only a **dev** dependency on `floe-experts`; the normal manifest and `module-dependencies.json` do not permit `builtin -> experts`. In 03 add that explicit normal dependency and policy edge together, provided the rechecked graph remains acyclic (Experts has no builtin edge). Do not move the descriptor to `agent_contract` merely to avoid this edge. App continues to compose the supplied registrations, rather than introducing a second built-in registration lifecycle.
 
 Reinspect current manifests and `tools/architecture/module-dependencies.json`. At the baseline, Experts allows only agent-contract, execution and inference; builtin does not directly depend on Experts. This plan does not pretend those edges already exist.
 
