@@ -74,7 +74,7 @@ macOS is the acceptance platform for this task. Android parity is out of scope. 
 
 | Checkpoint | Document / responsibility | Status | Completion evidence |
 |---|---|---|---|
-| 00 | [Baseline, reproducible findings and owner contract decisions](00-baseline-and-contract-freeze.md) | Not started | None |
+| 00 | [Baseline, reproducible findings and owner contract decisions](00-baseline-and-contract-freeze.md) | Complete | `b9617d578a2bf8e442e6d2cc26593e7cb4165cfd`; R1.1/R1.2/R2 red and R3 Rust-green/Dart-red commands and results in [00](00-baseline-and-contract-freeze.md) |
 | 01 | [Current contract regressions](01-contract-regressions.md) | Not started | None |
 | 02 | [Prompt, result and settlement contracts](02-result-and-prompt-contracts.md) | Not started | None |
 | 03 | [Generic Registry and runtime registration](03-registry-and-runtime.md) | Not started | None |
