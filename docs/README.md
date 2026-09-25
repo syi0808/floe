@@ -48,3 +48,11 @@ Use the smallest relevant context:
 - When a decision changes, add/amend/supersede an ADR; do not use an ADR as an implementation checklist.
 - Git history is the archive for removed planning and validation documents.
 - If an architectural invariant can be checked mechanically, prefer a repository tool/CI rule as the enforcement mechanism and keep prose as the semantic explanation rather than a second hand-maintained truth.
+
+## Task-specific execution plans
+
+For the Expert extensibility and preselected source-binding task, use the
+[authoritative execution plan](development/plans/expert-extensibility/README.md)
+and only its current checkpoint. It describes proposed work, not implemented
+architecture; other tasks do not need to load it. Remove this pointer when the
+completed plan is retired to Git history.
