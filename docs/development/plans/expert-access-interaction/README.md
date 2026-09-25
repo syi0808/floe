@@ -1,9 +1,9 @@
 # Expert access and conversation interaction convergence
 
-- **Status:** execution plan; Checkpoint 05 complete, Checkpoint 06 next.
+- **Status:** execution plan; Checkpoints 01–05 complete, Checkpoint 06 active, 06-A next.
 - **Original baseline:** `0615b343bb752da85487a1a728927f0e3affdf5b` (historical).
-- **Current planning baseline:** `main` at `00017e668e71e34be3d3ea5772aa1612b15c5d6c`.
-- **Completed code baseline:** Checkpoint 05 including durable interaction and linked resume at `27299093263fb4998e59f800f663c5e604f22ac3`; prior Checkpoint 04 closure at `0bd102f4087584246e453293df51217054798131`, documentation closure at `00017e66`.
+- **Current Checkpoint 06 source baseline:** `main` at `c137b35bf44ea12b1d2f5aa57b2f86aa6d0f1761`.
+- **Completed code baseline:** Checkpoint 05 code at `27299093263fb4998e59f800f663c5e604f22ac3`, verification/docs closure at `c137b35bf44ea12b1d2f5aa57b2f86aa6d0f1761`.
 - **Scope:** Expert runtime, source access, connection permission UX, Conversation-owned interaction, linked resume, and final deletion/document convergence.
 - **Product priority:** macOS/Apple. iOS device validation is deferred to active iOS development; Android parity is not part of this work.
 
@@ -20,11 +20,14 @@ Checkpoints 01 through 05 are complete. Do not reimplement them to start Checkpo
 | 03 — Registry/Access separation, including 03-E | Complete | [03](03-expert-registry-and-access-authority.md) |
 | 04 — connection permission product model | Complete | [04](04-connector-permission-product-model.md) |
 | 05 — durable interaction and linked resume | Complete | [05 index](05-conversation-and-flutter-interaction.md) |
-| 06 — final deletion, archive and documentation convergence | Next | [06](06-deletion-verification-and-doc-convergence.md) |
+| 06 — final deletion, archive and documentation convergence | Active; 06-A next | [06 index](06-deletion-verification-and-doc-convergence.md) |
 
-For current implementation, read `AGENTS.md`, the architecture-change skill, the current architecture documents, and the next plan only:
+For current implementation, read `AGENTS.md`, the architecture-change skill, the current architecture documents, the [06 index](06-deletion-verification-and-doc-convergence.md), and only the active child:
 
-- [06 — final deletion, archive and documentation convergence](06-deletion-verification-and-doc-convergence.md) — **next**.
+1. [06-A — recorded provenance and budget-continuation convergence](06-a-recorded-provenance-and-continuation.md) — **next**.
+2. [06-B — legacy model transport and saved-consent deletion](06-b-legacy-inference-and-consent-deletion.md).
+3. [06-C — residual public surface and durable docs convergence](06-c-residual-surface-and-doc-convergence.md).
+4. [06-D — final verification and execution-plan archive](06-d-final-verification-and-plan-archive.md).
 
 Historical detail remains in the completed checkpoint documents. The Checkpoint 03 index links 03-A through 03-E; the Checkpoint 04 index links 04-A through 04-F and their completion SHAs. No parallel status ledger is needed.
 
@@ -68,7 +71,7 @@ explicit user decision
 
 A Conversation interaction is neither a DataAccessGrant nor a model dispatch permit. A successful resolution never authorizes reuse of old source bytes.
 
-## 4. Invariants carried into Checkpoint 05
+## 4. Invariants carried into Checkpoint 06
 
 - Registry remains source-independent. No `SourceGrants`, Calendar-Expert setup, `experts.calendar.*` compatibility path or `calendar.expert` proxy may return.
 - Use with Floe is a projection of current source plus grant bundle, not a persisted enable bit. Startup/inspect does not mint grants.
@@ -90,8 +93,6 @@ Use only an explicitly selected isolated development profile for changed persist
 
 ## 6. Completion and reporting
 
-Each child closes its owner behavior, callers, deletion gate and focused regressions before the next child starts. Passing a broad suite is not proof that the concrete failure scenarios are covered.
+Each 06 child closes its named transitional surface and focused regressions before the next child starts. Passing a broad suite is not proof that caller-zero, provenance reauthorization, request-scoped transport consent, or deletion gates are satisfied.
 
-The [05-G matrix](05-g-verification-and-convergence.md) owns Checkpoint 05 acceptance and final reporting. Report commit SHAs, runtime/authority topology, idempotency and crash results, source/recipient behavior, wire/UI coverage, residuals, exact commands and skips, and remaining blockers.
-
-Checkpoint 06 follows only after 05 is complete. It owns final cross-plan deletion/archive work; it must not be used to defer broken interaction behavior or stale current architecture introduced by 05.
+Checkpoint 06 owns the last architectural convergence plus the archive of this temporary plan. 06-D deletes this entire directory from the active documentation tree only after code, current architecture, product/ADR docs, residual searches and full applicable gates are green. Git history is the archive; no replacement status ledger is created.

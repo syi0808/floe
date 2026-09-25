@@ -1,738 +1,218 @@
-# Checkpoint 06 — obsolete-path deletion, verification and documentation convergence
+# Checkpoint 06 — final deletion, verification and documentation convergence
 
-## Goal
+- **Status:** active execution plan.
+- **Source baseline:** c137b35bf44ea12b1d2f5aa57b2f86aa6d0f1761 (Checkpoint 05-G completion).
+- **Prerequisite:** Checkpoints 01–05 complete. Do not reopen their deleted runtime paths.
+- **Goal:** remove the last transition-only provenance/model-consent surfaces, narrow obsolete public/test APIs, prove the final topology, converge durable docs, and remove this temporary execution-plan directory from the active tree.
+- **Next execution:** 06-A.
+- **Final state:** no Checkpoint 07. After 06-D, current source, architecture, product docs and accepted ADRs are authoritative; Git history retains this plan.
 
-Prove that the repository has converged to one architecture and remove every transition-only surface left by checkpoints 01–05.
+Execute in order:
 
-This checkpoint is not a place to add new compatibility wrappers. If an obsolete symbol still has a production caller, migrate that caller and delete the symbol.
+1. [06-A — recorded provenance and budget-continuation convergence](06-a-recorded-provenance-and-continuation.md)
+2. [06-B — legacy model transport and saved-consent deletion](06-b-legacy-inference-and-consent-deletion.md)
+3. [06-C — residual public surface and durable docs convergence](06-c-residual-surface-and-doc-convergence.md)
+4. [06-D — final verification and execution-plan archive](06-d-final-verification-and-plan-archive.md)
 
-Completion requires:
+## 1. Verified remaining architecture
 
-- one built-in Expert runtime path;
-- one Observe authority;
-- one connection permission editor;
-- one assistant interaction lifecycle;
-- one provenance-driven history path;
-- no old Schedule/Calendar Expert vertical;
-- no old Settings LLM/source permission path;
-- no stale architecture/product docs describing the removed design;
-- full affected-surface verification.
+Checkpoint 05 completed the intended product flow, but a current-code audit found two real transition designs.
 
-## 1. Final topology audit
+### 1.1 Source-history message heuristic still participates in production
 
-The repository must match this topology:
-
-~~~text
-Manager Conversation
-  |
-  +-> Manager Tools --------------------------+
-  |                                          |
-  +-> TaskCoordinator -> BuiltinExpertEndpoint
-                           |
-                           +-> Schedule
-                           +-> Commitments
-                           +-> Communication
-                           +-> Relationships
-                           +-> FocusAttention
-                           +-> Wellbeing
-                           +-> WorkContext
-                           +-> LifeLogistics
-                                      |
-                                      v
-                                  Context
-                                      |
-                               Access / Grant
-                                      |
-                           Connection/source adapter
-
-NeedsUserAction
-  -> Conversation interaction record
-  -> Manager response
-  -> Flutter inline interaction
-  -> Connections/Access owner mutation
-  -> linked follow-up Run
-~~~
-
-Schedule has no parallel vertical.
-
-## 2. Required production deletions
-
-Delete obsolete files when still present.
-
-### 2.1 Schedule App vertical
-
-Expected gone:
+Canonical history already uses recorded DependencyCoverage:
 
 ~~~text
-crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule.rs
-crates/app/src/vault_host/conversation_turn/expert_dispatch/schedule/
+recorded coverage
+  -> EvidenceReader
+  -> DependencyResolver
+  -> Context history projection
 ~~~
 
-No ScheduleEndpoint, CalendarExpertEndpointRequest/Result, select_active_setup or schedule-only source composition may remain.
-
-### 2.2 Schedule infrastructure files in built-in package
-
-Expected gone/replaced:
-
-~~~text
-crates/experts/builtin/src/schedule/definition.rs
-crates/experts/builtin/src/schedule/calendar_history.rs
-crates/experts/builtin/src/schedule/host.rs
-~~~
-
-If schedule/host.rs still exists, it must be pure Schedule domain logic and should be renamed expert.rs unless “host” is semantically accurate. There must be no provider/Access/App composition in the Expert package.
-
-### 2.3 Calendar Expert Registry/access vertical
-
-Expected gone:
-
-~~~text
-crates/modules/experts/src/registry/calendar_setup.rs
-crates/modules/experts/src/calendar_access.rs
-~~~
-
-Expected symbols gone:
-
-~~~text
-CalendarExpertSetup
-CalendarExpertSetupResult
-CalendarExpertOverview
-CalendarAccessConfiguration
-CalendarAccessChange
-CalendarViewBinding     # if only old Expert setup meaning
-install_calendar_expert
-apply_calendar_access
-calendar_expert_overview
-~~~
-
-### 2.4 Schedule/Registry-coupled grant persistence
-
-Expected obsolete concepts gone:
-
-~~~text
-calendar_grant_mappings
-calendar_grant_connection_id
-install_calendar_expert_with_connection
-setup_id as Access grant lookup identity
-tool_installation_id in Calendar grant identity
-expert_installation_id in Calendar grant identity
-tool_assignment_id in Calendar grant identity
-expert_assignment_id in Calendar grant identity
-~~~
-
-Calendar-specific native subject evidence may remain only when keyed by Access/source authority.
-
-### 2.5 Registry source permission
-
-Expected gone from built-in permission decisions:
-
-~~~text
-SourceGrants
-BuiltinSourceBinding
-BuiltinSourceState
-BuiltinSourceEvidence
-assignment_source_grant
-assignment_has_mandatory_source
-refresh_builtin_expert_sources
-~~~
-
-If a similarly named generic type remains, demonstrate that it is not an Observe authority and is required by a real current consumer.
-
-### 2.6 Calendar Expert wire/API
-
-Expected gone:
-
-~~~text
-experts.calendar.install
-experts.calendar.inspect
-CalendarExpertInstallDto
-CalendarExpertInstall
-ExpertCommand::InstallCalendar
-ExpertInspection::Calendar
-calendar_experts result field
-~~~
-
-No deprecated aliases.
-
-### 2.7 Flutter Calendar Expert permission vertical
-
-Expected deleted:
-
-~~~text
-apps/client/lib/features/experts/application/agent_calendar_expert_controller.dart
-apps/client/lib/features/experts/domain/agent_calendar_experts.dart
-apps/client/lib/features/experts/presentation/agent_calendar_expert_dialog.dart
-apps/client/test/features/experts/agent_calendar_expert_controller_test.dart
-apps/client/test/features/experts/agent_calendar_expert_dialog_test.dart
-apps/client/test/features/experts/agent_calendar_experts_test.dart
-apps/client/test/support/agent_calendar_experts.dart
-~~~
-
-Keep generic Expert Registry UI only if the product still intentionally exposes Expert enablement.
-
-### 2.8 Settings permission duplication
-
-Expected gone or non-editing:
-
-- external model “Allow external model providers” settings toggle;
-- editable Calendar Expert access under Data & privacy;
-- ordinary source grant review/pause controls under server pairing settings;
-- duplicate Use with Floe toggles outside the owning connection.
-
-Action permissions remain.
-
-## 3. Conversation/history cleanup
-
-### 3.1 Remove SourceHistoryBoundary if canonical coverage is sufficient
-
-Search:
+But production still also carries:
 
 ~~~text
 SourceHistoryBoundary
-narrow_by_source_boundary
-carries_source_history
-bounded_source_history_start
-CalendarHistoryBoundary
+  -> classify successful Capability / completed Delegation by message shape
+  -> conservatively reject budget continuation
 ~~~
 
-The final canonical history projection should use recorded coverage/dependencies.
+Baseline anchors:
 
-Delete the boundary abstraction if it only exists to infer provenance from capability/agent names.
+- crates/contracts/agent/src/expert_model.rs — public SourceHistoryBoundary.
+- crates/modules/conversation/src/turn/source_history.rs — ConservativeSourceHistoryBoundary, carries_source_history, bounded_source_history_start.
+- crates/modules/conversation/src/application/admission.rs — TurnPreparationRequest.boundary and the heuristic continuation rejection.
+- crates/app/src/vault_host/conversation_turn.rs — injects ConservativeSourceHistoryBoundary.
+- crates/modules/conversation/src/application/history_projection.rs — narrow_by_source_boundary remains but current search finds no production caller.
 
-Required regression:
+Do not simply delete this fallback. Budget continuation can execute a validated pending batch without recalling the model.
 
-1. successful Calendar source read creates dependency;
-2. Manager answer derived from it is recorded under that coverage;
-3. grant revoked;
-4. later turn does not see source-derived history;
-5. user-authored historical messages remain;
-6. no string check for “calendar.” or “floe.builtin.schedule” participates.
+The required replacement already exists in durable data: ValidatedModelBatch.projection_coverage is the exact DependencyCoverage of the AuthorizedModelProjection that produced the stored steps. 06-A reauthorizes that coverage before pending-step execution and again before terminal output release, then deletes the heuristic layer.
 
-If a fallback boundary remains for a real unproven legacy message class, that means the architecture has not fully converged. Because internal compatibility is not required, prefer deleting/resetting the obsolete stored message form rather than keeping the fallback.
+### 1.2 Legacy model transport and saved global-consent shape remain
 
-### 3.2 Top-level failure cleanup
-
-Search UI/Rust mappings for expected permission failures that should now be normal interactions:
+Canonical production model flow:
 
 ~~~text
-AccessReviewRequired
-ConsentRequired
-ReviewSource
-agentAccessReviewRequired
-agentCapabilityAccessDenied
-recovery_action = ReviewSource
-safe_actions = ContinueWithoutSource
+ModelProvider
+ -> PreparedModelProfile
+ -> Access admit / consume
+ -> PreparedModelTransport
+ -> provider
 ~~~
 
-Do not globally delete AgentFailure variants if they still represent real non-conversation API errors. Instead verify the canonical conversation source-read paths no longer use them as the product interaction mechanism.
+Caller audit still finds a legacy branch used by smoke/tests:
 
-Flutter should not show a global danger badge for a normal pending source permission request.
+- ModelTransport / ModelTransportRequest / ModelTransportResponse;
+- FoundationModelRunner;
+- ServerModelRunner;
+- ModelRouteConfig;
+- RemoteRoute / RoutePairing;
+- LEGACY_INFERENCE_CONSUMER.
 
-## 4. Generic built-in Expert invariant
+These survive only because examples/tests still call them. The canonical architecture docs already describe one provider path, so 06-B migrates those callers and deletes the branch.
 
-Add/retain table-driven tests that make a new Schedule exception difficult to reintroduce.
+Checkpoint 05 also moved exact-recipient consent to Access-owned contextual consent, but the saved connection shape still persists allow_external and external_recipients. SavedConnectionAdmission explicitly ignores them as product authority, so they are transition state.
 
-Required assertions:
+The same spelling on the Go/server inference request has different semantics: request-scoped external-transfer safety. Keep that fence. After 06-B, its value comes only from the exact Access-consumed dispatch target, never saved connection state or Flutter.
 
-- BuiltinExpertKind::ALL contains all built-ins exactly once;
-- builtin_setup_declarations covers ALL exactly once;
-- registered_experts covers ALL exactly once;
-- every installed enabled built-in card routes to the same BuiltinExpertEndpoint type;
-- no source availability check is used to decide card existence;
-- each declaration’s mandatory_source appears in required_sources;
-- source consumer policy has explicit first-party coverage for declared sources;
-- every successful source dependency records the actual admitted consumer identity;
-- third-party package identity is not part of the default first-party permission set;
-- no compatibility consumer such as `calendar.expert` substitutes for a real Expert package identity.
+### 1.3 Bounded caller-zero/public cleanup remains
 
-Avoid manually duplicated “expected 8 ids” arrays in many tests. One authoritative declaration plus derived checks is preferred.
+Known candidates:
+- calendar_first_party_consumers wrapper around first_party_observe policy;
+- set_calendar_observe production helper currently found through tests;
+- other pub/test helpers left only for completed checkpoint wiring.
 
-## 5. Interaction invariant
+Delete only after caller-zero proof. Keep low-level owner errors such as AccessReviewRequired when still semantically real. Keep old-wire rejection fixtures when they prove removed APIs fail closed.
 
-Add tests proving one lifecycle:
+## 2. Fixed final architecture
 
-- SourceReadOutcome::NeedsUserAction creates/replays one ConversationInteraction.
-- Tool/Task carries only a reference.
-- AgentMessage::Interaction carries the same id.
-- Flutter queries/resolves that id.
-- resolution invokes Access/Connections current owner path.
-- linked follow-up Run references the resolved interaction.
-- no second “permission request” persistence table exists under Experts or Flutter.
+### Provenance
 
-A permission request must not be represented simultaneously as:
-- top-level Run failure;
-- Expert Registry pending flag;
-- Access review row;
-- Conversation interaction;
-unless those records have distinct owner meanings and exact linkage. Delete duplicate representations that only mirror state.
-
-## 6. Documentation convergence
-
-Implementation changes ownership/runtime and a durable product decision. Update current docs in the same final change set.
-
-### 6.1 docs/architecture/runtime.md
-
-Replace current language that says the host store is cloned into separate “root, built-in Expert and Schedule compositions”.
-
-Document:
-- one BuiltinExpertEndpoint for all built-ins;
-- provider-neutral source acquisition through Context/Access;
-- recoverable source blockers becoming Tool/Task observations;
-- Conversation-owned interaction record and linked follow-up Run;
-- interaction resume distinct from budget continuation.
-
-Remove Schedule as a special runtime path.
-
-### 6.2 docs/architecture/modules.md
-
-Document:
-- Experts owns Expert identity/package/Task/judgment, not source permission;
-- Access owns Observe consumer authority;
-- Connections owns connection/resource selection;
-- Context owns provider-neutral source Views;
-- Conversation owns assistant interaction lifecycle;
-- Flutter only presents/requests decisions.
-
-Ensure dependency direction matches manifests and tools/architecture/module-dependencies.json.
-
-### 6.3 docs/architecture/authority-recovery.md
-
-Add/clarify:
-- user approval is intent, not read authorization;
-- interaction resolution must re-read current source/connection/grant authority;
-- linked follow-up reexecutes and reauthorizes;
-- pending interaction holds no provider/executor transaction;
-- restart/duplicate decision and lost-response behavior;
-- source identity change supersedes stale interaction;
-- Observe/Act separation.
-
-### 6.4 docs/architecture/invariants.md
-
-Only add a new invariant if it is repository-wide and not already covered by one-owner/one-path rules.
-
-A useful concise addition may be:
-- “user interaction is not authorization”: presentation/approval records never substitute for the owning authority’s fresh admission.
-
-Do not copy checkpoint status into invariants.md.
-
-### 6.5 docs/product/intelligence.md
-
-Clarify:
-- all eight built-in Experts share the same host/runtime model;
-- Experts declare required sources but do not own grants;
-- a blocked source yields a bounded no-conclusion/user-action result rather than an invented answer;
-- Manager remains sole user-facing synthesizer.
-
-### 6.6 docs/product/integrations-and-privacy.md
-
-Change the current product rule that a successful read connection does not imply AI-use permission.
-
-New precise rule:
-
-- connecting a supported first-party source with Use with Floe enabled creates bounded Observe authority for Floe’s approved first-party consumers over the selected resources;
-- turning Use with Floe off pauses Observe without disconnecting;
-- this never grants Act authority;
-- this never grants arbitrary third-party Expert access;
-- this never grants arbitrary external model recipient approval;
-- sensitive/external processing remains independently fenced.
-
-### 6.7 docs/product/experience.md
-
-Document inline visual escalation:
+There is one answer to whether derived history or a pending validated batch may still be used:
 
 ~~~text
-request
- -> Manager/Expert source need
- -> normal Manager limitation response
- -> inline permission/recovery card
- -> user decision
- -> linked follow-up response
+recorded DependencyCoverage
+ -> current DependencyResolver
+ -> exact dependency reauthorization
 ~~~
 
-Keep voice/text as surfaces over the same interaction record.
+Message type, capability id, Expert id or a string table never decides source authority.
 
-### 6.8 ADR 0028
+Budget continuation:
+- reuses the exact validated batch and cursor;
+- does not recall the model;
+- may execute only while batch.projection_coverage reauthorizes;
+- rechecks the same coverage before terminal output release.
 
-At implementation time:
+Independent remains independent. Unknown never authorizes derived replay.
 
-- if ADR 0028 is still proposed, edit it before acceptance to the final connection/Observe policy;
-- if it has become accepted, supersede/amend it with a new ADR rather than rewriting accepted history.
+### External model recipient
 
-Required decision delta:
-- pair authenticates server relationship;
-- concrete first-party source connection establishes default Observe permission;
-- resource selection + Observe scope are one product interaction;
-- Use with Floe controls Observe;
-- third-party/Act/external-model consent remain separate.
-
-### 6.9 New ADR for conversation interaction lifecycle
-
-Add an ADR for the durable runtime decision if no accepted ADR already owns it.
-
-It should record **why**:
-- Run/Task are not held open for human latency;
-- Conversation owns assistant-triggered interaction lifecycle;
-- underlying mutations remain with their semantic owners;
-- resolved interaction starts a linked fresh Run rather than replaying a stale read;
-- UI is presentation, not authority.
-
-Do not make the ADR an implementation checklist.
-
-### 6.10 This execution plan
-
-After all implementation/docs verification is committed and no checkpoint remains:
-- remove docs/development/plans/expert-access-interaction/ from the active tree in a final cleanup commit, or
-- leave it only until the implementation PR/branch is merged if the team needs an active checklist.
-
-Git history is the archive. Do not keep completed checkpoint/status prose as permanent current documentation.
-
-## 7. Repository-wide residual search matrix
-
-Run exact and conceptual searches.
-
-### Schedule infrastructure
+There is one product authority path:
 
 ~~~text
-ScheduleEndpoint
-CalendarExpertEndpoint
-schedule_definition
-SCHEDULE_DEFINITION_REVISION
-schedule_packaging
-CALENDAR_EXPERT_SETTLEMENT_OWNER
-select_active_setup
-CalendarHistoryBoundary
-floe.builtin.schedule/v1
+selected candidate
+ -> Access exact-recipient contextual authority
+ -> admit
+ -> consume
+ -> request-scoped admitted transport target
+ -> PreparedModelTransport
+ -> provider
+ -> Access post-response revalidation
 ~~~
 
-Expected: zero production infrastructure matches.
+Saved pairing/connection state carries endpoint, credential and pairing identity only. It carries no recipient approval.
 
-### Calendar Expert vertical
+Server transport maps the consumed target:
 
 ~~~text
-CalendarExpertSetup
-CalendarExpertOverview
-CalendarAccessConfiguration
-CalendarAccessChange
-calendar_experts
-experts.calendar.
-install_calendar_expert
-apply_calendar_access
+External(exact recipient)
+  -> allow_external = true
+  -> expected_recipient = exact recipient
+
+Device/server-local
+  -> allow_external = false
+  -> no expected recipient
 ~~~
 
-Expected: zero production matches.
-
-### Duplicated source authority
-
-~~~text
-SourceGrants
-BuiltinSourceBinding
-BuiltinSourceState
-BuiltinSourceEvidence
-assignment_source_grant
-assignment_has_mandatory_source
-calendar_grant_mappings
-calendar.expert
-~~~
-
-Expected: zero production-authority matches for the obsolete permission model. `calendar.expert` may appear only in historical decision text or a regression fixture proving legacy scope is rejected; it must not create, widen or admit a current grant.
-
-### UI duplication
-
-~~~text
-AgentCalendarExpertController
-AgentCalendarSettings
-agent_calendar_expert
-Allow external model providers
-reviewRemoteCalendarGrant
-pauseRemoteCalendarGrant
-~~~
-
-Expected: zero production product-path matches.
-
-### Interaction
-
-~~~text
-NeedsUserAction
-UserInteractionRef
-ConversationInteraction
-AgentMessage::Interaction
-ResumeInteraction
-Use with Floe
-~~~
-
-Expected: matches only in canonical contract/owner/presentation/tests/docs.
-
-### Authority leakage / secrets
-
-Search serialized interaction/source requirement structs for:
-
-~~~text
-token
-bearer
-credential
-secret
-password
-base_url
-private_key
-oauth_state
-~~~
-
-No interaction payload may contain secret-shaped authority.
-
-## 8. Dependency and public-surface audit
-
-Inspect:
-- Cargo manifests;
-- tools/architecture/module-dependencies.json;
-- public Rust exports;
-- App service enums;
-- protocol command/query enums;
-- FFI headers;
-- Dart gateways.
-
-Required final properties:
-
-- Conversation business module does not depend on built-in Expert package.
-- Experts does not depend on provider/native adapters.
-- Access does not depend on Flutter/App or Expert Registry implementation.
-- Context does not own credentials.
-- App composes owners but does not duplicate their authority.
-- no public symbol exists solely to preserve removed Calendar Expert callers.
-- no optional field exists solely for old/new compatibility.
-- no v2/legacy/compat route was added for the internal cutover.
-
-If a new dependency edge is required for the final architecture, update module-dependencies.json deliberately and document the owner reason.
-
-## 9. Full verification
-
-Run focused tests first, then the full relevant gates.
-
-### 9.1 Rust/architecture
-
-~~~sh
-cargo check --workspace --lib
-cargo test --workspace --no-fail-fast
-python3 tools/architecture/check_boundaries.py
-git diff --check
-~~~
-
-Record actual failures and distinguish pre-existing unrelated issues. Do not weaken tests.
-
-### 9.2 FFI/protocol
-
-~~~sh
-cargo build -p floe-ffi
-~~~
-
-Also run:
-- protocol crate tests;
-- FFI C ABI tests;
-- app-wire fixtures/tests;
-- generated binding consistency command if current repository tooling requires one.
-
-Inspect the final wire enum manually to confirm experts.calendar.* is absent and interaction/connection commands have one representation.
-
-### 9.3 Flutter/macOS
-
-From apps/client:
-
-~~~sh
-flutter analyze
-flutter test
-flutter build macos
-~~~
-
-Run focused goldens for:
-- connection detail Use with Floe;
-- chat permission interaction;
-- generic Expert registry if still visible.
-
-If native/EventKit files changed, run the repository’s macOS Swift/native tests/scripts and verify bundle/sign/load as required by the current Apple runbook.
-
-Do not claim iOS validation unless it was actually run. Apple is the priority, but macOS stabilization may be the practical gate for this change.
-
-### 9.4 Go server
-
-If checkpoint 04 changes Go pairing/source connection/grant behavior, from server/ run:
-
-~~~sh
-go test -race ./...
-go vet ./...
-~~~
-
-Run current credential/authority tests from server/README.md when applicable.
-
-### 9.5 Persistence/authority
-
-Use fresh isolated profiles and verify:
-
-- fresh Vault creation;
-- restart/reopen;
-- grant active/pause/revoke;
-- source authority change;
-- interaction pending/restart;
-- duplicate decision;
-- linked resume accepted then response lost;
-- no duplicate external action;
-- no secret leakage in errors/debug/trace.
-
-## 10. End-to-end acceptance matrix
-
-### A. Happy Calendar use
-
-1. fresh profile;
-2. connect macOS Calendar;
-3. grant EventKit permission;
-4. select Personal + Work;
-5. Use with Floe displays Active;
-6. ask “What is on my calendar today?”;
-7. Manager delegates through common Schedule Expert;
-8. generic Calendar reader authorizes/read;
-9. Manager answers;
-10. source coverage recorded.
-
-### B. Observe paused
-
-1. turn Use with Floe Off;
-2. ask Calendar question;
-3. Schedule still exists in Manager catalog;
-4. Calendar read produces NeedsUserAction;
-5. Schedule Task is not an infrastructure failure;
-6. Manager says Calendar access is needed;
-7. inline card appears;
-8. Allow;
-9. current source/grant revalidated;
-10. linked follow-up Run;
-11. Calendar answer returned.
-
-### C. Deny
-
-1. repeat paused flow;
-2. choose Not now;
-3. interaction Denied;
-4. no grant mutation;
-5. no automatic linked Run;
-6. original Manager limitation remains valid.
-
-### D. OS permission revoked
-
-1. Use with Floe previously Active;
-2. revoke Calendar permission in macOS;
-3. ask question;
-4. source check identifies system permission requirement;
-5. UI does not say Active/usable based on stale Registry;
-6. interaction opens native/system recovery;
-7. after permission restore, backend refreshes and verifies;
-8. linked Run reads fresh Calendar.
-
-### E. Source identity changed
-
-1. create active grant;
-2. change source identity/authority/fingerprint;
-3. old grant does not admit;
-4. interaction says review/repair, not simple enable;
-5. stale Allow cannot reactivate without fresh review;
-6. after review, linked Run succeeds.
-
-### F. Remote source
-
-1. pair server;
-2. pair alone creates no arbitrary source account access;
-3. connect concrete SaaS account;
-4. default first-party Observe becomes Active;
-5. Use with Floe pause/resume works;
-6. external model recipient remains separately fenced.
-
-### G. Expert uniformity
-
-For every BuiltinExpertKind:
-- common setup declaration;
-- common Directory registration;
-- common BuiltinExpertEndpoint;
-- common TaskCoordinator lifecycle;
-- no App endpoint selected by agent id.
-
-### H. Restart
-
-1. create pending interaction;
-2. quit/restart;
-3. interaction still pending and inspectable;
-4. resolve;
-5. kill after resume command admission but before client receives response;
-6. restart;
-7. same command/run recovered;
-8. no duplicate source mutation or action.
-
-## 11. Final acceptance checklist
-
-The implementation is done only when all boxes are true:
-
-- [ ] Schedule special App endpoint deleted.
-- [ ] Schedule is in common built-in setup and dispatch.
-- [ ] request-scoped Calendar read preserved.
-- [ ] native EventKit read goes through generic Context/Access path.
-- [ ] generic Expert settlement handles Schedule.
-- [ ] Conversation has no Schedule-specific history boundary.
-- [ ] Registry source permission authority deleted.
-- [ ] CalendarExpertSetup vertical deleted.
-- [ ] Calendar grant identity no longer references Registry setup/assignment/installation.
-- [ ] Access/DataAccessGrant is sole Observe authority.
-- [ ] canonical first-party grants contain actual approved consumer identities and no `calendar.expert` compatibility authority.
-- [ ] enabled Expert remains discoverable while source is off.
-- [ ] connector connection creates default first-party Observe authority.
-- [ ] Use with Floe is the connection-level Observe control.
-- [ ] Settings external-model/source toggle removed.
-- [ ] Act authority remains separate.
-- [ ] external model recipient consent remains separate.
-- [ ] source blocker creates typed Conversation interaction.
-- [ ] Manager returns natural response instead of global error-only UX.
-- [ ] Flutter renders generic inline interaction.
-- [ ] interaction resolution revalidates current owner authority.
-- [ ] linked follow-up Run is distinct from budget continuation.
-- [ ] duplicate/restart interaction behavior verified.
-- [ ] old experts.calendar.* wire removed.
-- [ ] old Flutter Calendar Expert files removed.
-- [ ] architecture/product/ADR docs updated.
-- [ ] residual searches clean.
-- [ ] Rust/architecture gate passes.
-- [ ] FFI/protocol gate passes.
-- [ ] Flutter analyze/test/macos build passes.
-- [ ] relevant native/macOS validation passes or exact unavailable prerequisites are reported.
-- [ ] Go server gate passes if server code changed.
-
-## 12. Final agent report
-
-Use this exact structure at completion:
-
-1. **Final owner/path**
-   - one paragraph naming Experts, Context, Access, Connections, Conversation and Flutter ownership.
-
-2. **Major deleted surface**
-   - ScheduleEndpoint;
-   - Calendar Expert setup/access vertical;
-   - Registry source permission;
-   - Calendar grant mapping coupling;
-   - experts.calendar.* wire;
-   - Flutter Calendar Expert settings;
-   - Settings LLM/source toggle;
-   - Schedule history boundary.
-
-3. **Interaction behavior**
-   - blocked source -> Manager response -> interaction -> owner resolution -> linked fresh Run.
-
-4. **Residual audit**
-   - commands/searches run and remaining justified matches.
-
-5. **Verification**
-   - exact Rust/FFI/Flutter/native/Go commands and results.
-
-6. **Documentation**
-   - architecture docs updated;
-   - ADR 0028 disposition;
-   - new interaction ADR if added;
-   - product docs updated.
-
-7. **Unverified surface/blocker**
-   - state only concrete unavailable validation, not confidence language.
-
-The final report must not call the architecture complete while an old production path or authority remains.
+### Documentation
+
+After 06-D:
+- current docs describe only current owners and paths;
+- accepted ADRs preserve rationale, not checkpoint status;
+- product docs describe current UX;
+- docs/development/plans/expert-access-interaction is absent from the active tree;
+- Git history is the archive.
+
+## 3. Global invariants
+
+1. Do not weaken dependency, grant, policy, recipient or source reauthorization to delete a fallback.
+2. Do not ask the model again instead of resuming a valid pending batch.
+3. Do not execute a pending batch step after its recorded projection coverage becomes stale.
+4. Do not release a resumed answer after coverage revocation racing with execution.
+5. DependencyCoverage::Unknown is never Independent.
+6. Do not reintroduce saved/global recipient consent or a Settings toggle.
+7. Keep the Go/server request-scoped allow_external fence.
+8. Do not add dual saved-credential decoders or migration objects solely for disposable local state.
+9. Do not add a second model transport abstraction.
+10. Observe, Act and external processing remain independent.
+11. Preserve Checkpoint 05 interaction CAS, crash recovery, one linked child, and action uncertainty recovery.
+12. No Vault transaction spans model/provider/native I/O.
+13. No Android parity expansion and no iOS validation requirement unless separately requested.
+14. Do not archive this plan until all code/docs/gates are green.
+
+## 4. Stop conditions
+
+Stop and update the active child if implementation appears to require:
+- a duplicate provenance field when projection_coverage is sufficient;
+- turning budget continuation into a fresh model call;
+- classifying source history by capability/Expert id;
+- a provider bypass around Access consume/revalidation;
+- keeping saved allow_external/recipient lists as authority for compatibility;
+- deleting the server request fence;
+- converting all PolicyDenied/AccessReviewRequired errors to interactions;
+- deleting rejection tests that are the only proof removed wire fails closed;
+- deleting the plan directory before final verification.
+
+## 5. Definition of done
+
+- [ ] continuation reauthorizes exact ValidatedModelBatch.projection_coverage before pending-step execution.
+- [ ] resumed terminal output rechecks the exact batch coverage before release.
+- [ ] Independent continuation works; stale/Unknown dependent continuation fails closed.
+- [ ] SourceHistoryBoundary, ConservativeSourceHistoryBoundary, source_history.rs, narrow_by_source_boundary, carries_source_history, bounded_source_history_start and App boundary wiring are gone.
+- [ ] canonical history remains recorded-coverage based.
+- [ ] legacy ModelTransport port/request/response and Runner implementations are gone.
+- [ ] smoke/provider tests use ModelProvider / PreparedModelTransport or InferenceService.
+- [ ] ModelRouteConfig, RemoteRoute, RoutePairing and LEGACY_INFERENCE_CONSUMER are gone after canonical values move.
+- [ ] saved server connection no longer persists allow_external / external_recipients.
+- [ ] Flutter ServerConnection has no allowExternal/externalRecipients/withExternalConsent/coversExternalRecipient.
+- [ ] external server inference receives request-scoped external permission only after Access consume.
+- [ ] server-local/device inference never receives external approval.
+- [ ] caller-zero transitional helpers/exports are deleted or justified.
+- [ ] current architecture/product/ADR docs match source.
+- [ ] full applicable Rust/architecture/FFI/Flutter/macOS gates pass.
+- [ ] Go gates pass if server code changes.
+- [ ] ignored/live credential tests are reported honestly.
+- [ ] no active docs link points at the execution-plan directory.
+- [ ] the entire execution-plan directory is deleted in the final archive commit.
+- [ ] no replacement status/checkpoint ledger is created.
+
+## 6. Required final report
+
+After 06-D report:
+1. 06-A semantic SHA(s).
+2. 06-B semantic SHA(s).
+3. 06-C semantic SHA(s).
+4. 06-D verification and final archive SHA(s).
+5. final owner/runtime topology.
+6. continuation provenance evidence.
+7. recipient/transport evidence.
+8. deleted public/runtime surfaces.
+9. residual searches and justified fixtures.
+10. exact verification commands/results/skips/ignored tests.
+11. durable docs/ADR changes.
+12. proof the execution-plan directory is absent.
+13. remaining blocker.
+
+Do not leave a Checkpoint 06 complete status file. The archive commit and Git history are the completion record.
