@@ -4,7 +4,7 @@ use floe_agent_contract::{AgentDefinition, AgentFailure, DataClass, PackageKind,
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const EXPERT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const EXPERT_MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub const MAX_REQUIREMENT_SOURCES: u8 = 16;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -19,6 +19,7 @@ pub struct ContractRef {
 pub struct ExpertSourceRequirement {
     pub key: String,
     pub capability: String,
+    pub contract_version: u32,
     pub minimum_sources: u8,
     pub maximum_sources: u8,
 }
@@ -80,6 +81,7 @@ impl ExpertManifest {
         for requirement in &self.source_requirements {
             if !bounded_identifier(&requirement.key)
                 || !bounded_identifier(&requirement.capability)
+                || requirement.contract_version == 0
                 || requirement.minimum_sources > requirement.maximum_sources
                 || requirement.maximum_sources > MAX_REQUIREMENT_SOURCES
                 || !keys.insert(&requirement.key)
@@ -188,6 +190,7 @@ mod tests {
         manifest.source_requirements.push(ExpertSourceRequirement {
             key: "calendar".into(),
             capability: "calendar.timeline".into(),
+            contract_version: 1,
             minimum_sources: 0,
             maximum_sources: 2,
         });

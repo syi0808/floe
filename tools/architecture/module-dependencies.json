@@ -171,6 +171,7 @@
       "group": "modules",
       "allowed_internal_dependencies": [
         "agent_contract",
+        "context_contract",
         "execution",
         "inference"
       ]

@@ -37,10 +37,13 @@ pub use manifest::{
     ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES, manifest_set_digest,
 };
 pub use registry::{
-    AgentRegistry, AssignmentOverview, EXPERT_REGISTRY_SCHEMA_VERSION, ExpertInstallOperation,
+    AgentRegistry, AssignmentOverview, BindingOperationReceipt, EXPERT_BINDING_SCHEMA_VERSION,
+    EXPERT_REGISTRY_SCHEMA_VERSION, ExpertBindingCommand, ExpertBindingState,
+    ExpertInstallOperation,
     ExpertInstallReceipt, ExpertInstallResult, ExpertPrivateState, InstalledExpert,
     PackageAssignment, PackageInstallation, RegistryConfiguration, RegistryConfigurationTarget,
-    RegistryOverview, RegistrySnapshot, ResolvedExpert, eligible_cards_for_availability,
+    RegistryOverview, RegistrySnapshot, RequirementBinding, ResolvedExpert,
+    eligible_cards_for_availability,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

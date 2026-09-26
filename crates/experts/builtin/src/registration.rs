@@ -98,8 +98,13 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
             .map(|source| ExpertSourceRequirement {
                 key: source.source_id().into(),
                 capability: source.capability_id().into(),
+                contract_version: 1,
                 minimum_sources: u8::from(*source == kind.mandatory_source()),
-                maximum_sources: 1,
+                maximum_sources: match source.capability_id() {
+                    "calendar.timeline" | "mail.communication" | "work.context"
+                    | "life.logistics" => floe_experts::MAX_REQUIREMENT_SOURCES,
+                    _ => 1,
+                },
             })
             .collect(),
         capability_requirements: vec![],

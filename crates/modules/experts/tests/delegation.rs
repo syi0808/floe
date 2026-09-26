@@ -22,15 +22,18 @@ use floe_agent_contract::{
 };
 use floe_agent_contract::{RunId, TraceContext};
 use floe_agent_runtime::Engine;
+use floe_context_contract::{
+    ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
+};
 use floe_execution::{
     Cancellation, ExecutionScope,
     budget::{BudgetConfig, BudgetLedger},
 };
 use floe_experts::{
     AgentRegistry, ContractRef, Directory, DirectoryEntry, DirectoryQuery,
-    EXPERT_MANIFEST_SCHEMA_VERSION, ExpertAdmissionIdentity, ExpertInstallOperation,
-    ExpertManifest, ExpertRegistration, ExpertSourceRequirement, TaskActivation, TaskAdmission,
-    TaskCoordinator, TaskRecord, TaskRepository,
+    EXPERT_MANIFEST_SCHEMA_VERSION, ExpertAdmissionIdentity, ExpertBindingCommand,
+    ExpertInstallOperation, ExpertManifest, ExpertRegistration, ExpertSourceRequirement,
+    TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository,
 };
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -325,6 +328,7 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
             vec![ExpertSourceRequirement {
                 key: "calendar".into(),
                 capability: "calendar.timeline".into(),
+                contract_version: 1,
                 minimum_sources: 1,
                 maximum_sources: 1,
             }],
@@ -374,6 +378,66 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
             )
             .unwrap();
         assert_eq!(receipt.installed.len(), 1);
+        let assignment_id = receipt.installed[0].assignment_id;
+        let initial_binding = registry.binding(person, assignment_id).unwrap();
+        assert_eq!(initial_binding.revision, 1);
+        assert_eq!(
+            initial_binding.entries.len(),
+            manifest.source_requirements.len()
+        );
+        assert!(
+            initial_binding
+                .entries
+                .iter()
+                .all(|entry| entry.selected.is_empty())
+        );
+        if !manifest.source_requirements.is_empty() {
+            let selected = SourceSelectionReference {
+                connector_id: ConnectorId::try_new("floe.connector.calendar").unwrap(),
+                connection_id: ConnectionId::try_new("calendar-a").unwrap(),
+                execution_owner_id: ExecutionOwnerId::try_new("device:test").unwrap(),
+                capability_id: "calendar.timeline".into(),
+                resource: ResourceHandle::try_new("calendar:one").unwrap(),
+                contract_version: 1,
+            };
+            let command = ExpertBindingCommand {
+                assignment_id,
+                package: package.clone(),
+                definition_revision: 1,
+                requirement_key: "calendar".into(),
+                expected_binding_revision: 1,
+                selected: vec![selected.clone()],
+            };
+            let operation_id = Uuid::new_v4();
+            let updated = registry
+                .replace_binding(person, operation_id, command.clone())
+                .unwrap();
+            assert_eq!(updated.revision, 2);
+            assert_eq!(updated.entries[0].selected, vec![selected]);
+            assert_eq!(
+                registry
+                    .replace_binding(person, operation_id, command.clone())
+                    .unwrap(),
+                updated
+            );
+            let mut changed = command;
+            changed.selected.clear();
+            assert_eq!(
+                registry.replace_binding(person, operation_id, changed.clone()),
+                Err(AgentFailure::Conflict)
+            );
+            assert_eq!(
+                registry.replace_binding(person, Uuid::new_v4(), changed),
+                Err(AgentFailure::Conflict)
+            );
+            assert_eq!(
+                AgentRegistry::restore(registry.snapshot(), instance)
+                    .unwrap()
+                    .binding(person, assignment_id)
+                    .unwrap(),
+                updated
+            );
+        }
         let directory = Directory::default();
         let publish = |registry: &AgentRegistry| {
             let entries = registry

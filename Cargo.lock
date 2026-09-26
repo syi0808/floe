@@ -834,6 +834,7 @@ dependencies = [
  "chrono",
  "floe-agent-contract",
  "floe-agent-runtime",
+ "floe-context-contract",
  "floe-execution",
  "floe-inference",
  "serde",

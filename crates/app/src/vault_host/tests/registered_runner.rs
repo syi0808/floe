@@ -226,6 +226,7 @@ fn required_source_registration(
     manifest.source_requirements = vec![floe_experts::ExpertSourceRequirement {
         key: "required_attention".into(),
         capability: "attention.coarse".into(),
+        contract_version: 1,
         minimum_sources: 1,
         maximum_sources: 1,
     }];

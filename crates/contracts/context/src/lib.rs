@@ -15,6 +15,7 @@ mod evidence;
 mod memory;
 mod processing;
 mod source_access;
+mod source_selection;
 pub mod views;
 
 pub use assembly::{OptionalSource, acquire_optional_source, record_source_issue};
@@ -35,6 +36,7 @@ pub use source_access::{
     MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, SourceAccessBlockers, SourceAccessRequirement,
     SourceAccessRequirementKind, SourceReadOutcome, SourceUnavailable,
 };
+pub use source_selection::SourceSelectionReference;
 pub use views::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
