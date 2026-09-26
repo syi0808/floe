@@ -14,6 +14,15 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/agent_registry.dart';
 
 void main() {
+  test('Registry targets serialize only installation and assignment', () {
+    expect(AgentRegistryTarget.values, [
+      AgentRegistryTarget.installation,
+      AgentRegistryTarget.assignment,
+    ]);
+    expect(AgentRegistryTarget.installation.wireName, 'installation');
+    expect(AgentRegistryTarget.assignment.wireName, 'assignment');
+  });
+
   test('overview validates identity, counters, and installation links', () {
     final view = AgentRegistryView.fromJson(registryFixture());
     expect(view.assignments.single.completedInvocations, 2);

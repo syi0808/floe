@@ -1,9 +1,8 @@
 enum AgentRegistryTarget {
   installation,
-  assignment,
-  calendarView;
+  assignment;
 
-  String get wireName => this == calendarView ? 'calendar_view' : name;
+  String get wireName => name;
 }
 
 abstract interface class AgentRegistryGateway {
