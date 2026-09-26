@@ -1338,9 +1338,10 @@ impl GovernedFocus {
                 "test-device",
                 &["home".into()],
                 connection.source_authority,
-                &crate::first_party_observe::calendar_policy()
-                    .unwrap()
-                    .consumers,
+                &[GrantConsumer::builtin(
+                    floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+                )
+                .unwrap()],
                 &fingerprint,
                 None,
             )
@@ -1589,9 +1590,10 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             "test-device",
             &["home".into()],
             fixture.admission.source.source_authority(),
-            &crate::first_party_observe::calendar_policy()
-                .unwrap()
-                .consumers,
+            &[GrantConsumer::builtin(
+                floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+            )
+            .unwrap()],
             &"b".repeat(64),
             Some((fixture.admission.grant_id, authority)),
         )

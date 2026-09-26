@@ -283,40 +283,14 @@ impl<'host> DeviceCalendarAdmission<'host> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
+    use floe_experts_builtin::BuiltinExpertKind;
 
     #[test]
-    fn calendar_consumers_are_derived_from_builtin_declarations() {
-        let consumers = crate::first_party_observe::calendar_policy().unwrap().consumers;
-        let expected = floe_experts_builtin::manifests()
-            .into_iter()
-            .filter(|manifest| {
-                manifest.source_requirements.iter().any(|requirement| {
-                    requirement.capability == BuiltinContextSource::Calendar.capability_id()
-                })
-            })
-            .map(|manifest| manifest.package.id)
-            .collect::<Vec<_>>();
-
-        for package_id in expected {
-            assert!(
-                consumers
-                    .iter()
-                    .any(|consumer| consumer.identifier() == package_id),
-                "missing {package_id}"
-            );
-        }
-        assert_eq!(consumers.len(), 4);
-        assert!(
-            !consumers
-                .iter()
-                .any(|consumer| consumer.identifier() == "floe.builtin.communication")
-        );
-        assert!(
-            consumers
-                .iter()
-                .all(|consumer| matches!(consumer, floe_access::GrantConsumer::Builtin(_)))
-        );
+    fn calendar_template_has_no_unselected_expert_consumers() {
+        let consumers = crate::first_party_observe::calendar_policy()
+            .unwrap()
+            .consumers;
+        assert!(consumers.is_empty());
     }
 
     #[test]
@@ -335,7 +309,9 @@ mod tests {
             SourceAuthority::new(),
         )
         .unwrap();
-        let consumers = crate::first_party_observe::calendar_policy().unwrap().consumers;
+        let consumers = vec![
+            floe_access::GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id()).unwrap(),
+        ];
         let scope = floe_access::remote_calendar_scope("primary", &consumers).unwrap();
         let mut grant = DataAccessGrant::new(
             GrantId::new(),
@@ -561,7 +537,16 @@ where
                     &device_id,
                     &calendar_ids,
                     current.source_authority,
-                    &crate::first_party_observe::calendar_policy()?.consumers,
+                    &crate::first_party_observe::native_calendar_policy_for_target(
+                        vault,
+                        person_id,
+                        "calendar.event_kit",
+                        &current.connection_id,
+                        &device_id,
+                        &calendar_ids,
+                    )
+                    .await?
+                    .consumers,
                     &expected_native_subject_fingerprint,
                     expected_grant,
                 )

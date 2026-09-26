@@ -218,6 +218,12 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            if let Some(saved) = floe_inference::SavedConnectionStore::load(&self.connections)?
+                && (saved.person_id != invocation.request.principal
+                    || saved.device_id != context.device_id)
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
             let person_id = self.vault.person_id();
             let registry = self
                 .vault

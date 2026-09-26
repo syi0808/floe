@@ -1677,6 +1677,69 @@ impl HostFixture {
         )
         .await
         .unwrap();
+        base.vault
+            .install_expert_bundle(
+                floe_experts::ExpertInstallOperation {
+                    instance_id: base.vault.registry_instance_id(),
+                    expected_revision: 0,
+                    operation_id: Uuid::new_v4(),
+                },
+                &floe_experts_builtin::manifests(),
+                floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let registry = base.vault.expert_registry().await.unwrap().unwrap();
+        for assignment in &registry.assignments {
+            let installation = registry
+                .installations
+                .iter()
+                .find(|entry| entry.id == assignment.installation_id)
+                .unwrap();
+            let manifest = registry
+                .manifests
+                .iter()
+                .find(|entry| entry.package == installation.package)
+                .unwrap();
+            let Some(requirement) = manifest
+                .source_requirements
+                .iter()
+                .find(|requirement| requirement.capability == "calendar.timeline")
+            else {
+                continue;
+            };
+            base.vault
+                .replace_expert_binding(
+                    Uuid::new_v4(),
+                    floe_experts::ExpertBindingCommand {
+                        assignment_id: assignment.id,
+                        package: installation.package.clone(),
+                        definition_revision: manifest.definition.definition_revision,
+                        requirement_key: requirement.key.clone(),
+                        expected_binding_revision: 1,
+                        selected: vec![floe_context_contract::SourceSelectionReference {
+                            connector_id: floe_context_contract::ConnectorId::try_new(
+                                "calendar.event_kit",
+                            )
+                            .unwrap(),
+                            connection_id: floe_context_contract::ConnectionId::try_new(
+                                "connection",
+                            )
+                            .unwrap(),
+                            execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
+                                DEVICE,
+                            )
+                            .unwrap(),
+                            capability_id: "calendar.timeline".into(),
+                            resource: floe_context_contract::ResourceHandle::try_new("personal")
+                                .unwrap(),
+                            contract_version: 1,
+                        }],
+                    },
+                )
+                .await
+                .unwrap();
+        }
         let store = TestConnections::default().store();
         Self {
             base,
@@ -1710,6 +1773,24 @@ impl HostFixture {
             .await
             .unwrap()
             .unwrap();
+        let resources = live
+            .calendars
+            .iter()
+            .map(|calendar| calendar.calendar_id.clone())
+            .collect::<Vec<_>>();
+        let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
+            &crate::first_party_observe::native_calendar_policy_for_target(
+                &self.base.vault,
+                self.base.person,
+                "calendar.event_kit",
+                &live.connection_id,
+                DEVICE,
+                &resources,
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
         floe_conversation::InlineObserveTarget {
             connection_id: live.connection_id.clone(),
             device_id: Some(DEVICE.into()),
@@ -1725,11 +1806,7 @@ impl HostFixture {
                 .iter()
                 .map(|calendar| floe_conversation::ReviewedBundleMember {
                     member_id: "calendar.timeline".into(),
-                    policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
-                        "calendar.event_kit",
-                        "calendar.timeline",
-                    )
-                    .unwrap(),
+                    policy_fingerprint: policy_fingerprint.clone(),
                     resource: calendar.calendar_id.clone(),
                     source_revision: Some(floe_conversation::AuthorityRevision {
                         incarnation: live.source_authority.incarnation(),
@@ -2272,11 +2349,15 @@ async fn personal_attention_allow_resolves() {
         reviewed_native_subject: Some(NATIVE_FINGERPRINT.into()),
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: floe_access::ATTENTION_CONNECTOR.into(),
-            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
-                floe_access::ATTENTION_CONNECTOR,
-                floe_access::ATTENTION_CONNECTOR,
-            )
-            .unwrap(),
+            policy_fingerprint:
+                crate::first_party_observe::native_member_policy_fingerprint_for_target(
+                    &host.base.vault,
+                    host.base.person,
+                    floe_access::ATTENTION_CONNECTOR,
+                    DEVICE,
+                )
+                .await
+                .unwrap(),
             resource: floe_access::ATTENTION_RESOURCE.into(),
             source_revision: None,
             expected_grant: floe_conversation::ExpectedGrantState::Absent,
@@ -2720,8 +2801,16 @@ impl RemoteFixture {
 
     /// The reviewed target an honest capture binds for the canonical
     /// gmail bundle: live producer pin plus the previewed authority.
-    fn gmail_target(&self) -> floe_conversation::InlineObserveTarget {
-        let policies = crate::first_party_observe::remote_policies("gmail").unwrap();
+    async fn gmail_target(&self) -> floe_conversation::InlineObserveTarget {
+        let policies = crate::first_party_observe::remote_policies_for_target(
+            &self.base.vault,
+            self.base.person,
+            "gmail",
+            &self.connection_id,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(policies.len(), 2);
         let authority = *self.transport.authority.lock().unwrap();
         let mut members: Vec<floe_conversation::ReviewedBundleMember> = policies
@@ -2920,7 +3009,7 @@ impl InlineOwnerMutation for RemoteTestOwners<'_> {
 #[tokio::test]
 async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
     let host = RemoteFixture::open().await;
-    let target = host.gmail_target();
+    let target = host.gmail_target().await;
     let current = host
         .base
         .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
@@ -2971,7 +3060,7 @@ async fn gmail_views_allow_enables_bundle_atomically_and_resolves() {
 #[tokio::test]
 async fn gmail_reviewed_absence_policy_fingerprint_drift_supersedes() {
     let host = RemoteFixture::open().await;
-    let mut target = host.gmail_target();
+    let mut target = host.gmail_target().await;
     assert!(
         target
             .members
@@ -3178,7 +3267,7 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
 #[tokio::test]
 async fn gmail_authority_rotation_after_review_supersedes_without_mutation() {
     let host = RemoteFixture::open().await;
-    let target = host.gmail_target();
+    let target = host.gmail_target().await;
     let current = host
         .base
         .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
@@ -3223,7 +3312,7 @@ async fn gmail_authority_rotation_after_review_supersedes_without_mutation() {
 #[tokio::test]
 async fn gmail_bad_signature_never_mutates_nor_resolves() {
     let host = RemoteFixture::open().await;
-    let target = host.gmail_target();
+    let target = host.gmail_target().await;
     let current = host
         .base
         .seed_inline(target, "floe.source.gmail", host.connection_id.as_str())
@@ -3284,6 +3373,59 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         )
         .await
         .unwrap();
+    let manifest = floe_experts_builtin::manifests()
+        .into_iter()
+        .find(|manifest| manifest.package.id == "floe.builtin.schedule")
+        .unwrap();
+    host.base
+        .vault
+        .install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
+                instance_id: host.base.vault.registry_instance_id(),
+                expected_revision: 0,
+                operation_id: Uuid::new_v4(),
+            },
+            &[manifest.clone()],
+            floe_execution::Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let snapshot = host.base.vault.expert_registry().await.unwrap().unwrap();
+    host.base
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: snapshot.assignments[0].id,
+                package: manifest.package,
+                definition_revision: manifest.definition.definition_revision,
+                requirement_key: manifest
+                    .source_requirements
+                    .iter()
+                    .find(|requirement| requirement.capability == "calendar.timeline")
+                    .unwrap()
+                    .key
+                    .clone(),
+                expected_binding_revision: 1,
+                selected: vec![floe_context_contract::SourceSelectionReference {
+                    connector_id: floe_context_contract::ConnectorId::try_new("calendar.google")
+                        .unwrap(),
+                    connection_id: floe_context_contract::ConnectionId::try_new(
+                        &host.connection_id,
+                    )
+                    .unwrap(),
+                    execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
+                        &host.transport.producer.execution_owner,
+                    )
+                    .unwrap(),
+                    capability_id: "calendar.timeline".into(),
+                    resource: floe_context_contract::ResourceHandle::try_new("primary").unwrap(),
+                    contract_version: 1,
+                }],
+            },
+        )
+        .await
+        .unwrap();
     let authority = *host.transport.authority.lock().unwrap();
     let target = floe_conversation::InlineObserveTarget {
         connection_id: host.connection_id.clone(),
@@ -3297,11 +3439,17 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
         reviewed_native_subject: None,
         members: vec![floe_conversation::ReviewedBundleMember {
             member_id: "calendar.timeline".into(),
-            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
-                "calendar.google",
-                "calendar.timeline",
-            )
-            .unwrap(),
+            policy_fingerprint:
+                crate::first_party_observe::remote_member_policy_fingerprint_for_target(
+                    &host.base.vault,
+                    host.base.person,
+                    "calendar.google",
+                    &host.connection_id,
+                    "calendar.timeline",
+                    "primary",
+                )
+                .await
+                .unwrap(),
             resource: "primary".into(),
             source_revision: Some(floe_conversation::AuthorityRevision {
                 incarnation: authority.incarnation(),
@@ -3354,7 +3502,7 @@ async fn remote_calendar_allow_resolves_through_hosted_connection() {
 #[tokio::test]
 async fn gmail_reviewed_subset_supersedes_on_canonical_extras() {
     let host = RemoteFixture::open().await;
-    let mut target = host.gmail_target();
+    let mut target = host.gmail_target().await;
     // The review covers only one of the two canonical views: the live
     // bundle is wider than reviewed, so the card supersedes instead of
     // widening.
@@ -3516,7 +3664,7 @@ async fn same_command_different_kind_conflicts() {
 #[tokio::test]
 async fn gmail_commit_then_crash_reopens_and_resolves_without_second_mutation() {
     let host = RemoteFixture::open().await;
-    let target = host.gmail_target();
+    let target = host.gmail_target().await;
     let current = host
         .base
         .seed_inline(

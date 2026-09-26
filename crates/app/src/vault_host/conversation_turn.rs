@@ -556,6 +556,109 @@ impl floe_access::DependencyResolver for CompositeDependencyResolver<'_> {
 
 #[cfg(test)]
 mod tests {
+    struct TestBindingFence;
+    static TEST_BINDING_FENCE: TestBindingFence = TestBindingFence;
+
+    impl expert_dispatch::ExpertBindingFence for TestBindingFence {
+        fn validate<'a>(&'a self) -> floe_agent_contract::BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn test_admitted_selection() -> &'static floe_experts::ExpertExecutionSelection {
+        static SELECTION: std::sync::OnceLock<floe_experts::ExpertExecutionSelection> =
+            std::sync::OnceLock::new();
+        SELECTION.get_or_init(|| {
+            let mut requirements = std::collections::BTreeMap::new();
+            for manifest in floe_experts_builtin::manifests() {
+                for requirement in manifest.source_requirements {
+                    requirements
+                        .entry(requirement.key.clone())
+                        .or_insert(requirement);
+                }
+            }
+            let mut manifest = floe_experts_builtin::manifests().remove(0);
+            manifest.source_requirements = requirements.into_values().collect();
+            let entries = manifest
+                .source_requirements
+                .iter()
+                .map(|requirement| {
+                    let selected = if requirement.capability
+                        == "relationships.confirmed_interactions"
+                    {
+                        Vec::new()
+                    } else if matches!(
+                        requirement.capability.as_str(),
+                        "attention.coarse"
+                            | "people.identity"
+                            | "wellbeing.derived"
+                            | "floe.tasks"
+                            | "memory.confirmed"
+                    ) {
+                        floe_context::discover_source_candidates(
+                            floe_context::SourceCandidateRequest {
+                                person_id: PersonId::new(),
+                                device_id: "test-device",
+                                capability: &requirement.capability,
+                                contract_version: requirement.contract_version,
+                                remote_connections: &[],
+                                remote_execution_owner: None,
+                                calendar_connection: None,
+                            },
+                        )
+                        .unwrap()
+                        .into_iter()
+                        .map(|candidate| candidate.reference)
+                        .collect()
+                    } else {
+                        let calendar = requirement.capability == "calendar.timeline";
+                        let resource = if calendar {
+                            "primary".to_owned()
+                        } else {
+                            floe_context::remote_view_resource(
+                                &requirement.capability,
+                                "test-connection",
+                            )
+                        };
+                        vec![floe_context_contract::SourceSelectionReference {
+                            connector_id: floe_context_contract::ConnectorId::try_new(
+                                if calendar { "calendar.google" } else { "gmail" },
+                            )
+                            .unwrap(),
+                            connection_id: floe_context_contract::ConnectionId::try_new(
+                                "test-connection",
+                            )
+                            .unwrap(),
+                            execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
+                                "server:source",
+                            )
+                            .unwrap(),
+                            capability_id: requirement.capability.clone(),
+                            resource: floe_context_contract::ResourceHandle::try_new(resource)
+                                .unwrap(),
+                            contract_version: requirement.contract_version,
+                        }]
+                    };
+                    floe_experts::RequirementBinding {
+                        requirement_key: requirement.key.clone(),
+                        capability: requirement.capability.clone(),
+                        contract_version: requirement.contract_version,
+                        selected,
+                    }
+                })
+                .collect();
+            floe_experts::ExpertExecutionSelection::from_binding(
+                &manifest,
+                &floe_experts::ExpertBindingState {
+                    schema_version: floe_experts::EXPERT_BINDING_SCHEMA_VERSION,
+                    revision: 1,
+                    entries,
+                    last_operation: None,
+                },
+            )
+            .unwrap()
+        })
+    }
     use std::{
         collections::HashMap,
         fs,
@@ -1429,10 +1532,10 @@ mod tests {
             registrations: vec![Arc::new(registration)],
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let task_id = Uuid::new_v4();
         let task = experts
@@ -1810,10 +1913,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -1906,10 +2009,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1957,10 +2060,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2686,10 +2789,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -2932,10 +3035,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -3117,10 +3220,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -3407,10 +3510,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -3477,10 +3580,10 @@ mod tests {
                 .collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
-            admitted_selection: None,
-            binding_fence: None,
+            admitted_selection: Some(test_admitted_selection()),
+            binding_fence: Some(&TEST_BINDING_FENCE),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

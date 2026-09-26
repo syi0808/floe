@@ -75,6 +75,70 @@ impl Fixture {
                 floe_context_contract::CalendarScope::Selected,
             ))
             .unwrap();
+        runtime.block_on(async {
+            vault
+                .install_expert_bundle(
+                    floe_experts::ExpertInstallOperation {
+                        instance_id: vault.registry_instance_id(),
+                        expected_revision: 0,
+                        operation_id: Uuid::new_v4(),
+                    },
+                    &floe_experts_builtin::manifests(),
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap();
+            let registry = vault.expert_registry().await.unwrap().unwrap();
+            for assignment in &registry.assignments {
+                let installation = registry
+                    .installations
+                    .iter()
+                    .find(|entry| entry.id == assignment.installation_id)
+                    .unwrap();
+                let manifest = registry
+                    .manifests
+                    .iter()
+                    .find(|entry| entry.package == installation.package)
+                    .unwrap();
+                let Some(requirement) = manifest
+                    .source_requirements
+                    .iter()
+                    .find(|requirement| requirement.capability == "calendar.timeline")
+                else {
+                    continue;
+                };
+                vault
+                    .replace_expert_binding(
+                        Uuid::new_v4(),
+                        floe_experts::ExpertBindingCommand {
+                            assignment_id: assignment.id,
+                            package: installation.package.clone(),
+                            definition_revision: manifest.definition.definition_revision,
+                            requirement_key: requirement.key.clone(),
+                            expected_binding_revision: 1,
+                            selected: vec![floe_context_contract::SourceSelectionReference {
+                                connector_id: floe_context_contract::ConnectorId::try_new(
+                                    "calendar.event_kit",
+                                )
+                                .unwrap(),
+                                connection_id: floe_context_contract::ConnectionId::try_new(
+                                    "fixture-connection",
+                                )
+                                .unwrap(),
+                                execution_owner_id:
+                                    floe_context_contract::ExecutionOwnerId::try_new(&device_id)
+                                        .unwrap(),
+                                capability_id: "calendar.timeline".into(),
+                                resource: floe_context_contract::ResourceHandle::try_new("home")
+                                    .unwrap(),
+                                contract_version: 1,
+                            }],
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
         let subject = FixtureSubject {
             fingerprints: HashMap::from([
                 (vec!["home".to_owned()], "a".repeat(64)),
@@ -127,7 +191,6 @@ impl Fixture {
             expected_grant_authority: overview.grant_authority,
         })
     }
-
 }
 
 #[test]
@@ -318,6 +381,70 @@ fn selection_change_requires_a_fresh_subject_and_authority() {
         CalendarAccessState::NeedsReview,
         "rotated authority selects no grant"
     );
+    assert_eq!(
+        fixture.review(
+            &current,
+            &["home".to_owned(), "work".to_owned()],
+            &"b".repeat(64)
+        ),
+        Err(AgentFailure::InvalidInput),
+        "a newly added Calendar is not automatically included in existing Expert bindings"
+    );
+    fixture.runtime.block_on(async {
+        let registry = fixture.vault.expert_registry().await.unwrap().unwrap();
+        for assignment in &registry.assignments {
+            let installation = registry
+                .installations
+                .iter()
+                .find(|entry| entry.id == assignment.installation_id)
+                .unwrap();
+            let manifest = registry
+                .manifests
+                .iter()
+                .find(|entry| entry.package == installation.package)
+                .unwrap();
+            let Some(requirement) = manifest
+                .source_requirements
+                .iter()
+                .find(|entry| entry.capability == "calendar.timeline")
+            else {
+                continue;
+            };
+            let selected = ["home", "work"]
+                .into_iter()
+                .map(|resource| floe_context_contract::SourceSelectionReference {
+                    connector_id: floe_context_contract::ConnectorId::try_new("calendar.event_kit")
+                        .unwrap(),
+                    connection_id: floe_context_contract::ConnectionId::try_new(
+                        "fixture-connection",
+                    )
+                    .unwrap(),
+                    execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
+                        &fixture.device_id,
+                    )
+                    .unwrap(),
+                    capability_id: "calendar.timeline".into(),
+                    resource: floe_context_contract::ResourceHandle::try_new(resource).unwrap(),
+                    contract_version: 1,
+                })
+                .collect();
+            fixture
+                .vault
+                .replace_expert_binding(
+                    Uuid::new_v4(),
+                    floe_experts::ExpertBindingCommand {
+                        assignment_id: assignment.id,
+                        package: installation.package.clone(),
+                        definition_revision: manifest.definition.definition_revision,
+                        requirement_key: requirement.key.clone(),
+                        expected_binding_revision: assignment.binding.revision,
+                        selected,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    });
     let reviewed = fixture
         .review(
             &current,
@@ -386,17 +513,12 @@ fn review_rejects_malformed_and_mixed_expectations_without_device_io() {
 #[test]
 fn registry_revision_is_unchanged_across_calendar_access() {
     let fixture = Fixture::new();
-    let seed = super::schedule_host::TestScheduleHost::new_with_instance(
-        fixture.person,
-        fixture.vault.registry_instance_id(),
-    )
-    .unwrap();
-    let snapshot = seed.snapshot().unwrap();
-    let expected_revision = snapshot.revision;
-    fixture
+    let expected_revision = fixture
         .runtime
-        .block_on(fixture.vault.initialize_expert_registry(&snapshot))
-        .unwrap();
+        .block_on(fixture.vault.registry_overview())
+        .unwrap()
+        .unwrap()
+        .revision;
     let inspected = fixture.apply(CalendarAccessChange::Inspect).unwrap();
     let active = fixture
         .review(&inspected, &["home".to_owned()], &"a".repeat(64))

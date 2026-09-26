@@ -325,10 +325,26 @@ where
             },
         )
         .await?;
+        let reviewed_resources: Vec<String> = target
+            .members
+            .iter()
+            .map(|member| member.resource.clone())
+            .collect();
+        let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
+            &crate::first_party_observe::native_calendar_policy_for_target(
+                self.vault,
+                person_id,
+                connector,
+                &target.connection_id,
+                device_id,
+                &reviewed_resources,
+            )
+            .await?,
+        )?;
         let mut members = Vec::with_capacity(target.members.len());
         for member in &target.members {
-            members.push(
-                self.probed_member(
+            let mut live = self
+                .probed_member(
                     connector,
                     &target.connection_id,
                     &member.member_id,
@@ -336,9 +352,11 @@ where
                     Some(connection.source_authority),
                     person_id,
                     PolicyStore::Calendar,
+                    Some(device_id),
                 )
-                .await?,
-            );
+                .await?;
+            live.policy_fingerprint = policy_fingerprint.clone();
+            members.push(live);
         }
         Ok(LiveInlineState {
             members,
@@ -397,6 +415,7 @@ where
                 None,
                 person_id,
                 PolicyStore::Personal,
+                Some(device_id),
             )
             .await?;
         Ok(LiveInlineState {
@@ -414,7 +433,17 @@ where
         connector: &str,
         person_id: PersonId,
     ) -> Result<LiveInlineState, AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies(connector)?;
+        let policies = crate::first_party_observe::remote_policies_for_target(
+            self.vault,
+            person_id,
+            connector,
+            &target.connection_id,
+            target
+                .members
+                .first()
+                .map(|member| member.resource.as_str()),
+        )
+        .await?;
         if policies.is_empty() {
             return Err(AgentFailure::CapabilityUnavailable);
         }
@@ -475,6 +504,7 @@ where
                 None,
                 person_id,
                 PolicyStore::Calendar,
+                None,
             )
             .await?;
         Ok(LiveInlineState {
@@ -493,7 +523,14 @@ where
         person_id: PersonId,
         producer_fingerprint: String,
     ) -> Result<LiveInlineState, AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies(connector)?;
+        let policies = crate::first_party_observe::remote_policies_for_target(
+            self.vault,
+            person_id,
+            connector,
+            &target.connection_id,
+            None,
+        )
+        .await?;
         let canonical: Vec<(String, String)> = policies
             .iter()
             .map(|policy| {
@@ -522,6 +559,7 @@ where
                     None,
                     person_id,
                     PolicyStore::RemoteView,
+                    None,
                 )
                 .await?,
             );
@@ -545,6 +583,7 @@ where
                     None,
                     person_id,
                     PolicyStore::RemoteView,
+                    None,
                 )
                 .await?,
             );
@@ -572,6 +611,7 @@ where
         source_revision: Option<SourceAuthority>,
         person_id: PersonId,
         policy: PolicyStore,
+        device_id: Option<&str>,
     ) -> Result<LiveMember, AgentFailure> {
         // Active only: a paused grant authorizes nothing, and capture's
         // sibling verification requires Active, so parity demands the same
@@ -598,9 +638,36 @@ where
         };
         Ok(LiveMember {
             member_id: member_id.to_owned(),
-            policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
-                connector, member_id,
-            )?,
+            policy_fingerprint: if connector == "calendar.event_kit" {
+                crate::first_party_observe::policy_fingerprint(
+                    &crate::first_party_observe::native_calendar_policy_for_target(
+                        self.vault,
+                        person_id,
+                        connector,
+                        connection_id,
+                        device_id.ok_or(AgentFailure::InvalidInput)?,
+                        &[resource.to_owned()],
+                    )
+                    .await?,
+                )?
+            } else if let Some(device_id) = device_id {
+                crate::first_party_observe::native_member_policy_fingerprint_for_target(
+                    self.vault, person_id, connector, device_id,
+                )
+                .await?
+            } else if crate::first_party_observe::remote_policies(connector)?.is_empty() {
+                crate::first_party_observe::member_policy_fingerprint(connector, member_id)?
+            } else {
+                crate::first_party_observe::remote_member_policy_fingerprint_for_target(
+                    self.vault,
+                    person_id,
+                    connector,
+                    connection_id,
+                    member_id,
+                    resource,
+                )
+                .await?
+            },
             resource: resource.to_owned(),
             source_revision,
             live_grants: grants
@@ -1118,7 +1185,10 @@ where
                 (Some(id), Some(authority))
             }
         };
-        let consumers = crate::first_party_observe::native_consumers(connector).unwrap_or_default();
+        let consumers = crate::first_party_observe::native_consumers_for_target(
+            self.vault, person_id, connector, device_id,
+        )
+        .await?;
         floe_access::apply_personal_access(
             self.vault,
             self.personal_subject,
@@ -1154,7 +1224,17 @@ where
         device_id: &str,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<(), AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies(connector)?;
+        let policies = crate::first_party_observe::remote_policies_for_target(
+            self.vault,
+            person_id,
+            connector,
+            &target.connection_id,
+            target
+                .members
+                .first()
+                .map(|member| member.resource.as_str()),
+        )
+        .await?;
         if policies.is_empty() {
             return Err(AgentFailure::InvalidInput);
         }

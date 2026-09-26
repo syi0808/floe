@@ -1051,7 +1051,7 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
 }
 
 #[test]
-fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
+fn production_builtin_expert_completes_unconfigured_task_with_durable_binding_ref() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     let keys = Keys::default();
@@ -1095,8 +1095,6 @@ fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
     );
     assert_eq!(result.failure, None, "result: {result:?}");
     let session = result.session.unwrap();
-    // The blocked mandatory source completes the task with a
-    // needs_user_action report and a durable safe ref — never a failure.
     let task_id = session
         .messages
         .iter()
@@ -1111,7 +1109,7 @@ fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
                             matches!(
                                 part,
                                 floe_experts::A2APart::Data { data, .. }
-                                    if data.contains("needs_user_action")
+                                    if data.contains("expert_binding")
                             )
                         })
                     })
@@ -1173,7 +1171,7 @@ fn production_builtin_expert_completes_blocked_task_with_durable_ref() {
         .expect("blocked task must carry the durable ref");
     assert_eq!(
         reference.kind,
-        floe_agent_contract::UserInteractionKind::SourceAccess
+        floe_agent_contract::UserInteractionKind::ExpertBinding
     );
     let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::new(reopened));
     let stored = runtime
@@ -3172,14 +3170,7 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
 }
 
 #[test]
-fn builtin_endpoint_offers_only_observed_execution_classes() {
-    // 3-A1: the delegated endpoint composes canonical Inference from the
-    // stored credential and offers Experts from observed non-secret facts.
-    // The paired server is down, so only the device class is observed and
-    // the Remote-only Commitments Expert is denied at admission — before any
-    // source read or model call. Mail is installed and granted, so an offered
-    // Commitments run would fail on the dead-server read with a transport
-    // failure, never CapabilityDenied.
+fn builtin_endpoint_requires_admitted_origin_before_unconfigured_remote_execution() {
     let fixture = direct_endpoint_fixture();
     fixture.runtime.block_on(async {
         let setup = floe_experts::ExpertInstallOperation {
@@ -3226,7 +3217,7 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
         .block_on(floe_agent_contract::AgentEndpoint::execute(
             &endpoint, invocation, &scope,
         ));
-    assert_eq!(result.err(), Some(AgentFailure::CapabilityDenied));
+    assert_eq!(result.err(), Some(AgentFailure::NotFound));
 }
 
 // ---- linked resume (05-E) ----

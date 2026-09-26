@@ -2480,11 +2480,19 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         WorkerAction::PersonalAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let mut command = (**change).clone();
+            command.consumers = crate::first_party_observe::native_consumers_for_target(
+                vault.vault.as_ref(),
+                job.person,
+                &command.connector,
+                &command.device_id,
+            )
+            .await?;
             let overview = floe_access::apply_personal_access(
                 vault.vault.as_ref(),
                 &personal_grants::native_driver(local_context),
                 job.person,
-                (**change).clone(),
+                command,
                 job.cancellation.clone(),
             )
             .await?;
@@ -2495,11 +2503,19 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         WorkerAction::ContactsAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let mut command = (**change).clone();
+            command.consumers = crate::first_party_observe::native_consumers_for_target(
+                vault.vault.as_ref(),
+                job.person,
+                &command.connector,
+                &command.device_id,
+            )
+            .await?;
             let overview = floe_access::apply_contacts(
                 vault.vault.as_ref(),
                 &personal_grants::native_driver(local_context),
                 job.person,
-                (**change).clone(),
+                command,
                 job.cancellation.clone(),
             )
             .await?;

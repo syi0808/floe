@@ -327,9 +327,10 @@ mod tests {
                 "test-device",
                 &["home".into()],
                 source_authority,
-                &crate::first_party_observe::calendar_policy()
-                    .unwrap()
-                    .consumers,
+                &[
+                    floe_access::GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id())
+                        .unwrap(),
+                ],
                 &"a".repeat(64),
                 None,
             )

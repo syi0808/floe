@@ -121,7 +121,14 @@ where
     if ctx.vault.person_id() != ctx.person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let policies = crate::first_party_observe::remote_policies(ctx.connector_id)?;
+    let policies = crate::first_party_observe::remote_policies_for_target(
+        ctx.vault,
+        ctx.person_id,
+        ctx.connector_id,
+        ctx.connection_id,
+        ctx.resource,
+    )
+    .await?;
     if policies.is_empty() {
         return Err(AgentFailure::InvalidInput);
     }
@@ -155,7 +162,14 @@ where
     if ctx.vault.person_id() != ctx.person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let policies = crate::first_party_observe::remote_policies(ctx.connector_id)?;
+    let policies = crate::first_party_observe::remote_policies_for_target(
+        ctx.vault,
+        ctx.person_id,
+        ctx.connector_id,
+        ctx.connection_id,
+        ctx.resource,
+    )
+    .await?;
     if policies.is_empty() {
         return Err(AgentFailure::InvalidInput);
     }
@@ -300,7 +314,14 @@ pub(crate) async fn observe_status<Keys: VaultKeyProvider>(
     if vault.person_id() != person_id {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let policies = crate::first_party_observe::remote_policies(connector_id)?;
+    let policies = crate::first_party_observe::remote_policies_for_target(
+        vault,
+        person_id,
+        connector_id,
+        connection_id,
+        resource,
+    )
+    .await?;
     if policies.is_empty() {
         return Err(AgentFailure::InvalidInput);
     }

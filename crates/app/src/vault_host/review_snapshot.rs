@@ -232,13 +232,22 @@ where
             .ok_or(AgentFailure::InvalidInput)?;
         self.verify_observed_live(person_id, connector, connection_id, expected)
             .await?;
+        let policy_fingerprint = crate::first_party_observe::policy_fingerprint(
+            &crate::first_party_observe::native_calendar_policy_for_target(
+                self.vault,
+                person_id,
+                connector,
+                connection_id,
+                device_id,
+                &reviewed,
+            )
+            .await?,
+        )?;
         let mut members = Vec::with_capacity(reviewed.len());
         for resource in reviewed {
             members.push(SnapshotMember {
                 member_id: "calendar.timeline".to_owned(),
-                policy_fingerprint: crate::first_party_observe::policy_fingerprint(
-                    &crate::first_party_observe::calendar_policy()?,
-                )?,
+                policy_fingerprint: policy_fingerprint.clone(),
                 resource,
                 source_revision: requirement.source_authority(),
                 expected_grant: expected,
@@ -310,9 +319,11 @@ where
         Ok(InlineReviewSnapshot {
             members: vec![SnapshotMember {
                 member_id: connector.to_owned(),
-                policy_fingerprint: crate::first_party_observe::member_policy_fingerprint(
-                    connector, connector,
-                )?,
+                policy_fingerprint:
+                    crate::first_party_observe::native_member_policy_fingerprint_for_target(
+                        self.vault, person_id, connector, device_id,
+                    )
+                    .await?,
                 resource: identity_resource.to_owned(),
                 source_revision: requirement.source_authority(),
                 expected_grant: expected,
@@ -334,16 +345,23 @@ where
         connector: &str,
         connection: &str,
     ) -> Result<InlineReviewSnapshot, AgentFailure> {
-        let policies = crate::first_party_observe::remote_policies(connector)?;
-        if policies.is_empty() {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        let producer = self.vault.remote_pinned_producer().await?;
         let requested: Vec<String> = requirement
             .resources()
             .iter()
             .map(|resource| resource.as_str().to_owned())
             .collect();
+        let policies = crate::first_party_observe::remote_policies_for_target(
+            self.vault,
+            person_id,
+            connector,
+            connection,
+            requested.first().map(String::as_str),
+        )
+        .await?;
+        if policies.is_empty() {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        let producer = self.vault.remote_pinned_producer().await?;
         let mut members = Vec::with_capacity(policies.len());
         let mut connection_revision = None;
         for policy in &policies {
