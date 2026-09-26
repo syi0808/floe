@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_switch.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -249,7 +250,7 @@ class _RequirementPickerState extends State<_RequirementPicker> {
           Text(strings.expertSourceNoCompatible),
         if (current != null)
           for (final candidate in current.candidates)
-            CheckboxListTile(
+            FloeCheckboxTile(
               value:
                   draft.contains(candidate.id) ||
                   (candidate.availability == 'unavailable' &&
