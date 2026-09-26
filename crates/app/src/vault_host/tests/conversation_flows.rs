@@ -2536,10 +2536,9 @@ fn direct_endpoint_fixture_for(person: PersonId) -> DirectEndpointFixture {
 }
 
 #[test]
-fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
+fn common_schedule_endpoint_publishes_binding_setup_before_source_review() {
     use floe_context_contract::{CalendarProvider, CalendarScope};
     use floe_day::CalendarSelection;
-    use std::io::{Read, Write};
 
     let person = PersonId::new();
     let fixture = direct_endpoint_fixture_for(person);
@@ -2574,28 +2573,6 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
             .await
             .unwrap();
     });
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-    let inventory_server = std::thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        let size = socket.read(&mut request).unwrap();
-        assert!(
-            String::from_utf8_lossy(&request[..size]).starts_with("GET /v1/inference-purposes")
-        );
-        let inventory = canonical_inventory_body();
-        socket
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{inventory}",
-                    inventory.len(),
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-    });
-    let mut connection = fixture_saved_connection(person, "mac-local");
-    connection.base_url = base_url;
     let (admission, selection) = direct_endpoint_identity(
         &fixture,
         floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
@@ -2604,7 +2581,7 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
-        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
+        floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
         admission,
         selection,
         direct_endpoint_registration(
@@ -2685,15 +2662,14 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         .block_on(floe_agent_contract::AgentEndpoint::execute(
             &endpoint, invocation, &scope,
         ));
-    inventory_server.join().unwrap();
     let report = report.unwrap();
     assert!(
-        report.result.contains("needs your review"),
+        report.result.contains("Expert settings are required"),
         "{}",
         report.result
     );
     assert!(report.settlement.is_none());
-    assert_eq!(report.artifacts.len(), 2);
+    assert_eq!(report.artifacts.len(), 1);
     let data = report
         .artifacts
         .iter()
@@ -2710,7 +2686,7 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     let reference: floe_agent_contract::UserInteractionRef = serde_json::from_str(&data).unwrap();
     assert_eq!(
         reference.kind,
-        floe_agent_contract::UserInteractionKind::SourceAccess
+        floe_agent_contract::UserInteractionKind::ExpertBinding
     );
     let stored = fixture
         .runtime
@@ -2988,24 +2964,40 @@ fn direct_invocation(
 fn direct_endpoint_identity(
     fixture: &DirectEndpointFixture,
     agent_id: &str,
-) -> (floe_experts::ExpertAdmissionIdentity, floe_experts::ExpertExecutionSelection) {
+) -> (
+    floe_experts::ExpertAdmissionIdentity,
+    floe_experts::ExpertExecutionSelection,
+) {
     fixture.runtime.block_on(async {
         if fixture.vault.expert_registry().await.unwrap().is_none() {
-            fixture.vault.install_expert_bundle(
-                floe_experts::ExpertInstallOperation {
-                    instance_id: fixture.vault.registry_instance_id(),
-                    expected_revision: 0,
-                    operation_id: Uuid::new_v4(),
-                },
-                &floe_experts_builtin::manifests(),
-                floe_execution::Cancellation::default(),
-            ).await.unwrap();
+            fixture
+                .vault
+                .install_expert_bundle(
+                    floe_experts::ExpertInstallOperation {
+                        instance_id: fixture.vault.registry_instance_id(),
+                        expected_revision: 0,
+                        operation_id: Uuid::new_v4(),
+                    },
+                    &floe_experts_builtin::manifests(),
+                    floe_execution::Cancellation::default(),
+                )
+                .await
+                .unwrap();
         }
         let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
-        let registry = floe_experts::AgentRegistry::restore(snapshot, fixture.vault.registry_instance_id()).unwrap();
-        let admission = registry.enabled_expert_admissions(fixture.person).unwrap()
-            .into_iter().find(|(card, _)| card.id == agent_id).unwrap().1;
-        let selection = registry.execution_selection(fixture.person, &admission).unwrap();
+        let registry =
+            floe_experts::AgentRegistry::restore(snapshot, fixture.vault.registry_instance_id())
+                .unwrap();
+        let admission = registry
+            .enabled_expert_admissions(fixture.person)
+            .unwrap()
+            .into_iter()
+            .find(|(card, _)| card.id == agent_id)
+            .unwrap()
+            .1;
+        let selection = registry
+            .execution_selection(fixture.person, &admission)
+            .unwrap();
         (admission, selection)
     })
 }

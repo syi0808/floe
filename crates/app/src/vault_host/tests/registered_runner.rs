@@ -846,6 +846,22 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
     .unwrap();
     assert_eq!(saved.binding_revision, first.binding_revision + 1);
     assert!(saved.candidates[0].selected);
+    let disappeared = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "other-device",
+        operation_id,
+        &intent,
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(disappeared.binding_revision, saved.binding_revision);
+    assert!(disappeared.candidates.iter().any(|candidate| {
+        candidate.availability == "unavailable"
+            && candidate.selected
+            && candidate.candidate_id == first.candidates[0].candidate_id
+    }));
     let retry = crate::vault_host::expert_binding_settings::replace(
         &open,
         person,
@@ -906,6 +922,54 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn initial_shipped_setup_selects_single_native_source_only_once() {
+    let person = PersonId::new();
+    let registration = super::conversation_turn::expert_dispatch::shipped_registrations()
+        .into_iter()
+        .find(|entry| entry.manifest.package.id == "floe.builtin.focus-attention")
+        .unwrap();
+    let manifest = registration.manifest.clone();
+    let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    let before = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment_id = before.assignments[0].id;
+    assert_eq!(before.assignments[0].binding.revision, 1);
+    crate::vault_host::expert_binding_settings::bind_initial_defaults(
+        &open,
+        person,
+        "mac-local",
+        Uuid::new_v4(),
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    let first = open.vault.expert_registry().await.unwrap().unwrap();
+    let binding = &first
+        .assignments
+        .iter()
+        .find(|entry| entry.id == assignment_id)
+        .unwrap()
+        .binding;
+    assert!(
+        binding
+            .entries
+            .iter()
+            .any(|entry| entry.capability == "attention.coarse" && entry.selected.len() == 1)
+    );
+    let revision = binding.revision;
+    crate::vault_host::expert_binding_settings::bind_initial_defaults(
+        &open,
+        person,
+        "other-device",
+        Uuid::new_v4(),
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    let after = open.vault.expert_registry().await.unwrap().unwrap();
+    assert_eq!(after.assignments[0].binding.revision, revision);
 }
 
 #[tokio::test]

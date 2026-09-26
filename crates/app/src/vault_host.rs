@@ -2530,12 +2530,23 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {
                 ConversationSessionOperation::Start => {
+                    let first_install = vault.vault.expert_registry().await?.is_none();
                     ensure_expert_bundle(
                         vault,
                         job.cancellation.clone(),
                         floe_experts::ExpertInstallRefresh::InstallIfAbsent,
                     )
                     .await?;
+                    if first_install && let Some(admission) = job.local_admission.as_ref() {
+                        expert_binding_settings::bind_initial_defaults(
+                            vault,
+                            job.person,
+                            admission.caller.device_id(),
+                            job.id,
+                            &job.cancellation,
+                        )
+                        .await?;
+                    }
                     let receipt = floe_conversation::start_session(
                         vault.conversation_repository.as_ref(),
                         floe_conversation::SessionRequest {

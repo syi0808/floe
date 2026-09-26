@@ -171,6 +171,119 @@ pub(super) async fn inspect<Keys: floe_vault::VaultKeyProvider>(
     .catalog)
 }
 
+pub(super) async fn bind_initial_defaults<Keys: floe_vault::VaultKeyProvider + 'static>(
+    open: &OpenVault<Keys>,
+    person_id: PersonId,
+    device_id: &str,
+    setup_operation_id: Uuid,
+    cancellation: &floe_execution::Cancellation,
+) -> Result<(), AgentFailure> {
+    if setup_operation_id.is_nil() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let snapshot = open
+        .vault
+        .expert_registry()
+        .await?
+        .ok_or(AgentFailure::NotFound)?;
+    for assignment in snapshot
+        .assignments
+        .iter()
+        .filter(|entry| entry.person_id == person_id)
+    {
+        let Some(installation) = snapshot
+            .installations
+            .iter()
+            .find(|entry| entry.id == assignment.installation_id)
+        else {
+            return Err(AgentFailure::StorageUnavailable);
+        };
+        let Some(manifest) = snapshot
+            .manifests
+            .iter()
+            .find(|entry| entry.package == installation.package)
+        else {
+            return Err(AgentFailure::StorageUnavailable);
+        };
+        if !floe_experts_builtin::manifests()
+            .iter()
+            .any(|shipped| shipped.package == manifest.package)
+        {
+            continue;
+        }
+        for requirement in &manifest.source_requirements {
+            let current = match current_candidates(
+                open,
+                person_id,
+                device_id,
+                assignment.id,
+                &requirement.key,
+                cancellation,
+            )
+            .await
+            {
+                Ok(current) => current,
+                Err(
+                    failure @ (AgentFailure::Cancelled
+                    | AgentFailure::VaultUnavailable
+                    | AgentFailure::StorageUnavailable),
+                ) => return Err(failure),
+                Err(_) => continue,
+            };
+            if current
+                .catalog
+                .candidates
+                .iter()
+                .any(|candidate| candidate.selected)
+            {
+                continue;
+            }
+            let chosen = match requirement.capability.as_str() {
+                "calendar.timeline" if !current.live.is_empty() => {
+                    current.live.iter().collect::<Vec<_>>()
+                }
+                "relationships.confirmed_interactions" => Vec::new(),
+                _ if current.live.len() == 1 => current.live.iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+            if chosen.is_empty() || chosen.len() > usize::from(requirement.maximum_sources) {
+                continue;
+            }
+            let selected = chosen
+                .into_iter()
+                .map(|candidate| candidate.reference.clone())
+                .collect();
+            let operation_id = Uuid::new_v5(
+                &setup_operation_id,
+                format!(
+                    "floe.initial-expert-binding.v1:{}:{}",
+                    assignment.id, requirement.key
+                )
+                .as_bytes(),
+            );
+            match open
+                .vault
+                .replace_expert_binding(
+                    operation_id,
+                    floe_experts::ExpertBindingCommand {
+                        assignment_id: assignment.id,
+                        package: installation.package.clone(),
+                        definition_revision: manifest.definition.definition_revision,
+                        requirement_key: requirement.key.clone(),
+                        expected_binding_revision: current.catalog.binding_revision,
+                        selected,
+                    },
+                )
+                .await
+            {
+                Ok(_) | Err(AgentFailure::Conflict) => {}
+                Err(failure) => return Err(failure),
+            }
+        }
+    }
+    open.publish_expert_directory(&open.registrations).await
+}
+
 pub(super) async fn replace<Keys: floe_vault::VaultKeyProvider + 'static>(
     open: &OpenVault<Keys>,
     person_id: PersonId,
@@ -183,6 +296,65 @@ pub(super) async fn replace<Keys: floe_vault::VaultKeyProvider + 'static>(
         || change.candidate_ids.len() > usize::from(floe_experts::MAX_REQUIREMENT_SOURCES)
     {
         return Err(AgentFailure::InvalidInput);
+    }
+    if let Some(snapshot) = open.vault.expert_registry().await?
+        && let Some(assignment) = snapshot
+            .assignments
+            .iter()
+            .find(|entry| entry.id == change.assignment_id && entry.person_id == person_id)
+        && assignment
+            .binding
+            .last_operation
+            .as_ref()
+            .is_some_and(|receipt| receipt.operation_id == operation_id)
+    {
+        let entry = assignment
+            .binding
+            .entries
+            .iter()
+            .find(|entry| entry.requirement_key == change.requirement_key)
+            .ok_or(AgentFailure::Conflict)?;
+        let mut requested = change.candidate_ids.clone();
+        requested.sort();
+        if requested.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut recorded = entry
+            .selected
+            .iter()
+            .map(floe_context::source_candidate_id)
+            .collect::<Result<Vec<_>, _>>()?;
+        recorded.sort();
+        if requested != recorded {
+            return Err(AgentFailure::Conflict);
+        }
+        open.vault
+            .replace_expert_binding(
+                operation_id,
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: change.assignment_id,
+                    package: floe_agent_contract::PackageRef {
+                        id: change.package_id.clone(),
+                        version: change.package_version.clone(),
+                        kind: PackageKind::Expert,
+                    },
+                    definition_revision: change.definition_revision,
+                    requirement_key: change.requirement_key.clone(),
+                    expected_binding_revision: change.expected_binding_revision,
+                    selected: entry.selected.clone(),
+                },
+            )
+            .await?;
+        return Ok(current_candidates(
+            open,
+            person_id,
+            device_id,
+            change.assignment_id,
+            &change.requirement_key,
+            cancellation,
+        )
+        .await?
+        .catalog);
     }
     let current = current_candidates(
         open,
