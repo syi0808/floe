@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{ExpertAdmissionIdentity, ExpertExecutionSelection, ExpertManifest, manifest_set_digest};
+use crate::{
+    ExpertAdmissionIdentity, ExpertExecutionSelection, ExpertManifest, manifest_set_digest,
+};
 
 pub const EXPERT_REGISTRY_SCHEMA_VERSION: u32 = 3;
 pub const EXPERT_BINDING_SCHEMA_VERSION: u32 = 1;
@@ -140,7 +142,19 @@ pub struct RegistryOverview {
     pub instance_id: Uuid,
     pub revision: u64,
     pub installations: Vec<PackageInstallation>,
+    pub definitions: Vec<ExpertDefinitionOverview>,
     pub assignments: Vec<AssignmentOverview>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertDefinitionOverview {
+    pub package: PackageRef,
+    pub definition_revision: u64,
+    pub name: String,
+    pub description: String,
+    pub domain_tags: Vec<String>,
+    pub skills: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -151,6 +165,19 @@ pub struct AssignmentOverview {
     pub enabled: bool,
     pub state_revision: u64,
     pub completed_invocations: u64,
+    pub binding_revision: u64,
+    pub requirements: Vec<RequirementBindingOverview>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequirementBindingOverview {
+    pub key: String,
+    pub capability: String,
+    pub contract_version: u32,
+    pub minimum_sources: u8,
+    pub maximum_sources: u8,
+    pub selected_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -358,17 +385,71 @@ impl AgentRegistry {
                 .filter(|installation| installation_ids.contains(&installation.id))
                 .cloned()
                 .collect(),
+            definitions: self
+                .snapshot
+                .manifests
+                .iter()
+                .filter(|manifest| {
+                    self.snapshot.installations.iter().any(|installation| {
+                        installation_ids.contains(&installation.id)
+                            && installation.package == manifest.package
+                    })
+                })
+                .map(|manifest| ExpertDefinitionOverview {
+                    package: manifest.package.clone(),
+                    definition_revision: manifest.definition.definition_revision,
+                    name: manifest.definition.card.name.clone(),
+                    description: manifest.definition.card.description.clone(),
+                    domain_tags: manifest.definition.card.domain_tags.clone(),
+                    skills: manifest.definition.card.skills.clone(),
+                })
+                .collect(),
             assignments: self
                 .snapshot
                 .assignments
                 .iter()
                 .filter(|assignment| assignment.person_id == person_id)
-                .map(|assignment| AssignmentOverview {
-                    id: assignment.id,
-                    installation_id: assignment.installation_id,
-                    enabled: assignment.enabled,
-                    state_revision: assignment.private_state.revision,
-                    completed_invocations: assignment.private_state.completed_invocations,
+                .map(|assignment| {
+                    let installation = self
+                        .snapshot
+                        .installations
+                        .iter()
+                        .find(|installation| installation.id == assignment.installation_id)
+                        .expect("validated assignment installation");
+                    let manifest = self
+                        .snapshot
+                        .manifests
+                        .iter()
+                        .find(|manifest| manifest.package == installation.package)
+                        .expect("validated installation manifest");
+                    AssignmentOverview {
+                        id: assignment.id,
+                        installation_id: assignment.installation_id,
+                        enabled: assignment.enabled,
+                        state_revision: assignment.private_state.revision,
+                        completed_invocations: assignment.private_state.completed_invocations,
+                        binding_revision: assignment.binding.revision,
+                        requirements: manifest
+                            .source_requirements
+                            .iter()
+                            .map(|requirement| {
+                                let binding = assignment
+                                    .binding
+                                    .entries
+                                    .iter()
+                                    .find(|entry| entry.requirement_key == requirement.key)
+                                    .expect("validated requirement binding");
+                                RequirementBindingOverview {
+                                    key: requirement.key.clone(),
+                                    capability: requirement.capability.clone(),
+                                    contract_version: requirement.contract_version,
+                                    minimum_sources: requirement.minimum_sources,
+                                    maximum_sources: requirement.maximum_sources,
+                                    selected_count: binding.selected.len(),
+                                }
+                            })
+                            .collect(),
+                    }
                 })
                 .collect(),
         }

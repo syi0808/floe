@@ -5,7 +5,6 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_switch.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
-import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
@@ -100,6 +99,11 @@ class _CapabilityPermission extends StatelessWidget {
     final assignments = registry.assignments
         .where((entry) => entry.installationId == installation.id)
         .toList();
+    final definition = registry.definitions.singleWhere(
+      (entry) =>
+          entry.packageId == installation.packageId &&
+          entry.version == installation.version,
+    );
     final enabled =
         installation.enabled &&
         assignments.isNotEmpty &&
@@ -121,19 +125,10 @@ class _CapabilityPermission extends StatelessWidget {
         label: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              agentCapabilityTitle(
-                installation.packageId,
-                kind: installation.kind,
-              ),
-              style: FloeType.controlLabel,
-            ),
+            Text(definition.name, style: FloeType.controlLabel),
             const SizedBox(height: FloeSpace.xxs),
             Text(
-              agentCapabilityDescription(
-                installation.packageId,
-                kind: installation.kind,
-              ),
+              definition.description,
               style: FloeType.bodySmall.copyWith(
                 color: FloePalette.neutral600,
                 fontSize: 12,

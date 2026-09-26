@@ -111,4 +111,32 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('unknown Expert renders manifest metadata without a UI branch', (
+    tester,
+  ) async {
+    final gateway = TestRegistryGateway();
+    final installation =
+        (gateway.snapshot!['installations'] as List).single as Map;
+    final definition = (gateway.snapshot!['definitions'] as List).single as Map;
+    (installation['package'] as Map)['id'] = 'example.test.expert';
+    (definition['package'] as Map)['id'] = 'example.test.expert';
+    definition['name'] = 'Example test Expert';
+    definition['description'] = 'An installed extension for a specific task.';
+    final controller = AgentController(
+      gateway: gateway,
+      personId: registryPerson,
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+    await controller.loadRegistry();
+    await tester.pumpWidget(app(controller, 1));
+    await tester.pumpAndSettle();
+    expect(find.text('Example test Expert'), findsOneWidget);
+    expect(
+      find.text('An installed extension for a specific task.'),
+      findsOneWidget,
+    );
+    expect(find.text('Specialized assistance'), findsNothing);
+  });
 }
