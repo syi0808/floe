@@ -2,9 +2,9 @@
 //!
 //! It needs one view — granted communication — and the paired server model.
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::SourceReadOutcome;
 
 use floe_context_contract::CommunicationView;
 
@@ -36,8 +36,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await?
     {
-        SourceReadOutcome::Ready(view) => view,
-        SourceReadOutcome::Unavailable(_) => {
+        RequirementReadOutcome::Ready(view) => view,
+        RequirementReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Communication.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -45,10 +45,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 "Mail is temporarily unavailable, so there is no communication assessment.".into(),
             );
         }
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        RequirementReadOutcome::NeedsUserAction => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Communication.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,

@@ -1,8 +1,8 @@
 //! The Life Logistics Expert's own execution.
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::SourceReadOutcome;
 
 use floe_context_contract::LogisticsView;
 
@@ -25,8 +25,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await?
     {
-        SourceReadOutcome::Ready(view) => view,
-        SourceReadOutcome::Unavailable(_) => {
+        RequirementReadOutcome::Ready(view) => view,
+        RequirementReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -34,10 +34,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 "Logistics are temporarily unavailable, so there is no logistics plan.".into(),
             );
         }
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        RequirementReadOutcome::NeedsUserAction => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,

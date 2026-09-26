@@ -9,10 +9,10 @@ use floe_agent_contract::{
     InferencePolicyDecision,
 };
 use floe_context_contract::{
-    AttentionView, AuthorizedRead, CalendarContextView, ConfirmedInteractionView, ConnectionId,
-    ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority,
-    GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
-    HeldGrant, PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
+    AttentionView, AuthorizedRead, CalendarContextView, ConnectionId, ConnectorId,
+    ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+    GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding, HeldGrant,
+    PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
     SourceAccessRequirement, SourceAccessRequirementKind, SourceAuthority, SourceReadOutcome,
     SourceUnavailable, WellbeingView, WorkContextView,
 };
@@ -20,7 +20,8 @@ use floe_execution::Cancellation;
 use tokio::time::Instant;
 
 use crate::{
-    Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft,
+    Acquiring, BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest,
+    RequirementReadOutcome, StatefulExpertDraft,
 };
 
 pub struct ScriptedModel {
@@ -111,19 +112,17 @@ impl ScriptedHost {
 
     fn encode<T: serde::Serialize>(
         outcome: SourceReadOutcome<T>,
-    ) -> Result<SourceReadOutcome<crate::DeclaredSourceRead<TestRead>>, AgentFailure> {
+    ) -> Result<RequirementReadOutcome<crate::DeclaredSourceRead<TestRead>>, AgentFailure> {
         Ok(match outcome {
             SourceReadOutcome::Ready(value) => {
-                SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                RequirementReadOutcome::Ready(crate::DeclaredSourceRead::new(
                     serde_json::to_value(value).map_err(|_| AgentFailure::InvalidInput)?,
                     vec![],
                     None,
                 ))
             }
-            SourceReadOutcome::Unavailable(reason) => SourceReadOutcome::Unavailable(reason),
-            SourceReadOutcome::NeedsUserAction(blockers) => {
-                SourceReadOutcome::NeedsUserAction(blockers)
-            }
+            SourceReadOutcome::Unavailable(reason) => RequirementReadOutcome::Unavailable(reason),
+            SourceReadOutcome::NeedsUserAction(_) => RequirementReadOutcome::NeedsUserAction,
         })
     }
 }
@@ -145,7 +144,7 @@ impl BuiltinExpertHost for ScriptedHost {
         request: &'a BuiltinExpertRequest,
         key: &'a str,
         _: serde_json::Value,
-    ) -> Acquiring<'a, SourceReadOutcome<crate::DeclaredSourceRead<Self::SourceRead>>> {
+    ) -> Acquiring<'a, RequirementReadOutcome<crate::DeclaredSourceRead<Self::SourceRead>>> {
         Box::pin(async move {
             if !crate::manifests().into_iter().any(|manifest| {
                 manifest.package.id == request.agent_id
@@ -168,7 +167,7 @@ impl BuiltinExpertHost for ScriptedHost {
                 "floe.source.attention" => {
                     Ok(match Self::take(&self.attention, "attention view")? {
                         SourceReadOutcome::Ready((view, dependency)) => {
-                            SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                            RequirementReadOutcome::Ready(crate::DeclaredSourceRead::new(
                                 serde_json::to_value(view)
                                     .map_err(|_| AgentFailure::InvalidInput)?,
                                 vec![dependency],
@@ -176,36 +175,31 @@ impl BuiltinExpertHost for ScriptedHost {
                             ))
                         }
                         SourceReadOutcome::Unavailable(reason) => {
-                            SourceReadOutcome::Unavailable(reason)
+                            RequirementReadOutcome::Unavailable(reason)
                         }
-                        SourceReadOutcome::NeedsUserAction(blockers) => {
-                            SourceReadOutcome::NeedsUserAction(blockers)
+                        SourceReadOutcome::NeedsUserAction(_) => {
+                            RequirementReadOutcome::NeedsUserAction
                         }
                     })
                 }
                 "floe.source.work-context" if has_work => {
                     Self::encode(Self::take(&self.work, "work context views")?)
                 }
-                "floe.source.confirmed-interactions" => {
-                    Ok(SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
-                        serde_json::to_value(Vec::<ConfirmedInteractionView>::new())
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                        vec![],
-                        None,
-                    )))
-                }
+                "floe.source.confirmed-interactions" => Ok(RequirementReadOutcome::Unavailable(
+                    SourceUnavailable::TemporarilyUnavailable,
+                )),
                 "floe.source.confirmed-memory" | "floe.source.tasks" => {
                     Err(AgentFailure::CapabilityUnavailable)
                 }
                 _ => Ok(match Self::take(&self.source, "source view")? {
-                    SourceReadOutcome::Ready(read) => SourceReadOutcome::Ready(
+                    SourceReadOutcome::Ready(read) => RequirementReadOutcome::Ready(
                         crate::DeclaredSourceRead::new(read.payload.clone(), vec![], Some(read)),
                     ),
                     SourceReadOutcome::Unavailable(reason) => {
-                        SourceReadOutcome::Unavailable(reason)
+                        RequirementReadOutcome::Unavailable(reason)
                     }
-                    SourceReadOutcome::NeedsUserAction(blockers) => {
-                        SourceReadOutcome::NeedsUserAction(blockers)
+                    SourceReadOutcome::NeedsUserAction(_) => {
+                        RequirementReadOutcome::NeedsUserAction
                     }
                 }),
             }

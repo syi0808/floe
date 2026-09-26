@@ -8,6 +8,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::prompts::PromptAssembly;
 use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, ExpertModel, ExpertModelAnswer, ExpertModelCall,
@@ -16,7 +17,7 @@ use floe_agent_contract::{
 use floe_agent_contract::{AgentContext, InferencePolicyDecision};
 use floe_context_contract::{
     CalendarContextView, CommunicationView, ContextEvidence, ContextIssueReason, ContextSource,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, ProcessingRequirement, SourceReadOutcome,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, ProcessingRequirement,
     calendar_context_evidence, communication_context_evidence, validate_calendar_context_view,
     validate_communication_view,
 };
@@ -26,39 +27,37 @@ pub(crate) async fn read_declared_view<Host, View>(
     request: &crate::BuiltinExpertRequest,
     key: &str,
     query: serde_json::Value,
-) -> Result<SourceReadOutcome<View>, AgentFailure>
+) -> Result<RequirementReadOutcome<View>, AgentFailure>
 where
     Host: crate::BuiltinExpertHost + ?Sized,
     View: DeserializeOwned,
 {
     Ok(match host.read_requirement(request, key, query).await? {
-        SourceReadOutcome::Ready(read) => {
+        RequirementReadOutcome::Ready(read) => {
             for dependency in read.dependencies() {
                 host.record_dependency(request.task_id, request.task_id, dependency.clone())?;
             }
-            SourceReadOutcome::Ready(
+            RequirementReadOutcome::Ready(
                 serde_json::from_value(read.payload().clone())
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?,
             )
         }
-        SourceReadOutcome::Unavailable(reason) => SourceReadOutcome::Unavailable(reason),
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            SourceReadOutcome::NeedsUserAction(blockers)
-        }
+        RequirementReadOutcome::Unavailable(reason) => RequirementReadOutcome::Unavailable(reason),
+        RequirementReadOutcome::NeedsUserAction => RequirementReadOutcome::NeedsUserAction,
     })
 }
 
 pub(crate) fn optional_calendar_views(
     context: &mut AgentContext,
-    outcome: SourceReadOutcome<Vec<CalendarContextView>>,
+    outcome: RequirementReadOutcome<Vec<CalendarContextView>>,
 ) -> Vec<CalendarContextView> {
     let (views, issue) = match outcome {
-        SourceReadOutcome::Ready(views) => (views, None),
-        SourceReadOutcome::Unavailable(_) => (vec![], Some(ContextIssueReason::Unavailable)),
+        RequirementReadOutcome::Ready(views) => (views, None),
+        RequirementReadOutcome::Unavailable(_) => (vec![], Some(ContextIssueReason::Unavailable)),
         // The requirement itself is preserved by the host, which publishes it
         // under the admitted origin; the context records that user action —
         // not a denial — is what the source needs.
-        SourceReadOutcome::NeedsUserAction(_) => {
+        RequirementReadOutcome::NeedsUserAction => {
             (vec![], Some(ContextIssueReason::NeedsUserAction))
         }
     };
@@ -439,10 +438,7 @@ pub(crate) fn validate_judgment(
 #[cfg(test)]
 mod calendar_outcome_tests {
     use super::*;
-    use floe_context_contract::{
-        GrantConsumer, GrantOperation, GrantPurpose, SourceAccessBlockers, SourceAccessRequirement,
-        SourceAccessRequirementKind, SourceUnavailable,
-    };
+    use floe_context_contract::SourceUnavailable;
 
     fn context() -> AgentContext {
         AgentContext {
@@ -459,7 +455,7 @@ mod calendar_outcome_tests {
         let mut context = context();
         let views = optional_calendar_views(
             &mut context,
-            SourceReadOutcome::Unavailable(SourceUnavailable::TemporarilyUnavailable),
+            RequirementReadOutcome::Unavailable(SourceUnavailable::TemporarilyUnavailable),
         );
         assert!(views.is_empty());
         assert_eq!(context.optional_context_issues.len(), 1);
@@ -472,34 +468,14 @@ mod calendar_outcome_tests {
             ContextIssueReason::Unavailable
         );
 
-        let requirement = SourceAccessRequirement::try_new(
-            "calendar",
-            None,
-            None,
-            GrantOperation::Read,
-            GrantConsumer::builtin("floe.builtin.commitments").unwrap(),
-            GrantPurpose::Assistant,
-            vec![],
-            None,
-            SourceAccessRequirementKind::ReviewChangedSource,
-            None,
-            None,
-            true,
-        )
-        .unwrap();
-        optional_calendar_views(
-            &mut context,
-            SourceReadOutcome::NeedsUserAction(
-                SourceAccessBlockers::try_new(vec![requirement]).unwrap(),
-            ),
-        );
+        optional_calendar_views(&mut context, RequirementReadOutcome::NeedsUserAction);
         assert_eq!(context.optional_context_issues.len(), 1);
         assert_eq!(
             context.optional_context_issues[0].reason,
             ContextIssueReason::NeedsUserAction
         );
 
-        optional_calendar_views(&mut context, SourceReadOutcome::Ready(vec![]));
+        optional_calendar_views(&mut context, RequirementReadOutcome::Ready(vec![]));
         assert!(context.optional_context_issues.is_empty());
     }
 }

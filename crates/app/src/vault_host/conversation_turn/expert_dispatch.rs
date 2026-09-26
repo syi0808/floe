@@ -721,7 +721,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
         query: serde_json::Value,
     ) -> floe_experts_builtin::Acquiring<
         'a,
-        floe_context_contract::SourceReadOutcome<DeclaredSourceRead<Self::SourceRead>>,
+        floe_experts::RequirementReadOutcome<DeclaredSourceRead<Self::SourceRead>>,
     > {
         Box::pin(async move {
             if self.manifest.package.id != request.agent_id {
@@ -757,17 +757,17 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
             }
             Ok(match outcome {
                 floe_context_contract::SourceReadOutcome::Ready(read) => {
-                    floe_context_contract::SourceReadOutcome::Ready(DeclaredSourceRead::new(
+                    floe_experts::RequirementReadOutcome::Ready(DeclaredSourceRead::new(
                         read.payload,
                         read.dependencies,
                         read.held,
                     ))
                 }
                 floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
-                    floe_context_contract::SourceReadOutcome::Unavailable(reason)
+                    floe_experts::RequirementReadOutcome::Unavailable(reason)
                 }
-                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
-                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers)
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(_) => {
+                    floe_experts::RequirementReadOutcome::NeedsUserAction
                 }
             })
         })
@@ -1255,7 +1255,7 @@ mod capture_tests {
         .unwrap();
         assert!(matches!(
             attention_outcome,
-            SourceReadOutcome::NeedsUserAction(_)
+            floe_experts::RequirementReadOutcome::NeedsUserAction
         ));
         let calendar_outcome = BuiltinExpertHost::read_requirement(
             &host,
@@ -1267,7 +1267,7 @@ mod capture_tests {
         .unwrap();
         assert!(matches!(
             calendar_outcome,
-            SourceReadOutcome::NeedsUserAction(_)
+            floe_experts::RequirementReadOutcome::NeedsUserAction
         ));
         // Both blockers are preserved as distinct requirements: nothing is
         // merged, nothing is dropped, and the capture is deduplicated.

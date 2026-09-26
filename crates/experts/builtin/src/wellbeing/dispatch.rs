@@ -1,7 +1,7 @@
 //! The Wellbeing Expert's own execution.
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::SourceReadOutcome;
 
 use crate::shared::ExpertJudgment;
 use crate::wellbeing::{WellbeingContextViews, run_wellbeing_expert_with_views};
@@ -22,8 +22,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )
     .await?
     {
-        SourceReadOutcome::Ready(view) => view,
-        SourceReadOutcome::Unavailable(_) => {
+        RequirementReadOutcome::Ready(view) => view,
+        RequirementReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -31,10 +31,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 "Wellbeing is temporarily unavailable, so there is no wellbeing assessment.".into(),
             );
         }
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        RequirementReadOutcome::NeedsUserAction => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,

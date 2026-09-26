@@ -3,8 +3,8 @@
 //! Attention is coarse on-device context, so this Expert only runs on the
 //! device model, and it adds schedule and active work only when granted.
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::SourceReadOutcome;
 
 use crate::focus_attention::{FocusContextViews, run_focus_expert_with_views};
 use crate::shared::ExpertJudgment;
@@ -25,8 +25,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )
     .await?
     {
-        SourceReadOutcome::Ready(read) => read,
-        SourceReadOutcome::Unavailable(_) => {
+        RequirementReadOutcome::Ready(read) => read,
+        RequirementReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -34,10 +34,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 "Attention is temporarily unavailable, so there is no focus assessment.".into(),
             );
         }
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        RequirementReadOutcome::NeedsUserAction => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -68,14 +65,11 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )
     .await
     {
-        Ok(SourceReadOutcome::Ready(view)) => vec![view],
-        Ok(SourceReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => vec![],
-        Ok(SourceReadOutcome::NeedsUserAction(blockers)) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        Ok(RequirementReadOutcome::Ready(view)) => vec![view],
+        Ok(RequirementReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => {
             vec![]
         }
+        Ok(RequirementReadOutcome::NeedsUserAction) => vec![],
         Err(error) => return Err(error),
     };
     let result = match run_focus_expert_with_views(

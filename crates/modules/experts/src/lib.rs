@@ -10,6 +10,7 @@ mod directory;
 mod dispatch;
 mod manifest;
 mod registry;
+mod requirement;
 mod selection;
 mod settlement;
 mod task;
@@ -40,12 +41,15 @@ pub use manifest::{
 pub use registry::{
     AgentRegistry, AssignmentOverview, BindingOperationReceipt, EXPERT_BINDING_SCHEMA_VERSION,
     EXPERT_REGISTRY_SCHEMA_VERSION, ExpertBindingCommand, ExpertBindingState,
-    ExpertInstallOperation,
-    ExpertInstallReceipt, ExpertInstallResult, ExpertPrivateState, InstalledExpert,
-    PackageAssignment, PackageInstallation, RegistryConfiguration, RegistryConfigurationTarget,
-    RegistryOverview, RegistrySnapshot, RequirementBinding, ResolvedExpert,
-    eligible_cards_for_availability,
+    ExpertInstallOperation, ExpertInstallReceipt, ExpertInstallResult, ExpertPrivateState,
+    InstalledExpert, PackageAssignment, PackageInstallation, RegistryConfiguration,
+    RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, RequirementBinding,
+    ResolvedExpert, eligible_cards_for_availability,
+};
+pub use requirement::RequirementReadOutcome;
+pub use selection::{
+    AdmittedRequirementSelection, EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION,
+    ExpertExecutionSelection,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
-pub use selection::{AdmittedRequirementSelection, EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION, ExpertExecutionSelection};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

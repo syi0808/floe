@@ -6,8 +6,8 @@ use floe_agent_contract::{
     AgentContext, ArtifactPart, DelegationExecutionContext, DelegationPort, DelegationRequest,
     ExecutionScope, InvocationKey, ModelPlacement, TaskId, TaskState, TraceContext,
 };
-use floe_context_contract::SourceReadOutcome;
 use floe_execution::budget::{BudgetConfig, BudgetLedger};
+use floe_experts::RequirementReadOutcome;
 use floe_experts_builtin::{BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest};
 use floe_kernel::RunId;
 use std::io::{Read, Write};
@@ -249,9 +249,9 @@ fn required_source_runner<'turn, 'model, 'msg, 'call>(
             )
             .await?;
         let marker = match outcome {
-            SourceReadOutcome::Ready(_) => "source-ready",
-            SourceReadOutcome::Unavailable(_) => "source-unavailable",
-            SourceReadOutcome::NeedsUserAction(_) => "source-needs-user-action",
+            RequirementReadOutcome::Ready(_) => "source-ready",
+            RequirementReadOutcome::Unavailable(_) => "source-unavailable",
+            RequirementReadOutcome::NeedsUserAction => "source-needs-user-action",
         };
         BuiltinExpertOutput::from_result(
             "source-outcome",

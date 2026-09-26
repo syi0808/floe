@@ -15,9 +15,9 @@ use floe_agent_contract::{
 };
 use floe_agent_contract::{AgentFailure, ExpertModel};
 use floe_context_contract::ContextDependency;
-use floe_context_contract::SourceReadOutcome;
 use floe_context_contract::{AuthorizedRead, CalendarViewQuery, NativeContextView};
 use floe_execution::Cancellation;
+use floe_experts::RequirementReadOutcome;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -269,7 +269,7 @@ pub trait BuiltinExpertHost: Sync {
         request: &'a BuiltinExpertRequest,
         key: &'a str,
         query: serde_json::Value,
-    ) -> Acquiring<'a, SourceReadOutcome<DeclaredSourceRead<Self::SourceRead>>>;
+    ) -> Acquiring<'a, RequirementReadOutcome<DeclaredSourceRead<Self::SourceRead>>>;
 
     /// Record that this Expert's result depends on a source it read.
     fn record_dependency(

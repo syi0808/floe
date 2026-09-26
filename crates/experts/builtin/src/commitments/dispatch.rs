@@ -4,9 +4,9 @@
 //! confirmed memory, tasks and calendars — and how it composes them. Acquiring
 //! each view stays behind the host port.
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{AgentFailure, ContextSource};
-use floe_context_contract::SourceReadOutcome;
 
 use floe_context_contract::CommunicationView;
 use floe_context_contract::{ContextIssueReason, ContextMemory, NativeContextView};
@@ -43,7 +43,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await
         {
-            Ok(SourceReadOutcome::Ready(snapshot)) => {
+            Ok(RequirementReadOutcome::Ready(snapshot)) => {
                 context.memories = snapshot.memories;
                 floe_context_contract::record_source_issue(
                     &mut context.optional_context_issues,
@@ -51,14 +51,15 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                     snapshot.issue,
                 );
             }
-            Ok(SourceReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => {
+            Ok(RequirementReadOutcome::Unavailable(_))
+            | Err(AgentFailure::CapabilityUnavailable) => {
                 floe_context_contract::record_source_issue(
                     &mut context.optional_context_issues,
                     ContextSource::Memory,
                     Some(ContextIssueReason::Unavailable),
                 );
             }
-            Ok(SourceReadOutcome::NeedsUserAction(_)) => {
+            Ok(RequirementReadOutcome::NeedsUserAction) => {
                 floe_context_contract::record_source_issue(
                     &mut context.optional_context_issues,
                     ContextSource::Memory,
@@ -75,15 +76,16 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await
         {
-            Ok(SourceReadOutcome::Ready(view)) => task_views = vec![view],
-            Ok(SourceReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => {
+            Ok(RequirementReadOutcome::Ready(view)) => task_views = vec![view],
+            Ok(RequirementReadOutcome::Unavailable(_))
+            | Err(AgentFailure::CapabilityUnavailable) => {
                 floe_context_contract::record_source_issue(
                     &mut context.optional_context_issues,
                     ContextSource::Tasks,
                     Some(ContextIssueReason::Unavailable),
                 );
             }
-            Ok(SourceReadOutcome::NeedsUserAction(_)) => {
+            Ok(RequirementReadOutcome::NeedsUserAction) => {
                 floe_context_contract::record_source_issue(
                     &mut context.optional_context_issues,
                     ContextSource::Tasks,
@@ -106,8 +108,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await?
     {
-        SourceReadOutcome::Ready(view) => view,
-        SourceReadOutcome::Unavailable(_) => {
+        RequirementReadOutcome::Ready(view) => view,
+        RequirementReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Commitments.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -115,10 +117,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 "Mail is temporarily unavailable, so there are no commitment findings.".into(),
             );
         }
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        RequirementReadOutcome::NeedsUserAction => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Commitments.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,

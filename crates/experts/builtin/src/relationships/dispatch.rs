@@ -3,8 +3,8 @@
 //! It reads granted people context under its own consumer identity, and adds
 //! confirmed interactions only when they were granted.
 
+use crate::RequirementReadOutcome;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::SourceReadOutcome;
 
 use crate::relationships::{RelationshipsContextViews, run_relationships_expert_with_views};
 use crate::shared::ExpertJudgment;
@@ -25,8 +25,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )
     .await?
     {
-        SourceReadOutcome::Ready(view) => view,
-        SourceReadOutcome::Unavailable(_) => {
+        RequirementReadOutcome::Ready(view) => view,
+        RequirementReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Relationships.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -35,10 +35,7 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                     .into(),
             );
         }
-        SourceReadOutcome::NeedsUserAction(blockers) => {
-            blockers
-                .validate()
-                .map_err(|_| AgentFailure::StaleContext)?;
+        RequirementReadOutcome::NeedsUserAction => {
             return BuiltinExpertOutput::from_blocked(
                 crate::BuiltinExpertKind::Relationships.result_artifact_name(),
                 super::RESULT_MEDIA_TYPE,
@@ -55,8 +52,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     )
     .await?
     {
-        SourceReadOutcome::Ready(views) => views,
-        SourceReadOutcome::Unavailable(_) | SourceReadOutcome::NeedsUserAction(_) => vec![],
+        RequirementReadOutcome::Ready(views) => views,
+        RequirementReadOutcome::Unavailable(_) | RequirementReadOutcome::NeedsUserAction => vec![],
     };
     let result = match run_relationships_expert_with_views(
         host.model(),

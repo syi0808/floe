@@ -4,14 +4,14 @@ use chrono::{Local, TimeZone, Utc};
 use floe_agent_contract::{AgentFailure, Artifact};
 use floe_context_contract::{
     CalendarContextView, CalendarViewQuery, MAX_CALENDAR_CONTEXT_ITEMS, MAX_CONTEXT_EVIDENCE_BYTES,
-    SourceReadOutcome, SourceUnavailable, validate_calendar_context_view_for_query,
+    SourceUnavailable, validate_calendar_context_view_for_query,
 };
 use serde::Serialize;
 
 use crate::shared::ExpertJudgment;
 use crate::{
     BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput,
-    BuiltinExpertRequest,
+    BuiltinExpertRequest, RequirementReadOutcome,
 };
 
 use super::{expert, plan_request};
@@ -61,14 +61,11 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         )
         .await?;
         let views = match outcome {
-            SourceReadOutcome::Ready(views) => views,
-            SourceReadOutcome::Unavailable(reason) => {
+            RequirementReadOutcome::Ready(views) => views,
+            RequirementReadOutcome::Unavailable(reason) => {
                 return blocked(BlockedResult::Unavailable { reason }, vec![]);
             }
-            SourceReadOutcome::NeedsUserAction(blockers) => {
-                blockers
-                    .validate()
-                    .map_err(|_| AgentFailure::StaleContext)?;
+            RequirementReadOutcome::NeedsUserAction => {
                 // The host publishes the requirement it captured; the report
                 // proposes no requirement of its own.
                 return blocked(BlockedResult::NeedsUserAction, vec![]);
@@ -206,6 +203,7 @@ mod tests {
     use floe_context_contract::{
         AuthorizedRead, CalendarContextItem, ContextDependency, GrantConsumer, GrantOperation,
         GrantPurpose, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
+        SourceReadOutcome,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
@@ -356,7 +354,8 @@ mod tests {
             _request: &'a BuiltinExpertRequest,
             key: &'a str,
             query: serde_json::Value,
-        ) -> Acquiring<'a, SourceReadOutcome<crate::DeclaredSourceRead<Self::SourceRead>>> {
+        ) -> Acquiring<'a, RequirementReadOutcome<crate::DeclaredSourceRead<Self::SourceRead>>>
+        {
             Box::pin(async move {
                 if key != "floe.source.calendar" {
                     return Err(AgentFailure::CapabilityDenied);
@@ -365,17 +364,17 @@ mod tests {
                     serde_json::from_value(query).map_err(|_| AgentFailure::InvalidInput)?;
                 Ok(match self.calendar_views(query).await? {
                     SourceReadOutcome::Ready(views) => {
-                        SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                        RequirementReadOutcome::Ready(crate::DeclaredSourceRead::new(
                             serde_json::to_value(views).map_err(|_| AgentFailure::InvalidInput)?,
                             vec![],
                             None,
                         ))
                     }
                     SourceReadOutcome::Unavailable(reason) => {
-                        SourceReadOutcome::Unavailable(reason)
+                        RequirementReadOutcome::Unavailable(reason)
                     }
-                    SourceReadOutcome::NeedsUserAction(blockers) => {
-                        SourceReadOutcome::NeedsUserAction(blockers)
+                    SourceReadOutcome::NeedsUserAction(_) => {
+                        RequirementReadOutcome::NeedsUserAction
                     }
                 })
             })

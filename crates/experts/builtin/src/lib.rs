@@ -23,6 +23,7 @@ pub use catalog::{
     BUILTIN_EXPERT_PACKAGE_VERSION, BUILTIN_EXPERT_PUBLISHER, BUILTIN_EXPERT_STATE_SCHEMA_VERSION,
     BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement,
 };
+pub use floe_experts::RequirementReadOutcome;
 pub use host::{
     Acquiring, BlockedExpertResult, BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput,
     BuiltinExpertRequest, DeclaredSourceRead, StatefulExpertDraft, granted_context,
