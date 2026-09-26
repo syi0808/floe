@@ -71,6 +71,7 @@ pub(crate) struct LiveInlineState {
 /// Why the reviewed target no longer binds the live state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DriftReason {
+    ExpertAssignmentChanged,
     ConnectionUnusable,
     ConnectionRevision,
     ProducerFingerprint,
@@ -599,6 +600,7 @@ where
     ) && matches!(
         current.target,
         floe_conversation::ReviewedTarget::NavigationOnly(_)
+            | floe_conversation::ReviewedTarget::ExpertBinding(_)
     ) {
         return Err(AgentFailure::InvalidInput);
     }
@@ -708,6 +710,9 @@ where
                 .await
             }
             floe_conversation::ReviewedTarget::NavigationOnly(_) => {
+                Err(AgentFailure::StorageUnavailable)
+            }
+            floe_conversation::ReviewedTarget::ExpertBinding(_) => {
                 Err(AgentFailure::StorageUnavailable)
             }
         },
@@ -878,6 +883,11 @@ where
                     })
                 }
             }
+            floe_conversation::ReviewedTarget::ExpertBinding(_) => {
+                Ok(RefreshOutcome::StillPending {
+                    interaction: current,
+                })
+            }
         },
         floe_conversation::InteractionState::Resolving {
             decision_id,
@@ -946,10 +956,142 @@ where
             floe_conversation::ReviewedTarget::NavigationOnly(_) => Ok(RefreshOutcome::Terminal {
                 interaction: current,
             }),
+            floe_conversation::ReviewedTarget::ExpertBinding(_) => Ok(RefreshOutcome::Terminal {
+                interaction: current,
+            }),
         },
         _ => Ok(RefreshOutcome::Terminal {
             interaction: current,
         }),
+    }
+}
+
+pub(crate) async fn refresh_expert_binding<Keys, Interactions>(
+    vault: &floe_vault::EncryptedAgentVault<Keys>,
+    interactions: &Interactions,
+    caller: &CallerContext,
+    command: RefreshInteractionCommand,
+    now_unix_ms: i64,
+) -> Result<RefreshOutcome, AgentFailure>
+where
+    Keys: floe_vault::VaultKeyProvider,
+    Interactions: floe_conversation::InteractionRepository,
+{
+    enum BindingStatus {
+        Superseded,
+        Pending,
+        Configured,
+    }
+    command.validate()?;
+    let person_id = caller_person(caller)?;
+    let principal = caller.person_id().to_string();
+    let current = load_owned(interactions, &principal, person_id, command.interaction_id).await?;
+    if current.session_id != command.session_id {
+        return Err(AgentFailure::NotFound);
+    }
+    let floe_conversation::ReviewedTarget::ExpertBinding(target) = &current.target else {
+        return Err(AgentFailure::InvalidInput);
+    };
+    if current.projects_expired_at(now_unix_ms) {
+        let expired =
+            expire_owned(interactions, person_id, command.interaction_id, now_unix_ms).await?;
+        return Ok(RefreshOutcome::Expired {
+            interaction: expired,
+        });
+    }
+    if current.revision != command.expected_revision {
+        return Ok(RefreshOutcome::Stale {
+            interaction: current,
+        });
+    }
+    if !matches!(current.state, floe_conversation::InteractionState::Pending) {
+        return Ok(RefreshOutcome::Terminal {
+            interaction: current,
+        });
+    }
+    let registry = vault.expert_registry().await?;
+    let status = if let Some(snapshot) = registry {
+        let registry =
+            floe_experts::AgentRegistry::restore(snapshot, vault.registry_instance_id())?;
+        match registry.resolve_assignment(
+            target.registry_instance_id,
+            person_id,
+            target.assignment_id,
+            &target.package,
+            target.definition_revision,
+        ) {
+            Ok(resolved) => {
+                let requirement =
+                    resolved
+                        .manifest
+                        .source_requirements
+                        .iter()
+                        .find(|requirement| {
+                            requirement.key == target.requirement_key
+                                && requirement.capability == target.capability
+                                && requirement.contract_version == target.contract_version
+                                && requirement.minimum_sources == target.minimum_sources
+                                && requirement.maximum_sources == target.maximum_sources
+                        });
+                let binding = resolved
+                    .assignment
+                    .binding
+                    .entries
+                    .iter()
+                    .find(|entry| entry.requirement_key == target.requirement_key);
+                match (requirement, binding) {
+                    (Some(_), Some(binding))
+                        if binding.selected.len() >= usize::from(target.minimum_sources) =>
+                    {
+                        BindingStatus::Configured
+                    }
+                    (Some(_), Some(_)) => BindingStatus::Pending,
+                    _ => BindingStatus::Superseded,
+                }
+            }
+            Err(
+                AgentFailure::NotFound | AgentFailure::Conflict | AgentFailure::CapabilityDenied,
+            ) => BindingStatus::Superseded,
+            Err(failure) => return Err(failure),
+        }
+    } else {
+        BindingStatus::Superseded
+    };
+    match status {
+        BindingStatus::Configured => {
+            let resolved = settle_satisfied(
+                interactions,
+                person_id,
+                &principal,
+                &current,
+                command.command_id,
+                now_unix_ms,
+            )
+            .await?;
+            Ok(RefreshOutcome::Resolved {
+                interaction: resolved,
+            })
+        }
+        BindingStatus::Pending => Ok(RefreshOutcome::StillPending {
+            interaction: current,
+        }),
+        BindingStatus::Superseded => {
+            let superseded = floe_conversation::supersede_interaction(
+                interactions,
+                floe_conversation::SupersedeInteraction {
+                    interaction_id: current.id,
+                    person_id,
+                    expected_revision: current.revision,
+                    superseded_by: None,
+                },
+            )
+            .await?;
+            Ok(RefreshOutcome::Superseded {
+                interaction: superseded,
+                reason: DriftReason::ExpertAssignmentChanged,
+                replacement_id: None,
+            })
+        }
     }
 }
 
@@ -1544,6 +1686,7 @@ fn device_mismatch(target: &floe_conversation::ReviewedTarget, device_id: &str) 
             target.device_id != device_id
         }
         floe_conversation::ReviewedTarget::NavigationOnly(_) => false,
+        floe_conversation::ReviewedTarget::ExpertBinding(_) => false,
     }
 }
 

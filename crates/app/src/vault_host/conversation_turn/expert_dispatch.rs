@@ -221,6 +221,58 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                     &self.selection,
                     true,
                 )?;
+            if self.selection.requirements.iter().any(|requirement| {
+                requirement.selected.len() < usize::from(requirement.minimum_sources)
+            }) {
+                let repository =
+                    floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
+                let origin_run_id =
+                    floe_kernel::RunId::from_uuid(run_id).ok_or(AgentFailure::InvalidInput)?;
+                let now_unix_ms = i64::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .map_err(|_| AgentFailure::StaleContext)?
+                        .as_millis(),
+                )
+                .map_err(|_| AgentFailure::StaleContext)?;
+                let refs = super::interaction_publication::publish_expert_binding_blockers(
+                    &repository,
+                    &repository,
+                    &invocation.request.principal,
+                    context.session_id,
+                    origin_run_id,
+                    invocation.request.task_id.as_uuid(),
+                    &self.admission,
+                    &self.selection,
+                    now_unix_ms,
+                )
+                .await?;
+                let current_registry = self
+                    .vault
+                    .expert_registry()
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                floe_experts::AgentRegistry::restore(
+                    current_registry,
+                    self.vault.registry_instance_id(),
+                )?
+                .validate_current_execution_selection(
+                    person_id,
+                    &self.admission,
+                    &self.selection,
+                    true,
+                )?;
+                return Ok(ExpertReport {
+                    task_id: invocation.request.task_id,
+                    principal: invocation.request.principal,
+                    agent_id: invocation.request.selected_agent_id,
+                    definition_revision: invocation.request.selected_definition_revision,
+                    result: "Expert settings are required before this task can run.".into(),
+                    artifacts: super::interaction_publication::interaction_ref_artifacts(&refs)?,
+                    coverage: floe_agent_contract::DependencyCoverage::Independent,
+                    settlement: None,
+                });
+            }
             let source_client = ServerSourceClient::from_current_connection(
                 &self.connections,
                 &person_id.to_string(),

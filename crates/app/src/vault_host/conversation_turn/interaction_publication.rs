@@ -306,6 +306,89 @@ where
     Ok(reference)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_expert_binding_blockers<Runs, Interactions>(
+    runs: &Runs,
+    interactions: &Interactions,
+    principal: &str,
+    session_id: Uuid,
+    origin_run_id: RunId,
+    task_id: Uuid,
+    admission: &floe_experts::ExpertAdmissionIdentity,
+    selection: &floe_experts::ExpertExecutionSelection,
+    now_unix_ms: i64,
+) -> Result<Vec<UserInteractionRef>, AgentFailure>
+where
+    Runs: floe_conversation::ConversationRepository + ?Sized,
+    Interactions: floe_conversation::InteractionRepository + ?Sized,
+{
+    selection.validate()?;
+    if selection
+        .requirements
+        .iter()
+        .filter(|requirement| requirement.selected.len() < usize::from(requirement.minimum_sources))
+        .count()
+        > floe_conversation::MAX_ACTIVE_INTERACTIONS_PER_RUN
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    let mut refs = Vec::new();
+    for requirement in &selection.requirements {
+        if requirement.selected.len() >= usize::from(requirement.minimum_sources) {
+            continue;
+        }
+        let admission = floe_conversation::publish_interaction(
+            runs,
+            interactions,
+            floe_conversation::PublishInteractionRequest {
+                principal: principal.to_owned(),
+                session_id,
+                origin_run_id,
+                origin: floe_conversation::InteractionOrigin::Task {
+                    task_id,
+                    capability_call_id: None,
+                },
+                kind: UserInteractionKind::ExpertBinding,
+                requirement: floe_conversation::InteractionRequirement {
+                    kind: floe_conversation::InteractionRequirementKind::ConfigureExpertBinding,
+                    source_id: "floe.expert.binding".into(),
+                    connection_id: None,
+                    consumer: admission.package.id.clone(),
+                    purpose: "configuration".into(),
+                    inline: false,
+                },
+                target: floe_conversation::ReviewedTarget::ExpertBinding(
+                    floe_conversation::ExpertBindingTarget {
+                        registry_instance_id: admission.registry_instance_id,
+                        assignment_id: admission.assignment_id,
+                        package: admission.package.clone(),
+                        definition_revision: admission.definition_revision,
+                        requirement_key: requirement.key.clone(),
+                        capability: requirement.capability.clone(),
+                        contract_version: requirement.contract_version,
+                        minimum_sources: requirement.minimum_sources,
+                        maximum_sources: requirement.maximum_sources,
+                        expected_binding_revision: selection.binding_revision,
+                        admitted_selection_digest: selection.digest,
+                    },
+                ),
+            },
+            now_unix_ms,
+        )
+        .await?;
+        let record = match admission {
+            floe_conversation::PublishAdmission::Created(record)
+            | floe_conversation::PublishAdmission::Existing(record) => record,
+        };
+        refs.push(UserInteractionRef {
+            interaction_id: record.id,
+            kind: UserInteractionKind::ExpertBinding,
+            status: interaction_status(&record.state),
+        });
+    }
+    Ok(refs)
+}
+
 /// Publish every blocker under the admitted origin and return the safe refs.
 ///
 /// Publication is deterministic in origin plus canonical requirement digest:

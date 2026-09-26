@@ -1,4 +1,4 @@
-enum AgentInteractionKind { sourceAccess, processingRecipient }
+enum AgentInteractionKind { sourceAccess, processingRecipient, expertBinding }
 
 enum AgentInteractionState {
   pending,
@@ -19,6 +19,7 @@ enum AgentInteractionAction {
   openConnection,
   reviewSource,
   requestPermission,
+  openExpertSettings,
 }
 
 enum AgentInteractionDecision { approve, deny, dismiss }
@@ -182,6 +183,14 @@ sealed class AgentInteractionTarget {
             ),
           ),
         );
+      case 'expert_binding':
+        return AgentExpertBindingTarget(
+          assignmentId: field('assignment_id'),
+          packageId: field('package_id'),
+          packageVersion: field('package_version'),
+          requirementKey: field('requirement_key'),
+          capability: field('capability'),
+        );
       default:
         throw const FormatException('Unknown interaction target.');
     }
@@ -234,6 +243,22 @@ final class AgentRecipientConsentTarget extends AgentInteractionTarget {
   final String consumer;
   final List<String> inputDataClasses;
   final List<AgentConsentScope> sourceScopes;
+}
+
+final class AgentExpertBindingTarget extends AgentInteractionTarget {
+  const AgentExpertBindingTarget({
+    required this.assignmentId,
+    required this.packageId,
+    required this.packageVersion,
+    required this.requirementKey,
+    required this.capability,
+  });
+
+  final String assignmentId;
+  final String packageId;
+  final String packageVersion;
+  final String requirementKey;
+  final String capability;
 }
 
 final class AgentInteractionSnapshot {
@@ -289,6 +314,7 @@ final class AgentInteractionSnapshot {
       kind: switch (json['interaction_kind']) {
         'source_access' => AgentInteractionKind.sourceAccess,
         'processing_recipient' => AgentInteractionKind.processingRecipient,
+        'expert_binding' => AgentInteractionKind.expertBinding,
         _ => throw const FormatException('Unknown interaction kind.'),
       },
       state: switch (json['state']) {
@@ -317,6 +343,7 @@ final class AgentInteractionSnapshot {
             'open_connection' => AgentInteractionAction.openConnection,
             'review_source' => AgentInteractionAction.reviewSource,
             'request_permission' => AgentInteractionAction.requestPermission,
+            'open_expert_settings' => AgentInteractionAction.openExpertSettings,
             _ => throw const FormatException('Unknown interaction action.'),
           },
         ),

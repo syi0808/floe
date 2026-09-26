@@ -102,6 +102,35 @@ void main() {
       );
     });
 
+    test('parses navigation-only Expert binding without source authority', () {
+      final binding = _snapshot(actions: [
+        'open_expert_settings',
+        'refresh',
+        'dismiss',
+      ])
+        ..['interaction_kind'] = 'expert_binding'
+        ..['target'] = {
+          'kind': 'expert_binding',
+          'assignment_id': 'assignment-1',
+          'package_id': 'example.test.expert',
+          'package_version': '1.0.0',
+          'requirement_key': 'required_attention',
+          'capability': 'attention.coarse',
+        };
+      final snapshot = AgentInteractionSnapshot.parse(binding);
+      expect(snapshot.kind, AgentInteractionKind.expertBinding);
+      expect(snapshot.actions, [
+        AgentInteractionAction.openExpertSettings,
+        AgentInteractionAction.refresh,
+        AgentInteractionAction.dismiss,
+      ]);
+      final target = snapshot.target as AgentExpertBindingTarget;
+      expect(target.packageId, 'example.test.expert');
+      expect(target.requirementKey, 'required_attention');
+      expect(binding['target'], isNot(contains('connector_id')));
+      expect(binding['target'], isNot(contains('grant_id')));
+    });
+
     test('rejects unknown states, actions, targets and digests', () {
       for (final patch in [
         (map) => map['state'] = 'waiting_on_user',

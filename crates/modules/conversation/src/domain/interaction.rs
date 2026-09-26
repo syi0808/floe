@@ -19,7 +19,8 @@
 //! [`UserInteractionRef`].
 
 use floe_agent_contract::{
-    AgentFailure, DataClass, ProcessingSourceScope, RecipientLineage, UserInteractionKind,
+    AgentFailure, DataClass, PackageKind, PackageRef, ProcessingSourceScope, RecipientLineage,
+    UserInteractionKind,
 };
 use floe_kernel::{CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,7 @@ pub enum InteractionRequirementKind {
     Reconnect,
     ApproveProcessingRecipient,
     SelectResource,
+    ConfigureExpertBinding,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -348,6 +350,47 @@ pub struct RecipientConsentTarget {
     pub projection_revision: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertBindingTarget {
+    pub registry_instance_id: Uuid,
+    pub assignment_id: Uuid,
+    pub package: PackageRef,
+    pub definition_revision: u64,
+    pub requirement_key: String,
+    pub capability: String,
+    pub contract_version: u32,
+    pub minimum_sources: u8,
+    pub maximum_sources: u8,
+    pub expected_binding_revision: u64,
+    pub admitted_selection_digest: [u8; 32],
+}
+
+impl ExpertBindingTarget {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.registry_instance_id.is_nil()
+            || self.assignment_id.is_nil()
+            || self.package.kind != PackageKind::Expert
+            || validate_identifier(&self.package.id, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            || validate_identifier(&self.package.version, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            || self.definition_revision == 0
+            || validate_identifier(&self.requirement_key, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            || validate_identifier(&self.capability, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+            || self.contract_version == 0
+            || self.minimum_sources > self.maximum_sources
+            || self.maximum_sources > 16
+            || self.expected_binding_revision == 0
+            || self.admitted_selection_digest == [0; 32]
+            || serde_json::to_vec(self)
+                .map(|encoded| encoded.len() > MAX_REVIEWED_TARGET_BYTES)
+                .unwrap_or(true)
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(())
+    }
+}
+
 impl RecipientConsentTarget {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         floe_agent_contract::ProcessingRequirement::try_new(
@@ -388,6 +431,7 @@ pub enum ReviewedTarget {
     InlineObserve(InlineObserveTarget),
     NavigationOnly(NavigationOnlyTarget),
     RecipientConsent(RecipientConsentTarget),
+    ExpertBinding(ExpertBindingTarget),
 }
 
 impl ReviewedTarget {
@@ -396,6 +440,7 @@ impl ReviewedTarget {
             Self::InlineObserve(target) => target.validate(),
             Self::NavigationOnly(target) => target.validate(),
             Self::RecipientConsent(target) => target.validate(),
+            Self::ExpertBinding(target) => target.validate(),
         }
     }
 }
@@ -528,6 +573,10 @@ impl ConversationInteraction {
                 != (self.requirement.kind == InteractionRequirementKind::ApproveProcessingRecipient)
             || (self.kind == UserInteractionKind::ProcessingRecipient)
                 != matches!(self.target, ReviewedTarget::RecipientConsent(_))
+            || (self.kind == UserInteractionKind::ExpertBinding)
+                != (self.requirement.kind == InteractionRequirementKind::ConfigureExpertBinding)
+            || (self.kind == UserInteractionKind::ExpertBinding)
+                != matches!(self.target, ReviewedTarget::ExpertBinding(_))
             || self.requirement_digest == [0; 32]
             || self.target_digest == [0; 32]
         {
@@ -746,6 +795,7 @@ pub fn canonical_requirement_digest(
         InteractionRequirementKind::Reconnect => 4,
         InteractionRequirementKind::ApproveProcessingRecipient => 5,
         InteractionRequirementKind::SelectResource => 6,
+        InteractionRequirementKind::ConfigureExpertBinding => 7,
     });
     append_str(&mut bytes, &requirement.source_id);
     match &requirement.connection_id {
@@ -884,6 +934,21 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             append_str(&mut bytes, &target.device_id);
             bytes.extend_from_slice(target.projection_ref.as_bytes());
             bytes.extend_from_slice(&target.projection_revision.to_be_bytes());
+        }
+        ReviewedTarget::ExpertBinding(target) => {
+            bytes.push(4);
+            bytes.extend_from_slice(target.registry_instance_id.as_bytes());
+            bytes.extend_from_slice(target.assignment_id.as_bytes());
+            append_str(&mut bytes, &target.package.id);
+            append_str(&mut bytes, &target.package.version);
+            bytes.extend_from_slice(&target.definition_revision.to_be_bytes());
+            append_str(&mut bytes, &target.requirement_key);
+            append_str(&mut bytes, &target.capability);
+            bytes.extend_from_slice(&target.contract_version.to_be_bytes());
+            bytes.push(target.minimum_sources);
+            bytes.push(target.maximum_sources);
+            bytes.extend_from_slice(&target.expected_binding_revision.to_be_bytes());
+            bytes.extend_from_slice(&target.admitted_selection_digest);
         }
     }
     Ok(Sha256::digest(bytes).into())
@@ -1301,6 +1366,64 @@ mod tests {
         let mut oversized = target.clone();
         oversized.device_id = "x".repeat(MAX_REVIEWED_IDENTIFIER_BYTES + 1);
         assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn expert_binding_target_binds_assignment_revision_and_selection_without_source() {
+        let target = ExpertBindingTarget {
+            registry_instance_id: Uuid::new_v4(),
+            assignment_id: Uuid::new_v4(),
+            package: PackageRef {
+                kind: PackageKind::Expert,
+                id: "example.test.expert".into(),
+                version: "1.0.0".into(),
+            },
+            definition_revision: 1,
+            requirement_key: "floe.source.calendar".into(),
+            capability: "calendar.timeline".into(),
+            contract_version: 1,
+            minimum_sources: 1,
+            maximum_sources: 16,
+            expected_binding_revision: 2,
+            admitted_selection_digest: [7; 32],
+        };
+        target.validate().unwrap();
+        let reviewed = ReviewedTarget::ExpertBinding(target.clone());
+        let digest = canonical_target_digest(&reviewed).unwrap();
+        let mut changed = target.clone();
+        changed.expected_binding_revision += 1;
+        assert_ne!(
+            canonical_target_digest(&ReviewedTarget::ExpertBinding(changed)).unwrap(),
+            digest
+        );
+        let mut changed = target.clone();
+        changed.admitted_selection_digest = [8; 32];
+        assert_ne!(
+            canonical_target_digest(&ReviewedTarget::ExpertBinding(changed)).unwrap(),
+            digest
+        );
+        let encoded = serde_json::to_string(&target).unwrap();
+        assert!(!encoded.contains("connector_id"));
+        assert!(!encoded.contains("grant_id"));
+        assert_eq!(
+            serde_json::from_str::<ExpertBindingTarget>(&encoded).unwrap(),
+            target
+        );
+        let mut interaction = record();
+        interaction.kind = UserInteractionKind::ExpertBinding;
+        interaction.requirement.kind = InteractionRequirementKind::ConfigureExpertBinding;
+        interaction.requirement_digest =
+            canonical_requirement_digest(&interaction.requirement).unwrap();
+        interaction.target = reviewed;
+        interaction.target_digest = digest;
+        interaction.id = interaction_publication_id(
+            interaction.origin_run_id,
+            &interaction.origin,
+            &interaction.requirement_digest,
+            &interaction.target_digest,
+        )
+        .unwrap();
+        interaction.validate().unwrap();
     }
 
     #[test]

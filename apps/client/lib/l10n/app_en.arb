@@ -38,6 +38,8 @@
   "agentInteractionContinue": "Continue",
   "agentInteractionReviewSource": "Review",
   "agentInteractionOpenConnection": "Open settings",
+  "agentInteractionOpenExpertSettings": "Open Expert settings",
+  "agentInteractionExpertBindingTitle": "Expert setup needed",
   "agentInteractionRequestPermission": "Request access",
   "agentInteractionRecipient": "Recipient",
   "agentInteractionProfile": "Profile",

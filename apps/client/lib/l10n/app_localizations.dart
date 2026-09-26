@@ -310,6 +310,18 @@ abstract class AppLocalizations {
   /// **'Open settings'**
   String get agentInteractionOpenConnection;
 
+  /// No description provided for @agentInteractionOpenExpertSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Open Expert settings'**
+  String get agentInteractionOpenExpertSettings;
+
+  /// No description provided for @agentInteractionExpertBindingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Expert setup needed'**
+  String get agentInteractionExpertBindingTitle;
+
   /// No description provided for @agentInteractionRequestPermission.
   ///
   /// In en, this message translates to:

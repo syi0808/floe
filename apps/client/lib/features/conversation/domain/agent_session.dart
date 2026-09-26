@@ -107,7 +107,11 @@ sealed class AgentMessage {
   AgentMessageKind get kind;
 }
 
-enum AgentInteractionMessageKind { sourceAccess, processingRecipient }
+enum AgentInteractionMessageKind {
+  sourceAccess,
+  processingRecipient,
+  expertBinding,
+}
 
 final class AgentInteractionMessage extends AgentMessage {
   AgentInteractionMessage.fromJson(Map<String, Object?> json)
@@ -116,6 +120,7 @@ final class AgentInteractionMessage extends AgentMessage {
         'source_access' => AgentInteractionMessageKind.sourceAccess,
         'processing_recipient' =>
           AgentInteractionMessageKind.processingRecipient,
+        'expert_binding' => AgentInteractionMessageKind.expertBinding,
         _ => throw const FormatException('Unknown interaction kind.'),
       },
       super(json['turn_id']! as String) {
@@ -159,7 +164,10 @@ final class AgentCapabilityMessage extends AgentMessage {
     }
     final result = task['result'];
     if (state == 'completed') {
-      if (failure != null || result is! String || result.trim().isEmpty || result.length > 16384) {
+      if (failure != null ||
+          result is! String ||
+          result.trim().isEmpty ||
+          result.length > 16384) {
         throw const FormatException('Invalid completed Agent delegation.');
       }
     } else if (result != null) {
@@ -174,46 +182,66 @@ final class AgentCapabilityMessage extends AgentMessage {
     for (final raw in task['artifacts']! as List) {
       final artifact = _object(raw);
       final parts = artifact['parts'];
-      if (artifact['artifact_id'] is! String || artifact['name'] is! String ||
-          (artifact['name'] as String).isEmpty || parts is! List || parts.length > 16) {
+      if (artifact['artifact_id'] is! String ||
+          artifact['name'] is! String ||
+          (artifact['name'] as String).isEmpty ||
+          parts is! List ||
+          parts.length > 16) {
         throw const FormatException('Invalid Agent delegation artifact.');
       }
       final mediaTypes = <String>[];
       for (final part in parts) {
         final value = _object(part);
         if (value['kind'] == 'data') {
-          if (value['media_type'] is! String || value['data'] is! String ||
+          if (value['media_type'] is! String ||
+              value['data'] is! String ||
               (value['data'] as String).length > 16384) {
-            throw const FormatException('Invalid Agent delegation artifact data.');
+            throw const FormatException(
+              'Invalid Agent delegation artifact data.',
+            );
           }
           mediaTypes.add(value['media_type'] as String);
-        } else if (value['kind'] != 'text' || value['text'] is! String ||
+        } else if (value['kind'] != 'text' ||
+            value['text'] is! String ||
             (value['text'] as String).length > 16384) {
-          throw const FormatException('Invalid Agent delegation artifact part.');
+          throw const FormatException(
+            'Invalid Agent delegation artifact part.',
+          );
         }
       }
-      artifacts.add(AgentArtifact(artifact['artifact_id'] as String,
-          artifact['name'] as String, List.unmodifiable(mediaTypes)));
+      artifacts.add(
+        AgentArtifact(
+          artifact['artifact_id'] as String,
+          artifact['name'] as String,
+          List.unmodifiable(mediaTypes),
+        ),
+      );
     }
-    return AgentCapabilityMessage.fromJson({
-      'turn_id': json['turn_id'],
-      'call_id': task['id'],
-      'capability_id': 'floe.a2a.delegate',
-      'input': task['agent_id'],
-      'result': state == 'completed'
-          ? {'Ok': result}
-          : {'Err': failure ?? 'invalid_model_output'},
-    }, artifacts: List.unmodifiable(artifacts), isDelegation: true);
+    return AgentCapabilityMessage.fromJson(
+      {
+        'turn_id': json['turn_id'],
+        'call_id': task['id'],
+        'capability_id': 'floe.a2a.delegate',
+        'input': task['agent_id'],
+        'result': state == 'completed'
+            ? {'Ok': result}
+            : {'Err': failure ?? 'invalid_model_output'},
+      },
+      artifacts: List.unmodifiable(artifacts),
+      isDelegation: true,
+    );
   }
 
-  AgentCapabilityMessage.fromJson(Map<String, Object?> json,
-      {this.artifacts = const [], this.isDelegation = false})
-    : callId = json['call_id']! as String,
-      capabilityId = json['capability_id']! as String,
-      input = json['input']! as String,
-      output = _object(json['result'])['Ok'] as String?,
-      failure = _object(json['result'])['Err'] as String?,
-      super(json['turn_id']! as String) {
+  AgentCapabilityMessage.fromJson(
+    Map<String, Object?> json, {
+    this.artifacts = const [],
+    this.isDelegation = false,
+  }) : callId = json['call_id']! as String,
+       capabilityId = json['capability_id']! as String,
+       input = json['input']! as String,
+       output = _object(json['result'])['Ok'] as String?,
+       failure = _object(json['result'])['Err'] as String?,
+       super(json['turn_id']! as String) {
     if ((output == null) == (failure == null)) {
       throw const FormatException('Invalid Agent capability result.');
     }
@@ -227,9 +255,8 @@ final class AgentCapabilityMessage extends AgentMessage {
   final List<AgentArtifact> artifacts;
   final bool isDelegation;
 
-  bool hasArtifactMediaType(String mediaType) => artifacts.any(
-    (artifact) => artifact.mediaTypes.contains(mediaType),
-  );
+  bool hasArtifactMediaType(String mediaType) =>
+      artifacts.any((artifact) => artifact.mediaTypes.contains(mediaType));
   final String? output;
   final String? failure;
 }

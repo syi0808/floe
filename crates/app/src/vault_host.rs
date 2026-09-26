@@ -2015,23 +2015,45 @@ async fn execute_interaction_refresh<Keys: VaultKeyProvider + 'static>(
         personal_subject: &personal_subject,
         probe_deadline: tokio::time::Instant::now() + Duration::from_secs(5),
     };
-    let outcome = interaction_resolution::refresh_interaction(
+    let command = interaction_resolution::RefreshInteractionCommand {
+        interaction_id: request.interaction_id,
+        command_id: request.command_id,
+        session_id: request.session_id,
+        expected_revision: request.expected_revision,
+    };
+    let current = floe_conversation::load_interaction(
         vault.conversation_repository.as_ref(),
-        vault.conversation_repository.as_ref(),
-        &owners,
-        &owners,
-        &owners,
-        caller,
-        interaction_resolution::RefreshInteractionCommand {
-            interaction_id: request.interaction_id,
-            command_id: request.command_id,
-            session_id: request.session_id,
-            expected_revision: request.expected_revision,
-        },
-        &Cancellation::default(),
-        chrono::Utc::now().timestamp_millis(),
+        &caller.person_id().to_string(),
+        request.interaction_id,
     )
     .await?;
+    let now_unix_ms = chrono::Utc::now().timestamp_millis();
+    let outcome = if matches!(
+        current.target,
+        floe_conversation::ReviewedTarget::ExpertBinding(_)
+    ) {
+        interaction_resolution::refresh_expert_binding(
+            vault.vault.as_ref(),
+            vault.conversation_repository.as_ref(),
+            caller,
+            command,
+            now_unix_ms,
+        )
+        .await?
+    } else {
+        interaction_resolution::refresh_interaction(
+            vault.conversation_repository.as_ref(),
+            vault.conversation_repository.as_ref(),
+            &owners,
+            &owners,
+            &owners,
+            caller,
+            command,
+            &Cancellation::default(),
+            now_unix_ms,
+        )
+        .await?
+    };
     let claim = match &outcome {
         interaction_resolution::RefreshOutcome::Resolved { interaction } => {
             conversation_turn::evaluate_auto_resume(

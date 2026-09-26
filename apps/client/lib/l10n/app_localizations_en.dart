@@ -124,6 +124,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentInteractionOpenConnection => 'Open settings';
 
   @override
+  String get agentInteractionOpenExpertSettings => 'Open Expert settings';
+
+  @override
+  String get agentInteractionExpertBindingTitle => 'Expert setup needed';
+
+  @override
   String get agentInteractionRequestPermission => 'Request access';
 
   @override

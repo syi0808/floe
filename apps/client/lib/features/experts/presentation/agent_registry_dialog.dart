@@ -7,13 +7,19 @@ import 'package:floe_client/app/floe_switch.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/experts/presentation/agent_capability_label.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 
 class AgentRegistrySettings extends StatelessWidget {
-  const AgentRegistrySettings({super.key, required this.controller});
+  const AgentRegistrySettings({
+    super.key,
+    required this.controller,
+    this.focus,
+  });
 
   final AgentController controller;
+  final AgentExpertBindingTarget? focus;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -26,6 +32,13 @@ class AgentRegistrySettings extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(strings.agentRegistryTitle, style: FloeType.title),
+          if (focus != null) ...[
+            const SizedBox(height: FloeSpace.xs),
+            Text(
+              '${focus!.packageId} · ${focus!.requirementKey}',
+              style: FloeType.body,
+            ),
+          ],
           const SizedBox(height: FloeSpace.xs),
           Text(
             strings.agentRegistryBoundary,

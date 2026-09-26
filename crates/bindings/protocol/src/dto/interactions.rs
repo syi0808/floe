@@ -9,6 +9,7 @@ pub const MAX_INTERACTIONS_PER_LIST: usize = 64;
 pub enum AppInteractionKindDto {
     SourceAccess,
     ProcessingRecipient,
+    ExpertBinding,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -49,6 +50,13 @@ pub enum AppInteractionTargetDto {
         consumer: String,
         input_data_classes: Vec<String>,
         source_scopes: Vec<AppConsentScopeDto>,
+    },
+    ExpertBinding {
+        assignment_id: Uuid,
+        package_id: String,
+        package_version: String,
+        requirement_key: String,
+        capability: String,
     },
 }
 
@@ -91,6 +99,7 @@ pub enum AppInteractionActionDto {
     OpenConnection,
     ReviewSource,
     RequestPermission,
+    OpenExpertSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

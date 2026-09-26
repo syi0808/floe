@@ -22,12 +22,14 @@ final class AgentInteractionCard extends StatefulWidget {
     required this.message,
     this.onOpenSourceReview,
     this.onOpenConnections,
+    this.onOpenExpertSettings,
   });
 
   final AgentController controller;
   final AgentInteractionMessage message;
   final VoidCallback? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
+  final void Function(AgentExpertBindingTarget target)? onOpenExpertSettings;
 
   @override
   State<AgentInteractionCard> createState() => _AgentInteractionCardState();
@@ -116,6 +118,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
                       strings.agentInteractionSourceTitle,
                     AgentInteractionKind.processingRecipient =>
                       strings.agentInteractionConsentTitle,
+                    AgentInteractionKind.expertBinding =>
+                      strings.agentInteractionExpertBindingTitle,
                   }, style: FloeType.label),
                 ),
                 FloeBadge(
@@ -222,6 +226,16 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
             '${scope.connectionId} · ${scope.resources.join(', ')} · ${scope.operation}',
           ),
       ],
+    AgentExpertBindingTarget(
+      :final packageId,
+      :final requirementKey,
+      :final capability,
+    ) =>
+      [
+        _row(strings.agentInteractionSource, packageId),
+        _row(strings.agentInteractionNextStep, requirementKey),
+        _row(strings.agentInteractionPurpose, capability),
+      ],
   };
 
   Widget _row(String label, String value) => Padding(
@@ -260,6 +274,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
         strings.agentInteractionReviewSource,
       AgentInteractionAction.requestPermission =>
         strings.agentInteractionRequestPermission,
+      AgentInteractionAction.openExpertSettings =>
+        strings.agentInteractionOpenExpertSettings,
     };
     final VoidCallback? onPressed = busy
         ? null
@@ -291,6 +307,12 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
             },
             AgentInteractionAction.requestPermission =>
               () => controller.refreshInteraction(snapshot),
+            AgentInteractionAction.openExpertSettings => () {
+              final target = snapshot.target;
+              if (target is AgentExpertBindingTarget) {
+                widget.onOpenExpertSettings?.call(target);
+              }
+            },
           };
     if (action == AgentInteractionAction.allow ||
         action == AgentInteractionAction.continueRequest) {

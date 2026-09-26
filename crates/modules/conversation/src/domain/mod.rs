@@ -14,10 +14,10 @@ pub use intent::{
 };
 pub use interaction::{
     AuthorityRevision, ConversationInteraction, DecisionAdmission, ExpectedGrantState,
-    ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InlineObserveTarget,
-    InteractionDecision, InteractionDecisionKind, InteractionOrigin, InteractionRequirement,
-    InteractionRequirementKind, InteractionResolution, InteractionResolutionReceipt,
-    InteractionResumeRef, InteractionState,
+    ExpertBindingTarget, ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS,
+    InlineObserveTarget, InteractionDecision, InteractionDecisionKind, InteractionOrigin,
+    InteractionRequirement, InteractionRequirementKind, InteractionResolution,
+    InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
     MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RECIPIENT_CONSENT_TARGET_BYTES, MAX_RESUME_LINEAGE,
     MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
     MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
@@ -543,7 +543,10 @@ impl RunTerminal {
                 .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
             || self.steps.len() > floe_agent_contract::MAX_AGENT_MESSAGES
             || self.interactions.len() > MAX_ACTIVE_INTERACTIONS_PER_RUN
-            || self.interactions.iter().any(|reference| reference.validate().is_err())
+            || self
+                .interactions
+                .iter()
+                .any(|reference| reference.validate().is_err())
         {
             return Err(AgentFailure::InvalidInput);
         }

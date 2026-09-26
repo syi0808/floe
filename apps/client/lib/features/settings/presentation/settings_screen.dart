@@ -12,6 +12,8 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
+import 'package:floe_client/features/experts/presentation/agent_registry_dialog.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
 import 'package:floe_client/features/settings/domain/agent_personal_access.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -27,7 +29,7 @@ part 'data_privacy.dart';
 part 'action_permissions.dart';
 part 'navigation.dart';
 
-enum _SettingsPage { actions, dataPrivacy, memory, remoteServer }
+enum _SettingsPage { actions, dataPrivacy, experts, memory, remoteServer }
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -37,6 +39,7 @@ class SettingsScreen extends StatefulWidget {
     this.pairingGateway,
     this.actionController,
     this.agentController,
+    this.expertBindingTarget,
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
@@ -48,6 +51,7 @@ class SettingsScreen extends StatefulWidget {
   final RemotePairingGateway? pairingGateway;
   final CalendarActionController? actionController;
   final AgentController? agentController;
+  final AgentExpertBindingTarget? expertBindingTarget;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
@@ -58,19 +62,26 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late _SettingsPage selectedPage = _availablePages.first;
+  late _SettingsPage selectedPage = widget.expertBindingTarget == null
+      ? _availablePages.first
+      : _SettingsPage.experts;
   final navigationScrollController = ScrollController();
   final contentScrollController = ScrollController();
 
   List<_SettingsPage> get _availablePages => [
     if (widget.actionController != null) _SettingsPage.actions,
     if (widget.agentController != null) _SettingsPage.dataPrivacy,
+    if (widget.agentController != null) _SettingsPage.experts,
     _SettingsPage.remoteServer,
   ];
 
   @override
   void didUpdateWidget(SettingsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.expertBindingTarget != oldWidget.expertBindingTarget &&
+        widget.expertBindingTarget != null) {
+      selectedPage = _SettingsPage.experts;
+    }
     if (!_availablePages.contains(selectedPage) &&
         !(selectedPage == _SettingsPage.memory &&
             widget.agentController != null)) {
@@ -98,6 +109,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       personalAccessGateway: widget.personalAccessGateway,
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
+    ),
+    _SettingsPage.experts => AgentRegistrySettings(
+      controller: widget.agentController!,
+      focus: widget.expertBindingTarget,
     ),
     _SettingsPage.memory => AgentMemorySettings(
       controller: widget.agentController!,

@@ -14,6 +14,7 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
@@ -26,6 +27,7 @@ class AgentPanel extends StatefulWidget {
     this.onOpenAction,
     this.onOpenSourceReview,
     this.onOpenConnections,
+    this.onOpenExpertSettings,
   });
 
   final AgentController controller;
@@ -33,6 +35,7 @@ class AgentPanel extends StatefulWidget {
   final Future<void> Function(String actionId)? onOpenAction;
   final VoidCallback? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
+  final void Function(AgentExpertBindingTarget target)? onOpenExpertSettings;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -233,6 +236,7 @@ class _AgentPanelState extends State<AgentPanel> {
           message: message,
           onOpenSourceReview: widget.onOpenSourceReview,
           onOpenConnections: widget.onOpenConnections,
+          onOpenExpertSettings: widget.onOpenExpertSettings,
         ),
         AgentCapabilityMessage() => ExpansionTile(
           tilePadding: EdgeInsets.zero,

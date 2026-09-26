@@ -54,6 +54,11 @@ impl PublishInteractionRequest {
         if (self.kind == UserInteractionKind::ProcessingRecipient)
             != (self.requirement.kind
                 == crate::InteractionRequirementKind::ApproveProcessingRecipient)
+            || (self.kind == UserInteractionKind::ExpertBinding)
+                != (self.requirement.kind
+                    == crate::InteractionRequirementKind::ConfigureExpertBinding)
+            || (self.kind == UserInteractionKind::ExpertBinding)
+                != matches!(self.target, crate::ReviewedTarget::ExpertBinding(_))
         {
             return Err(AgentFailure::InvalidInput);
         }

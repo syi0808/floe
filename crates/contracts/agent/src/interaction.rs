@@ -11,6 +11,7 @@ pub const USER_INTERACTION_MEDIA_TYPE: &str =
 pub enum UserInteractionKind {
     SourceAccess,
     ProcessingRecipient,
+    ExpertBinding,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -82,6 +83,7 @@ mod tests {
             for kind in [
                 UserInteractionKind::SourceAccess,
                 UserInteractionKind::ProcessingRecipient,
+                UserInteractionKind::ExpertBinding,
             ] {
                 let reference = UserInteractionRef {
                     interaction_id: Uuid::new_v4(),

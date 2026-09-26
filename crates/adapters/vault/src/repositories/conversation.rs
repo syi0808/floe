@@ -776,6 +776,7 @@ fn contract_message(
                     floe_agent_contract::UserInteractionKind::ProcessingRecipient => {
                         "processing_recipient"
                     }
+                    floe_agent_contract::UserInteractionKind::ExpertBinding => "expert_binding",
                 }
             ),
             None,

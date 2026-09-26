@@ -40,6 +40,7 @@ import 'package:floe_client/features/settings/presentation/settings_screen.dart'
 import 'package:floe_client/features/connections/application/local_server_client.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/application/agent_controller.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
@@ -99,6 +100,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   AgentController? agentController;
   bool assistantOpen = false;
   bool openDeviceCalendarDetail = false;
+  AgentExpertBindingTarget? expertBindingTarget;
   final assistantEntryFocus = FocusNode();
   late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
@@ -302,6 +304,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         personalAccessGateway: widget.ownerGateways.personalAccess,
         actionController: actionController,
         agentController: agentController,
+        expertBindingTarget: expertBindingTarget,
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
         daySnapshot: controller.snapshot,
@@ -479,6 +482,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               controller: agentController!,
               onOpenAction: actionController == null ? null : _openAgentAction,
               onOpenSourceReview: _openAgentSourceReview,
+              onOpenExpertSettings: _openExpertSettings,
               onClose: _closeAssistant,
             );
           }
@@ -508,6 +512,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                           ? null
                           : _openAgentAction,
                       onOpenSourceReview: _openAgentSourceReview,
+                      onOpenExpertSettings: _openExpertSettings,
                       onClose: _closeAssistant,
                     )
                   : SingleChildScrollView(child: rail),
@@ -566,6 +571,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           controller: agent,
           onOpenAction: actionController == null ? null : _openAgentAction,
           onOpenSourceReview: _openAgentSourceReview,
+          onOpenExpertSettings: _openExpertSettings,
           onClose: () => Navigator.pop(context),
         ),
       ),
@@ -600,6 +606,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     _selectDestination(_DestinationView.connections, openCalendarDetail: true);
   }
 
+  void _openExpertSettings(AgentExpertBindingTarget target) {
+    if (MediaQuery.sizeOf(context).width <= 960) {
+      Navigator.of(context).maybePop();
+    }
+    setState(() => expertBindingTarget = target);
+    _selectDestination(_DestinationView.settings);
+  }
 
   void _closeAssistant() {
     setState(() => assistantOpen = false);

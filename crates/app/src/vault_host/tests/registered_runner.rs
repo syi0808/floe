@@ -59,6 +59,7 @@ fn inventory_connection(
 static RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_A_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_B_CALLS: AtomicUsize = AtomicUsize::new(0);
+static REQUIRED_SOURCE_RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_A_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static RUNNER_A_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
@@ -241,6 +242,7 @@ fn required_source_runner<'turn, 'model, 'msg, 'call>(
     request: &'call BuiltinExpertRequest,
 ) -> floe_agent_contract::BoxFuture<'call, Result<BuiltinExpertOutput, AgentFailure>> {
     Box::pin(async move {
+        REQUIRED_SOURCE_RUNNER_CALLS.fetch_add(1, Ordering::SeqCst);
         let outcome = host
             .read_requirement(
                 request,
@@ -620,8 +622,9 @@ async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_
 #[tokio::test]
 async fn registered_runner_required_unconfigured_source_returns_typed_outcome() {
     let person = PersonId::new();
-    let (_root, open, server) =
-        installed_open(person, required_source_registration(required_source_runner)).await;
+    let registration = required_source_registration(required_source_runner);
+    let manifest = registration.manifest.clone();
+    let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
     assert_eq!(
         open.task_coordinator
             .catalog(&person.to_string())
@@ -634,6 +637,7 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
     let task_id = TaskId::new();
     let mut task_request = request(person, run_id, task_id);
     journal_origin(&open, &mut task_request, run_id).await;
+    let calls_before = REQUIRED_SOURCE_RUNNER_CALLS.load(Ordering::SeqCst);
     let receipt = open
         .task_coordinator
         .delegate(task_request, &task_scope(run_id, task_id))
@@ -642,7 +646,11 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
     assert_eq!(receipt.snapshot.state, TaskState::Completed, "{receipt:?}");
     assert_eq!(
         receipt.snapshot.result.as_deref(),
-        Some("source-needs-user-action")
+        Some("Expert settings are required before this task can run.")
+    );
+    assert_eq!(
+        REQUIRED_SOURCE_RUNNER_CALLS.load(Ordering::SeqCst),
+        calls_before
     );
     assert!(receipt.snapshot.artifacts.iter().any(|artifact| artifact.parts.iter().any(|part| matches!(part, ArtifactPart::Data { media_type, .. } if media_type == floe_agent_contract::USER_INTERACTION_MEDIA_TYPE))));
     let interactions = floe_conversation::InteractionRepository::list_run_interactions(
@@ -654,13 +662,89 @@ async fn registered_runner_required_unconfigured_source_returns_typed_outcome() 
     .unwrap();
     assert_eq!(interactions.len(), 1);
     assert_eq!(
+        interactions[0].kind,
+        floe_agent_contract::UserInteractionKind::ExpertBinding
+    );
+    assert_eq!(
+        interactions[0].requirement.kind,
+        floe_conversation::InteractionRequirementKind::ConfigureExpertBinding
+    );
+    assert!(
+        matches!(&interactions[0].target, floe_conversation::ReviewedTarget::ExpertBinding(target) if target.requirement_key == "required_attention" && target.package.id == "example.test.expert")
+    );
+    assert_eq!(
         interactions[0].origin,
         floe_conversation::InteractionOrigin::Task {
             task_id: task_id.as_uuid(),
             capability_call_id: None,
         }
     );
-    server.join().unwrap();
+    let caller = crate::CallerContext::verified(
+        crate::LocalIdentityClaim {
+            person_id: person.0,
+            device_id: "mac-local".into(),
+        },
+        1,
+    )
+    .unwrap();
+    let refresh = || crate::vault_host::interaction_resolution::RefreshInteractionCommand {
+        interaction_id: interactions[0].id,
+        command_id: Uuid::new_v4(),
+        session_id: interactions[0].session_id,
+        expected_revision: interactions[0].revision,
+    };
+    assert!(matches!(
+        crate::vault_host::interaction_resolution::refresh_expert_binding(
+            open.vault.as_ref(),
+            open.conversation_repository.as_ref(),
+            &caller,
+            refresh(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .unwrap(),
+        crate::vault_host::interaction_resolution::RefreshOutcome::StillPending { .. }
+    ));
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = &snapshot.assignments[0];
+    let source = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+        person_id: person,
+        device_id: "mac-local",
+        capability: "attention.coarse",
+        contract_version: 1,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        calendar_connection: None,
+    })
+    .unwrap()
+    .remove(0)
+    .reference;
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: snapshot.installations[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_attention".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![source],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        crate::vault_host::interaction_resolution::refresh_expert_binding(
+            open.vault.as_ref(),
+            open.conversation_repository.as_ref(),
+            &caller,
+            refresh(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .unwrap(),
+        crate::vault_host::interaction_resolution::RefreshOutcome::Resolved { .. }
+    ));
 }
 
 #[tokio::test]
@@ -671,6 +755,36 @@ async fn registered_runner_undeclared_requirement_is_denied_before_source_io() {
         required_source_registration(undeclared_source_runner),
     )
     .await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let source = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+        person_id: person,
+        device_id: "mac-local",
+        capability: "attention.coarse",
+        contract_version: 1,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        calendar_connection: None,
+    })
+    .unwrap()
+    .remove(0)
+    .reference;
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: snapshot.assignments[0].id,
+                package: snapshot.installations[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_attention".into(),
+                expected_binding_revision: snapshot.assignments[0].binding.revision,
+                selected: vec![source],
+            },
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
     let run_id = RunId::new();
     let task_id = TaskId::new();
     let receipt = open

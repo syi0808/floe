@@ -1170,6 +1170,13 @@ fn interaction_target(target: &floe_app::ReviewedTarget) -> AppInteractionTarget
                     .collect(),
             }
         }
+        floe_app::ReviewedTarget::ExpertBinding(target) => AppInteractionTargetDto::ExpertBinding {
+            assignment_id: target.assignment_id,
+            package_id: target.package.id.clone(),
+            package_version: target.package.version.clone(),
+            requirement_key: target.requirement_key.clone(),
+            capability: target.capability.clone(),
+        },
     }
 }
 
@@ -1221,6 +1228,11 @@ fn interaction_snapshot(
             };
             vec![navigate, AppInteractionActionDto::Dismiss]
         }
+        (AppInteractionStateDto::Pending, floe_app::ReviewedTarget::ExpertBinding(_)) => vec![
+            AppInteractionActionDto::OpenExpertSettings,
+            AppInteractionActionDto::Refresh,
+            AppInteractionActionDto::Dismiss,
+        ],
         (AppInteractionStateDto::Resolving, _) => vec![
             AppInteractionActionDto::Refresh,
             AppInteractionActionDto::Dismiss,
@@ -1237,6 +1249,7 @@ fn interaction_snapshot(
             floe_app::UserInteractionKind::ProcessingRecipient => {
                 AppInteractionKindDto::ProcessingRecipient
             }
+            floe_app::UserInteractionKind::ExpertBinding => AppInteractionKindDto::ExpertBinding,
         },
         state,
         revision: interaction.revision,
