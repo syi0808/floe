@@ -6,10 +6,10 @@
 
 use super::expert_host::{
     CalendarContextReaderApi, CapturingRecorder, ConversationContextReader,
-    ConversationContextReaderApi, CurrentCalendarContextReader, ExpertModelHost,
-    PersonalAttentionReader, PersonalAttentionReaderApi, PersonalPeopleReader,
-    PersonalPeopleReaderApi, PersonalViewSource, PersonalWellbeingReader,
-    PersonalWellbeingReaderApi, ResultRecorder, StoreResultRecorder, expert_policy,
+    ConversationContextReaderApi, ExpertModelHost, PersonalAttentionReader,
+    PersonalAttentionReaderApi, PersonalPeopleReader, PersonalPeopleReaderApi, PersonalViewSource,
+    PersonalWellbeingReader, PersonalWellbeingReaderApi, ResultRecorder,
+    SelectedCalendarContextReader, StoreResultRecorder, expert_policy,
 };
 use super::*;
 use std::sync::{Arc, Mutex};
@@ -167,7 +167,11 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 return Err(AgentFailure::CapabilityDenied);
             }
             let person_id = self.vault.person_id();
-            let registry = self.vault.expert_registry().await?.ok_or(AgentFailure::NotFound)?;
+            let registry = self
+                .vault
+                .expert_registry()
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
             floe_experts::AgentRegistry::restore(registry, self.vault.registry_instance_id())?
                 .validate_current_execution_selection(
                     person_id,
@@ -220,15 +224,31 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 )),
                 None => None,
             };
-            let calendar_reader = CurrentCalendarContextReader {
+            let calendar_selection = self
+                .selection
+                .requirements
+                .iter()
+                .find(|requirement| requirement.capability == "calendar.timeline")
+                .map(|requirement| requirement.selected.as_slice())
+                .unwrap_or_default();
+            let calendar_reader = SelectedCalendarContextReader {
                 core: &self.core,
                 vault: &self.vault,
                 source_client: source_client.as_ref(),
                 device_id: &context.device_id,
+                selected: calendar_selection,
             };
             let remote_resolver = remote_reader
                 .as_ref()
                 .map(|reader| remote_views::RemoteDependencyResolver { reader });
+            let bound_remote_reader =
+                remote_reader
+                    .as_ref()
+                    .map(|reader| remote_views::BoundRemoteViewReader {
+                        reader,
+                        admission: &self.admission,
+                        selection: &self.selection,
+                    });
             let calendar_resolver =
                 crate::vault_host::calendar_access::NativeCalendarDependencyResolver {
                     core: &self.core,
@@ -300,7 +320,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 people_reader: Some(&people_reader),
                 wellbeing_reader: Some(&wellbeing_reader),
                 recorder: Some(&recorder),
-                remote_reader: remote_reader
+                remote_reader: bound_remote_reader
                     .as_ref()
                     .map(|reader| reader as &dyn floe_context::SourceReader),
                 context_reader: Some(&context_reader),
@@ -348,14 +368,21 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                     artifact.coverage = coverage.clone();
                 }
             }
-            let current_registry = self.vault.expert_registry().await?.ok_or(AgentFailure::NotFound)?;
-            floe_experts::AgentRegistry::restore(current_registry, self.vault.registry_instance_id())?
-                .validate_current_execution_selection(
-                    person_id,
-                    &self.admission,
-                    &self.selection,
-                    true,
-                )?;
+            let current_registry = self
+                .vault
+                .expert_registry()
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            floe_experts::AgentRegistry::restore(
+                current_registry,
+                self.vault.registry_instance_id(),
+            )?
+            .validate_current_execution_selection(
+                person_id,
+                &self.admission,
+                &self.selection,
+                true,
+            )?;
             Ok(ExpertReport {
                 task_id: invocation.request.task_id,
                 principal: invocation.request.principal,
@@ -593,11 +620,9 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                         }
                     }
                 }
-                LocalExpertSource::ConfirmedInteractions => {
-                    Ok(SourceReadOutcome::Unavailable(
-                        floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
-                    ))
-                }
+                LocalExpertSource::ConfirmedInteractions => Ok(SourceReadOutcome::Unavailable(
+                    floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+                )),
                 LocalExpertSource::ConfirmedMemory => {
                     let snapshot = self
                         .host

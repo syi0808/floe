@@ -62,6 +62,95 @@ pub(crate) struct RemoteDependencyResolver<'a, Keys: VaultKeyProvider> {
     pub(crate) reader: &'a RemoteViewReader<'a, Keys>,
 }
 
+pub(crate) struct BoundRemoteViewReader<'a, Keys: VaultKeyProvider> {
+    pub(crate) reader: &'a RemoteViewReader<'a, Keys>,
+    pub(crate) admission: &'a floe_experts::ExpertAdmissionIdentity,
+    pub(crate) selection: &'a floe_experts::ExpertExecutionSelection,
+}
+
+impl<Keys: VaultKeyProvider> BoundRemoteViewReader<'_, Keys> {
+    async fn validate_current(&self) -> Result<(), AgentFailure> {
+        let registry = self
+            .reader
+            .vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        floe_experts::AgentRegistry::restore(registry, self.reader.vault.registry_instance_id())?
+            .validate_current_execution_selection(
+                self.reader.person_id,
+                self.admission,
+                self.selection,
+                true,
+            )
+    }
+}
+
+impl<Keys: VaultKeyProvider> floe_context::SourceReader for BoundRemoteViewReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        request: &'a floe_context::SourceReadRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.validate_current().await?;
+            let selected = self
+                .selection
+                .requirements
+                .iter()
+                .find(|requirement| requirement.capability == request.source().as_str())
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            if selected.selected.is_empty() {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+            let outcome = floe_context::read_selected_remote_view(
+                self.reader.vault,
+                &self.reader.transport(),
+                self.reader.person_id,
+                self.reader.pairing(),
+                request.source().as_str(),
+                request.consumer().identifier(),
+                &selected.selected,
+                request.query().clone(),
+                &RemoteCallWindow {
+                    deadline: request.deadline(),
+                    cancellation: request.cancellation().clone(),
+                },
+                request.process_incarnation_id(),
+                request.query_fingerprint(),
+            )
+            .await?;
+            self.validate_current().await?;
+            Ok(match outcome {
+                floe_context_contract::SourceReadOutcome::Ready((payload, bindings)) => {
+                    floe_context_contract::SourceReadOutcome::Ready(
+                        floe_context::SourceRead::with_bindings(
+                            request.source().clone(),
+                            payload,
+                            bindings,
+                        ),
+                    )
+                }
+                floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
+                    floe_context_contract::SourceReadOutcome::Unavailable(reason)
+                }
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
+                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers)
+                }
+            })
+        })
+    }
+}
+
 impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_, Keys> {
     fn read<'a>(
         &'a self,
@@ -104,12 +193,12 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for RemoteViewReader<'_,
                         ),
                     ))
                 }
-                floe_context_contract::SourceReadOutcome::Unavailable(reason) => {
-                    Ok(floe_context_contract::SourceReadOutcome::Unavailable(reason))
-                }
-                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => {
-                    Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers))
-                }
+                floe_context_contract::SourceReadOutcome::Unavailable(reason) => Ok(
+                    floe_context_contract::SourceReadOutcome::Unavailable(reason),
+                ),
+                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
+                    floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
+                ),
             }
         })
     }

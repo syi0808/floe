@@ -22,8 +22,8 @@ mod application {
     pub mod remote_views;
     pub mod routing;
     pub mod service;
-    pub mod source_view;
     pub mod source_candidates;
+    pub mod source_view;
     pub mod tools;
 }
 
@@ -55,10 +55,6 @@ pub use application::expert_sources::{
     DeclaredSourceValue, LocalExpertSource, LocalExpertSourceDriver, classify_calendar_review,
     current_calendar_connector, observe_calendar_binding, read_declared_source,
     select_current_calendar_connection,
-};
-pub use application::source_candidates::{
-    LOCAL_CONTEXT_CONNECTOR, SourceCandidate, SourceCandidateRequest,
-    discover_source_candidates, source_candidate_id,
 };
 pub use application::history::read_history_coverage;
 pub use application::leases::{
@@ -101,7 +97,7 @@ pub use application::personal_sources::{
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{
     AdmittedRemoteRead, RemoteCalendarViewRead, RemoteViewTransport, authorize_remote_dependency,
-    read_remote_calendar_view, read_remote_view,
+    read_remote_calendar_view, read_remote_view, read_selected_remote_view,
 };
 pub use application::remote_views::{
     LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, is_remote_view, remote_view_data_category,
@@ -109,6 +105,10 @@ pub use application::remote_views::{
     validate_remote_view_query,
 };
 pub use application::service::{ContextService, PreparedContext};
+pub use application::source_candidates::{
+    LOCAL_CONTEXT_CONNECTOR, SourceCandidate, SourceCandidateRequest, discover_source_candidates,
+    source_candidate_id,
+};
 pub use application::source_view::SourceView;
 pub use application::tools::{
     ATTENTION_COARSE_READ, ContextToolService, LIFE_LOGISTICS_READ, MAIL_COMMUNICATION_READ,
