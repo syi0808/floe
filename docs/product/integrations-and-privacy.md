@@ -14,7 +14,7 @@ External source
   -> Manager
 ```
 
-Observe and Act are separate authority classes. Completing a concrete supported source connection enables Floe's exact, product-approved first-party readers for the selected resources by default. The connection's **Use with Floe** control pauses or freshly revalidates those Observe grants without disconnecting the account or changing its selected resources.
+Observe and Act are separate authority classes. Completing a concrete supported source connection can review Floe's exact, product-approved first-party readers for the selected resources: Manager direct readers and active trusted Experts whose settings select that exact source. Expert selection does not itself create a grant or add a consumer to an existing grant. The connection's **Use with Floe** control pauses or freshly revalidates those Observe grants without disconnecting the account or changing its selected resources.
 
 Pairing a server by itself grants no connector Observe access. Existing connections discovered during startup are never silently promoted; a connection without current grants requires explicit review. Adding or changing resources while Use with Floe is active coordinates source selection and Observe scope as one user interaction, while provider-side drift fails closed.
 

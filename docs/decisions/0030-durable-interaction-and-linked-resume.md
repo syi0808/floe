@@ -62,9 +62,16 @@ mutation, race through compare-and-swap, and rejoin on the identical
 command id. Material drift invalidates review; a decision never re-reads
 latest state to widen what was approved.
 
-Resolution runs through the canonical source/Access owner operation with
+An authority review resolves through the canonical source/Access owner operation with
 the reviewed target binding, re-reading and re-verifying current
-authority; the interaction then records a semantic receipt. A linked
+authority; the interaction then records a semantic receipt. An Expert
+binding blocker uses the same durable lifecycle but is navigation, not
+approval: its target names the exact Task/assignment/requirement and
+selection revision/digest, not a candidate or grant. A separate Experts
+settings command saves the person's choice, and explicit Refresh resolves
+only after re-reading the current binding. An Expert-origin SourceAccess
+review also binds the admitted Task selection and supersedes before grant
+mutation if that assignment was rebound. A linked
 resume is a fresh Run, not budget continuation: it recomputes context,
 claims no old batch takeover, duplicates no user text, and admits through
 one atomically bound per-origin auto-resume slot. No global run-id stash,
