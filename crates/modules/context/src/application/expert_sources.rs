@@ -8,6 +8,113 @@ use tokio::time::Instant;
 
 use crate::{ContextService, SourceReader, SourceView};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CurrentCalendarSelection {
+    Missing,
+    Reconnect,
+    SelectResource,
+    Native,
+    Remote,
+}
+
+pub fn select_current_calendar_connection(
+    connection: Option<&floe_day::CalendarConnection>,
+    device_id: &str,
+) -> Result<CurrentCalendarSelection, AgentFailure> {
+    let Some(connection) = connection else {
+        return Ok(CurrentCalendarSelection::Missing);
+    };
+    if connection.device_id != device_id || connection.revision == 0 {
+        return Err(AgentFailure::StaleContext);
+    }
+    if connection.disconnected {
+        return Ok(CurrentCalendarSelection::Reconnect);
+    }
+    if connection.calendars.is_empty() {
+        return Ok(CurrentCalendarSelection::SelectResource);
+    }
+    Ok(
+        if connection.provider == floe_context_contract::CalendarProvider::EventKit {
+            CurrentCalendarSelection::Native
+        } else {
+            CurrentCalendarSelection::Remote
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CalendarReviewClassification {
+    pub reason: floe_context_contract::SourceAccessRequirementKind,
+    pub observed: Option<floe_context_contract::ObservedGrant>,
+}
+
+pub fn current_calendar_connector(
+    connection: &floe_day::CalendarConnection,
+) -> Option<&'static str> {
+    floe_access::native_calendar_connector(connection.provider)
+        .or_else(|| floe_access::hosted_calendar_connector(connection.provider))
+}
+
+pub fn observe_calendar_binding(
+    grants: &[floe_access::DataAccessGrant],
+    person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
+) -> Result<Option<floe_context_contract::ObservedGrant>, AgentFailure> {
+    let grant = current_calendar_grant(grants, person_id, connector_id, connection_id)?;
+    grant
+        .map(|grant| {
+            floe_context_contract::ObservedGrant::try_new(grant.id(), grant.authority())
+                .map_err(|_| AgentFailure::StaleContext)
+        })
+        .transpose()
+}
+
+fn current_calendar_grant<'a>(
+    grants: &'a [floe_access::DataAccessGrant],
+    person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
+) -> Result<Option<&'a floe_access::DataAccessGrant>, AgentFailure> {
+    let mut binding = grants.iter().filter(|grant| {
+        grant.state() != floe_access::GrantState::Revoked
+            && grant.source().person_id() == person_id
+            && grant.source().connector().as_str() == connector_id
+            && grant.source().connection_id().as_str() == connection_id
+    });
+    let grant = binding.next();
+    if binding.next().is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(grant)
+}
+
+pub fn classify_calendar_review(
+    grants: &[floe_access::DataAccessGrant],
+    person_id: PersonId,
+    connector_id: &str,
+    connection_id: &str,
+) -> Result<CalendarReviewClassification, AgentFailure> {
+    let grant = current_calendar_grant(grants, person_id, connector_id, connection_id)?;
+    let observed = grant
+        .map(|grant| {
+            floe_context_contract::ObservedGrant::try_new(grant.id(), grant.authority())
+                .map_err(|_| AgentFailure::StaleContext)
+        })
+        .transpose()?;
+    let reason = match grant {
+        None => floe_context_contract::SourceAccessRequirementKind::EnableObserve,
+        Some(grant) => {
+            if grant.state() == floe_access::GrantState::Paused {
+                floe_context_contract::SourceAccessRequirementKind::EnableObserve
+            } else {
+                floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource
+            }
+        }
+    };
+    Ok(CalendarReviewClassification { reason, observed })
+}
+
 pub struct DeclaredSourceRequirement<'a> {
     pub key: &'a str,
     pub capability: &'a str,
@@ -178,9 +285,60 @@ async fn read_declared_remote_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     struct ProbeDriver(Mutex<Vec<LocalExpertSource>>);
+
+    #[test]
+    fn current_calendar_selection_does_not_infer_a_fallback() {
+        assert_eq!(
+            select_current_calendar_connection(None, "device").unwrap(),
+            CurrentCalendarSelection::Missing
+        );
+        let mut connection = floe_day::CalendarConnection {
+            connection_id: "connection".into(),
+            device_id: "device".into(),
+            disconnected: false,
+            scope: floe_context_contract::CalendarScope::Selected,
+            provider: floe_context_contract::CalendarProvider::EventKit,
+            calendars: vec![floe_day::CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            revision: 1,
+            source_authority: floe_context_contract::SourceAuthority::new(),
+            last_success_at: None,
+            last_range: None,
+            error: None,
+            error_at: None,
+            source_statuses: BTreeMap::new(),
+        };
+        assert_eq!(
+            select_current_calendar_connection(Some(&connection), "device").unwrap(),
+            CurrentCalendarSelection::Native
+        );
+        connection.provider = floe_context_contract::CalendarProvider::Google;
+        assert_eq!(
+            select_current_calendar_connection(Some(&connection), "device").unwrap(),
+            CurrentCalendarSelection::Remote
+        );
+        connection.disconnected = true;
+        assert_eq!(
+            select_current_calendar_connection(Some(&connection), "device").unwrap(),
+            CurrentCalendarSelection::Reconnect
+        );
+        connection.disconnected = false;
+        connection.calendars.clear();
+        assert_eq!(
+            select_current_calendar_connection(Some(&connection), "device").unwrap(),
+            CurrentCalendarSelection::SelectResource
+        );
+        assert_eq!(
+            select_current_calendar_connection(Some(&connection), "other"),
+            Err(AgentFailure::StaleContext)
+        );
+    }
 
     impl LocalExpertSourceDriver for ProbeDriver {
         fn read<'a>(

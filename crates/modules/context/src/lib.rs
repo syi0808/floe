@@ -50,8 +50,10 @@ pub use application::coverage::{
 pub use application::day_context_views::{note_context_view, task_context_view};
 pub use application::expert_context::{ExpertContextRequest, prepare_expert_context};
 pub use application::expert_sources::{
-    DeclaredSourceRequirement, DeclaredSourceValue, LocalExpertSource, LocalExpertSourceDriver,
-    read_declared_source,
+    CalendarReviewClassification, CurrentCalendarSelection, DeclaredSourceRequirement,
+    DeclaredSourceValue, LocalExpertSource, LocalExpertSourceDriver, classify_calendar_review,
+    current_calendar_connector, observe_calendar_binding, read_declared_source,
+    select_current_calendar_connection,
 };
 pub use application::history::read_history_coverage;
 pub use application::leases::{
