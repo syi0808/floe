@@ -16,6 +16,51 @@ use crate::current_calendar_connector;
 
 pub const LOCAL_CONTEXT_CONNECTOR: &str = "floe.local.context";
 
+pub fn validate_local_source_selection(
+    selected: &SourceSelectionReference,
+    device_id: &str,
+) -> Result<(), AgentFailure> {
+    selected
+        .validate()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    let (connector, connection, owner, resource) = match selected.capability_id.as_str() {
+        "attention.coarse" => (
+            ATTENTION_CONNECTOR.to_owned(),
+            ATTENTION_CONNECTION.to_owned(),
+            attention_execution_owner(device_id),
+            ATTENTION_RESOURCE.to_owned(),
+        ),
+        "people.identity" => (
+            "contacts.apple".to_owned(),
+            contacts_connection("contacts.apple"),
+            contacts_execution_owner("contacts.apple", device_id),
+            PEOPLE_RESOURCE.to_owned(),
+        ),
+        "wellbeing.derived" => (
+            WELLBEING_CONNECTOR.to_owned(),
+            WELLBEING_CONNECTION.to_owned(),
+            apple_execution_owner(device_id),
+            WELLBEING_RESOURCE.to_owned(),
+        ),
+        "floe.tasks" | "memory.confirmed" => (
+            LOCAL_CONTEXT_CONNECTOR.to_owned(),
+            LOCAL_CONTEXT_CONNECTOR.to_owned(),
+            format!("device:{device_id}"),
+            selected.capability_id.clone(),
+        ),
+        _ => return Err(AgentFailure::CapabilityDenied),
+    };
+    if selected.contract_version != 1
+        || selected.connector_id.as_str() != connector
+        || selected.connection_id.as_str() != connection
+        || selected.execution_owner_id.as_str() != owner
+        || selected.resource.as_str() != resource
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 pub struct SourceCandidateRequest<'a> {
     pub person_id: PersonId,
@@ -214,6 +259,28 @@ mod tests {
             remote_connections: &[],
             remote_execution_owner: None,
             calendar_connection: calendar,
+        }
+    }
+
+    #[test]
+    fn native_and_intrinsic_selection_is_exactly_device_pinned() {
+        let person_id = PersonId::new();
+        for capability in [
+            "attention.coarse",
+            "people.identity",
+            "wellbeing.derived",
+            "floe.tasks",
+            "memory.confirmed",
+        ] {
+            let selected = discover_source_candidates(request(person_id, capability, None))
+                .unwrap()
+                .remove(0)
+                .reference;
+            validate_local_source_selection(&selected, "mac-local").unwrap();
+            assert_eq!(
+                validate_local_source_selection(&selected, "other-device"),
+                Err(AgentFailure::StaleContext),
+            );
         }
     }
 

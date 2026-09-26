@@ -60,6 +60,16 @@ struct BindingFencedInferenceExecutor<'a, Keys: VaultKeyProvider> {
     selection: &'a floe_experts::ExpertExecutionSelection,
 }
 
+pub(super) trait ExpertBindingFence: Send + Sync {
+    fn validate<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>>;
+}
+
+impl<Keys: VaultKeyProvider> ExpertBindingFence for BindingFencedInferenceExecutor<'_, Keys> {
+    fn validate<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move { self.validate_current().await })
+    }
+}
+
 impl<Keys: VaultKeyProvider> BindingFencedInferenceExecutor<'_, Keys> {
     async fn validate_current(&self) -> Result<(), AgentFailure> {
         let registry = self
@@ -387,6 +397,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
                 admission: &self.admission,
+                selection: &self.selection,
             };
             let repository = floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
             let calendar_subject = crate::vault_host::calendar_access::DeviceCalendarSubject {
@@ -432,6 +443,8 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 interactions: Some(&repository),
                 device_id: Some(context.device_id.as_str()),
                 snapshots: Some(&snapshots),
+                admitted_selection: Some(&self.selection),
+                binding_fence: Some(&fenced_inference),
             };
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
@@ -545,6 +558,8 @@ pub(crate) struct ConversationExperts<'model> {
     /// ref-less.
     pub(super) snapshots:
         Option<&'model dyn crate::vault_host::review_snapshot::ReviewSnapshotSource>,
+    pub(super) admitted_selection: Option<&'model floe_experts::ExpertExecutionSelection>,
+    pub(super) binding_fence: Option<&'model dyn ExpertBindingFence>,
 }
 
 /// One delegated message's Expert host.
@@ -779,6 +794,57 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
             if self.manifest.package.id != request.agent_id {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            let selection = self
+                .experts
+                .admitted_selection
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            let binding_fence = self
+                .experts
+                .binding_fence
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            binding_fence.validate().await?;
+            let declared = self
+                .manifest
+                .source_requirements
+                .iter()
+                .find(|requirement| requirement.key == key)
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            let admitted = selection
+                .requirements
+                .iter()
+                .find(|requirement| {
+                    requirement.key == declared.key
+                        && requirement.capability == declared.capability
+                        && requirement.contract_version == declared.contract_version
+                })
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            if admitted.selected.is_empty() {
+                return Ok(floe_experts::RequirementReadOutcome::Unavailable(
+                    floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+                ));
+            }
+            if matches!(
+                declared.capability.as_str(),
+                "attention.coarse"
+                    | "people.identity"
+                    | "wellbeing.derived"
+                    | "floe.tasks"
+                    | "memory.confirmed"
+            ) {
+                let selected = admitted
+                    .selected
+                    .first()
+                    .ok_or(AgentFailure::CapabilityDenied)?;
+                if admitted.selected.len() != 1 {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                floe_context::validate_local_source_selection(
+                    selected,
+                    self.experts
+                        .device_id
+                        .ok_or(AgentFailure::CapabilityDenied)?,
+                )?;
+            }
             let requirements = self
                 .manifest
                 .source_requirements
@@ -804,6 +870,7 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
                 &request.cancellation,
             )
             .await?;
+            binding_fence.validate().await?;
             if let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = &outcome {
                 self.capture(blockers)?;
             }
@@ -1071,6 +1138,68 @@ mod capture_tests {
         SourceReadOutcome,
     };
 
+    struct TestBindingFence;
+
+    impl ExpertBindingFence for TestBindingFence {
+        fn validate<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn focus_selection(device_id: &str) -> floe_experts::ExpertExecutionSelection {
+        let manifest = floe_experts_builtin::manifests()
+            .into_iter()
+            .find(|manifest| manifest.package.id == BuiltinExpertKind::FocusAttention.package_id())
+            .unwrap();
+        let binding = floe_experts::ExpertBindingState {
+            schema_version: floe_experts::EXPERT_BINDING_SCHEMA_VERSION,
+            revision: 1,
+            entries: manifest
+                .source_requirements
+                .iter()
+                .map(|requirement| {
+                    let selected = if requirement.capability == "calendar.timeline" {
+                        vec![floe_context_contract::SourceSelectionReference {
+                            connector_id: ConnectorId::try_new("calendar.event_kit").unwrap(),
+                            connection_id: ConnectionId::try_new("calendar-connection").unwrap(),
+                            execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new(
+                                device_id,
+                            )
+                            .unwrap(),
+                            capability_id: requirement.capability.clone(),
+                            resource: ResourceHandle::try_new("calendar:test").unwrap(),
+                            contract_version: 1,
+                        }]
+                    } else {
+                        floe_context::discover_source_candidates(
+                            floe_context::SourceCandidateRequest {
+                                person_id: floe_kernel::PersonId::new(),
+                                device_id,
+                                capability: &requirement.capability,
+                                contract_version: 1,
+                                remote_connections: &[],
+                                remote_execution_owner: None,
+                                calendar_connection: None,
+                            },
+                        )
+                        .unwrap()
+                        .into_iter()
+                        .map(|candidate| candidate.reference)
+                        .collect()
+                    };
+                    floe_experts::RequirementBinding {
+                        requirement_key: requirement.key.clone(),
+                        capability: requirement.capability.clone(),
+                        contract_version: requirement.contract_version,
+                        selected,
+                    }
+                })
+                .collect(),
+            last_operation: None,
+        };
+        floe_experts::ExpertExecutionSelection::from_binding(&manifest, &binding).unwrap()
+    }
+
     struct UnusedExecutor;
 
     impl floe_inference::InferenceExecutor for UnusedExecutor {
@@ -1235,6 +1364,8 @@ mod capture_tests {
         let attention = BlockedAttention;
         let calendar = BlockedCalendar;
         let settlement = RejectStatefulSettlement;
+        let selection = focus_selection("test-device");
+        let binding_fence = TestBindingFence;
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -1254,8 +1385,10 @@ mod capture_tests {
             registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
+            admitted_selection: Some(&selection),
+            binding_fence: Some(&binding_fence),
         };
         let captured = Mutex::new(Vec::new());
         let model_blocked = Mutex::new(None);
@@ -1488,6 +1621,8 @@ mod capture_tests {
         let calendar = BlockedCalendar;
         let settlement = RejectStatefulSettlement;
         let store = ProbeRecorder;
+        let selection = focus_selection("test-device");
+        let binding_fence = TestBindingFence;
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -1507,8 +1642,10 @@ mod capture_tests {
             registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
+            admitted_selection: Some(&selection),
+            binding_fence: Some(&binding_fence),
         };
         let dependencies = Mutex::new(Vec::new());
         let model_blocked = Mutex::new(None);
@@ -1649,6 +1786,8 @@ mod capture_tests {
         let calendar = BlockedCalendar;
         let settlement = RejectStatefulSettlement;
         let store = ProbeRecorder;
+        let selection = focus_selection("test-device");
+        let binding_fence = TestBindingFence;
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -1668,8 +1807,10 @@ mod capture_tests {
             registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: None,
             interactions: None,
-            device_id: None,
+            device_id: Some("test-device"),
             snapshots: None,
+            admitted_selection: Some(&selection),
+            binding_fence: Some(&binding_fence),
         };
         let dependencies = Mutex::new(Vec::new());
         let model_blocked = Mutex::new(None);
@@ -1953,6 +2094,8 @@ mod capture_tests {
         .await;
         let device_id = "test-device";
         let snapshots = crate::vault_host::review_snapshot::NoCaptureSnapshots;
+        let selection = focus_selection(device_id);
+        let binding_fence = TestBindingFence;
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -1986,6 +2129,8 @@ mod capture_tests {
             interactions: Some(&runs),
             device_id: Some(device_id),
             snapshots: Some(&snapshots),
+            admitted_selection: Some(&selection),
+            binding_fence: Some(&binding_fence),
         };
         let request = floe_experts::A2ASendMessageRequest {
             usage: floe_inference::UsageLedger::default(),

@@ -7,7 +7,7 @@ use turso::transaction::TransactionBehavior;
 
 use super::*;
 use floe_actions::{
-    ExpertCalendarProposal, ExpertProposalReference, EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE,
+    EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE, ExpertCalendarProposal, ExpertProposalReference,
 };
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -81,8 +81,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     where
         Publish: Future<Output = Result<ResultValue, AgentFailure>>,
     {
-        self.with_proposal_evidence(reference, true, publish)
-            .await
+        self.with_proposal_evidence(reference, true, publish).await
     }
 
     pub(crate) async fn with_recorded_expert_proposal<ResultValue, Inspect>(
@@ -93,8 +92,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     where
         Inspect: Future<Output = Result<ResultValue, AgentFailure>>,
     {
-        self.with_proposal_evidence(reference, false, inspect)
-            .await
+        self.with_proposal_evidence(reference, false, inspect).await
     }
 
     async fn with_proposal_evidence<ResultValue, Operation>(
@@ -209,7 +207,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .iter()
                 .filter_map(|part| match part {
                     floe_agent_contract::ArtifactPart::Data { media_type, data }
-                        if media_type == EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE => Some(data),
+                        if media_type == EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE =>
+                    {
+                        Some(data)
+                    }
                     _ => None,
                 })
                 .collect();
@@ -217,7 +218,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::Conflict);
             }
             let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
-                &trusted.coverage else {
+                &trusted.coverage
+            else {
                 return Err(AgentFailure::PolicyDenied);
             };
             let [contributor] = dependencies.as_slice() else {
@@ -228,7 +230,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             let floe_agent_contract::DependencyCoverage::Dependent {
                 dependencies: report_dependencies,
-            } = &task_snapshot.coverage else {
+            } = &task_snapshot.coverage
+            else {
                 return Err(AgentFailure::PolicyDenied);
             };
             if !report_dependencies.contains(contributor) {
@@ -244,15 +247,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 evidence.data_class,
             )?;
             if require_active {
-                registry.validate_active_assignment(
+                registry.validate_active_assignment(evidence.person_id, evidence.assignment_id)?;
+                registry.validate_current_execution_selection(
                     evidence.person_id,
-                    evidence.assignment_id,
+                    &recorded.admission,
+                    &recorded.selection,
+                    true,
                 )?;
             }
             Ok(evidence)
         }
         .await;
-        let evidence = self.finish_registry_transaction(transaction, result).await?;
+        let evidence = self
+            .finish_registry_transaction(transaction, result)
+            .await?;
         self.check_access()?;
         let value = operation(evidence).await?;
         self.check_access()?;

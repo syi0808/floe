@@ -158,7 +158,8 @@ impl Fixture {
         for manifest in &mut snapshot.manifests {
             manifest.data_class = class;
         }
-        snapshot.install_receipts[0].manifest_digest = floe_experts::manifest_set_digest(&snapshot.manifests).unwrap();
+        snapshot.install_receipts[0].manifest_digest =
+            floe_experts::manifest_set_digest(&snapshot.manifests).unwrap();
         vault.initialize_expert_registry(&snapshot).await.unwrap();
         let assignment = snapshot
             .assignments
@@ -174,7 +175,6 @@ impl Fixture {
             .unwrap()
             .package
             .clone();
-        let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
         let start = u64::try_from(now().timestamp_millis()).unwrap() + 3_600_000;
         let mut session = vault.create_session().await.unwrap();
         if !session.data_classes.contains(&class) {
@@ -190,16 +190,6 @@ impl Fixture {
         vault.compare_and_swap(&session, 0).await.unwrap();
         let invocation_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
-        let resolved = registry
-            .resolve_assignment(
-                registry.instance_id(),
-                person,
-                assignment_id,
-                &package,
-                1,
-            )
-            .unwrap();
-        let state_revision = registry.complete(&resolved, invocation_id).unwrap();
         let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
         core.set_calendar_scope(
             person,
@@ -217,7 +207,7 @@ impl Fixture {
         .unwrap();
         let connection = core.calendar_connection(person).await.unwrap().unwrap();
         let fingerprint = "a".repeat(64);
-        vault
+        let grant = vault
             .review_native_calendar_grant(
                 "eventkit-connection",
                 CalendarProvider::EventKit,
@@ -230,6 +220,36 @@ impl Fixture {
             )
             .await
             .unwrap();
+        vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id,
+                    package: package.clone(),
+                    definition_revision: 1,
+                    requirement_key: "floe.source.calendar".into(),
+                    expected_binding_revision: 1,
+                    selected: vec![floe_context_contract::SourceSelectionReference {
+                        connector_id: grant.source().connector().clone(),
+                        connection_id: grant.source().connection_id(),
+                        execution_owner_id: grant.source().execution_owner().clone(),
+                        capability_id: "calendar.timeline".into(),
+                        resource: floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                        contract_version: 1,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let mut registry = AgentRegistry::restore(
+            vault.expert_registry().await.unwrap().unwrap(),
+            vault.registry_instance_id(),
+        )
+        .unwrap();
+        let resolved = registry
+            .resolve_assignment(registry.instance_id(), person, assignment_id, &package, 1)
+            .unwrap();
+        let state_revision = registry.complete(&resolved, invocation_id).unwrap();
         let consumer = GrantConsumer::builtin(package.id.clone()).unwrap();
         let admission = vault
             .authorize_current_native_calendar_grant(
@@ -300,7 +320,8 @@ impl Fixture {
             ProposalArtifactCase::WrongContributor => forged.evidence_id = Uuid::new_v4(),
             _ => {}
         }
-        let coverage = floe_agent_contract::DependencyCoverage::dependent(dependency.clone()).unwrap();
+        let coverage =
+            floe_agent_contract::DependencyCoverage::dependent(dependency.clone()).unwrap();
         let mut artifact = forged.artifact(coverage).unwrap();
         if matches!(artifact_case, ProposalArtifactCase::AbsentContributor) {
             artifact.coverage = floe_agent_contract::DependencyCoverage::Independent;
@@ -320,7 +341,15 @@ impl Fixture {
             }
         }
         let artifacts = if matches!(artifact_case, ProposalArtifactCase::Multiple) {
-            vec![artifact, forged.artifact(floe_agent_contract::DependencyCoverage::dependent(dependency.clone()).unwrap()).unwrap()]
+            vec![
+                artifact,
+                forged
+                    .artifact(
+                        floe_agent_contract::DependencyCoverage::dependent(dependency.clone())
+                            .unwrap(),
+                    )
+                    .unwrap(),
+            ]
         } else {
             vec![artifact]
         };
@@ -330,7 +359,8 @@ impl Fixture {
             &evidence,
             dependency,
             artifacts,
-        ).await;
+        )
+        .await;
         if !proposal {
             terminal.artifacts.clear();
         }
@@ -438,7 +468,15 @@ async fn proposal_publication_rejects_forged_and_ambiguous_artifacts() {
     ] {
         let fixture = Fixture::with_artifact_case(DataClass::Personal, true, artifact_case).await;
         assert!(fixture.prepare().await.is_err());
-        assert!(fixture.core.actions().calendar_actions(fixture.person).await.unwrap().is_empty());
+        assert!(
+            fixture
+                .core
+                .actions()
+                .calendar_actions(fixture.person)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
@@ -667,6 +705,68 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
         CalendarActionState::Succeeded {
             external_id: "recovered-event".into()
         }
+    );
+}
+
+#[tokio::test]
+async fn rebinding_after_proposal_fences_new_dispatch_without_erasing_intent() {
+    let fixture = Fixture::new().await;
+    let action = fixture.prepare().await.unwrap();
+    fixture
+        .core
+        .decide_expert_calendar_action(
+            &fixture.vault,
+            fixture.person,
+            action.execution_id,
+            true,
+            now(),
+        )
+        .await
+        .unwrap();
+    let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = snapshot
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == fixture.evidence.assignment_id)
+        .unwrap();
+    fixture
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: fixture.evidence.package.clone(),
+                definition_revision: 1,
+                requirement_key: "floe.source.calendar".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let provider = Provider::default();
+    let result = fixture
+        .core
+        .execute_expert_calendar_action_with_cancellation(
+            &fixture.vault,
+            fixture.person,
+            action.execution_id,
+            &fixture.policy(),
+            &provider,
+            now,
+            Cancellation::default(),
+        )
+        .await;
+    assert_eq!(result, Err(AgentFailure::Conflict));
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .vault
+            .agent_calendar_action(action.id)
+            .await
+            .unwrap()
+            .state,
+        CalendarActionState::Approved,
     );
 }
 
@@ -1011,8 +1111,7 @@ async fn personal_projection_uses_the_same_bridge_but_sensitive_classes_cannot_e
         DataClass::HighlySensitive,
         DataClass::TemporaryAiContext,
     ] {
-        let fixture =
-            Fixture::with_class(class, true).await;
+        let fixture = Fixture::with_class(class, true).await;
         let mut request = fixture.request();
         request.destination.provider = CalendarProvider::EventKit;
         request.destination.connection_revision = fixture
@@ -1239,7 +1338,9 @@ impl GovernedFocus {
                 "test-device",
                 &["home".into()],
                 connection.source_authority,
-                &crate::first_party_observe::calendar_policy().unwrap().consumers,
+                &crate::first_party_observe::calendar_policy()
+                    .unwrap()
+                    .consumers,
                 &fingerprint,
                 None,
             )
@@ -1488,7 +1589,9 @@ async fn governed_focus_proposal_rejects_a_stale_consumer_policy() {
             "test-device",
             &["home".into()],
             fixture.admission.source.source_authority(),
-            &crate::first_party_observe::calendar_policy().unwrap().consumers,
+            &crate::first_party_observe::calendar_policy()
+                .unwrap()
+                .consumers,
             &"b".repeat(64),
             Some((fixture.admission.grant_id, authority)),
         )

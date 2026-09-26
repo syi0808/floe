@@ -106,7 +106,7 @@ pub use application::remote_views::{
 pub use application::service::{ContextService, PreparedContext};
 pub use application::source_candidates::{
     LOCAL_CONTEXT_CONNECTOR, SourceCandidate, SourceCandidateRequest, discover_source_candidates,
-    source_candidate_id,
+    source_candidate_id, validate_local_source_selection,
 };
 pub use application::source_view::SourceView;
 pub use application::tools::{

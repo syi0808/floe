@@ -1431,6 +1431,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let task_id = Uuid::new_v4();
         let task = experts
@@ -1810,6 +1812,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -1904,6 +1908,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1953,6 +1959,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2680,6 +2688,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -2924,6 +2934,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -3107,6 +3119,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -3395,6 +3409,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -3463,6 +3479,8 @@ mod tests {
             interactions: None,
             device_id: None,
             snapshots: None,
+            admitted_selection: None,
+            binding_fence: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

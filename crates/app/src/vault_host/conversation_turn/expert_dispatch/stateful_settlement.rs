@@ -21,6 +21,7 @@ pub(in crate::vault_host::conversation_turn) trait StatefulExpertSettlement:
 pub(super) struct VaultStatefulExpertSettlement<'a, Keys> {
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) admission: &'a floe_experts::ExpertAdmissionIdentity,
+    pub(super) selection: &'a floe_experts::ExpertExecutionSelection,
 }
 
 impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSettlement<'_, Keys> {
@@ -48,6 +49,12 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
             {
                 return Err(AgentFailure::Conflict);
             }
+            registry.validate_current_execution_selection(
+                request.person_id,
+                self.admission,
+                self.selection,
+                true,
+            )?;
             let assignment_id = self.admission.assignment_id;
             let resolved = registry.resolve_admitted(request.person_id, self.admission)?;
             if resolved.manifest.package.id != request.agent_id
@@ -89,6 +96,18 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                 let [contributor] = contributors.as_slice() else {
                     return Err(AgentFailure::PolicyDenied);
                 };
+                if !self.selection.requirements.iter().any(|requirement| {
+                    requirement.capability == "calendar.timeline"
+                        && requirement.selected.iter().any(|selected| {
+                            selected.connector_id == *contributor.source().connector()
+                                && selected.connection_id == contributor.source().connection_id()
+                                && selected.execution_owner_id
+                                    == *contributor.source().execution_owner()
+                                && contributor.resources().contains(&selected.resource)
+                        })
+                }) {
+                    return Err(AgentFailure::PolicyDenied);
+                }
                 let coverage =
                     floe_agent_contract::DependencyCoverage::dependent((*contributor).clone())
                         .map_err(|_| AgentFailure::PolicyDenied)?;
@@ -316,6 +335,40 @@ mod tests {
             )
             .await
             .unwrap();
+        let registry_snapshot = vault.expert_registry().await.unwrap().unwrap();
+        let schedule_installation = registry_snapshot
+            .installations
+            .iter()
+            .find(|installation| {
+                installation.package.id == BuiltinExpertKind::Schedule.package_id()
+            })
+            .unwrap();
+        let schedule_assignment = registry_snapshot
+            .assignments
+            .iter()
+            .find(|assignment| assignment.installation_id == schedule_installation.id)
+            .unwrap();
+        vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: schedule_assignment.id,
+                    package: schedule_installation.package.clone(),
+                    definition_revision: 1,
+                    requirement_key: "floe.source.calendar".into(),
+                    expected_binding_revision: schedule_assignment.binding.revision,
+                    selected: vec![floe_context_contract::SourceSelectionReference {
+                        connector_id: grant.source().connector().clone(),
+                        connection_id: grant.source().connection_id(),
+                        execution_owner_id: grant.source().execution_owner().clone(),
+                        capability_id: "calendar.timeline".into(),
+                        resource: floe_context_contract::ResourceHandle::try_new("home").unwrap(),
+                        contract_version: 1,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
         let consumer = GrantConsumer::builtin(BuiltinExpertKind::Schedule.package_id()).unwrap();
         let admission = vault
             .authorize_current_native_calendar_grant(
@@ -415,9 +468,17 @@ mod tests {
             .find(|(card, _)| card.id == request.agent_id)
             .unwrap()
             .1;
+        let selection = floe_experts::AgentRegistry::restore(
+            vault.expert_registry().await.unwrap().unwrap(),
+            vault.registry_instance_id(),
+        )
+        .unwrap()
+        .execution_selection(person_id, &admission)
+        .unwrap();
         let settlement = VaultStatefulExpertSettlement {
             vault: &vault,
             admission: &admission,
+            selection: &selection,
         };
         let duplicate_draft = StatefulExpertDraft {
             result: draft.result.clone(),
@@ -501,13 +562,11 @@ mod tests {
             .find(|(card, _)| card.id == request.agent_id)
             .unwrap();
         let registry_snapshot = vault.expert_registry().await.unwrap().unwrap();
-        let selection = floe_experts::AgentRegistry::restore(
-            registry_snapshot,
-            vault.registry_instance_id(),
-        )
-        .unwrap()
-        .execution_selection(person_id, &admission)
-        .unwrap();
+        let selection =
+            floe_experts::AgentRegistry::restore(registry_snapshot, vault.registry_instance_id())
+                .unwrap()
+                .execution_selection(person_id, &admission)
+                .unwrap();
         directory
             .register(
                 DirectoryEntry {

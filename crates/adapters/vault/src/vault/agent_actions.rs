@@ -457,6 +457,40 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::PolicyDenied);
             }
+            if let Some(origin) = &envelope.action.agent_origin {
+                let task_id = floe_agent_contract::TaskId::from_uuid(origin.invocation_id)
+                    .ok_or(AgentFailure::InvalidInput)?;
+                let task = self.task_on(&transaction, task_id).await?.ok_or(AgentFailure::NotFound)?;
+                if task.snapshot.state != floe_agent_contract::TaskState::Completed
+                    || task.snapshot.principal != self.person_id.to_string()
+                    || task.admission.registry_instance_id != origin.instance_id
+                    || task.admission.assignment_id != origin.assignment_id
+                    || task.admission.package != origin.package
+                    || task.snapshot.agent_id != origin.package.id
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                let registry_snapshot = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
+                floe_experts::AgentRegistry::restore(registry_snapshot, self.vault_id)?
+                    .validate_current_execution_selection(self.person_id, &task.admission, &task.selection, true)?;
+                let floe_agent_contract::DependencyCoverage::Dependent { dependencies } = &task.snapshot.coverage else {
+                    return Err(AgentFailure::PolicyDenied);
+                };
+                if !dependencies.contains(&envelope.dependency)
+                    || envelope.dependency.observation_id() != origin.evidence_id
+                    || !task.selection.requirements.iter().any(|requirement| {
+                        requirement.capability == "calendar.timeline"
+                            && requirement.selected.iter().any(|selected| {
+                                selected.connector_id == *envelope.dependency.source().connector()
+                                    && selected.connection_id == envelope.dependency.source().connection_id()
+                                    && selected.execution_owner_id == *envelope.dependency.source().execution_owner()
+                                    && envelope.dependency.resources().contains(&selected.resource)
+                            })
+                    })
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
             self.validate_dependency_transaction(&transaction, &envelope.dependency, now)
                 .await?;
             if cancellation.is_cancelled() {
