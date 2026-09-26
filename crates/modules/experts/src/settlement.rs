@@ -1,8 +1,7 @@
 //! What a delegated Expert hands back so its Task can be settled exactly once.
 //!
 //! An endpoint may finish its work and still fail to record it. The settlement
-//! carries the registry state it staged and the result it produced, so the Task
-//! owner can commit both together, or commit neither.
+//! carries only its assignment-local private-state transition and result.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -10,16 +9,16 @@ use uuid::Uuid;
 use floe_agent_contract::ContextDependency;
 use floe_agent_contract::{AgentFailure, EndpointSettlement, TaskId, TaskSnapshot};
 
-use crate::RegistrySnapshot;
+use crate::{ExpertAdmissionIdentity, ExpertPrivateState};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpertSettlement {
     schema_version: u32,
     owner: String,
-    pub expected_registry_revision: u64,
-    pub staged_registry: RegistrySnapshot,
-    pub assignment_id: Uuid,
+    pub admission: ExpertAdmissionIdentity,
+    pub expected_private_state_revision: u64,
+    pub next_private_state: ExpertPrivateState,
     pub invocation_id: Uuid,
     pub dependencies: Vec<ContextDependency>,
     pub task_result: String,
@@ -29,19 +28,19 @@ impl ExpertSettlement {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         owner: impl Into<String>,
-        expected_registry_revision: u64,
-        staged_registry: RegistrySnapshot,
-        assignment_id: Uuid,
+        admission: ExpertAdmissionIdentity,
+        expected_private_state_revision: u64,
+        next_private_state: ExpertPrivateState,
         invocation_id: Uuid,
         dependencies: Vec<ContextDependency>,
         task_result: String,
     ) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             owner: owner.into(),
-            expected_registry_revision,
-            staged_registry,
-            assignment_id,
+            admission,
+            expected_private_state_revision,
+            next_private_state,
             invocation_id,
             dependencies,
             task_result,
@@ -72,7 +71,7 @@ impl ExpertSettlement {
         }
         let decoded: Self = serde_json::from_str(settlement.payload())
             .map_err(|_| AgentFailure::InvalidModelOutput)?;
-        if decoded.schema_version != 1
+        if decoded.schema_version != 2
             || decoded.owner != owner
             || serde_json::to_string(&decoded).map_err(|_| AgentFailure::InvalidModelOutput)?
                 != settlement.payload()
@@ -83,7 +82,7 @@ impl ExpertSettlement {
     }
 }
 
-/// One settled Expert Task, ready to be committed with its staged registry.
+/// One settled Expert Task, ready for atomic assignment-local state commit.
 pub struct ExpertTaskCompletion {
     pub settlement: ExpertSettlement,
     pub task_id: TaskId,

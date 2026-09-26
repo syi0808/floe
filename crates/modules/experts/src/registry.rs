@@ -584,6 +584,42 @@ impl AgentRegistry {
         })
     }
 
+    pub fn resolve_admitted(
+        &self,
+        person_id: PersonId,
+        admission: &crate::ExpertAdmissionIdentity,
+    ) -> Result<ResolvedExpert, AgentFailure> {
+        if admission.registry_instance_id != self.instance_id()
+            || admission.package.kind != PackageKind::Expert
+            || admission.definition_revision == 0
+        {
+            return Err(AgentFailure::NotFound);
+        }
+        let assignment = self.assignment(person_id, admission.assignment_id)?;
+        if assignment.installation_id != admission.installation_id {
+            return Err(AgentFailure::Conflict);
+        }
+        let installation = self.installation(assignment.installation_id)?;
+        if installation.package != admission.package {
+            return Err(AgentFailure::Conflict);
+        }
+        let package = self.package(&installation.package)?;
+        self.validate_tool_linkage(assignment)?;
+        let tool = self.assignment(person_id, assignment.granted_tool_assignments[0])?;
+        let tool_installation = self.installation(tool.installation_id)?;
+        let PackageImplementation::TimelineRead { data_class } =
+            self.package(&tool_installation.package)?.implementation
+        else {
+            return Err(AgentFailure::Conflict);
+        };
+        Ok(ResolvedExpert {
+            registry_revision: self.revision(),
+            package: package.clone(),
+            assignment: assignment.clone(),
+            data_class,
+        })
+    }
+
     /// Record that this Expert completed `invocation_id` exactly once.
     pub fn complete(
         &mut self,
@@ -715,28 +751,39 @@ impl SetupValidator for NoSetupValidator {
 }
 
 impl AgentRegistry {
-    /// Stage this registry for the settlement of one registered invocation.
-    ///
-    /// The Task owner commits the staged registry and the Expert's result
-    /// together, or commits neither.
+    /// Describe only the completed assignment state; the Vault applies it to
+    /// the current Registry under the Task settlement transaction.
     pub fn settle_registered_expert_invocation(
         &self,
         owner: impl Into<String>,
-        expected_revision: u64,
-        assignment_id: Uuid,
+        person_id: PersonId,
+        admission: crate::ExpertAdmissionIdentity,
         invocation_id: Uuid,
         dependencies: Vec<floe_agent_contract::ContextDependency>,
         task_result: String,
-    ) -> crate::ExpertSettlement {
-        crate::ExpertSettlement::new(
+    ) -> Result<crate::ExpertSettlement, AgentFailure> {
+        let assignment = self.assignment(person_id, admission.assignment_id)?;
+        if admission.registry_instance_id != self.instance_id()
+            || assignment.installation_id != admission.installation_id
+            || self.installation(assignment.installation_id)?.package != admission.package
+            || assignment.private_state.last_invocation_id != Some(invocation_id)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let expected_private_state_revision = assignment
+            .private_state
+            .revision
+            .checked_sub(1)
+            .ok_or(AgentFailure::Conflict)?;
+        Ok(crate::ExpertSettlement::new(
             owner,
-            expected_revision,
-            self.snapshot(),
-            assignment_id,
+            admission,
+            expected_private_state_revision,
+            assignment.private_state.clone(),
             invocation_id,
             dependencies,
             task_result,
-        )
+        ))
     }
 }
 
@@ -765,23 +812,41 @@ mod tests {
     }
 
     #[test]
-    fn settlement_names_the_invoked_assignment_and_stages_the_current_snapshot() {
-        let registry = AgentRegistry::new(Uuid::new_v4());
+    fn settlement_carries_only_assignment_local_state() {
         let assignment_id = Uuid::new_v4();
         let invocation_id = Uuid::new_v4();
-        let settlement = registry.settle_registered_expert_invocation(
-            "test-owner",
-            registry.revision(),
+        let admission = crate::ExpertAdmissionIdentity {
+            registry_instance_id: Uuid::new_v4(),
             assignment_id,
+            installation_id: Uuid::new_v4(),
+            package: PackageRef {
+                kind: PackageKind::Expert,
+                id: "example.test.expert".into(),
+                version: "1.0.0".into(),
+            },
+            definition_revision: 1,
+        };
+        let next_private_state = ExpertPrivateState {
+            schema_version: 1,
+            revision: 1,
+            completed_invocations: 1,
+            last_invocation_id: Some(invocation_id),
+        };
+        let settlement = crate::ExpertSettlement::new(
+            "test-owner",
+            admission.clone(),
+            0,
+            next_private_state.clone(),
             invocation_id,
             vec![],
             "task result".into(),
         );
-        assert_eq!(settlement.assignment_id, assignment_id);
+        assert_eq!(settlement.admission, admission);
         assert_eq!(settlement.invocation_id, invocation_id);
-        assert_eq!(settlement.expected_registry_revision, registry.revision());
-        assert_eq!(settlement.staged_registry, registry.snapshot());
+        assert_eq!(settlement.expected_private_state_revision, 0);
+        assert_eq!(settlement.next_private_state, next_private_state);
         assert_eq!(settlement.task_result, "task result");
         assert!(settlement.dependencies.is_empty());
+        assert!(serde_json::to_value(settlement).unwrap().get("staged_registry").is_none());
     }
 }

@@ -3,7 +3,58 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use floe_agent_contract::{AgentDefinition, AgentEndpoint, AgentFailure, AllowedCatalog};
+use floe_agent_contract::{
+    AgentDefinition, AgentEndpoint, AgentFailure, AllowedCatalog, PackageKind, PackageRef,
+};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertAdmissionIdentity {
+    pub registry_instance_id: Uuid,
+    pub assignment_id: Uuid,
+    pub installation_id: Uuid,
+    pub package: PackageRef,
+    pub definition_revision: u64,
+}
+
+impl ExpertAdmissionIdentity {
+    pub fn validate_task(
+        &self,
+        agent_id: &str,
+        definition_revision: u64,
+    ) -> Result<(), AgentFailure> {
+        let valid_name = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+                })
+        };
+        if self.registry_instance_id.is_nil()
+            || self.assignment_id.is_nil()
+            || self.installation_id.is_nil()
+            || self.package.kind != PackageKind::Expert
+            || !valid_name(&self.package.id)
+            || !valid_name(&self.package.version)
+            || self.package.id != agent_id
+            || self.definition_revision == 0
+            || self.definition_revision != definition_revision
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self, definition: &AgentDefinition) -> Result<(), AgentFailure> {
+        self.validate_task(&definition.card.id, definition.definition_revision)?;
+        if self.package.version != definition.card.version {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryQuery<'a> {
@@ -14,6 +65,7 @@ pub struct DirectoryQuery<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryEntry {
     pub definition: AgentDefinition,
+    pub admission: ExpertAdmissionIdentity,
     pub reviewed: bool,
     pub enabled: bool,
     pub admitted_principals: Vec<String>,
@@ -23,6 +75,7 @@ pub struct DirectoryEntry {
 impl DirectoryEntry {
     fn validate(&self) -> Result<(), AgentFailure> {
         self.definition.validate()?;
+        self.admission.validate(&self.definition)?;
         if self
             .admitted_principals
             .iter()
@@ -51,6 +104,11 @@ struct RegisteredEndpoint {
     entry: DirectoryEntry,
     endpoint: Arc<dyn AgentEndpoint>,
     owner: Option<String>,
+}
+
+pub struct ResolvedDirectoryEntry {
+    pub admission: ExpertAdmissionIdentity,
+    pub endpoint: Arc<dyn AgentEndpoint>,
 }
 
 #[derive(Default)]
@@ -110,6 +168,13 @@ impl Directory {
                 return Err(AgentFailure::Conflict);
             }
         }
+        let mut assignments = std::collections::HashSet::new();
+        if candidates
+            .values()
+            .any(|(entry, _)| !assignments.insert(entry.admission.assignment_id))
+        {
+            return Err(AgentFailure::Conflict);
+        }
         let mut state = self
             .state
             .write()
@@ -122,6 +187,17 @@ impl Directory {
             {
                 return Err(AgentFailure::Conflict);
             }
+        }
+        if state.endpoints.values().any(|registered| {
+            registered.owner.as_deref() != Some(owner)
+                && candidates.values().any(|(entry, _)| {
+                    entry.admission.registry_instance_id
+                        == registered.entry.admission.registry_instance_id
+                        && entry.admission.assignment_id
+                            == registered.entry.admission.assignment_id
+                })
+        }) {
+            return Err(AgentFailure::Conflict);
         }
         let previous = state
             .endpoints
@@ -225,7 +301,7 @@ impl Directory {
         agent_id: &str,
         definition_revision: u64,
         query: DirectoryQuery<'_>,
-    ) -> Result<Arc<dyn AgentEndpoint>, AgentFailure> {
+    ) -> Result<ResolvedDirectoryEntry, AgentFailure> {
         validate_query(&query)?;
         let state = self
             .state
@@ -241,7 +317,10 @@ impl Directory {
         if !registered.entry.eligible(&query) {
             return Err(AgentFailure::CapabilityDenied);
         }
-        Ok(Arc::clone(&registered.endpoint))
+        Ok(ResolvedDirectoryEntry {
+            admission: registered.entry.admission.clone(),
+            endpoint: Arc::clone(&registered.endpoint),
+        })
     }
 }
 

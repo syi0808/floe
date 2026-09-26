@@ -54,6 +54,17 @@ fn submitted(person_id: PersonId, task_id: TaskId, generation: u64) -> TaskRecor
             coverage: DependencyCoverage::Unknown,
             issue: None,
         },
+        admission: floe_experts::ExpertAdmissionIdentity {
+            registry_instance_id: Uuid::new_v4(),
+            assignment_id: Uuid::new_v4(),
+            installation_id: Uuid::new_v4(),
+            package: floe_agent_contract::PackageRef {
+                kind: floe_agent_contract::PackageKind::Expert,
+                id: "floe.builtin.schedule".into(),
+                version: "1.0.0".into(),
+            },
+            definition_revision: 3,
+        },
         invocation_key: InvocationKey::new(),
         request_digest: [4; 32],
         aggregate_revision: 1,
@@ -89,6 +100,12 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
     assert_eq!(
         repository.admit(proposed.clone()).await.unwrap(),
         TaskAdmission::Existing(proposed.clone())
+    );
+    let mut changed_admission = proposed.clone();
+    changed_admission.admission.assignment_id = Uuid::new_v4();
+    assert_eq!(
+        repository.admit(changed_admission).await,
+        Err(AgentFailure::Conflict)
     );
     let working = repository
         .compare_and_swap(

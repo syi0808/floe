@@ -27,8 +27,8 @@ use floe_execution::{
     budget::{BudgetConfig, BudgetLedger},
 };
 use floe_experts::{
-    Directory, DirectoryEntry, DirectoryQuery, TaskActivation, TaskAdmission, TaskCoordinator,
-    TaskRecord, TaskRepository,
+    Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity, TaskActivation,
+    TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository,
 };
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -87,6 +87,7 @@ impl TaskRepository for MemoryTasks {
             if let Some(record) = records.records.get(&proposed.snapshot.task_id) {
                 if record.invocation_key != proposed.invocation_key
                     || record.request_digest != proposed.request_digest
+                    || record.admission != proposed.admission
                     || record.snapshot.task_id != proposed.snapshot.task_id
                     || record.snapshot.parent_run_id != proposed.snapshot.parent_run_id
                     || record.snapshot.principal != proposed.snapshot.principal
@@ -268,10 +269,25 @@ fn definition(id: &str, revision: u64) -> AgentDefinition {
     }
 }
 
+fn admission(id: &str, definition_revision: u64) -> ExpertAdmissionIdentity {
+    ExpertAdmissionIdentity {
+        registry_instance_id: Uuid::new_v4(),
+        assignment_id: Uuid::new_v4(),
+        installation_id: Uuid::new_v4(),
+        package: floe_agent_contract::PackageRef {
+            kind: floe_agent_contract::PackageKind::Expert,
+            id: id.into(),
+            version: "1.0.0".into(),
+        },
+        definition_revision,
+    }
+}
+
 fn register(directory: &Directory, id: &str, endpoint: Endpoint) -> Result<(), AgentFailure> {
     directory.register(
         DirectoryEntry {
             definition: definition(id, 1),
+            admission: admission(id, 1),
             reviewed: true,
             enabled: true,
             admitted_principals: vec!["person-a".into()],
@@ -286,6 +302,7 @@ fn publication_entry(id: &str) -> (DirectoryEntry, Arc<dyn AgentEndpoint>) {
     (
         DirectoryEntry {
             definition: definition(id, 1),
+            admission: admission(id, 1),
             reviewed: true,
             enabled: true,
             admitted_principals: vec!["person-a".into()],
@@ -372,6 +389,35 @@ fn owner_publication_rejects_duplicate_candidates_and_rejoins_exact_set() {
     );
 }
 
+#[test]
+fn owner_publication_rejects_duplicate_assignment_identity() {
+    let directory = Directory::default();
+    let first = publication_entry("example.test.first");
+    let mut second = publication_entry("example.test.second");
+    second.0.admission.registry_instance_id = first.0.admission.registry_instance_id;
+    second.0.admission.assignment_id = first.0.admission.assignment_id;
+    assert_eq!(
+        directory.publish("bundle-a", vec![first.clone(), second.clone()]),
+        Err(AgentFailure::Conflict),
+    );
+    directory.publish("bundle-a", vec![first]).unwrap();
+    assert_eq!(
+        directory.publish("bundle-b", vec![second]),
+        Err(AgentFailure::Conflict),
+    );
+    assert_eq!(
+        directory
+            .list_cards(DirectoryQuery {
+                principal: "person-a",
+                purpose: "everyday-assistance",
+            })
+            .unwrap()
+            .cards
+            .len(),
+        1,
+    );
+}
+
 fn scope(run_id: RunId, task_id: Option<TaskId>) -> ExecutionScope {
     let budget = BudgetLedger::new(BudgetConfig::new(50_000, 100_000), Default::default());
     let root = ExecutionScope::root(
@@ -420,6 +466,7 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
     let old_calls = Arc::new(AtomicUsize::new(0));
     let new_calls = Arc::new(AtomicUsize::new(0));
     let (entry, _) = publication_entry("example.test.pinned");
+    let admitted_identity = entry.admission.clone();
     directory
         .publish(
             "test-bundle",
@@ -468,6 +515,7 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
         .await
         .unwrap();
     assert_eq!(first.snapshot.result.as_deref(), Some("old endpoint"));
+    assert_eq!(repository.get(task_id).await.unwrap().unwrap().admission, admitted_identity);
     assert_eq!(old_calls.load(Ordering::SeqCst), 1);
     assert_eq!(new_calls.load(Ordering::SeqCst), 0);
     *repository.1.lock().unwrap() = None;
@@ -480,6 +528,10 @@ async fn admitted_task_keeps_endpoint_across_publication_refresh() {
         .await
         .unwrap();
     assert_eq!(second.snapshot.result.as_deref(), Some("new endpoint"));
+    assert_ne!(
+        repository.get(new_task_id).await.unwrap().unwrap().admission,
+        admitted_identity,
+    );
     assert_eq!(new_calls.load(Ordering::SeqCst), 1);
 }
 
@@ -590,6 +642,7 @@ async fn trusted_endpoint_settlement_reaches_the_repository_once() {
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.settlement", 1),
+                admission: admission("floe.test.settlement", 1),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -636,6 +689,7 @@ async fn unsupported_endpoint_settlement_becomes_a_failed_task_before_commit() {
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.unsupported-settlement", 1),
+                admission: admission("floe.test.unsupported-settlement", 1),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -697,6 +751,7 @@ async fn explicit_task_cancel_is_authorized_persisted_and_does_not_cancel_parent
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.blocking", 1),
+                admission: admission("floe.test.blocking", 1),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -765,6 +820,7 @@ async fn restart_recovery_interrupts_only_an_orphaned_nonterminal_task() {
             coverage: DependencyCoverage::Unknown,
             issue: None,
         },
+        admission: admission("floe.test.recovery", 1),
         invocation_key: request.invocation_key,
         request_digest,
         aggregate_revision: 1,
@@ -813,7 +869,7 @@ async fn restart_recovery_interrupts_only_an_orphaned_nonterminal_task() {
 }
 
 #[tokio::test]
-async fn disabled_selection_is_persisted_as_rejected_without_endpoint_execution() {
+async fn disabled_selection_is_denied_before_task_admission() {
     let directory = Directory::default();
     let calls = Arc::new(AtomicUsize::new(0));
     register(
@@ -828,9 +884,10 @@ async fn disabled_selection_is_persisted_as_rejected_without_endpoint_execution(
     directory
         .set_enabled("floe.test.disabled", 1, false)
         .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
     let coordinator = TaskCoordinator::activate(
         directory,
-        Arc::new(MemoryTasks::default()),
+        Arc::clone(&repository),
         "everyday-assistance",
         16 * 1024,
     )
@@ -839,16 +896,16 @@ async fn disabled_selection_is_persisted_as_rejected_without_endpoint_execution(
     let coordinator = coordinator.0;
     let run_id = RunId::new();
     let task_id = TaskId::new();
-    let receipt = floe_agent_contract::DelegationPort::delegate(
+    let failure = floe_agent_contract::DelegationPort::delegate(
         &coordinator,
         delegation(run_id, task_id, "floe.test.disabled"),
         &scope(run_id, Some(task_id)),
     )
     .await
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(receipt.snapshot.state, TaskState::Rejected);
-    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::CapabilityDenied));
+    assert_eq!(failure, AgentFailure::CapabilityDenied);
+    assert!(repository.get(task_id).await.unwrap().is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -1211,6 +1268,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
         .register(
             DirectoryEntry {
                 definition: remote_only,
+                admission: admission("floe.test.remote-only", 3),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -1235,6 +1293,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.disabled", 1),
+                admission: admission("floe.test.disabled", 1),
                 reviewed: true,
                 enabled: false,
                 admitted_principals: vec!["person-a".into()],
@@ -1250,6 +1309,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.unreviewed", 1),
+                admission: admission("floe.test.unreviewed", 1),
                 reviewed: false,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -1265,6 +1325,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.other-principal", 1),
+                admission: admission("floe.test.other-principal", 1),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-b".into()],
@@ -1335,12 +1396,12 @@ async fn stale_definition_revision_is_rejected_by_task_coordinator() {
     let task_id = TaskId::new();
     let mut request = delegation(run_id, task_id, "floe.test.versioned");
     request.selected_definition_revision = 99;
-    let receipt = coordinator
+    let failure = coordinator
         .delegate(request, &scope(run_id, Some(task_id)))
         .await
-        .unwrap();
-    assert_eq!(receipt.snapshot.state, TaskState::Failed);
-    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+        .unwrap_err();
+    assert_eq!(failure, AgentFailure::Conflict);
+    assert!(repository.get(task_id).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -1508,6 +1569,7 @@ async fn deadline_during_execution_produces_timed_out_terminal_task() {
         .register(
             DirectoryEntry {
                 definition: definition("floe.test.deadline", 1),
+                admission: admission("floe.test.deadline", 1),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],

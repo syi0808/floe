@@ -7,8 +7,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::{AGENT_VERSION, PersonId};
 use floe_agent_contract::AgentFailure;
+use floe_agent_contract::{AGENT_VERSION, PersonId};
 
 use super::{
     AgentId, AgentPackage, AgentRegistry, BuiltinExpertAssignmentReceipt,
@@ -89,6 +89,39 @@ pub struct BuiltinExpertSetupResult {
 }
 
 impl AgentRegistry {
+    pub fn enabled_expert_admissions(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Vec<(crate::AgentCard, crate::ExpertAdmissionIdentity)>, AgentFailure> {
+        let mut seen = std::collections::HashSet::new();
+        let mut entries = Vec::new();
+        for assignment in self
+            .snapshot
+            .assignments
+            .iter()
+            .filter(|assignment| assignment.person_id == person_id && assignment.enabled)
+        {
+            let Some(card) = self.enabled_expert_card(person_id, assignment) else {
+                continue;
+            };
+            if !seen.insert(card.id.clone()) {
+                return Err(AgentFailure::Conflict);
+            }
+            let installation = self.installation(assignment.installation_id)?;
+            entries.push((
+                card.clone(),
+                crate::ExpertAdmissionIdentity {
+                    registry_instance_id: self.instance_id(),
+                    assignment_id: assignment.id,
+                    installation_id: installation.id,
+                    package: installation.package.clone(),
+                    definition_revision: 1,
+                },
+            ));
+        }
+        Ok(entries)
+    }
+
     pub fn install_builtin_experts_enabled(
         &mut self,
         person_id: PersonId,

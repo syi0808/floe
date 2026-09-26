@@ -331,7 +331,6 @@ impl Fixture {
         };
         let mut terminal = record_proposal_task_with_artifacts(
             &vault,
-            revision,
             registry.snapshot(),
             &evidence,
             dependency,
@@ -1384,7 +1383,6 @@ impl GovernedFocus {
         };
         let terminal = record_proposal_task(
             &self.vault,
-            current.revision,
             registry.snapshot(),
             &evidence,
             dependency.clone(),

@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::ContextDependency;
-use floe_experts::{AgentRegistry, PackageImplementation};
+use floe_experts::AgentRegistry;
 use floe_experts_builtin::{BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
 use tokio::time::Instant;
@@ -20,6 +20,7 @@ pub(in crate::vault_host::conversation_turn) trait StatefulExpertSettlement:
 
 pub(super) struct VaultStatefulExpertSettlement<'a, Keys> {
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
+    pub(super) admission: &'a floe_experts::ExpertAdmissionIdentity,
 }
 
 impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSettlement<'_, Keys> {
@@ -42,33 +43,16 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                 .await?
                 .ok_or(AgentFailure::CapabilityDenied)?;
             let mut registry = AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
-            let expected_revision = registry.revision();
-            let current_snapshot = registry.snapshot();
-            let setup = current_snapshot
-                .builtin_setups
-                .iter()
-                .find(|setup| setup.person_id == request.person_id)
-                .ok_or(AgentFailure::CapabilityDenied)?;
-            let assignment = setup
-                .assignments
-                .iter()
-                .find(|assignment| assignment.expert.as_str() == request.agent_id)
-                .ok_or(AgentFailure::CapabilityDenied)?;
-            let assignment_id = assignment.expert_assignment_id;
-            let expected_expert = floe_experts::AgentId::try_new(request.agent_id.clone())
-                .ok_or(AgentFailure::CapabilityDenied)?;
-            let resolved = registry.resolve_builtin(
-                registry.instance_id(),
-                request.person_id,
-                assignment_id,
-                expected_revision,
-                &expected_expert,
-            )?;
+            if self.admission.registry_instance_id != registry.instance_id()
+                || self.admission.package.id != request.agent_id
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let assignment_id = self.admission.assignment_id;
+            let resolved = registry.resolve_admitted(request.person_id, self.admission)?;
             if resolved.package.reference.id != request.agent_id
-                || !matches!(
-                    &resolved.package.implementation,
-                    PackageImplementation::Builtin { expert } if expert.as_str() == request.agent_id
-                )
+                || resolved.package.reference != self.admission.package
+                || resolved.assignment.installation_id != self.admission.installation_id
                 || dependencies.is_empty()
                 || dependencies
                     .iter()
@@ -129,12 +113,13 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
             let settlement = registry
                 .settle_registered_expert_invocation(
                     request.agent_id.clone(),
-                    expected_revision,
-                    assignment_id,
+                    request.person_id,
+                    self.admission.clone(),
                     request.invocation_id,
                     dependencies,
                     draft.result.clone(),
                 )
+                ?
                 .into_endpoint_settlement()?;
             Ok(BuiltinExpertOutput {
                 result: draft.result,
@@ -420,7 +405,18 @@ mod tests {
                 ends_at_unix_ms: window_start + 1_800_000,
             }),
         };
-        let settlement = VaultStatefulExpertSettlement { vault: &vault };
+        let admission = vault
+            .enabled_expert_admissions()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(card, _)| card.id == request.agent_id)
+            .unwrap()
+            .1;
+        let settlement = VaultStatefulExpertSettlement {
+            vault: &vault,
+            admission: &admission,
+        };
         let duplicate_draft = StatefulExpertDraft {
             result: draft.result.clone(),
             artifacts: draft.artifacts.clone(),
@@ -485,12 +481,12 @@ mod tests {
 
         let coverage = DependencyCoverage::dependent(dependency).unwrap();
         let directory = Directory::default();
-        let card = vault
-            .enabled_builtin_expert_cards()
+        let (card, admission) = vault
+            .enabled_expert_admissions()
             .await
             .unwrap()
             .into_iter()
-            .find(|card| card.id == request.agent_id)
+            .find(|(card, _)| card.id == request.agent_id)
             .unwrap();
         directory
             .register(
@@ -499,6 +495,7 @@ mod tests {
                         card,
                         definition_revision: 1,
                     },
+                    admission,
                     reviewed: true,
                     enabled: true,
                     admitted_principals: vec![person_id.to_string()],

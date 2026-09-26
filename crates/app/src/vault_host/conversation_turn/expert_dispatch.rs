@@ -133,6 +133,8 @@ pub(crate) struct BuiltinExpertEndpoint<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
     local_context: Arc<LocalContextHost>,
     connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
+    admission: floe_experts::ExpertAdmissionIdentity,
+    card: floe_agent_contract::AgentCard,
 }
 
 impl<Keys> BuiltinExpertEndpoint<Keys> {
@@ -141,12 +143,16 @@ impl<Keys> BuiltinExpertEndpoint<Keys> {
         vault: Arc<EncryptedAgentVault<Keys>>,
         local_context: Arc<LocalContextHost>,
         connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
+        admission: floe_experts::ExpertAdmissionIdentity,
+        card: floe_agent_contract::AgentCard,
     ) -> Self {
         Self {
             core,
             vault,
             local_context,
             connections,
+            admission,
+            card,
         }
     }
 }
@@ -166,6 +172,9 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 .ok_or(AgentFailure::InvalidInput)?;
             let registrations = registered_experts();
             if invocation.request.principal != self.vault.person_id().to_string()
+                || invocation.request.selected_agent_id != self.admission.package.id
+                || invocation.request.selected_definition_revision
+                    != self.admission.definition_revision
                 || !registrations.is_registered(&invocation.request.selected_agent_id)
             {
                 return Err(AgentFailure::CapabilityDenied);
@@ -265,9 +274,10 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for BuiltinExpertEndpoint<K
                 person_id: self.vault.person_id(),
             };
             let policy = expert_policy();
-            let cards = self.vault.enabled_builtin_expert_cards().await?;
+            let cards = vec![self.card.clone()];
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
+                admission: &self.admission,
             };
             let repository = floe_vault::VaultConversationRepository::new(Arc::clone(&self.vault));
             let calendar_subject = crate::vault_host::calendar_access::DeviceCalendarSubject {

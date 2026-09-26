@@ -51,6 +51,17 @@ fn submitted(person_id: PersonId, task_id: TaskId, generation: u64) -> VaultTask
             coverage: DependencyCoverage::Unknown,
             issue: None,
         },
+        admission: floe_experts::ExpertAdmissionIdentity {
+            registry_instance_id: Uuid::new_v4(),
+            assignment_id: Uuid::new_v4(),
+            installation_id: Uuid::new_v4(),
+            package: floe_agent_contract::PackageRef {
+                kind: floe_agent_contract::PackageKind::Expert,
+                id: "floe.builtin.schedule".into(),
+                version: "1.0.0".into(),
+            },
+            definition_revision: 7,
+        },
         invocation_key: InvocationKey::new(),
         request_digest: [7; 32],
         aggregate_revision: 1,
@@ -84,6 +95,12 @@ async fn durable_task_admission_cas_and_generation_recovery_are_fail_closed() {
     assert_eq!(
         vault.admit_task(proposed.clone()).await.unwrap(),
         VaultTaskAdmission::Existing(proposed.clone())
+    );
+    let mut changed_admission = proposed.clone();
+    changed_admission.admission.assignment_id = Uuid::new_v4();
+    assert_eq!(
+        vault.admit_task(changed_admission).await,
+        Err(AgentFailure::Conflict)
     );
     let mut duplicate_invocation = proposed.clone();
     duplicate_invocation.snapshot.task_id = TaskId::new();

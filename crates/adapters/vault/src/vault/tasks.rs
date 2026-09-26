@@ -7,7 +7,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const MAX_TASK_RECORD_BYTES: usize = 128 * 1024;
 const MAX_TASK_ROWS: i64 = 4_096;
 
@@ -15,6 +15,7 @@ const MAX_TASK_ROWS: i64 = 4_096;
 #[serde(deny_unknown_fields)]
 pub struct VaultTaskRecord {
     pub snapshot: TaskSnapshot,
+    pub admission: floe_experts::ExpertAdmissionIdentity,
     pub invocation_key: InvocationKey,
     pub request_digest: [u8; 32],
     pub aggregate_revision: u64,
@@ -40,6 +41,10 @@ impl VaultTaskRecord {
             || self.aggregate_revision == 0
             || self.executor_generation == 0
             || self.invocation_key.as_uuid().is_nil()
+            || self.admission.validate_task(
+                &self.snapshot.agent_id,
+                self.snapshot.definition_revision,
+            ).is_err()
         {
             return Err(AgentFailure::CapabilityDenied);
         }
@@ -101,6 +106,7 @@ impl VaultTaskRecord {
         }
         let next = Self {
             snapshot,
+            admission: self.admission.clone(),
             invocation_key: self.invocation_key,
             request_digest: self.request_digest,
             aggregate_revision: self
@@ -145,6 +151,7 @@ impl VaultTaskRecord {
             && self.snapshot.principal == proposed.snapshot.principal
             && self.snapshot.agent_id == proposed.snapshot.agent_id
             && self.snapshot.definition_revision == proposed.snapshot.definition_revision
+            && self.admission == proposed.admission
             && self.invocation_key == proposed.invocation_key
             && self.request_digest == proposed.request_digest
     }
@@ -415,7 +422,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
+                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
                 (),
             )
             .await
@@ -443,7 +450,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_task_schema (id, version) VALUES (1, 2)",
+                "INSERT INTO agent_task_schema (id, version) VALUES (1, 3)",
                 (),
             )
             .await

@@ -2592,6 +2592,8 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
+        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
+        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
     );
     // The direct invocation still needs the validated origin the common
     // endpoint publishes under: an admitted run with the DelegationIntent
@@ -2966,6 +2968,37 @@ fn direct_invocation(
     )
 }
 
+fn direct_endpoint_admission(agent_id: &str) -> floe_experts::ExpertAdmissionIdentity {
+    floe_experts::ExpertAdmissionIdentity {
+        registry_instance_id: Uuid::new_v4(),
+        assignment_id: Uuid::new_v4(),
+        installation_id: Uuid::new_v4(),
+        package: floe_agent_contract::PackageRef {
+            kind: floe_agent_contract::PackageKind::Expert,
+            id: agent_id.into(),
+            version: "1.0.0".into(),
+        },
+        definition_revision: 1,
+    }
+}
+
+fn direct_endpoint_card(agent_id: &str) -> floe_agent_contract::AgentCard {
+    let declaration = floe_experts_builtin::BuiltinExpertKind::from_package_id(agent_id)
+        .unwrap()
+        .declaration();
+    floe_agent_contract::AgentCard {
+        schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+        protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+        id: agent_id.into(),
+        version: declaration.version.into(),
+        name: declaration.name.into(),
+        description: declaration.description.into(),
+        domain_tags: declaration.domain_tags,
+        skills: declaration.skills,
+        supported_placements: declaration.supported_placements,
+    }
+}
+
 fn direct_invocation_in_session(
     principal: &str,
     parent_run_id: Uuid,
@@ -3047,6 +3080,8 @@ fn builtin_endpoint_denies_forged_principal_without_touching_state() {
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
+        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
     );
     let (invocation, scope) = direct_invocation(
         "person:foreign",
@@ -3076,6 +3111,8 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
             fixture_saved_connection(fixture.person, "mac-local"),
         )),
+        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
     );
     let parent_run_id = Uuid::new_v4();
     let agent_id = floe_experts_builtin::BuiltinExpertKind::Commitments.package_id();
@@ -3140,6 +3177,8 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
             fixture_saved_connection(fixture.person, "mac-local"),
         )),
+        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
     );
     let (invocation, scope) = direct_invocation(
         &fixture.person.to_string(),

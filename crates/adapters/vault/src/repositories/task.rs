@@ -118,6 +118,7 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
 fn to_vault_record(record: TaskRecord) -> VaultTaskRecord {
     VaultTaskRecord {
         snapshot: record.snapshot,
+        admission: record.admission,
         invocation_key: record.invocation_key,
         request_digest: record.request_digest,
         aggregate_revision: record.aggregate_revision,
@@ -128,6 +129,7 @@ fn to_vault_record(record: TaskRecord) -> VaultTaskRecord {
 fn from_vault_record(record: VaultTaskRecord) -> TaskRecord {
     TaskRecord {
         snapshot: record.snapshot,
+        admission: record.admission,
         invocation_key: record.invocation_key,
         request_digest: record.request_digest,
         aggregate_revision: record.aggregate_revision,

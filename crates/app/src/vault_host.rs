@@ -226,13 +226,14 @@ struct Worker {
 
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+    core: Arc<FloeCore>,
+    local_context: Arc<LocalContextHost>,
     connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
     available: AtomicBool,
     conversation_repository: Arc<VaultConversationRepository<Keys>>,
     _recovered_conversation_runs: Vec<floe_vault::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     directory: Directory,
-    builtin_expert_endpoint: Arc<conversation_turn::expert_dispatch::BuiltinExpertEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
 }
 
@@ -248,14 +249,6 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         let conversation_repository =
             Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
         let directory = Directory::default();
-        let builtin_expert_endpoint = Arc::new(
-            conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
-                core,
-                Arc::clone(&vault),
-                local_context,
-                connections.clone(),
-            ),
-        );
         let repository = Arc::new(VaultTaskRepository::new(Arc::clone(&vault)));
         let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
             directory.clone(),
@@ -266,20 +259,21 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         .await?;
         Ok(Self {
             vault,
+            core,
+            local_context,
             connections,
             available: AtomicBool::new(true),
             conversation_repository,
             _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
             directory,
-            builtin_expert_endpoint,
             _recovered_tasks: recovered_tasks,
         })
     }
 
     async fn sync_expert_directory(&self) -> Result<(), AgentFailure> {
         let mut entries = Vec::new();
-        for card in self.vault.enabled_builtin_expert_cards().await? {
+        for (card, admission) in self.vault.enabled_expert_admissions().await? {
             if !BuiltinExpertKind::ALL
                 .iter()
                 .any(|kind| card.id == kind.package_id())
@@ -289,12 +283,20 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             entries.push((
                 DirectoryEntry {
                     definition: conversation_turn::engine_ports::contract_definition(&card),
+                    admission: admission.clone(),
                     reviewed: true,
                     enabled: true,
                     admitted_principals: vec![self.vault.person_id().to_string()],
                     purposes: vec!["everyday-assistance".into()],
                 },
-                self.builtin_expert_endpoint.clone() as Arc<dyn floe_agent_contract::AgentEndpoint>,
+                Arc::new(conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
+                    Arc::clone(&self.core),
+                    Arc::clone(&self.vault),
+                    Arc::clone(&self.local_context),
+                    self.connections.clone(),
+                    admission.clone(),
+                    card.clone(),
+                )) as Arc<dyn floe_agent_contract::AgentEndpoint>,
             ));
         }
         self.directory.publish("product.experts", entries)?;

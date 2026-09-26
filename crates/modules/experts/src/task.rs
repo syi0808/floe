@@ -11,12 +11,13 @@ use floe_agent_contract::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Directory, DirectoryQuery};
+use crate::{Directory, DirectoryQuery, ExpertAdmissionIdentity};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRecord {
     pub snapshot: TaskSnapshot,
+    pub admission: ExpertAdmissionIdentity,
     pub invocation_key: floe_agent_contract::InvocationKey,
     pub request_digest: [u8; 32],
     pub aggregate_revision: u64,
@@ -29,6 +30,10 @@ impl TaskRecord {
         if self.aggregate_revision == 0
             || self.executor_generation == 0
             || self.invocation_key.as_uuid().is_nil()
+            || self.admission.validate_task(
+                &self.snapshot.agent_id,
+                self.snapshot.definition_revision,
+            ).is_err()
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -93,6 +98,7 @@ impl TaskRecord {
         }
         let next = Self {
             snapshot,
+            admission: self.admission.clone(),
             invocation_key: self.invocation_key,
             request_digest: self.request_digest,
             aggregate_revision: self
@@ -370,7 +376,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             &request.selected_agent_id,
             request.selected_definition_revision,
             query.clone(),
-        );
+        )?;
         let proposed = TaskRecord {
             snapshot: snapshot(
                 &request,
@@ -380,6 +386,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
                 DependencyCoverage::Unknown,
                 None,
             ),
+            admission: endpoint.admission.clone(),
             invocation_key: request.invocation_key,
             request_digest,
             aggregate_revision: 1,
@@ -390,39 +397,22 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             TaskAdmission::Created(record) => {
                 validate_replay(&request, request_digest, &record)?;
                 validate_owned_record(&record, self.maximum_output_bytes)?;
+                if record.admission != endpoint.admission {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 record
             }
             TaskAdmission::Existing(record) => {
                 validate_replay(&request, request_digest, &record)?;
                 validate_owned_record(&record, self.maximum_output_bytes)?;
+                if record.admission != endpoint.admission {
+                    return Err(AgentFailure::Conflict);
+                }
                 return Ok(TaskReceipt {
                     task_id: request.task_id,
                     snapshot: record.snapshot,
                     replay: None,
                 });
-            }
-        };
-        let admitted_endpoint = match endpoint {
-            Ok(endpoint) => endpoint,
-            Err(failure) => {
-                let rejected = snapshot(
-                    &request,
-                    failure_state(failure),
-                    None,
-                    vec![],
-                    DependencyCoverage::Unknown,
-                    Some(failure),
-                );
-                let saved = scope
-                    .run(self.repository.compare_and_swap(
-                        request.task_id,
-                        admitted.aggregate_revision,
-                        admitted.executor_generation,
-                        rejected.clone(),
-                    ))
-                    .await?;
-                validate_saved_transition(&admitted, &saved, &rejected, self.maximum_output_bytes)?;
-                return Ok(receipt(saved));
             }
         };
         let working_snapshot = snapshot(
@@ -476,7 +466,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             return current.map(receipt).ok_or(AgentFailure::StorageUnavailable);
         }
         let outcome = scope
-            .run(admitted_endpoint.execute(invocation.clone(), scope))
+            .run(endpoint.endpoint.execute(invocation.clone(), scope))
             .await;
         self.active
             .lock()
@@ -682,6 +672,7 @@ fn validate_saved_transition(
 ) -> Result<(), AgentFailure> {
     validate_owned_record(saved, maximum_bytes)?;
     if saved.snapshot != *expected_snapshot
+        || saved.admission != previous.admission
         || saved.invocation_key != previous.invocation_key
         || saved.request_digest != previous.request_digest
         || saved.executor_generation != previous.executor_generation

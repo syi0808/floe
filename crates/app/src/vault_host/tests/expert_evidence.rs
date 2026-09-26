@@ -5,8 +5,8 @@ use floe_agent_contract::{
 use floe_context_contract::ContextDependency;
 use floe_conversation::AgentMessage;
 use floe_experts::{
-    A2AArtifact, A2AMessage, A2AMessageRole, A2APart, A2ATask, A2ATaskState,
-    ExpertSettlement, ExpertTaskCompletion, RegistrySnapshot,
+    A2AArtifact, A2AMessage, A2AMessageRole, A2APart, A2ATask, A2ATaskState, ExpertSettlement,
+    ExpertTaskCompletion, RegistrySnapshot,
 };
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider, VaultTaskRecord};
 use uuid::Uuid;
@@ -60,8 +60,7 @@ pub(in crate::vault_host) fn delegation_message(
 
 pub(in crate::vault_host) async fn record_proposal_task<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
-    expected_registry_revision: u64,
-    staged_registry: RegistrySnapshot,
+    completed_registry: RegistrySnapshot,
     evidence: &ExpertCalendarProposal,
     dependency: ContextDependency,
 ) -> TaskSnapshot {
@@ -69,8 +68,7 @@ pub(in crate::vault_host) async fn record_proposal_task<Keys: VaultKeyProvider>(
     let artifact = evidence.artifact(coverage.clone()).unwrap();
     record_proposal_task_with_artifacts(
         vault,
-        expected_registry_revision,
-        staged_registry,
+        completed_registry,
         evidence,
         dependency,
         vec![artifact],
@@ -80,8 +78,7 @@ pub(in crate::vault_host) async fn record_proposal_task<Keys: VaultKeyProvider>(
 
 pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
-    expected_registry_revision: u64,
-    staged_registry: RegistrySnapshot,
+    completed_registry: RegistrySnapshot,
     evidence: &ExpertCalendarProposal,
     dependency: ContextDependency,
     artifacts: Vec<Artifact>,
@@ -112,6 +109,18 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
     vault
         .admit_task(VaultTaskRecord {
             snapshot: submitted.clone(),
+            admission: floe_experts::ExpertAdmissionIdentity {
+                registry_instance_id: evidence.instance_id,
+                assignment_id: evidence.assignment_id,
+                installation_id: completed_registry
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.id == evidence.assignment_id)
+                    .unwrap()
+                    .installation_id,
+                package: evidence.package.clone(),
+                definition_revision: 1,
+            },
             invocation_key: InvocationKey::from_uuid(evidence.invocation_id).unwrap(),
             request_digest: [1; 32],
             aggregate_revision: 1,
@@ -131,11 +140,29 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
         )
         .await
         .unwrap();
+    let next_private_state = completed_registry
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == evidence.assignment_id)
+        .unwrap()
+        .private_state
+        .clone();
     let settlement = ExpertSettlement::new(
         evidence.package.id.clone(),
-        expected_registry_revision,
-        staged_registry,
-        evidence.assignment_id,
+        floe_experts::ExpertAdmissionIdentity {
+            registry_instance_id: evidence.instance_id,
+            assignment_id: evidence.assignment_id,
+            installation_id: completed_registry
+                .assignments
+                .iter()
+                .find(|assignment| assignment.id == evidence.assignment_id)
+                .unwrap()
+                .installation_id,
+            package: evidence.package.clone(),
+            definition_revision: 1,
+        },
+        next_private_state.revision - 1,
+        next_private_state,
         evidence.invocation_id,
         vec![dependency],
         result,

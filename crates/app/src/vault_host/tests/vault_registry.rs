@@ -128,9 +128,23 @@ impl Fixture {
             coverage: DependencyCoverage::Unknown,
             issue: None,
         };
+        let admission = floe_experts::ExpertAdmissionIdentity {
+            registry_instance_id: current.instance_id,
+            assignment_id: assignment.id,
+            installation_id: assignment.installation_id,
+            package: current
+                .installations
+                .iter()
+                .find(|installation| installation.id == assignment.installation_id)
+                .unwrap()
+                .package
+                .clone(),
+            definition_revision: 1,
+        };
         self.vault
             .admit_task(VaultTaskRecord {
                 snapshot: submitted.clone(),
+                admission: admission.clone(),
                 invocation_key: InvocationKey::from_uuid(invocation_id).unwrap(),
                 request_digest: [1; 32],
                 aggregate_revision: 1,
@@ -154,9 +168,15 @@ impl Fixture {
         let completion = ExpertTaskCompletion {
             settlement: ExpertSettlement::new(
                 agent_id.as_str(),
-                current.revision,
-                staged.clone(),
-                assignment.id,
+                admission,
+                assignment.private_state.revision,
+                staged
+                    .assignments
+                    .iter()
+                    .find(|entry| entry.id == assignment.id)
+                    .unwrap()
+                    .private_state
+                    .clone(),
                 invocation_id,
                 vec![],
                 result.clone(),
@@ -351,7 +371,7 @@ async fn key_loss_cannot_partially_settle_registry_or_task() {
 }
 
 #[tokio::test]
-async fn changed_installation_rejects_staged_expert_task_success() {
+async fn active_task_settlement_preserves_unrelated_installation_disable() {
     let fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;
     let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
@@ -366,14 +386,60 @@ async fn changed_installation_rejects_staged_expert_task_success() {
         .save_expert_registry(baseline.revision, &registry.snapshot())
         .await
         .unwrap();
+    fixture.vault.settle_expert_task_checked(completion, || Ok(())).await.unwrap();
+    let after = fixture.vault.expert_registry().await.unwrap().unwrap();
+    assert!(!after.installations.iter().find(|entry| entry.id == baseline.installations[0].id).unwrap().enabled);
+    assert_eq!(after.assignments.iter().filter(|entry| entry.private_state.revision == 1).count(), 1);
+    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Completed);
+}
+
+#[tokio::test]
+async fn concurrent_same_assignment_private_state_settlement_conflicts() {
+    let fixture = Fixture::new().await;
+    fixture.prepare().await;
+    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let (first, _) = fixture.stage(generation, Uuid::new_v4()).await;
+    let (raced, _) = fixture.stage(generation, Uuid::new_v4()).await;
+    let raced_task_id = raced.task_id;
+    fixture.vault.settle_expert_task_checked(first, || Ok(())).await.unwrap();
     assert_eq!(
-        fixture.vault.settle_expert_task_checked(completion, || Ok(())).await,
-        Err(AgentFailure::Conflict)
+        fixture.vault.settle_expert_task_checked(raced, || Ok(())).await,
+        Err(AgentFailure::Conflict),
     );
-    assert_eq!(fixture.vault.task(task_id).await.unwrap().unwrap().snapshot.state, TaskState::Working);
-    assert!(fixture.vault.expert_registry().await.unwrap().unwrap().assignments.iter().all(
-        |entry| entry.private_state.revision == 0
-    ));
+    assert_eq!(
+        fixture.vault.task(raced_task_id).await.unwrap().unwrap().snapshot.state,
+        TaskState::Working,
+    );
+}
+
+#[tokio::test]
+async fn admitted_task_finishes_after_its_assignment_is_disabled() {
+    let fixture = Fixture::new().await;
+    fixture.prepare().await;
+    let generation = fixture.vault.activate_task_executor().await.unwrap().executor_generation;
+    let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
+    let assignment_id = completion.settlement.admission.assignment_id;
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    fixture
+        .vault
+        .configure_registry(
+            RegistryConfiguration {
+                instance_id: before.instance_id,
+                expected_revision: before.revision,
+                target: RegistryConfigurationTarget::Assignment {
+                    id: assignment_id,
+                    enabled: false,
+                },
+            },
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    fixture.vault.settle_expert_task_checked(completion, || Ok(())).await.unwrap();
+    let after = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = after.assignments.iter().find(|entry| entry.id == assignment_id).unwrap();
+    assert!(!assignment.enabled);
+    assert_eq!(assignment.private_state.revision, 1);
 }
 
 #[tokio::test]

@@ -167,7 +167,6 @@ async fn seed(
     };
     let terminal = record_proposal_task(
         &vault,
-        registry_revision,
         registry.snapshot(),
         &evidence,
         dependency,
