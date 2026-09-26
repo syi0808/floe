@@ -4,6 +4,13 @@
 - Keep the package's `packageManager` version and `pnpm-lock.yaml` in sync; do not add npm or Yarn lockfiles.
 - Use Flutter's `flutter pub` commands for Dart dependencies. Prefer current stable releases compatible with the supported Flutter SDK; do not override SDK-pinned dependencies solely to force newer versions.
 
+# Rust build and test footprint
+
+- During iteration, test the affected Rust crates first with normal incremental compilation (`cargo test -p <crate>`). Do not disable incremental compilation globally; it speeds up repeated local builds.
+- For the broad Rust test gate, use `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` to avoid multi-GiB incremental caches across workspace crates. Expect slower rebuilds. Follow any task-specific validation plan that requires different exact commands.
+- Keep `RUSTFLAGS`, Cargo profiles, features, target triples, and `CARGO_TARGET_DIR` consistent across routine runs. Changing them creates additional build variants rather than reusing the same cache. Do not create separate target directories solely for routine validation.
+- If disk pressure requires `cargo clean`, first confirm which target directory it will remove and account for the full rebuild afterward; do not clean automatically after every test run.
+
 # Platform priority
 
 - Apple ecosystem devices are the first product target. Prioritize macOS, iPhone, and iPad implementation and validation.
