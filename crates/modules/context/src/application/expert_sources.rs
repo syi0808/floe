@@ -9,40 +9,6 @@ use tokio::time::Instant;
 use crate::{ContextService, SourceReader, SourceView};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CurrentCalendarSelection {
-    Missing,
-    Reconnect,
-    SelectResource,
-    Native,
-    Remote,
-}
-
-pub fn select_current_calendar_connection(
-    connection: Option<&floe_day::CalendarConnection>,
-    device_id: &str,
-) -> Result<CurrentCalendarSelection, AgentFailure> {
-    let Some(connection) = connection else {
-        return Ok(CurrentCalendarSelection::Missing);
-    };
-    if connection.device_id != device_id || connection.revision == 0 {
-        return Err(AgentFailure::StaleContext);
-    }
-    if connection.disconnected {
-        return Ok(CurrentCalendarSelection::Reconnect);
-    }
-    if connection.calendars.is_empty() {
-        return Ok(CurrentCalendarSelection::SelectResource);
-    }
-    Ok(
-        if connection.provider == floe_context_contract::CalendarProvider::EventKit {
-            CurrentCalendarSelection::Native
-        } else {
-            CurrentCalendarSelection::Remote
-        },
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CalendarReviewClassification {
     pub reason: floe_context_contract::SourceAccessRequirementKind,
     pub observed: Option<floe_context_contract::ObservedGrant>,
@@ -271,60 +237,9 @@ async fn read_declared_remote_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     struct ProbeDriver(Mutex<Vec<LocalExpertSource>>);
-
-    #[test]
-    fn current_calendar_selection_does_not_infer_a_fallback() {
-        assert_eq!(
-            select_current_calendar_connection(None, "device").unwrap(),
-            CurrentCalendarSelection::Missing
-        );
-        let mut connection = floe_day::CalendarConnection {
-            connection_id: "connection".into(),
-            device_id: "device".into(),
-            disconnected: false,
-            scope: floe_context_contract::CalendarScope::Selected,
-            provider: floe_context_contract::CalendarProvider::EventKit,
-            calendars: vec![floe_day::CalendarSelection {
-                calendar_id: "primary".into(),
-                calendar_name: "Primary".into(),
-            }],
-            revision: 1,
-            source_authority: floe_context_contract::SourceAuthority::new(),
-            last_success_at: None,
-            last_range: None,
-            error: None,
-            error_at: None,
-            source_statuses: BTreeMap::new(),
-        };
-        assert_eq!(
-            select_current_calendar_connection(Some(&connection), "device").unwrap(),
-            CurrentCalendarSelection::Native
-        );
-        connection.provider = floe_context_contract::CalendarProvider::Google;
-        assert_eq!(
-            select_current_calendar_connection(Some(&connection), "device").unwrap(),
-            CurrentCalendarSelection::Remote
-        );
-        connection.disconnected = true;
-        assert_eq!(
-            select_current_calendar_connection(Some(&connection), "device").unwrap(),
-            CurrentCalendarSelection::Reconnect
-        );
-        connection.disconnected = false;
-        connection.calendars.clear();
-        assert_eq!(
-            select_current_calendar_connection(Some(&connection), "device").unwrap(),
-            CurrentCalendarSelection::SelectResource
-        );
-        assert_eq!(
-            select_current_calendar_connection(Some(&connection), "other"),
-            Err(AgentFailure::StaleContext)
-        );
-    }
 
     impl LocalExpertSourceDriver for ProbeDriver {
         fn read<'a>(
