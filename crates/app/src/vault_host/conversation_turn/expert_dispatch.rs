@@ -53,6 +53,48 @@ impl BoundExpertRunner {
 
 pub(crate) type BoundExpertRegistration = floe_experts::ExpertRegistration<BoundExpertRunner>;
 
+struct BindingFencedInferenceExecutor<'a, Keys: VaultKeyProvider> {
+    inner: &'a dyn floe_inference::InferenceExecutor,
+    vault: &'a EncryptedAgentVault<Keys>,
+    admission: &'a floe_experts::ExpertAdmissionIdentity,
+    selection: &'a floe_experts::ExpertExecutionSelection,
+}
+
+impl<Keys: VaultKeyProvider> BindingFencedInferenceExecutor<'_, Keys> {
+    async fn validate_current(&self) -> Result<(), AgentFailure> {
+        let registry = self
+            .vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        floe_experts::AgentRegistry::restore(registry, self.vault.registry_instance_id())?
+            .validate_current_execution_selection(
+                self.vault.person_id(),
+                self.admission,
+                self.selection,
+                true,
+            )
+    }
+}
+
+impl<Keys: VaultKeyProvider> floe_inference::InferenceExecutor
+    for BindingFencedInferenceExecutor<'_, Keys>
+{
+    fn execute<'a>(
+        &'a self,
+        request: floe_agent_contract::ModelRequest,
+        scope: &'a floe_execution::ExecutionScope,
+        constraint: floe_inference::InferenceExecutionConstraint,
+    ) -> BoxFuture<'a, Result<floe_agent_contract::ModelCallOutcome, AgentFailure>> {
+        Box::pin(async move {
+            self.validate_current().await?;
+            let outcome = self.inner.execute(request, scope, constraint).await;
+            self.validate_current().await?;
+            outcome
+        })
+    }
+}
+
 pub(crate) fn shipped_registrations() -> Vec<BoundExpertRegistration> {
     floe_experts_builtin::registrations()
         .into_iter()
@@ -309,8 +351,14 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                     .deadline()
                     .min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
             };
+            let fenced_inference = BindingFencedInferenceExecutor {
+                inner: &service,
+                vault: self.vault.as_ref(),
+                admission: &self.admission,
+                selection: &self.selection,
+            };
             let experts = ConversationExperts {
-                executor: &service,
+                executor: &fenced_inference,
                 scope,
                 availability,
                 calendar_reader: Some(&calendar_reader as &dyn CalendarContextReaderApi),
