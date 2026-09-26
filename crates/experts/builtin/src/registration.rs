@@ -108,6 +108,10 @@ mod tests {
     fn shipped_manifests_are_valid_and_unique() {
         let manifests = manifests();
         assert_eq!(manifests.len(), 8);
+        assert_eq!(
+            floe_experts::manifest_set_digest(&manifests).unwrap().len(),
+            64
+        );
         for (index, manifest) in manifests.iter().enumerate() {
             manifest.validate().unwrap();
             assert!(

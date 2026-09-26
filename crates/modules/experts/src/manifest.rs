@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use floe_agent_contract::{AgentDefinition, AgentFailure, DataClass, PackageKind, PackageRef};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const EXPERT_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const MAX_REQUIREMENT_SOURCES: u8 = 16;
@@ -96,6 +97,31 @@ impl ExpertManifest {
         }
         Ok(())
     }
+}
+
+pub fn manifest_set_digest(manifests: &[ExpertManifest]) -> Result<String, AgentFailure> {
+    if manifests.is_empty() || manifests.len() > 64 {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let mut canonical = manifests.to_vec();
+    canonical.sort_by(|left, right| {
+        left.package
+            .id
+            .cmp(&right.package.id)
+            .then(left.package.version.cmp(&right.package.version))
+    });
+    for (index, manifest) in canonical.iter().enumerate() {
+        manifest.validate()?;
+        if index > 0 && canonical[index - 1].package == manifest.package {
+            return Err(AgentFailure::Conflict);
+        }
+    }
+    let bytes = serde_json::to_vec(&("floe.expert-manifest-set.sha256.v1", canonical))
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    if bytes.len() > 65_536 {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn bounded_identifier(value: &str) -> bool {
@@ -205,5 +231,24 @@ mod tests {
             },
         ];
         assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
+    }
+
+    #[test]
+    fn canonical_manifest_digest_binds_contents_not_input_order() {
+        let first = manifest();
+        let mut second = manifest();
+        second.package.id = "example.test.other".into();
+        second.definition.card.id = second.package.id.clone();
+        let digest = manifest_set_digest(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(
+            digest,
+            manifest_set_digest(&[second.clone(), first.clone()]).unwrap()
+        );
+        assert_eq!(
+            manifest_set_digest(&[first.clone(), first]),
+            Err(AgentFailure::Conflict)
+        );
+        second.prompt_contract.revision += 1;
+        assert_ne!(digest, manifest_set_digest(&[second]).unwrap());
     }
 }

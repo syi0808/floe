@@ -34,7 +34,7 @@ pub use dispatch::{
 pub use floe_agent_contract::{ExpertBudget, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef};
 pub use manifest::{
     ContractRef, EXPERT_MANIFEST_SCHEMA_VERSION, ExpertManifest, ExpertRegistration,
-    ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES,
+    ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES, manifest_set_digest,
 };
 pub use registry::{
     AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
