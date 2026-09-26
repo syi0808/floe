@@ -1922,6 +1922,201 @@ mod capture_tests {
         }
     }
 
+    struct PausedModelResponse {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl floe_inference::InferenceExecutor for PausedModelResponse {
+        fn execute<'a>(
+            &'a self,
+            request: floe_agent_contract::ModelRequest,
+            _: &'a floe_execution::ExecutionScope,
+            _: floe_inference::InferenceExecutionConstraint,
+        ) -> BoxFuture<'a, Result<floe_agent_contract::ModelCallOutcome, AgentFailure>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(floe_agent_contract::ModelCallOutcome::Ready(
+                    floe_agent_contract::ModelResponse {
+                        attempt_id: request.attempt_id,
+                        steps: vec![floe_agent_contract::ModelStep::Answer {
+                            text: "stale-answer".into(),
+                            artifacts: vec![],
+                        }],
+                        usage: floe_agent_contract::ModelUsage {
+                            tokens: 1,
+                            cost_micros: 1,
+                        },
+                    },
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn model_response_after_rebinding_is_not_released() {
+        use floe_agent_contract::ExpertModel;
+        use floe_context_contract::{
+            ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceSelectionReference,
+        };
+        use floe_experts::{AgentRegistry, ExpertBindingCommand, ExpertInstallOperation};
+        use std::os::unix::fs::DirBuilderExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("vaults");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let person = floe_kernel::PersonId::new();
+        let vault = floe_vault::EncryptedAgentVault::create(&root, person, TestKeys::default())
+            .await
+            .unwrap();
+        let instance_id = vault.registry_instance_id();
+        let manifest = floe_experts_builtin::manifests()
+            .into_iter()
+            .find(|manifest| {
+                manifest.package.id
+                    == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
+            })
+            .unwrap();
+        let requirement = manifest
+            .source_requirements
+            .iter()
+            .find(|requirement| requirement.capability == "calendar.timeline")
+            .unwrap();
+        let mut registry = AgentRegistry::new(instance_id);
+        registry
+            .install_bundle(
+                person,
+                &ExpertInstallOperation {
+                    instance_id,
+                    expected_revision: 0,
+                    operation_id: uuid::Uuid::new_v4(),
+                },
+                &[manifest.clone()],
+            )
+            .unwrap();
+        vault
+            .initialize_expert_registry(&registry.snapshot())
+            .await
+            .unwrap();
+        let snapshot = vault.expert_registry().await.unwrap().unwrap();
+        let assignment = &snapshot.assignments[0];
+        let source = |connection: &str| SourceSelectionReference {
+            connector_id: ConnectorId::try_new("calendar.event_kit").unwrap(),
+            connection_id: ConnectionId::try_new(connection).unwrap(),
+            execution_owner_id: ExecutionOwnerId::try_new("test-device").unwrap(),
+            capability_id: requirement.capability.clone(),
+            resource: ResourceHandle::try_new("calendar-a").unwrap(),
+            contract_version: requirement.contract_version,
+        };
+        let package = manifest.package.clone();
+        vault
+            .replace_expert_binding(
+                uuid::Uuid::new_v4(),
+                ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package: package.clone(),
+                    definition_revision: manifest.definition.definition_revision,
+                    requirement_key: requirement.key.clone(),
+                    expected_binding_revision: assignment.binding.revision,
+                    selected: vec![source("connection-a")],
+                },
+            )
+            .await
+            .unwrap();
+        let admission = floe_experts::ExpertAdmissionIdentity {
+            registry_instance_id: instance_id,
+            assignment_id: assignment.id,
+            installation_id: assignment.installation_id,
+            package: package.clone(),
+            definition_revision: manifest.definition.definition_revision,
+        };
+        let selection =
+            AgentRegistry::restore(vault.expert_registry().await.unwrap().unwrap(), instance_id)
+                .unwrap()
+                .execution_selection(person, &admission)
+                .unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let inner = PausedModelResponse {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+            calls: Arc::clone(&calls),
+        };
+        let fenced = BindingFencedInferenceExecutor {
+            inner: &inner,
+            vault: &vault,
+            admission: &admission,
+            selection: &selection,
+        };
+        let ledger = floe_execution::budget::BudgetLedger::new(
+            floe_execution::budget::BudgetConfig::new(100, 100),
+            Default::default(),
+        );
+        let scope = floe_execution::ExecutionScope::root(
+            floe_execution::Cancellation::default(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            ledger.work_lease(),
+            floe_agent_contract::TraceContext::new(uuid::Uuid::new_v4()),
+        );
+        let captured = Mutex::new(Vec::new());
+        let model_blocked = Mutex::new(None);
+        let model = ExpertModelHost {
+            executor: &fenced,
+            scope: &scope,
+            captured: &captured,
+            lineage: None,
+            model_blocked: &model_blocked,
+        };
+        let response = model.answer(floe_agent_contract::ExpertModelCall {
+            person_id: person,
+            invocation_id: uuid::Uuid::new_v4(),
+            prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
+            policy: expert_policy(),
+            context: floe_agent_contract::AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+            assignment: "Review the admitted source".into(),
+            requirement: floe_agent_contract::ExpertModelRequirement::Any,
+            max_output_bytes: 4096,
+            max_tokens: 100,
+            max_cost_micros: 100,
+            deadline: scope.deadline(),
+            cancellation: scope.cancellation().clone(),
+        });
+        let rebind = async {
+            entered.notified().await;
+            vault
+                .replace_expert_binding(
+                    uuid::Uuid::new_v4(),
+                    ExpertBindingCommand {
+                        assignment_id: assignment.id,
+                        package,
+                        definition_revision: manifest.definition.definition_revision,
+                        requirement_key: requirement.key.clone(),
+                        expected_binding_revision: assignment.binding.revision + 1,
+                        selected: vec![source("connection-b")],
+                    },
+                )
+                .await
+                .unwrap();
+            release.notify_one();
+        };
+        let (result, ()) = tokio::join!(response, rebind);
+        assert!(matches!(result, Err(AgentFailure::Conflict)));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
     struct AvailableProvider;
 
     impl floe_inference::ModelProvider for AvailableProvider {
