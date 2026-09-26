@@ -4,7 +4,8 @@ use super::conversation_turn::expert_dispatch::{
 use super::*;
 use floe_agent_contract::{
     AgentContext, ArtifactPart, DelegationExecutionContext, DelegationPort, DelegationRequest,
-    ExecutionScope, InvocationKey, ModelPlacement, TaskId, TaskState, TraceContext,
+    ExecutionScope, ExpertModel, ExpertModelCall, ExpertModelRequirement, InvocationKey,
+    ModelPlacement, TaskId, TaskState, TraceContext,
 };
 use floe_execution::budget::{BudgetConfig, BudgetLedger};
 use floe_experts::RequirementReadOutcome;
@@ -66,6 +67,8 @@ static SOURCE_READ_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static SOURCE_READ_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static OUTPUT_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static OUTPUT_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static MODEL_DISPATCH_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static MODEL_DISPATCH_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
 fn runner_a<'turn, 'model, 'msg, 'call>(
     _host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
@@ -314,6 +317,155 @@ fn paused_output_runner<'turn, 'model, 'msg, 'call>(
             &serde_json::json!({"output": true}),
         )
     })
+}
+
+fn tasks_requirement_registration() -> BoundExpertRegistration {
+    let mut manifest = example_manifest();
+    manifest.source_requirements = vec![floe_experts::ExpertSourceRequirement {
+        key: "required_tasks".into(),
+        capability: "floe.tasks".into(),
+        contract_version: 1,
+        minimum_sources: 1,
+        maximum_sources: 1,
+    }];
+    BoundExpertRegistration {
+        manifest,
+        runner: BoundExpertRunner::Supplied(paused_model_after_tasks_runner),
+    }
+}
+
+fn paused_model_after_tasks_runner<'turn, 'model, 'msg, 'call>(
+    host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
+    request: &'call BuiltinExpertRequest,
+) -> floe_agent_contract::BoxFuture<'call, Result<BuiltinExpertOutput, AgentFailure>> {
+    Box::pin(async move {
+        assert!(matches!(
+            host.read_requirement(
+                request,
+                "required_tasks",
+                serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+            )
+            .await?,
+            RequirementReadOutcome::Ready(_),
+        ));
+        MODEL_DISPATCH_ENTERED
+            .get_or_init(tokio::sync::Notify::new)
+            .notify_one();
+        MODEL_DISPATCH_RELEASE
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+        host.model()
+            .answer(ExpertModelCall {
+                person_id: request.person_id,
+                invocation_id: request.invocation_id,
+                prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
+                policy: host.policy().clone(),
+                context: request.context.clone(),
+                assignment: request.assignment.clone(),
+                requirement: ExpertModelRequirement::Any,
+                max_output_bytes: request.max_output_bytes,
+                max_tokens: 100,
+                max_cost_micros: 100,
+                deadline: request.deadline,
+                cancellation: request.cancellation.clone(),
+            })
+            .await?;
+        BuiltinExpertOutput::from_result(
+            "model-outcome",
+            "application/vnd.example.result+json",
+            "model-dispatched".into(),
+            &serde_json::json!({"model": true}),
+        )
+    })
+}
+
+#[tokio::test]
+async fn read_a_then_rebind_b_fences_expert_model_dispatch() {
+    let person = PersonId::new();
+    let (_root, open, server) = installed_open(person, tasks_requirement_registration()).await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = &snapshot.assignments[0];
+    let selected = |device_id| {
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: person,
+            device_id,
+            capability: "floe.tasks",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            calendar_connection: None,
+        })
+        .unwrap()
+        .remove(0)
+        .reference
+    };
+    let source_a = selected("mac-local");
+    let source_b = selected("other-device");
+    let package = snapshot.installations[0].package.clone();
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_tasks".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![source_a.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let scope = task_scope(run_id, task_id);
+    let execution = open
+        .task_coordinator
+        .delegate(request(person, run_id, task_id), &scope);
+    let rebind = async {
+        MODEL_DISPATCH_ENTERED
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+        open.vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package,
+                    definition_revision: 1,
+                    requirement_key: "required_tasks".into(),
+                    expected_binding_revision: assignment.binding.revision + 1,
+                    selected: vec![source_b],
+                },
+            )
+            .await
+            .unwrap();
+        MODEL_DISPATCH_RELEASE
+            .get_or_init(tokio::sync::Notify::new)
+            .notify_one();
+    };
+    let (result, ()) = tokio::join!(execution, rebind);
+    let receipt = result.unwrap();
+    assert_eq!(receipt.snapshot.state, TaskState::Failed, "{receipt:?}");
+    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+    assert_ne!(receipt.snapshot.result.as_deref(), Some("model-dispatched"));
+    assert_eq!(
+        open.vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .selection
+            .requirements[0]
+            .selected[0],
+        source_a,
+    );
+    server.join().unwrap();
 }
 
 #[tokio::test]

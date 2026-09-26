@@ -508,6 +508,11 @@ mod tests {
 
     #[test]
     fn shipped_consumer_requires_active_exact_binding() {
+        use floe_connections::{
+            ConnectionState, ConnectorConnectionSnapshot, ConnectorDescriptor, ConnectorSnapshot,
+            ExecutionLocation,
+        };
+
         let person = PersonId::new();
         let instance_id = uuid::Uuid::new_v4();
         let manifest = floe_experts_builtin::manifests()
@@ -575,6 +580,56 @@ mod tests {
             )
             .unwrap();
         let bound = registry.snapshot();
+        let new_connection = ConnectorSnapshot {
+            descriptor: ConnectorDescriptor {
+                schema_version: 1,
+                id: "gmail".into(),
+                version: "1".into(),
+                provider: "Google Mail".into(),
+                execution: ExecutionLocation::Server,
+                capabilities: vec![],
+                views: vec![],
+            },
+            connection: ConnectorConnectionSnapshot {
+                schema_version: 1,
+                connector_id: "gmail".into(),
+                connection_id: Some("account-b".into()),
+                person_id: Some(person.to_string()),
+                device_binding: None,
+                state: ConnectionState::Ready,
+                granted_scopes: vec![],
+                observed_at_unix_ms: 1,
+                last_success_at_unix_ms: None,
+                last_failure: None,
+            },
+            views: vec![],
+        };
+        let new_candidate =
+            floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+                person_id: person,
+                device_id: "mac-local",
+                capability: "mail.communication",
+                contract_version: 1,
+                remote_connections: &[new_connection],
+                remote_execution_owner: Some("server:source"),
+                calendar_connection: None,
+            })
+            .unwrap()
+            .remove(0);
+        assert_eq!(new_candidate.reference.connection_id.as_str(), "account-b");
+        assert_eq!(bound.assignments[0].binding.revision, 2);
+        assert_eq!(
+            bound.assignments[0]
+                .binding
+                .entries
+                .iter()
+                .find(|entry| entry.capability == "mail.communication")
+                .unwrap()
+                .selected[0]
+                .connection_id
+                .as_str(),
+            "account-a"
+        );
         let selected = selected_shipped_consumers(
             Some(&bound),
             person,
