@@ -378,16 +378,34 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
+                selected: self
+                    .selection
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.capability == "attention.coarse")
+                    .and_then(|requirement| requirement.selected.first()),
             };
             let people_reader = PersonalPeopleReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
+                selected: self
+                    .selection
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.capability == "people.identity")
+                    .and_then(|requirement| requirement.selected.first()),
             };
             let wellbeing_reader = PersonalWellbeingReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
+                selected: self
+                    .selection
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.capability == "wellbeing.derived")
+                    .and_then(|requirement| requirement.selected.first()),
             };
             let governed_store = self.vault.governed_general_store(context.session_id);
             let recorder = StoreResultRecorder {

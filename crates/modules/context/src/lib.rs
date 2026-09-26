@@ -90,8 +90,8 @@ pub use application::personal_sources::{
     apple_execution_owner, attention_execution_owner, attention_source,
     authorize_personal_dependency, contacts_connection, contacts_execution_owner,
     feasibility_source, personal_dependency_holds, read_feasibility, read_feasibility_outcome,
-    read_manager_people, read_manager_people_outcome, read_people, read_wellbeing,
-    read_wellbeing_outcome, wellbeing_source,
+    read_manager_people, read_manager_people_outcome, read_people, read_selected_people_outcome,
+    read_wellbeing, read_wellbeing_outcome, wellbeing_source,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
 pub use application::remote_sources::{

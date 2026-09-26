@@ -1747,6 +1747,7 @@ mod tests {
             vault: &vault,
             local_context: &local_context,
             device_id: "test-device",
+            selected: None,
         };
         let recorder = StoreResultRecorder { store: &store };
         let turn_id = Uuid::new_v4();

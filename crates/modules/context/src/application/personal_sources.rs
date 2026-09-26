@@ -1366,6 +1366,89 @@ pub async fn read_manager_people_outcome(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn read_selected_people_outcome(
+    records: &impl PersonalGrantRecords,
+    driver: &impl PersonalSourceDriver,
+    person_id: PersonId,
+    device_id: &str,
+    selected: &floe_context_contract::SourceSelectionReference,
+    consumer_name: &str,
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<floe_context_contract::SourceReadOutcome<(PeopleView, ContextDependency)>, AgentFailure>
+{
+    crate::validate_local_source_selection(selected, device_id)?;
+    if selected.capability_id != "people.identity" {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    let mut identity = people_identity(person_id, device_id)?;
+    identity.expected.retain(|source| {
+        source.connector() == &selected.connector_id
+            && source.connection_id() == selected.connection_id
+            && source.execution_owner() == &selected.execution_owner_id
+    });
+    if identity.expected.len() != 1 {
+        return Err(AgentFailure::StaleContext);
+    }
+    identity.known_identity = Some(("contacts.apple", "contacts.apple.local"));
+    let grant = match active_read_grant(
+        &records.grants().await?,
+        &PersonalReadRequirement {
+            source: &identity.expected[0],
+            resource: PEOPLE_RESOURCE,
+            consumer: &consumer,
+            same_authority: false,
+            reject_ambiguous: true,
+        },
+    ) {
+        Ok(grant) => grant,
+        Err(error) => {
+            return Ok(
+                classify_personal_blocker(records, &identity, consumer, error)
+                    .await?
+                    .into_outcome(),
+            );
+        }
+    };
+    let selected_handles = records.selected_handles(grant.id()).await?;
+    if selected_handles.is_empty() {
+        return Ok(PersonalBlock::blocked(personal_requirement(
+            &identity,
+            Some(selected.connector_id.clone()),
+            Some(selected.connection_id.clone()),
+            consumer,
+            floe_context_contract::SourceAccessRequirementKind::SelectResource,
+            Some(grant.source().source_authority()),
+            None,
+        )?)?
+        .into_outcome());
+    }
+    let subject = records.reviewed_subject(grant.id()).await?;
+    match read_people(
+        records,
+        driver,
+        person_id,
+        device_id,
+        grant.source().clone(),
+        &selected_handles,
+        &subject,
+        consumer_name,
+        deadline,
+        cancellation,
+    )
+    .await
+    {
+        Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
+        Err(error) => Ok(
+            classify_personal_blocker(records, &identity, consumer, error)
+                .await?
+                .into_outcome(),
+        ),
+    }
+}
+
 /// Read the feasibility view, preserving a recoverable blocker as a typed
 /// outcome instead of raising it. Only hard failures raise.
 #[allow(clippy::too_many_arguments)]
@@ -1703,6 +1786,82 @@ mod tests {
             .await
             .unwrap_err(),
             AgentFailure::PolicyDenied
+        );
+    }
+
+    #[tokio::test]
+    async fn selected_apple_contacts_ignore_live_android_grant() {
+        let person_id = PersonId::new();
+        let device_id = "device";
+        let source = GrantSourceBinding::try_new(
+            person_id,
+            floe_context_contract::ConnectionId::try_new(contacts_connection("contacts.android"))
+                .unwrap(),
+            floe_context_contract::ConnectorId::try_new("contacts.android").unwrap(),
+            floe_context_contract::ExecutionOwnerId::try_new(contacts_execution_owner(
+                "contacts.android",
+                device_id,
+            ))
+            .unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let scope = GrantScope::try_new(
+            vec![ResourceHandle::try_new(PEOPLE_RESOURCE).unwrap()],
+            vec![GrantDataCategory::Derived],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![GrantConsumer::builtin("floe.builtin.relationships").unwrap()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        let mut grant = DataAccessGrant::new(
+            GrantId::new(),
+            Uuid::new_v4(),
+            source.clone(),
+            scope.clone(),
+        )
+        .unwrap();
+        grant
+            .activate_review(grant.authority(), source, scope)
+            .unwrap();
+        let records = SwappingRecords {
+            grants: vec![grant],
+            reads: Mutex::new(0),
+            queries: vec![],
+            subjects: vec![],
+        };
+        let selected = crate::discover_source_candidates(crate::SourceCandidateRequest {
+            person_id,
+            device_id,
+            capability: "people.identity",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            calendar_connection: None,
+        })
+        .unwrap()
+        .remove(0)
+        .reference;
+        let outcome = read_selected_people_outcome(
+            &records,
+            &EchoingDriver,
+            person_id,
+            device_id,
+            &selected,
+            "floe.builtin.relationships",
+            Instant::now() + std::time::Duration::from_secs(5),
+            &Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
+            panic!("unselected Android grant must not authorize the Apple target");
+        };
+        assert_eq!(blockers.blockers().len(), 1);
+        assert_eq!(
+            blockers.blockers()[0].connector_id().unwrap().as_str(),
+            "contacts.apple"
         );
     }
 }
