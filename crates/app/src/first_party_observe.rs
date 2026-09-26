@@ -263,7 +263,11 @@ pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvide
         return Err(AgentFailure::CapabilityDenied);
     }
     let snapshot = vault.expert_registry().await?;
-    let execution_owner = vault.remote_pinned_producer().await?.execution_owner;
+    let execution_owner = match vault.remote_pinned_producer().await {
+        Ok(producer) => Some(producer.execution_owner),
+        Err(AgentFailure::NotFound) => None,
+        Err(failure) => return Err(failure),
+    };
     let mut policies = remote_policies(connector_id)?;
     for policy in &mut policies {
         let resource = if policy.view_id == "calendar.timeline" {
@@ -273,15 +277,17 @@ pub(crate) async fn remote_policies_for_target<Keys: floe_vault::VaultKeyProvide
         } else {
             floe_context::remote_view_resource(policy.view_id, connection_id)
         };
-        policy.consumers.extend(selected_shipped_consumers(
-            snapshot.as_ref(),
-            person_id,
-            policy.view_id,
-            connector_id,
-            connection_id,
-            execution_owner.as_str(),
-            &resource,
-        )?);
+        if let Some(execution_owner) = &execution_owner {
+            policy.consumers.extend(selected_shipped_consumers(
+                snapshot.as_ref(),
+                person_id,
+                policy.view_id,
+                connector_id,
+                connection_id,
+                execution_owner,
+                &resource,
+            )?);
+        }
         policy.consumers.sort();
         policy.consumers.dedup();
     }
