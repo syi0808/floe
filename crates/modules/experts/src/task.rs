@@ -5,9 +5,9 @@ use std::{
 };
 
 use floe_agent_contract::{
-    AgentFailure, AllowedCatalog, BoxFuture, DelegationPort, DelegationRequest,
-    DependencyCoverage, EndpointInvocation, EndpointSettlement, TaskId, TaskReceipt, TaskSnapshot,
-    TaskState, delegation_request_digest,
+    AgentFailure, AllowedCatalog, BoxFuture, DelegationPort, DelegationRequest, DependencyCoverage,
+    EndpointInvocation, EndpointSettlement, TaskId, TaskReceipt, TaskSnapshot, TaskState,
+    delegation_request_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -402,7 +402,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
                 });
             }
         };
-        let _admitted_endpoint = match endpoint {
+        let admitted_endpoint = match endpoint {
             Ok(endpoint) => endpoint,
             Err(failure) => {
                 let rejected = snapshot(
@@ -475,14 +475,9 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
                 .remove(&request.task_id);
             return current.map(receipt).ok_or(AgentFailure::StorageUnavailable);
         }
-        let outcome = match self.directory.resolve(
-            &request.selected_agent_id,
-            request.selected_definition_revision,
-            query,
-        ) {
-            Ok(endpoint) => scope.run(endpoint.execute(invocation.clone(), scope)).await,
-            Err(failure) => Err(failure),
-        };
+        let outcome = scope
+            .run(admitted_endpoint.execute(invocation.clone(), scope))
+            .await;
         self.active
             .lock()
             .map_err(|_| AgentFailure::StorageUnavailable)?

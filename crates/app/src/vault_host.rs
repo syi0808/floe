@@ -278,12 +278,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
     }
 
     async fn sync_expert_directory(&self) -> Result<(), AgentFailure> {
-        for kind in BuiltinExpertKind::ALL {
-            match self.directory.unregister(kind.package_id()) {
-                Ok(_) | Err(AgentFailure::NotFound) => {}
-                Err(failure) => return Err(failure),
-            }
-        }
+        let mut entries = Vec::new();
         for card in self.vault.enabled_builtin_expert_cards().await? {
             if !BuiltinExpertKind::ALL
                 .iter()
@@ -291,7 +286,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             {
                 continue;
             }
-            self.directory.register(
+            entries.push((
                 DirectoryEntry {
                     definition: conversation_turn::engine_ports::contract_definition(&card),
                     reviewed: true,
@@ -299,9 +294,10 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                     admitted_principals: vec![self.vault.person_id().to_string()],
                     purposes: vec!["everyday-assistance".into()],
                 },
-                self.builtin_expert_endpoint.clone(),
-            )?;
+                self.builtin_expert_endpoint.clone() as Arc<dyn floe_agent_contract::AgentEndpoint>,
+            ));
         }
+        self.directory.publish("product.experts", entries)?;
         Ok(())
     }
 

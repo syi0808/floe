@@ -34,7 +34,10 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 #[derive(Default)]
-struct MemoryTasks(Mutex<MemoryTaskState>);
+struct MemoryTasks(
+    Mutex<MemoryTaskState>,
+    Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+);
 
 #[derive(Default)]
 struct MemoryTaskState {
@@ -112,6 +115,7 @@ impl TaskRepository for MemoryTasks {
         snapshot: TaskSnapshot,
     ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>> {
         Box::pin(async move {
+            let became_working = snapshot.state == TaskState::Working;
             let mut records = self
                 .0
                 .lock()
@@ -126,7 +130,19 @@ impl TaskRepository for MemoryTasks {
                 snapshot,
                 floe_agent_contract::MAX_OUTPUT_BYTES,
             )?;
-            Ok(current.clone())
+            let updated = current.clone();
+            drop(records);
+            if became_working {
+                if let Some(on_working) = self
+                    .1
+                    .lock()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                    .as_ref()
+                {
+                    on_working();
+                }
+            }
+            Ok(updated)
         })
     }
 
@@ -266,6 +282,96 @@ fn register(directory: &Directory, id: &str, endpoint: Endpoint) -> Result<(), A
     Ok(())
 }
 
+fn publication_entry(id: &str) -> (DirectoryEntry, Arc<dyn AgentEndpoint>) {
+    (
+        DirectoryEntry {
+            definition: definition(id, 1),
+            reviewed: true,
+            enabled: true,
+            admitted_principals: vec!["person-a".into()],
+            purposes: vec!["everyday-assistance".into()],
+        },
+        Arc::new(Endpoint {
+            result: Ok("published result"),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }),
+    )
+}
+
+#[test]
+fn owner_publication_replaces_a_complete_set_without_losing_other_owners() {
+    let directory = Directory::default();
+    let first = publication_entry("example.test.first");
+    let second = publication_entry("example.test.second");
+    let unrelated = publication_entry("example.test.unrelated");
+    let first_revision = directory.publish("bundle-a", vec![first]).unwrap();
+    directory.publish("bundle-b", vec![unrelated]).unwrap();
+    let before_conflict = directory
+        .list_cards(DirectoryQuery {
+            principal: "person-a",
+            purpose: "everyday-assistance",
+        })
+        .unwrap();
+    assert_eq!(
+        directory.publish(
+            "bundle-a",
+            vec![publication_entry("example.test.unrelated")]
+        ),
+        Err(AgentFailure::Conflict),
+    );
+    assert_eq!(
+        directory
+            .list_cards(DirectoryQuery {
+                principal: "person-a",
+                purpose: "everyday-assistance",
+            })
+            .unwrap(),
+        before_conflict
+    );
+    let revision = directory.publish("bundle-a", vec![second]).unwrap();
+    assert_eq!(revision, first_revision + 2);
+    let after = directory
+        .list_cards(DirectoryQuery {
+            principal: "person-a",
+            purpose: "everyday-assistance",
+        })
+        .unwrap();
+    let ids = after
+        .cards
+        .iter()
+        .map(|definition| definition.card.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["example.test.second", "example.test.unrelated"]);
+    assert_eq!(after.revision, revision);
+}
+
+#[test]
+fn owner_publication_rejects_duplicate_candidates_and_rejoins_exact_set() {
+    let directory = Directory::default();
+    let candidate = publication_entry("example.test.stable");
+    let revision = directory
+        .publish("test-bundle", vec![candidate.clone()])
+        .unwrap();
+    assert_eq!(
+        directory.publish("test-bundle", vec![candidate.clone()]),
+        Ok(revision),
+    );
+    assert_eq!(
+        directory.publish("test-bundle", vec![candidate.clone(), candidate]),
+        Err(AgentFailure::Conflict),
+    );
+    assert_eq!(
+        directory
+            .list_cards(DirectoryQuery {
+                principal: "person-a",
+                purpose: "everyday-assistance",
+            })
+            .unwrap()
+            .revision,
+        revision,
+    );
+}
+
 fn scope(run_id: RunId, task_id: Option<TaskId>) -> ExecutionScope {
     let budget = BudgetLedger::new(BudgetConfig::new(50_000, 100_000), Default::default());
     let root = ExecutionScope::root(
@@ -306,6 +412,75 @@ fn delegation(run_id: RunId, task_id: TaskId, agent_id: &str) -> DelegationReque
         context_refs: vec![],
         execution_context: delegation_context(),
     }
+}
+
+#[tokio::test]
+async fn admitted_task_keeps_endpoint_across_publication_refresh() {
+    let directory = Directory::default();
+    let old_calls = Arc::new(AtomicUsize::new(0));
+    let new_calls = Arc::new(AtomicUsize::new(0));
+    let (entry, _) = publication_entry("example.test.pinned");
+    directory
+        .publish(
+            "test-bundle",
+            vec![(
+                entry,
+                Arc::new(Endpoint {
+                    result: Ok("old endpoint"),
+                    calls: Arc::clone(&old_calls),
+                }),
+            )],
+        )
+        .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let refresh_directory = directory.clone();
+    let refresh_calls = Arc::clone(&new_calls);
+    *repository.1.lock().unwrap() = Some(Box::new(move || {
+        let (entry, _) = publication_entry("example.test.pinned");
+        refresh_directory
+            .publish(
+                "test-bundle",
+                vec![(
+                    entry,
+                    Arc::new(Endpoint {
+                        result: Ok("new endpoint"),
+                        calls: Arc::clone(&refresh_calls),
+                    }),
+                )],
+            )
+            .unwrap();
+    }));
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        16 * 1024,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let first = coordinator
+        .delegate(
+            delegation(run_id, task_id, "example.test.pinned"),
+            &scope(run_id, Some(task_id)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.snapshot.result.as_deref(), Some("old endpoint"));
+    assert_eq!(old_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(new_calls.load(Ordering::SeqCst), 0);
+    *repository.1.lock().unwrap() = None;
+    let new_task_id = TaskId::new();
+    let second = coordinator
+        .delegate(
+            delegation(run_id, new_task_id, "example.test.pinned"),
+            &scope(run_id, Some(new_task_id)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.snapshot.result.as_deref(), Some("new endpoint"));
+    assert_eq!(new_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

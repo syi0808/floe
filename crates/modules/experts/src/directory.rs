@@ -11,7 +11,7 @@ pub struct DirectoryQuery<'a> {
     pub purpose: &'a str,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryEntry {
     pub definition: AgentDefinition,
     pub reviewed: bool,
@@ -50,6 +50,7 @@ impl DirectoryEntry {
 struct RegisteredEndpoint {
     entry: DirectoryEntry,
     endpoint: Arc<dyn AgentEndpoint>,
+    owner: Option<String>,
 }
 
 #[derive(Default)]
@@ -82,10 +83,79 @@ impl Directory {
             .revision
             .checked_add(1)
             .ok_or(AgentFailure::Conflict)?;
+        state.endpoints.insert(
+            agent_id,
+            RegisteredEndpoint {
+                entry,
+                endpoint,
+                owner: None,
+            },
+        );
+        Ok(state.revision)
+    }
+
+    pub fn publish(
+        &self,
+        owner: &str,
+        entries: Vec<(DirectoryEntry, Arc<dyn AgentEndpoint>)>,
+    ) -> Result<u64, AgentFailure> {
+        if owner.trim().is_empty() || owner.len() > 128 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut candidates = BTreeMap::new();
+        for (entry, endpoint) in entries {
+            entry.validate()?;
+            let agent_id = entry.definition.card.id.clone();
+            if candidates.insert(agent_id, (entry, endpoint)).is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        for agent_id in candidates.keys() {
+            if state
+                .endpoints
+                .get(agent_id)
+                .is_some_and(|registered| registered.owner.as_deref() != Some(owner))
+            {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        let previous = state
+            .endpoints
+            .iter()
+            .filter(|(_, registered)| registered.owner.as_deref() == Some(owner))
+            .collect::<Vec<_>>();
+        let unchanged = previous.len() == candidates.len()
+            && previous.iter().all(|(agent_id, registered)| {
+                candidates.get(*agent_id).is_some_and(|(entry, endpoint)| {
+                    registered.entry == *entry && Arc::ptr_eq(&registered.endpoint, endpoint)
+                })
+            });
+        if unchanged {
+            return Ok(state.revision);
+        }
+        let next_revision = state
+            .revision
+            .checked_add(1)
+            .ok_or(AgentFailure::Conflict)?;
         state
             .endpoints
-            .insert(agent_id, RegisteredEndpoint { entry, endpoint });
-        Ok(state.revision)
+            .retain(|_, registered| registered.owner.as_deref() != Some(owner));
+        for (agent_id, (entry, endpoint)) in candidates {
+            state.endpoints.insert(
+                agent_id,
+                RegisteredEndpoint {
+                    entry,
+                    endpoint,
+                    owner: Some(owner.to_owned()),
+                },
+            );
+        }
+        state.revision = next_revision;
+        Ok(next_revision)
     }
 
     pub fn set_enabled(
