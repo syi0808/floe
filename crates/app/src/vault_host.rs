@@ -31,7 +31,6 @@ use floe_conversation::AgentOutcome;
 use floe_conversation::{AgentEvent, AgentSession, SessionStore as _};
 use floe_execution::Cancellation;
 use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
-use floe_experts_builtin::BuiltinExpertKind;
 use floe_kernel::PersonId;
 use floe_provider_adapters::control::authorization::RemoteAuthorityEndpoint;
 #[cfg(not(target_os = "android"))]
@@ -273,30 +272,37 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
 
     async fn sync_expert_directory(&self) -> Result<(), AgentFailure> {
         let mut entries = Vec::new();
+        let manifests = floe_experts_builtin::manifests();
         for (card, admission) in self.vault.enabled_expert_admissions().await? {
-            if !BuiltinExpertKind::ALL
+            let Some(manifest) = manifests
                 .iter()
-                .any(|kind| card.id == kind.package_id())
-            {
+                .find(|manifest| manifest.package == admission.package)
+            else {
                 continue;
+            };
+            manifest.validate()?;
+            if card != manifest.definition.card {
+                return Err(AgentFailure::Conflict);
             }
             entries.push((
                 DirectoryEntry {
-                    definition: conversation_turn::engine_ports::contract_definition(&card),
+                    definition: manifest.definition.clone(),
                     admission: admission.clone(),
                     reviewed: true,
                     enabled: true,
                     admitted_principals: vec![self.vault.person_id().to_string()],
                     purposes: vec!["everyday-assistance".into()],
                 },
-                Arc::new(conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
-                    Arc::clone(&self.core),
-                    Arc::clone(&self.vault),
-                    Arc::clone(&self.local_context),
-                    self.connections.clone(),
-                    admission.clone(),
-                    card.clone(),
-                )) as Arc<dyn floe_agent_contract::AgentEndpoint>,
+                Arc::new(
+                    conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
+                        Arc::clone(&self.core),
+                        Arc::clone(&self.vault),
+                        Arc::clone(&self.local_context),
+                        self.connections.clone(),
+                        admission.clone(),
+                        card.clone(),
+                    ),
+                ) as Arc<dyn floe_agent_contract::AgentEndpoint>,
             ));
         }
         self.directory.publish("product.experts", entries)?;
@@ -3073,7 +3079,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
             specs: builtin_setup_specs(),
             cancellation,
         },
-        BuiltinExpertKind::ALL.len(),
+        floe_experts_builtin::manifests().len(),
         when,
     )
     .await

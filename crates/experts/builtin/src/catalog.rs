@@ -258,6 +258,21 @@ pub enum BuiltinSourceRequirement {
 }
 
 impl BuiltinContextSource {
+    pub const fn capability_id(self) -> &'static str {
+        match self {
+            Self::Calendar => "calendar.timeline",
+            Self::Mail => "mail.communication",
+            Self::Tasks => "floe.tasks",
+            Self::ConfirmedMemory => "memory.confirmed",
+            Self::Contacts => "people.identity",
+            Self::ConfirmedInteractions => "relationships.confirmed_interactions",
+            Self::Attention => "attention.coarse",
+            Self::WorkContext => "work.context",
+            Self::Wellbeing => "wellbeing.derived",
+            Self::Logistics => "life.logistics",
+        }
+    }
+
     /// What has to be answering for this source to serve a run.
     pub const fn requirement(self) -> BuiltinSourceRequirement {
         match self {

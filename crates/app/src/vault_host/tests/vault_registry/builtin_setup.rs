@@ -4,6 +4,7 @@ use floe_experts::AgentRegistry;
 use floe_experts::BuiltinExpertSetup;
 use floe_experts::RegistryConfiguration;
 use floe_experts::RegistryConfigurationTarget;
+use floe_experts_builtin::BuiltinExpertKind;
 
 #[tokio::test]
 async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_entry_point() {

@@ -8,6 +8,7 @@ mod a2a;
 mod builtin_setup;
 mod directory;
 mod dispatch;
+mod manifest;
 mod registry;
 mod settlement;
 mod task;
@@ -31,6 +32,10 @@ pub use dispatch::{
 /// What one Expert is asked to do and what it answers are contract values; what
 /// this module adds is the registry that admits an invocation and records it.
 pub use floe_agent_contract::{ExpertBudget, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef};
+pub use manifest::{
+    ContractRef, EXPERT_MANIFEST_SCHEMA_VERSION, ExpertManifest, ExpertRegistration,
+    ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES,
+};
 pub use registry::{
     AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
     BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, ExpertMetadata,

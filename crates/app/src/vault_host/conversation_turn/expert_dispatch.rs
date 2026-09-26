@@ -18,8 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use floe_agent_contract::{AgentEndpoint, BoxFuture, EndpointInvocation, ExpertReport};
 use floe_experts_builtin::{
-    BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest,
-    StatefulExpertDraft,
+    BuiltinExpertHost, BuiltinExpertOutput, BuiltinExpertRequest, StatefulExpertDraft,
 };
 
 mod stateful_settlement;
@@ -37,48 +36,15 @@ pub(super) fn registered_experts<'turn, 'host, 'msg>() -> floe_experts::ExpertDi
     BuiltinExpertOutput,
 > {
     let mut table = floe_experts::ExpertDispatchTable::default();
-    let registrations: [(
-        BuiltinExpertKind,
-        floe_experts::ExpertRun<
-            DelegatedMessageExperts<'turn, 'host, 'msg>,
-            BuiltinExpertRequest,
-            BuiltinExpertOutput,
-        >,
-    ); 8] = [
-        (BuiltinExpertKind::Schedule, |host, request| {
-            Box::pin(floe_experts_builtin::schedule::dispatch::dispatch(
-                host, request,
-            ))
-        }),
-        (BuiltinExpertKind::Commitments, |host, request| {
-            Box::pin(floe_experts_builtin::commitments::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::Communication, |host, request| {
-            Box::pin(floe_experts_builtin::communication::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::WorkContext, |host, request| {
-            Box::pin(floe_experts_builtin::work_context::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::LifeLogistics, |host, request| {
-            Box::pin(floe_experts_builtin::life_logistics::dispatch(
-                host, request,
-            ))
-        }),
-        (BuiltinExpertKind::Relationships, |host, request| {
-            Box::pin(floe_experts_builtin::relationships::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::FocusAttention, |host, request| {
-            Box::pin(floe_experts_builtin::focus_attention::dispatch(
-                host, request,
-            ))
-        }),
-        (BuiltinExpertKind::Wellbeing, |host, request| {
-            Box::pin(floe_experts_builtin::wellbeing::dispatch(host, request))
-        }),
-    ];
-    for (kind, run) in registrations {
+    for registration in
+        floe_experts_builtin::registrations::<DelegatedMessageExperts<'turn, 'host, 'msg>>()
+    {
+        registration
+            .manifest
+            .validate()
+            .expect("shipped Expert manifest is valid");
         table
-            .register(kind.package_id(), run)
+            .register(registration.manifest.package.id, registration.runner)
             .expect("each builtin Expert registers once");
     }
     table
@@ -111,10 +77,14 @@ fn reject_raw_requirement_artifacts(
 fn reject_raw_action_artifacts(
     artifacts: &[floe_agent_contract::Artifact],
 ) -> Result<(), AgentFailure> {
-    if artifacts.iter().flat_map(|artifact| &artifact.parts).any(|part| {
-        matches!(part, floe_agent_contract::ArtifactPart::Data { media_type, .. }
+    if artifacts
+        .iter()
+        .flat_map(|artifact| &artifact.parts)
+        .any(|part| {
+            matches!(part, floe_agent_contract::ArtifactPart::Data { media_type, .. }
             if media_type == floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE)
-    }) {
+        })
+    {
         Err(AgentFailure::InvalidModelOutput)
     } else {
         Ok(())
@@ -1388,9 +1358,14 @@ mod capture_tests {
             .await
             .unwrap();
         assert!(
-            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap().contains("protect_focus"),
+            output
+                .data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE)
+                .unwrap()
+                .contains("protect_focus"),
             "optional blocker must not gate the judgment: {}",
-            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap()
+            output
+                .data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE)
+                .unwrap()
         );
         assert!(
             output.artifacts.len() == 1,
@@ -1541,9 +1516,14 @@ mod capture_tests {
             output.result
         );
         assert!(
-            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap().contains("needs_user_action"),
+            output
+                .data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE)
+                .unwrap()
+                .contains("needs_user_action"),
             "blocked report carries the status: {}",
-            output.data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE).unwrap()
+            output
+                .data_part(floe_experts_builtin::focus_attention::RESULT_MEDIA_TYPE)
+                .unwrap()
         );
         assert!(
             output.artifacts.len() == 1,

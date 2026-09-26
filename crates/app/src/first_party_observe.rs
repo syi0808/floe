@@ -1,7 +1,7 @@
 use floe_access::GrantConsumer;
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::{GrantDataCategory, GrantPurpose};
-use floe_experts_builtin::{BuiltinContextSource, BuiltinExpertKind};
+use floe_experts_builtin::BuiltinContextSource;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,10 +20,15 @@ pub(crate) struct FirstPartyObservePolicy {
 }
 
 fn builtin_consumers(source: BuiltinContextSource) -> Result<Vec<GrantConsumer>, AgentFailure> {
-    let mut consumers = BuiltinExpertKind::ALL
+    let mut consumers = floe_experts_builtin::manifests()
         .into_iter()
-        .filter(|kind| kind.required_sources().contains(&source))
-        .map(|kind| GrantConsumer::builtin(kind.package_id()))
+        .filter(|manifest| {
+            manifest
+                .source_requirements
+                .iter()
+                .any(|requirement| requirement.capability == source.capability_id())
+        })
+        .map(|manifest| GrantConsumer::builtin(&manifest.package.id))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| AgentFailure::InvalidInput)?;
     consumers.sort();

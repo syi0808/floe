@@ -11,6 +11,7 @@ pub mod focus_attention;
 mod host;
 pub mod life_logistics;
 pub mod prompts;
+mod registration;
 pub mod relationships;
 pub mod schedule;
 pub mod wellbeing;
@@ -29,6 +30,7 @@ pub use host::{
 };
 #[cfg(test)]
 mod test_host;
+pub use registration::{manifests, registrations};
 pub use shared::{
     ExpertJudgment, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
 };
