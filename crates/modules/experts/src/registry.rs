@@ -218,7 +218,6 @@ pub struct AssignmentOverview {
     pub id: Uuid,
     pub installation_id: Uuid,
     pub enabled: bool,
-    pub granted_tool_count: usize,
     pub state_revision: u64,
     pub completed_invocations: u64,
 }
@@ -279,7 +278,8 @@ impl AgentRegistry {
         };
         let PackageImplementation::TimelineRead {
             data_class: installed_class,
-        } = self.package(required_tool)?.implementation else {
+        } = self.package(required_tool)?.implementation
+        else {
             return Err(AgentFailure::Conflict);
         };
         if installed_class != data_class {
@@ -317,7 +317,6 @@ impl AgentRegistry {
                     id: assignment.id,
                     installation_id: assignment.installation_id,
                     enabled: assignment.enabled,
-                    granted_tool_count: assignment.granted_tool_assignments.len(),
                     state_revision: assignment.private_state.revision,
                     completed_invocations: assignment.private_state.completed_invocations,
                 })
@@ -535,7 +534,6 @@ impl AgentRegistry {
             .clone())
     }
 
-
     /// Resolve one built-in assignment to the Expert it installs.
     ///
     /// This validates Registry/package/tool/private-state identity only.
@@ -699,7 +697,6 @@ fn valid_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
 }
 
-
 /// Validation of Expert-specific durable setup recorded in a registry snapshot.
 ///
 /// The generic registry does not know what any builtin Expert's setup means. The
@@ -746,6 +743,26 @@ impl AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assignment_overview_exposes_state_without_synthetic_grant_counts() {
+        let person_id = PersonId::new();
+        let registry = AgentRegistry::new(Uuid::new_v4());
+        let overview = registry.overview(person_id);
+        let value = serde_json::to_value(overview).unwrap();
+        assert!(value["assignments"].as_array().unwrap().is_empty());
+        let assignment = AssignmentOverview {
+            id: Uuid::new_v4(),
+            installation_id: Uuid::new_v4(),
+            enabled: true,
+            state_revision: 3,
+            completed_invocations: 3,
+        };
+        let value = serde_json::to_value(assignment).unwrap();
+        assert!(value.get("granted_tool_count").is_none());
+        assert_eq!(value["state_revision"], 3);
+        assert_eq!(value["completed_invocations"], 3);
+    }
 
     #[test]
     fn settlement_names_the_invoked_assignment_and_stages_the_current_snapshot() {

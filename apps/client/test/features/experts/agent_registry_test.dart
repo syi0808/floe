@@ -14,38 +14,30 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/agent_registry.dart';
 
 void main() {
-  test(
-    'overview validates identity cardinality counters and installation links',
-    () {
-      final view = AgentRegistryView.fromJson(registryFixture());
-      expect(view.assignments.single.completedInvocations, 2);
-      expect(() => view.assignments.clear(), throwsUnsupportedError);
-      for (final mode in [0, 1, 2, 3, 4, 5]) {
-        final fixture = registryFixture();
-        final assignment = (fixture['assignments'] as List).single as Map;
-        switch (mode) {
-          case 0:
-            fixture['schema_version'] = 2;
-          case 1:
-            fixture['instance_id'] = 'invalid';
-          case 2:
-            assignment['installation_id'] = registryInstance;
-          case 3:
-            assignment['granted_view_count'] = 5;
-          case 4:
-            assignment['state_revision'] = -1;
-          case 5:
-            (fixture['assignments'] as List).add(
-              Map<String, Object>.from(assignment),
-            );
-        }
-        expect(
-          () => AgentRegistryView.fromJson(fixture),
-          throwsFormatException,
-        );
+  test('overview validates identity, counters, and installation links', () {
+    final view = AgentRegistryView.fromJson(registryFixture());
+    expect(view.assignments.single.completedInvocations, 2);
+    expect(() => view.assignments.clear(), throwsUnsupportedError);
+    for (final mode in [0, 1, 2, 3, 4]) {
+      final fixture = registryFixture();
+      final assignment = (fixture['assignments'] as List).single as Map;
+      switch (mode) {
+        case 0:
+          fixture['schema_version'] = 2;
+        case 1:
+          fixture['instance_id'] = 'invalid';
+        case 2:
+          assignment['installation_id'] = registryInstance;
+        case 3:
+          assignment['state_revision'] = -1;
+        case 4:
+          (fixture['assignments'] as List).add(
+            Map<String, Object>.from(assignment),
+          );
       }
-    },
-  );
+      expect(() => AgentRegistryView.fromJson(fixture), throwsFormatException);
+    }
+  });
 
   test('native gateway sends only instance revision and explicit enablement target', () async {
     final transport = RegistryTransport();

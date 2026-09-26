@@ -3867,7 +3867,12 @@ mod tests {
         let assignment = before
             .assignments
             .iter()
-            .find(|assignment| assignment.granted_tool_count == 1)
+            .find(|assignment| {
+                before.installations.iter().any(|installation| {
+                    installation.id == assignment.installation_id
+                        && installation.package.kind == floe_agent_contract::PackageKind::Expert
+                })
+            })
             .unwrap();
         let action = || WorkerAction::Registry {
             change: Some(RegistryConfiguration {

@@ -71,19 +71,11 @@ final class AgentAssignment {
     : id = _identifier(json['id']),
       installationId = _identifier(json['installation_id']),
       enabled = _boolean(json['enabled']),
-      grantedToolCount = _number(json['granted_tool_count']),
-      grantedViewCount = _number(json['granted_view_count']),
       stateRevision = _number(json['state_revision']),
-      completedInvocations = _number(json['completed_invocations']) {
-    if (grantedToolCount > 1 || grantedViewCount > 4) {
-      throw const FormatException('Invalid grant counts');
-    }
-  }
+      completedInvocations = _number(json['completed_invocations']);
   final String id;
   final String installationId;
   final bool enabled;
-  final int grantedToolCount;
-  final int grantedViewCount;
   final int stateRevision;
   final int completedInvocations;
 }

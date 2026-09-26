@@ -27,8 +27,6 @@ Map<String, dynamic> registryFixture() => {
       'id': registryAssignment,
       'installation_id': registryInstallation,
       'enabled': true,
-      'granted_tool_count': 1,
-      'granted_view_count': 1,
       'state_revision': 2,
       'completed_invocations': 2,
     },
