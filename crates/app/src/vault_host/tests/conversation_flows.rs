@@ -2602,7 +2602,9 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
         direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
-        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
+        direct_endpoint_registration(
+            floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+        ),
     );
     // The direct invocation still needs the validated origin the common
     // endpoint publishes under: an admitted run with the DelegationIntent
@@ -2992,10 +2994,13 @@ fn direct_endpoint_admission(agent_id: &str) -> floe_experts::ExpertAdmissionIde
     }
 }
 
-fn direct_endpoint_manifest(agent_id: &str) -> floe_experts::ExpertManifest {
-    floe_experts_builtin::manifests()
+fn direct_endpoint_registration(
+    agent_id: &str,
+) -> Arc<super::conversation_turn::expert_dispatch::BoundExpertRegistration> {
+    super::conversation_turn::expert_dispatch::shipped_registrations()
         .into_iter()
-        .find(|manifest| manifest.package.id == agent_id)
+        .find(|registration| registration.manifest.package.id == agent_id)
+        .map(Arc::new)
         .unwrap()
 }
 
@@ -3083,7 +3088,9 @@ fn builtin_endpoint_denies_forged_principal_without_touching_state() {
         direct_endpoint_admission(
             floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
         ),
-        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_registration(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        ),
     );
     let (invocation, scope) = direct_invocation(
         "person:foreign",
@@ -3116,7 +3123,9 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
         direct_endpoint_admission(
             floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
         ),
-        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_registration(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        ),
     );
     let parent_run_id = Uuid::new_v4();
     let agent_id = floe_experts_builtin::BuiltinExpertKind::Commitments.package_id();
@@ -3184,7 +3193,9 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
         direct_endpoint_admission(
             floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
         ),
-        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_registration(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        ),
     );
     let (invocation, scope) = direct_invocation(
         &fixture.person.to_string(),

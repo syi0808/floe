@@ -233,7 +233,47 @@ struct OpenVault<Keys> {
     _recovered_conversation_runs: Vec<floe_vault::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     directory: Directory,
+    registrations: Vec<Arc<conversation_turn::expert_dispatch::BoundExpertRegistration>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
+}
+
+fn validated_expert_registrations(
+    registrations: Vec<conversation_turn::expert_dispatch::BoundExpertRegistration>,
+) -> Result<Vec<Arc<conversation_turn::expert_dispatch::BoundExpertRegistration>>, AgentFailure> {
+    validate_expert_registration_set(registrations.iter())?;
+    Ok(registrations.into_iter().map(Arc::new).collect())
+}
+
+fn validate_expert_registration_set<'a>(
+    registrations: impl IntoIterator<
+        Item = &'a conversation_turn::expert_dispatch::BoundExpertRegistration,
+    >,
+) -> Result<(), AgentFailure> {
+    let registrations: Vec<_> = registrations.into_iter().collect();
+    if registrations.is_empty() || registrations.len() > 64 {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let mut package_ids = std::collections::HashSet::new();
+    for registration in &registrations {
+        registration.manifest.validate()?;
+        if let conversation_turn::expert_dispatch::BoundExpertRunner::Shipped(runner) =
+            &registration.runner
+        {
+            if runner.manifest() != registration.manifest {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        if !package_ids.insert(registration.manifest.package.id.as_str()) {
+            return Err(AgentFailure::Conflict);
+        }
+    }
+    floe_experts::manifest_set_digest(
+        &registrations
+            .iter()
+            .map(|registration| registration.manifest.clone())
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(())
 }
 
 impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
@@ -242,7 +282,9 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
         connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
+        registrations: Vec<conversation_turn::expert_dispatch::BoundExpertRegistration>,
     ) -> Result<Self, AgentFailure> {
+        let registrations = validated_expert_registrations(registrations)?;
         let vault = Arc::new(vault);
         let conversation_activation = vault.activate_conversation_executor().await?;
         let conversation_repository =
@@ -266,13 +308,17 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
             directory,
+            registrations,
             _recovered_tasks: recovered_tasks,
         })
     }
 
-    async fn publish_expert_directory(&self) -> Result<(), AgentFailure> {
+    async fn publish_expert_directory(
+        &self,
+        registrations: &[Arc<conversation_turn::expert_dispatch::BoundExpertRegistration>],
+    ) -> Result<(), AgentFailure> {
+        validate_expert_registration_set(registrations.iter().map(Arc::as_ref))?;
         let mut entries = Vec::new();
-        let manifests = floe_experts_builtin::manifests();
         let Some(snapshot) = self.vault.expert_registry().await? else {
             self.directory.publish("product.experts", entries)?;
             return Ok(());
@@ -280,12 +326,13 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         let registry =
             floe_experts::AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
         for (card, admission) in registry.enabled_expert_admissions(self.vault.person_id())? {
-            let Some(manifest) = manifests
+            let Some(registration) = registrations
                 .iter()
-                .find(|manifest| manifest.package == admission.package)
+                .find(|registration| registration.manifest.package == admission.package)
             else {
                 continue;
             };
+            let manifest = &registration.manifest;
             manifest.validate()?;
             let installed = registry.resolve_admitted(self.vault.person_id(), &admission)?;
             if card != manifest.definition.card || installed.manifest != *manifest {
@@ -307,7 +354,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                         Arc::clone(&self.local_context),
                         self.connections.clone(),
                         admission.clone(),
-                        manifest.clone(),
+                        Arc::clone(registration),
                     ),
                 ) as Arc<dyn floe_agent_contract::AgentEndpoint>,
             ));
@@ -2062,7 +2109,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
     }
-    vault.publish_expert_directory().await?;
+    vault.publish_expert_directory(&vault.registrations).await?;
     let session = match Box::pin(conversation_turn::run(
         core,
         vault,
@@ -2154,7 +2201,7 @@ async fn execute_conversation_resume_action<Keys: VaultKeyProvider + 'static>(
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
     }
-    vault.publish_expert_directory().await?;
+    vault.publish_expert_directory(&vault.registrations).await?;
     let origin_run_id = request.origin_run_id;
     let link = floe_conversation::InteractionResumeRef {
         origin_run_id,
@@ -2266,6 +2313,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 Arc::clone(core),
                 Arc::clone(local_context),
                 connections.clone(),
+                conversation_turn::expert_dispatch::shipped_registrations(),
             )
             .await?;
             *current = Some((job.person, Arc::new(vault)));
@@ -2280,6 +2328,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 Arc::clone(core),
                 Arc::clone(local_context),
                 connections.clone(),
+                conversation_turn::expert_dispatch::shipped_registrations(),
             )
             .await?;
             *current = Some((job.person, Arc::new(vault)));
@@ -3083,7 +3132,10 @@ async fn ensure_expert_bundle<Keys: VaultKeyProvider>(
     floe_experts::ensure_expert_bundle(
         &expert_setup::VaultExpertBundle {
             vault,
-            manifests: floe_experts_builtin::manifests(),
+            manifests: floe_experts_builtin::registrations()
+                .into_iter()
+                .map(|registration| registration.manifest)
+                .collect(),
             cancellation,
         },
         when,
@@ -3129,6 +3181,7 @@ mod tests {
     mod memory_review;
     mod native_calendar_access;
     mod proposals;
+    mod registered_runner;
     mod remote_product;
     mod schedule_host;
     mod vault_registry;

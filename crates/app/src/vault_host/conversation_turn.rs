@@ -4,11 +4,11 @@ use crate::ConversationTurnRequest;
 use floe_agent_contract::{AgentFailure, DataClass};
 use floe_context::{AgentContext, InferencePolicyDecision, NativeContextView};
 use floe_conversation::{AgentBudget, AgentEvent, ConversationRepository, SessionStore};
+#[cfg(test)]
+use floe_experts::A2ATaskState;
 use floe_experts::{
     A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, AgentCard, InProcessAgent,
 };
-#[cfg(test)]
-use floe_experts::A2ATaskState;
 #[cfg(test)]
 use floe_experts_builtin::{
     BuiltinExpertKind, commitments::CommitmentsExpertResult,
@@ -1359,34 +1359,29 @@ mod tests {
         .collect()
     }
 
-    struct FixtureScheduleRunner {
-        calls: AtomicUsize,
-    }
+    static SCHEDULE_RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-    impl expert_dispatch::ExpertTaskRunner for FixtureScheduleRunner {
-        fn run<'a>(
-            &'a self,
-            request: A2ASendMessageRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>> {
-            self.calls.fetch_add(1, Ordering::AcqRel);
-            Box::pin(async move {
-                Ok(A2ATask {
-                    id: request.message.task_id.unwrap(),
-                    context_id: request.message.context_id,
-                    agent_id: request.agent_id,
-                    state: A2ATaskState::Completed,
-                    history: vec![request.message],
-                    artifacts: vec![],
-                    result: Some("Synthetic result".into()),
-                    failure: None,
-                    settlement: None,
-                })
-            })
-        }
+    fn schedule_fixture_runner<'turn, 'model, 'msg, 'call>(
+        _host: &'call expert_dispatch::DelegatedMessageExperts<'turn, 'model, 'msg>,
+        _request: &'call floe_experts_builtin::BuiltinExpertRequest,
+    ) -> floe_agent_contract::BoxFuture<
+        'call,
+        Result<floe_experts_builtin::BuiltinExpertOutput, AgentFailure>,
+    > {
+        Box::pin(async move {
+            SCHEDULE_RUNNER_CALLS.fetch_add(1, Ordering::AcqRel);
+            floe_experts_builtin::BuiltinExpertOutput::from_result(
+                "schedule-fixture",
+                "application/vnd.example.schedule+json",
+                "Synthetic result".into(),
+                &serde_json::json!({"fixture": true}),
+            )
+        })
     }
 
     #[tokio::test]
-    async fn schedule_delegation_uses_registered_task_runner() {
+    async fn schedule_delegation_uses_explicit_bound_runner() {
+        SCHEDULE_RUNNER_CALLS.store(0, Ordering::Release);
         let executor = CannedExpertExecutor::answering(vec![]);
         let scope = expert_scope();
         let policy = expert_policy();
@@ -1398,9 +1393,13 @@ mod tests {
             evidence: vec![],
         };
         let person_id = PersonId::new();
-        let runner = FixtureScheduleRunner {
-            calls: AtomicUsize::new(0),
-        };
+        let mut registration = expert_dispatch::shipped_registrations()
+            .into_iter()
+            .find(|registration| {
+                registration.manifest.package.id == BuiltinExpertKind::Schedule.package_id()
+            })
+            .unwrap();
+        registration.runner = expert_dispatch::BoundExpertRunner::Supplied(schedule_fixture_runner);
         let experts = ConversationExperts {
             executor: &executor,
             scope: &scope,
@@ -1428,10 +1427,7 @@ mod tests {
                 supported_placements: vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote],
             }],
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[(
-                floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
-                &runner,
-            )],
+            registrations: vec![Arc::new(registration)],
             runs: None,
             interactions: None,
             device_id: None,
@@ -1464,7 +1460,7 @@ mod tests {
 
         assert_eq!(task.id, task_id);
         assert_eq!(task.state, A2ATaskState::Completed);
-        assert_eq!(runner.calls.load(Ordering::Acquire), 1);
+        assert_eq!(SCHEDULE_RUNNER_CALLS.load(Ordering::Acquire), 1);
     }
 
     async fn request(mut socket: tokio::net::TcpStream) -> (String, tokio::net::TcpStream) {
@@ -1808,7 +1804,10 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -1900,7 +1899,10 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -1947,7 +1949,10 @@ mod tests {
             task_views: &[],
             cards: vec![],
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -2672,7 +2677,10 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -2704,7 +2712,9 @@ mod tests {
             .unwrap();
         assert_eq!(task.id, task_id);
         assert_eq!(task.state, A2ATaskState::Completed);
-        let data = task.data_part(floe_experts_builtin::commitments::RESULT_MEDIA_TYPE).unwrap();
+        let data = task
+            .data_part(floe_experts_builtin::commitments::RESULT_MEDIA_TYPE)
+            .unwrap();
         let result: CommitmentsExpertResult = serde_json::from_str(data).unwrap();
         assert_eq!(result.findings.len(), 1);
         // The Expert asked for remote execution through shared Inference with
@@ -2912,7 +2922,10 @@ mod tests {
 
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -2941,8 +2954,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let result: CommitmentsExpertResult =
-            serde_json::from_str(task.data_part(floe_experts_builtin::commitments::RESULT_MEDIA_TYPE).unwrap()).unwrap();
+        let result: CommitmentsExpertResult = serde_json::from_str(
+            task.data_part(floe_experts_builtin::commitments::RESULT_MEDIA_TYPE)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(result.findings.len(), 4);
         let calls = executor.calls();
         assert_eq!(calls.len(), 1);
@@ -3090,7 +3106,10 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -3122,8 +3141,12 @@ mod tests {
                 .await
                 .unwrap();
             let media_type = match task.agent_id.as_str() {
-                "floe.builtin.work-context" => floe_experts_builtin::work_context::RESULT_MEDIA_TYPE,
-                "floe.builtin.life-logistics" => floe_experts_builtin::life_logistics::RESULT_MEDIA_TYPE,
+                "floe.builtin.work-context" => {
+                    floe_experts_builtin::work_context::RESULT_MEDIA_TYPE
+                }
+                "floe.builtin.life-logistics" => {
+                    floe_experts_builtin::life_logistics::RESULT_MEDIA_TYPE
+                }
                 _ => unreachable!(),
             };
             results.push(task.data_part(media_type).unwrap().to_owned());
@@ -3372,7 +3395,10 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -3438,7 +3464,10 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             stateful_settlement: &RejectStatefulSettlement,
-            task_runners: &[],
+            registrations: expert_dispatch::shipped_registrations()
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
             runs: None,
             interactions: None,
             device_id: None,

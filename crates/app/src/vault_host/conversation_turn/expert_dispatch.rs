@@ -1,9 +1,8 @@
-//! Registering the builtin Expert endpoints and injecting the concrete readers
-//! they run against.
+//! Binding supplied Expert registrations to product endpoints and injecting
+//! the concrete readers they run against.
 //!
-//! No Expert's judgment lives here. Each agent id is answered by the Expert
-//! registered for it in `floe-experts-builtin`; this file only decides which
-//! endpoints exist and which readers back the host port they use.
+//! No Expert's judgment lives here. The selected registration carries its
+//! runner through publication; this file supplies the invocation-scoped host.
 
 use super::expert_host::{
     CalendarContextReaderApi, CapturingRecorder, ConversationContextReader,
@@ -26,28 +25,42 @@ mod stateful_settlement;
 pub(super) use stateful_settlement::RejectStatefulSettlement;
 use stateful_settlement::{StatefulExpertSettlement, VaultStatefulExpertSettlement};
 
-/// The Experts this host serves, and the judgment registered behind each id.
-///
-/// Registration is static: the composition root never picks an Expert from what
-/// a request appears to mean.
-pub(super) fn shipped_bundle_dispatch<'turn, 'host, 'msg>() -> floe_experts::ExpertDispatchTable<
-    DelegatedMessageExperts<'turn, 'host, 'msg>,
-    BuiltinExpertRequest,
-    BuiltinExpertOutput,
-> {
-    let mut table = floe_experts::ExpertDispatchTable::default();
-    for registration in
-        floe_experts_builtin::registrations::<DelegatedMessageExperts<'turn, 'host, 'msg>>()
-    {
-        registration
-            .manifest
-            .validate()
-            .expect("shipped Expert manifest is valid");
-        table
-            .register(registration.manifest.package.id, registration.runner)
-            .expect("each builtin Expert registers once");
+pub(crate) type SuppliedExpertRunner = for<'turn, 'model, 'msg, 'call> fn(
+    &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
+    &'call BuiltinExpertRequest,
+) -> BoxFuture<
+    'call,
+    Result<BuiltinExpertOutput, AgentFailure>,
+>;
+
+pub(crate) enum BoundExpertRunner {
+    Shipped(floe_experts_builtin::BuiltinExpertRunner),
+    Supplied(SuppliedExpertRunner),
+}
+
+impl BoundExpertRunner {
+    async fn run(
+        &self,
+        host: &DelegatedMessageExperts<'_, '_, '_>,
+        request: &BuiltinExpertRequest,
+    ) -> Result<BuiltinExpertOutput, AgentFailure> {
+        match self {
+            Self::Shipped(kind) => kind.run(host, request).await,
+            Self::Supplied(runner) => runner(host, request).await,
+        }
     }
-    table
+}
+
+pub(crate) type BoundExpertRegistration = floe_experts::ExpertRegistration<BoundExpertRunner>;
+
+pub(crate) fn shipped_registrations() -> Vec<BoundExpertRegistration> {
+    floe_experts_builtin::registrations()
+        .into_iter()
+        .map(|registration| BoundExpertRegistration {
+            manifest: registration.manifest,
+            runner: BoundExpertRunner::Shipped(registration.runner),
+        })
+        .collect()
 }
 
 /// Raw requirement proposals are never authority: no legitimate dispatch
@@ -91,8 +104,7 @@ fn reject_raw_action_artifacts(
     }
 }
 
-/// The endpoint the delegating Run invokes for every registered builtin Expert
-/// that answers in process.
+/// The endpoint the delegating Run invokes for one registered Expert.
 ///
 /// The invocation is self-sufficient: session, device, AgentContext, and the
 /// output bound arrive in its explicit execution context, and the
@@ -104,7 +116,7 @@ pub(crate) struct RegisteredExpertEndpoint<Keys> {
     local_context: Arc<LocalContextHost>,
     connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
     admission: floe_experts::ExpertAdmissionIdentity,
-    manifest: floe_experts::ExpertManifest,
+    registration: Arc<BoundExpertRegistration>,
 }
 
 impl<Keys> RegisteredExpertEndpoint<Keys> {
@@ -114,7 +126,7 @@ impl<Keys> RegisteredExpertEndpoint<Keys> {
         local_context: Arc<LocalContextHost>,
         connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
         admission: floe_experts::ExpertAdmissionIdentity,
-        manifest: floe_experts::ExpertManifest,
+        registration: Arc<BoundExpertRegistration>,
     ) -> Self {
         Self {
             core,
@@ -122,7 +134,7 @@ impl<Keys> RegisteredExpertEndpoint<Keys> {
             local_context,
             connections,
             admission,
-            manifest,
+            registration,
         }
     }
 }
@@ -140,16 +152,14 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 .request
                 .parent_run_id
                 .ok_or(AgentFailure::InvalidInput)?;
-            let registrations = shipped_bundle_dispatch();
-            self.manifest.validate()?;
+            self.registration.manifest.validate()?;
             if invocation.request.principal != self.vault.person_id().to_string()
                 || invocation.request.selected_agent_id != self.admission.package.id
                 || invocation.request.selected_definition_revision
                     != self.admission.definition_revision
-                || self.manifest.package != self.admission.package
-                || self.manifest.definition.definition_revision
+                || self.registration.manifest.package != self.admission.package
+                || self.registration.manifest.definition.definition_revision
                     != self.admission.definition_revision
-                || !registrations.is_registered(&invocation.request.selected_agent_id)
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
@@ -248,7 +258,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 person_id: self.vault.person_id(),
             };
             let policy = expert_policy();
-            let cards = vec![self.manifest.definition.card.clone()];
+            let cards = vec![self.registration.manifest.definition.card.clone()];
             let stateful_settlement = VaultStatefulExpertSettlement {
                 vault: self.vault.as_ref(),
                 admission: &self.admission,
@@ -287,7 +297,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 task_views: &[],
                 cards,
                 stateful_settlement: &stateful_settlement,
-                task_runners: &[],
+                registrations: vec![Arc::clone(&self.registration)],
                 runs: Some(&repository),
                 interactions: Some(&repository),
                 device_id: Some(context.device_id.as_str()),
@@ -296,7 +306,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
             let task_id = invocation.request.task_id.as_uuid();
             governed_store.record_result_independent(task_id, task_id)?;
             let mut output = experts
-                .execute_builtin(
+                .execute_registered(
                     &A2ASendMessageRequest {
                         usage: Default::default(),
                         schema_version: AGENT_VERSION,
@@ -317,7 +327,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                         deadline: scope.deadline(),
                         cancellation: scope.cancellation().clone(),
                     },
-                    &self.manifest,
+                    &self.registration,
                 )
                 .await?;
             let coverage = governed_store
@@ -340,15 +350,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
             })
         })
     }
-}
-
-/// An Expert whose work is a delegated Task of its own rather than one bounded
-/// in-process call.
-pub(super) trait ExpertTaskRunner: Send + Sync {
-    fn run<'a>(
-        &'a self,
-        request: A2ASendMessageRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>>;
 }
 
 pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
@@ -389,9 +390,7 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
     pub(super) stateful_settlement: &'model dyn StatefulExpertSettlement,
-    /// Experts that answer on the Task path, by the agent id they are registered
-    /// under.
-    pub(super) task_runners: &'model [(&'model str, &'model dyn ExpertTaskRunner)],
+    pub(super) registrations: Vec<Arc<BoundExpertRegistration>>,
     /// The validated origin bindings trusted publication requires. A blocked
     /// source without them fails closed rather than completing ref-less.
     pub(super) runs: Option<&'model dyn floe_conversation::ConversationRepository>,
@@ -411,7 +410,7 @@ pub(crate) struct ConversationExperts<'model> {
 /// the Task scope its model attempts settle against, the captured source
 /// dependencies that make its dispatch coverage exact, and the trusted source
 /// blockers this invocation observed for publication under the Task origin.
-pub(super) struct DelegatedMessageExperts<'turn, 'model, 'msg> {
+pub(crate) struct DelegatedMessageExperts<'turn, 'model, 'msg> {
     experts: &'turn ConversationExperts<'model>,
     manifest: floe_experts::ExpertManifest,
     recorder: CapturingRecorder<'msg>,
@@ -742,18 +741,12 @@ impl InProcessAgent for ConversationExperts<'_> {
         &self,
         request: A2ASendMessageRequest,
     ) -> Result<A2ATask, AgentFailure> {
-        if let Some((_, runner)) = self
-            .task_runners
+        let registration = self
+            .registrations
             .iter()
-            .find(|(agent_id, _)| *agent_id == request.agent_id)
-        {
-            return runner.run(request).await;
-        }
-        let manifest = floe_experts_builtin::manifests()
-            .into_iter()
-            .find(|manifest| manifest.package.id == request.agent_id)
+            .find(|registration| registration.manifest.package.id == request.agent_id)
             .ok_or(AgentFailure::CapabilityDenied)?;
-        let output = self.execute_builtin(&request, &manifest).await?;
+        let output = self.execute_registered(&request, registration).await?;
         floe_experts::completed_expert_task(
             request,
             output.result,
@@ -764,11 +757,12 @@ impl InProcessAgent for ConversationExperts<'_> {
 }
 
 impl ConversationExperts<'_> {
-    async fn execute_builtin(
+    async fn execute_registered(
         &self,
         request: &A2ASendMessageRequest,
-        manifest: &floe_experts::ExpertManifest,
+        registration: &BoundExpertRegistration,
     ) -> Result<BuiltinExpertOutput, AgentFailure> {
+        let manifest = &registration.manifest;
         let cards = self.agent_cards(request.person_id);
         let invocation_id = floe_experts::admit_expert_message(&request, &cards)?;
         let expert_started = std::time::Instant::now();
@@ -831,9 +825,7 @@ impl ConversationExperts<'_> {
             },
             captured: Mutex::new(Vec::new()),
         };
-        let mut output = shipped_bundle_dispatch()
-            .run(&request.agent_id, &host, &expert_request)
-            .await?;
+        let mut output = registration.runner.run(&host, &expert_request).await?;
         reject_raw_requirement_artifacts(&output.artifacts)?;
         if output.settlement.is_none() {
             reject_raw_action_artifacts(&output.artifacts)?;
@@ -923,10 +915,10 @@ mod registration_tests {
     use super::*;
 
     #[test]
-    fn dispatch_table_matches_every_builtin_kind() {
-        let mut actual: Vec<_> = shipped_bundle_dispatch()
-            .registered_ids()
-            .map(str::to_owned)
+    fn shipped_registration_set_matches_every_builtin_kind() {
+        let mut actual: Vec<_> = shipped_registrations()
+            .into_iter()
+            .map(|registration| registration.manifest.package.id)
             .collect();
         let mut expected: Vec<_> = BuiltinExpertKind::ALL
             .into_iter()
@@ -1129,7 +1121,7 @@ mod capture_tests {
             task_views: &[],
             cards: vec![],
             stateful_settlement: &settlement,
-            task_runners: &[],
+            registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -1383,7 +1375,7 @@ mod capture_tests {
             task_views: &[],
             cards: vec![],
             stateful_settlement: &settlement,
-            task_runners: &[],
+            registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -1545,7 +1537,7 @@ mod capture_tests {
             task_views: &[],
             cards: vec![],
             stateful_settlement: &settlement,
-            task_runners: &[],
+            registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: None,
             interactions: None,
             device_id: None,
@@ -1701,7 +1693,7 @@ mod capture_tests {
 
     #[tokio::test]
     async fn blocked_model_call_publishes_card_under_task_origin() {
-        use floe_experts::{A2AMessageRole, A2APart, A2ATaskState, InProcessAgent};
+        use floe_experts::{A2AMessageRole, A2APart, A2ATaskState};
         use std::os::unix::fs::DirBuilderExt;
 
         let directory = tempfile::tempdir().unwrap();
@@ -1862,37 +1854,49 @@ mod capture_tests {
                 supported_placements: vec![floe_agent_contract::ModelPlacement::DeviceLocal],
             }],
             stateful_settlement: &settlement,
-            task_runners: &[],
+            registrations: shipped_registrations().into_iter().map(Arc::new).collect(),
             runs: Some(&runs),
             interactions: Some(&runs),
             device_id: Some(device_id),
             snapshots: Some(&snapshots),
         };
-        let task = experts
-            .handle_message(floe_experts::A2ASendMessageRequest {
-                usage: floe_inference::UsageLedger::default(),
-                schema_version: floe_agent_contract::AGENT_VERSION,
-                person_id: person,
-                session_id,
-                parent_turn_id: run_id.as_uuid(),
-                agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
-                    .package_id()
-                    .into(),
-                message: floe_experts::A2AMessage {
-                    message_id: uuid::Uuid::new_v4(),
-                    context_id: uuid::Uuid::new_v4(),
-                    task_id: Some(task_id),
-                    role: A2AMessageRole::User,
-                    parts: vec![A2APart::Text {
-                        text: "focus".into(),
-                    }],
-                },
-                max_output_bytes: 16_384,
-                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-                cancellation: floe_execution::Cancellation::default(),
-            })
+        let request = floe_experts::A2ASendMessageRequest {
+            usage: floe_inference::UsageLedger::default(),
+            schema_version: floe_agent_contract::AGENT_VERSION,
+            person_id: person,
+            session_id,
+            parent_turn_id: run_id.as_uuid(),
+            agent_id: floe_experts_builtin::BuiltinExpertKind::FocusAttention
+                .package_id()
+                .into(),
+            message: floe_experts::A2AMessage {
+                message_id: uuid::Uuid::new_v4(),
+                context_id: uuid::Uuid::new_v4(),
+                task_id: Some(task_id),
+                role: A2AMessageRole::User,
+                parts: vec![A2APart::Text {
+                    text: "focus".into(),
+                }],
+            },
+            max_output_bytes: 16_384,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            cancellation: floe_execution::Cancellation::default(),
+        };
+        let registration = shipped_registrations()
+            .into_iter()
+            .find(|registration| registration.manifest.package.id == request.agent_id)
+            .unwrap();
+        let output = experts
+            .execute_registered(&request, &registration)
             .await
             .unwrap();
+        let task = floe_experts::completed_expert_task(
+            request,
+            output.result,
+            output.artifacts,
+            output.settlement,
+        )
+        .unwrap();
         assert_eq!(task.id, task_id);
         assert_eq!(task.state, A2ATaskState::Completed);
         // The optional calendar blocker and the model blockage each

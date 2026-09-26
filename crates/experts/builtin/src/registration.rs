@@ -1,51 +1,49 @@
 use floe_agent_contract::{AGENT_VERSION, AgentCard, AgentDefinition, PackageKind, PackageRef};
 use floe_experts::{
-    ContractRef, EXPERT_MANIFEST_SCHEMA_VERSION, ExpertManifest, ExpertRegistration, ExpertRun,
+    ContractRef, EXPERT_MANIFEST_SCHEMA_VERSION, ExpertManifest, ExpertRegistration,
     ExpertSourceRequirement,
 };
 
 use crate::{BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinExpertRequest};
 
-pub fn registrations<Host: BuiltinExpertHost>()
--> Vec<ExpertRegistration<ExpertRun<Host, BuiltinExpertRequest, BuiltinExpertOutput>>> {
+#[derive(Clone, Copy)]
+pub struct BuiltinExpertRunner(BuiltinExpertKind);
+
+impl BuiltinExpertRunner {
+    pub fn manifest(self) -> ExpertManifest {
+        manifest(self.0)
+    }
+
+    pub async fn run<Host: BuiltinExpertHost>(
+        self,
+        host: &Host,
+        request: &BuiltinExpertRequest,
+    ) -> Result<BuiltinExpertOutput, floe_agent_contract::AgentFailure> {
+        match self.0 {
+            BuiltinExpertKind::Schedule => crate::schedule::dispatch::dispatch(host, request).await,
+            BuiltinExpertKind::Commitments => crate::commitments::dispatch(host, request).await,
+            BuiltinExpertKind::Communication => crate::communication::dispatch(host, request).await,
+            BuiltinExpertKind::Relationships => crate::relationships::dispatch(host, request).await,
+            BuiltinExpertKind::FocusAttention => {
+                crate::focus_attention::dispatch(host, request).await
+            }
+            BuiltinExpertKind::Wellbeing => crate::wellbeing::dispatch(host, request).await,
+            BuiltinExpertKind::WorkContext => crate::work_context::dispatch(host, request).await,
+            BuiltinExpertKind::LifeLogistics => {
+                crate::life_logistics::dispatch(host, request).await
+            }
+        }
+    }
+}
+
+pub fn registrations() -> Vec<ExpertRegistration<BuiltinExpertRunner>> {
     BuiltinExpertKind::ALL
         .into_iter()
         .map(|kind| ExpertRegistration {
             manifest: manifest(kind),
-            runner: runner(kind),
+            runner: BuiltinExpertRunner(kind),
         })
         .collect()
-}
-
-fn runner<Host: BuiltinExpertHost>(
-    kind: BuiltinExpertKind,
-) -> ExpertRun<Host, BuiltinExpertRequest, BuiltinExpertOutput> {
-    match kind {
-        BuiltinExpertKind::Schedule => {
-            |host, request| Box::pin(crate::schedule::dispatch::dispatch(host, request))
-        }
-        BuiltinExpertKind::Commitments => {
-            |host, request| Box::pin(crate::commitments::dispatch(host, request))
-        }
-        BuiltinExpertKind::Communication => {
-            |host, request| Box::pin(crate::communication::dispatch(host, request))
-        }
-        BuiltinExpertKind::Relationships => {
-            |host, request| Box::pin(crate::relationships::dispatch(host, request))
-        }
-        BuiltinExpertKind::FocusAttention => {
-            |host, request| Box::pin(crate::focus_attention::dispatch(host, request))
-        }
-        BuiltinExpertKind::Wellbeing => {
-            |host, request| Box::pin(crate::wellbeing::dispatch(host, request))
-        }
-        BuiltinExpertKind::WorkContext => {
-            |host, request| Box::pin(crate::work_context::dispatch(host, request))
-        }
-        BuiltinExpertKind::LifeLogistics => {
-            |host, request| Box::pin(crate::life_logistics::dispatch(host, request))
-        }
-    }
 }
 
 pub fn manifests() -> Vec<ExpertManifest> {
@@ -70,7 +68,10 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
             domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
             skills: vec![skill.into()],
             supported_placements: if kind.supports_device_model() {
-                vec![floe_agent_contract::ModelPlacement::DeviceLocal, floe_agent_contract::ModelPlacement::Remote]
+                vec![
+                    floe_agent_contract::ModelPlacement::DeviceLocal,
+                    floe_agent_contract::ModelPlacement::Remote,
+                ]
             } else {
                 vec![floe_agent_contract::ModelPlacement::Remote]
             },

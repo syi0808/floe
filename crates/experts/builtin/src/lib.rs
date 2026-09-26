@@ -29,7 +29,7 @@ pub use host::{
 };
 #[cfg(test)]
 mod test_host;
-pub use registration::{manifests, registrations};
+pub use registration::{BuiltinExpertRunner, manifests, registrations};
 pub use shared::{
     ExpertJudgment, MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation,
 };
