@@ -385,6 +385,7 @@ impl floe_conversation::ConversationRepository for FakeRuns {
 }
 
 struct Script {
+    expert_review_current: bool,
     live: LiveInlineState,
     read_failures: VecDeque<AgentFailure>,
     mutation_results: VecDeque<Result<(), AgentFailure>>,
@@ -408,6 +409,7 @@ impl ScriptedOwners {
     fn new(live: LiveInlineState) -> Self {
         Self {
             script: Arc::new(Mutex::new(Script {
+                expert_review_current: true,
                 live,
                 read_failures: VecDeque::new(),
                 mutation_results: VecDeque::new(),
@@ -426,6 +428,14 @@ impl ScriptedOwners {
 }
 
 impl ObserveStateReader for ScriptedOwners {
+    fn expert_review_current<'a>(
+        &'a self,
+        _: &'a floe_conversation::ConversationInteraction,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        let current = self.script.lock().unwrap().expert_review_current;
+        Box::pin(async move { Ok(current) })
+    }
+
     fn read_live_inline<'a>(
         &'a self,
         _: &'a floe_conversation::InlineObserveTarget,
@@ -748,6 +758,41 @@ async fn approve_precondition_mutates_once_with_stable_operation_id() {
     };
     assert_eq!(receipt.owner_operation_id, expected_operation);
     assert!(!receipt.decision_id.is_nil());
+}
+
+#[tokio::test]
+async fn superseded_expert_selection_cannot_enable_reviewed_source() {
+    let fixture = Fixture::open().await;
+    let current = fixture
+        .seed_inline(reviewed_target(), "floe.source.calendar", "connection")
+        .await;
+    let owners = ScriptedOwners::new(live_precondition());
+    owners.script.lock().unwrap().expert_review_current = false;
+    let outcome = resolve_interaction(
+        &fixture.runs,
+        &fixture.repo,
+        &owners,
+        &owners,
+        &owners,
+        &fixture.caller,
+        fixture.resolve_command(
+            &current,
+            floe_conversation::InteractionDecisionKind::Approve,
+        ),
+        &fixture.cancellation,
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        ResolveOutcome::Superseded {
+            reason: DriftReason::ExpertAssignmentChanged,
+            replacement_id: None,
+            ..
+        }
+    ));
+    assert_eq!(owners.script.lock().unwrap().mutations, 0);
 }
 
 /// A mutation fake that flips the shared live state when the owner op
@@ -2739,6 +2784,13 @@ impl RemoteTestOwners<'_> {
 }
 
 impl ObserveStateReader for RemoteTestOwners<'_> {
+    fn expert_review_current<'a>(
+        &'a self,
+        interaction: &'a floe_conversation::ConversationInteraction,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move { self.host().expert_review_current(interaction).await })
+    }
+
     fn read_live_inline<'a>(
         &'a self,
         target: &'a floe_conversation::InlineObserveTarget,
@@ -3113,7 +3165,10 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
     };
     assert_eq!(dependencies.len(), 1);
     assert_eq!(dependencies[0].consumer().identifier(), "assistant");
-    assert_eq!(dependencies[0].operation(), floe_context_contract::GrantOperation::Read);
+    assert_eq!(
+        dependencies[0].operation(),
+        floe_context_contract::GrantOperation::Read
+    );
     assert_eq!(
         dependencies[0].resources()[0].as_str(),
         floe_context::remote_view_resource(floe_context::MAIL_VIEW, &host.connection_id)

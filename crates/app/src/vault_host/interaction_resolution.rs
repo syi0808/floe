@@ -321,6 +321,10 @@ fn reviewed_policy(
 /// Failure fails the decision closed; it never substitutes fresh values for
 /// the reviewed descriptor.
 pub(crate) trait ObserveStateReader: Send + Sync {
+    fn expert_review_current<'a>(
+        &'a self,
+        interaction: &'a floe_conversation::ConversationInteraction,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>>;
     fn read_live_inline<'a>(
         &'a self,
         target: &'a floe_conversation::InlineObserveTarget,
@@ -593,6 +597,27 @@ where
     }
     if command.target_digest != current.target_digest {
         return Err(AgentFailure::InvalidInput);
+    }
+    if command.kind == floe_conversation::InteractionDecisionKind::Approve
+        && matches!(current.state, floe_conversation::InteractionState::Pending)
+        && !reader.expert_review_current(&current).await?
+    {
+        let (superseded, _) = supersede_with_replacement(
+            runs,
+            interactions,
+            person_id,
+            &principal,
+            &current,
+            None,
+            caller.device_id(),
+            now_unix_ms,
+        )
+        .await?;
+        return Ok(ResolveOutcome::Superseded {
+            interaction: superseded,
+            reason: DriftReason::ExpertAssignmentChanged,
+            replacement_id: None,
+        });
     }
     if matches!(
         command.kind,
@@ -1164,6 +1189,24 @@ where
         .await?;
     match compare_reviewed_live(target, &live) {
         Ok(ReviewMatch::Precondition) | Ok(ReviewMatch::SatisfiedUnchanged) => {
+            if !reader.expert_review_current(current).await? {
+                let (superseded, _) = supersede_with_replacement(
+                    runs,
+                    interactions,
+                    person_id,
+                    principal,
+                    current,
+                    None,
+                    caller.device_id(),
+                    now_unix_ms,
+                )
+                .await?;
+                return Ok(ResolveOutcome::Superseded {
+                    interaction: superseded,
+                    reason: DriftReason::ExpertAssignmentChanged,
+                    replacement_id: None,
+                });
+            }
             let mutation_result = mutation
                 .enable_reviewed(target, person_id, caller.device_id(), cancellation)
                 .await;
@@ -1296,6 +1339,24 @@ where
             })
         }
         Ok(ReviewMatch::Precondition) => {
+            if !reader.expert_review_current(current).await? {
+                let (superseded, _) = supersede_with_replacement(
+                    runs,
+                    interactions,
+                    person_id,
+                    principal,
+                    current,
+                    None,
+                    caller.device_id(),
+                    now_unix_ms,
+                )
+                .await?;
+                return Ok(ResolveOutcome::Superseded {
+                    interaction: superseded,
+                    reason: DriftReason::ExpertAssignmentChanged,
+                    replacement_id: None,
+                });
+            }
             match mutation
                 .enable_reviewed(target, person_id, caller.device_id(), cancellation)
                 .await

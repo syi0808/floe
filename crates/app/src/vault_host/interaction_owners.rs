@@ -51,6 +51,58 @@ where
     CalendarSubject: floe_context::NativeCalendarSubjectSource,
     PersonalInspector: floe_access::PersonalSubjectInspector,
 {
+    fn expert_review_current<'a>(
+        &'a self,
+        interaction: &'a floe_conversation::ConversationInteraction,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            let floe_conversation::InteractionOrigin::Task { task_id, .. } = interaction.origin
+            else {
+                return Ok(true);
+            };
+            let floe_conversation::ReviewedTarget::InlineObserve(target) = &interaction.target
+            else {
+                return Ok(true);
+            };
+            let task_id = floe_agent_contract::TaskId::from_uuid(task_id)
+                .ok_or(AgentFailure::InvalidInput)?;
+            let Some(task) = self.vault.task(task_id).await? else {
+                return Ok(false);
+            };
+            if task.snapshot.principal != interaction.person_id.to_string()
+                || task.admission.package.id != target.consumer
+            {
+                return Ok(false);
+            }
+            let snapshot = self
+                .vault
+                .expert_registry()
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            let registry =
+                floe_experts::AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
+            if registry
+                .validate_current_execution_selection(
+                    interaction.person_id,
+                    &task.admission,
+                    &task.selection,
+                    true,
+                )
+                .is_err()
+            {
+                return Ok(false);
+            }
+            let Some(connector) = target.connector_id.as_deref() else {
+                return Ok(false);
+            };
+            Ok(reviewed_target_matches_selection(
+                target,
+                connector,
+                &task.selection,
+            ))
+        })
+    }
+
     fn read_live_inline<'a>(
         &'a self,
         target: &'a floe_conversation::InlineObserveTarget,
@@ -84,6 +136,22 @@ where
                 .await
         })
     }
+}
+
+fn reviewed_target_matches_selection(
+    target: &floe_conversation::InlineObserveTarget,
+    connector: &str,
+    selection: &floe_experts::ExpertExecutionSelection,
+) -> bool {
+    target.members.iter().all(|member| {
+        selection.requirements.iter().any(|requirement| {
+            requirement.selected.iter().any(|selected| {
+                selected.connector_id.as_str() == connector
+                    && selected.connection_id.as_str() == target.connection_id
+                    && selected.resource.as_str() == member.resource
+            })
+        })
+    })
 }
 
 impl<Keys, CalendarSubject, PersonalInspector> InlineOwnerMutation
