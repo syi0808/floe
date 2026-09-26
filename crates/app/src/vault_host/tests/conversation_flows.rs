@@ -1051,14 +1051,14 @@ fn production_continuation_uses_the_persisted_conversation_run_without_duplicate
 }
 
 #[test]
-fn production_builtin_expert_completes_unconfigured_task_with_durable_binding_ref() {
+fn production_builtin_expert_binding_refresh_links_fresh_selected_task() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
     let keys = Keys::default();
     let person = PersonId::new();
     // The mock answers both the root model and the delegated builtin
     // endpoint; the endpoint reads it from its injected fixture store.
-    let (mock, server) = commitments_denial_server();
+    let (mock, server) = commitments_denial_server(2);
     let worker = Worker::new_with_connection_store(
         root.clone(),
         keys.clone(),
@@ -1136,15 +1136,16 @@ fn production_builtin_expert_completes_unconfigured_task_with_durable_binding_re
             .any(|message| matches!(message, AgentMessage::Interaction { .. })),
         "completed turn must carry the Interaction message: {session:?}"
     );
-    assert_eq!(server.join().unwrap().len(), 2);
     assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
-    let reopened = runtime
-        .block_on(EncryptedAgentVault::open(&root, person, keys))
-        .unwrap();
+    let reopened = std::sync::Arc::new(
+        runtime
+            .block_on(EncryptedAgentVault::open(&root, person, keys.clone()))
+            .unwrap(),
+    );
     let task = runtime
         .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(task_id).unwrap()))
         .unwrap()
@@ -1173,7 +1174,7 @@ fn production_builtin_expert_completes_unconfigured_task_with_durable_binding_re
         reference.kind,
         floe_agent_contract::UserInteractionKind::ExpertBinding
     );
-    let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::new(reopened));
+    let repository = floe_vault::VaultConversationRepository::new(std::sync::Arc::clone(&reopened));
     let stored = runtime
         .block_on(floe_conversation::InteractionRepository::get_interaction(
             &repository,
@@ -1190,6 +1191,99 @@ fn production_builtin_expert_completes_unconfigured_task_with_durable_binding_re
             capability_call_id: None,
         }
     );
+    let floe_conversation::ReviewedTarget::ExpertBinding(target) = &stored.target else {
+        panic!("source choice must use an Expert binding target");
+    };
+    assert!(task.selection.requirements.iter().any(|requirement| {
+        requirement.capability == target.capability && requirement.selected.is_empty()
+    }));
+    let selected_b = floe_context_contract::SourceSelectionReference {
+        connector_id: floe_context_contract::ConnectorId::try_new("gmail").unwrap(),
+        connection_id: floe_context_contract::ConnectionId::try_new("mail-b").unwrap(),
+        execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new("server:source")
+            .unwrap(),
+        capability_id: target.capability.clone(),
+        resource: floe_context_contract::ResourceHandle::try_new(
+            floe_context::remote_view_resource(&target.capability, "mail-b"),
+        )
+        .unwrap(),
+        contract_version: target.contract_version,
+    };
+    runtime
+        .block_on(reopened.replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: target.assignment_id,
+                package: target.package.clone(),
+                definition_revision: target.definition_revision,
+                requirement_key: target.requirement_key.clone(),
+                expected_binding_revision: target.expected_binding_revision,
+                selected: vec![selected_b.clone()],
+            },
+        ))
+        .unwrap();
+    drop(repository);
+    drop(reopened);
+    assert_eq!(perform(&worker, person, WorkerAction::Unlock).failure, None);
+    let caller = crate::CallerContext::verified(
+        crate::LocalIdentityClaim {
+            person_id: person.0,
+            device_id: "mac-local".into(),
+        },
+        1,
+    )
+    .unwrap();
+    let refreshed = worker
+        .refresh_interaction(
+            &caller,
+            crate::RefreshInteraction {
+                command_id: Uuid::new_v4(),
+                interaction_id: stored.id,
+                session_id: stored.session_id,
+                expected_revision: stored.revision,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        refreshed.outcome,
+        crate::vault_host::RefreshOutcome::Resolved { .. }
+    ));
+    let linked = refreshed
+        .linked_run
+        .expect("configured binding resumes a fresh Run");
+    assert_eq!(linked.resume_of, Some(stored.origin_run_id));
+    let child_job = floe_conversation::resume_command_id(linked.resume_of.unwrap())
+        .unwrap()
+        .as_uuid();
+    let child = wait(&worker, person, child_job);
+    assert_eq!(child.failure, None, "linked child: {child:?}");
+    worker
+        .request(person, child_job, WorkerOperation::Release)
+        .unwrap();
+    assert_eq!(server.join().unwrap().len(), 4);
+    assert_eq!(perform(&worker, person, WorkerAction::Lock).failure, None);
+    let reopened = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let child_session = child.session.expect("linked session");
+    let fresh_task_id = child_session
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Delegation { task, .. } if task.id != task_id => Some(task.id),
+            _ => None,
+        })
+        .next()
+        .expect("linked Run delegated a fresh Task");
+    let fresh_task = runtime
+        .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(fresh_task_id).unwrap()))
+        .unwrap()
+        .unwrap();
+    assert!(fresh_task.selection.requirements.iter().any(|requirement| {
+        requirement.capability == target.capability
+            && requirement.selected == vec![selected_b.clone()]
+    }));
+    assert_ne!(fresh_task.snapshot.task_id.as_uuid(), task_id);
 }
 
 fn install_builtin_mail_setup(
@@ -1288,7 +1382,7 @@ fn production_builtin_setup_installs_through_vault_without_sources() {
     assert_eq!(cards.len(), 8);
 }
 
-fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
+fn commitments_denial_server(rounds: usize) -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1308,9 +1402,7 @@ fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<Strin
         ];
         let mut requests = vec![];
         let mut model_index = 0;
-        // Two scripted non-discovery requests; canonical purposes discovery
-        // is served but never counted.
-        while requests.len() < 2 {
+        while requests.len() < rounds * 2 {
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
                 match listener.accept() {
@@ -1392,7 +1484,7 @@ fn commitments_denial_server() -> (MockServer, std::thread::JoinHandle<Vec<Strin
                 .to_string()
             } else {
                 assert!(request.starts_with("POST /v1/agent "));
-                let step = &steps[model_index];
+                let step = &steps[model_index % steps.len()];
                 model_index += 1;
                 let output = serde_json::json!({"output": [step], "used_tokens": 10});
                 serde_json::json!({
