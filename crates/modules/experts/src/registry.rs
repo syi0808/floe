@@ -1,153 +1,44 @@
-use floe_agent_contract::PersonId;
+use std::collections::HashSet;
+
+use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef, PersonId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use floe_agent_contract::AGENT_VERSION;
-use floe_agent_contract::{AgentFailure, DataClass, PackageKind, PackageRef};
+use crate::{ExpertAdmissionIdentity, ExpertManifest, manifest_set_digest};
 
-mod expert_setup;
+pub const EXPERT_REGISTRY_SCHEMA_VERSION: u32 = 2;
 
-pub use expert_setup::{
-    BuiltinExpertSetup, BuiltinExpertSetupResult, ExpertPackaging, ExpertSetupSpec,
-    eligible_cards_for_availability,
-};
-
-/// The identity of a builtin agent in the common delegation path.
-///
-/// The generic registry never interprets it; the crate that owns the builtin
-/// Experts maps it to its own kind.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(transparent)]
-pub struct AgentId(String);
-
-impl AgentId {
-    pub fn try_new(value: impl Into<String>) -> Option<Self> {
-        let value = value.into();
-        (!value.trim().is_empty()
-            && value.len() <= 128
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-        .then_some(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-// Durable setup records the registry stores for an agent. The registry keeps
-// package topology only; source permission lives in Access.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct BuiltinExpertSetupReceipt {
-    pub setup_id: Uuid,
+pub struct ExpertInstallOperation {
+    pub instance_id: Uuid,
+    pub expected_revision: u64,
+    pub operation_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstalledExpert {
+    pub package: PackageRef,
+    pub installation_id: Uuid,
+    pub assignment_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertInstallReceipt {
+    pub operation_id: Uuid,
     pub person_id: PersonId,
     pub expected_revision: u64,
-    pub assignments: Vec<BuiltinExpertAssignmentReceipt>,
+    pub manifest_digest: String,
+    pub installed: Vec<InstalledExpert>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct BuiltinExpertAssignmentReceipt {
-    pub expert: AgentId,
-    pub tool_installation_id: Uuid,
-    pub expert_installation_id: Uuid,
-    pub tool_assignment_id: Uuid,
-    pub expert_assignment_id: Uuid,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PackageImplementation {
-    TimelineRead { data_class: DataClass },
-    Builtin { expert: AgentId },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentPackage {
-    pub schema_version: u32,
-    pub reference: PackageRef,
-    pub publisher: String,
-    pub implementation: PackageImplementation,
-    pub expert_metadata: Option<ExpertMetadata>,
-    pub required_tools: Vec<PackageRef>,
-    pub state_schema_version: u32,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExpertMetadata {
-    pub name: String,
-    pub description: String,
-    pub domain_tags: Vec<String>,
-    pub skills: Vec<String>,
-    /// Where this Expert's judgment can run, as its owning crate declared it.
-    #[serde(default = "every_placement")]
-    pub supported_placements: Vec<floe_agent_contract::ModelPlacement>,
-}
-
-fn every_placement() -> Vec<floe_agent_contract::ModelPlacement> {
-    vec![
-        floe_agent_contract::ModelPlacement::DeviceLocal,
-        floe_agent_contract::ModelPlacement::Remote,
-    ]
-}
-
-impl AgentPackage {
-    fn validate(&self) -> Result<(), AgentFailure> {
-        if self.schema_version != AGENT_VERSION || self.state_schema_version != 1 {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        if !valid_name(&self.reference.id)
-            || !valid_name(&self.reference.version)
-            || !valid_name(&self.publisher)
-            || (self.reference.kind == PackageKind::Tool && self.expert_metadata.is_some())
-            || (self.reference.kind == PackageKind::Expert && self.expert_metadata.is_none())
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        if let Some(metadata) = &self.expert_metadata {
-            crate::AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
-                id: self.reference.id.clone(),
-                version: self.reference.version.clone(),
-                name: metadata.name.clone(),
-                description: metadata.description.clone(),
-                domain_tags: metadata.domain_tags.clone(),
-                skills: metadata.skills.clone(),
-                supported_placements: metadata.supported_placements.clone(),
-            }
-            .validate()?;
-        }
-        match &self.implementation {
-            PackageImplementation::TimelineRead { data_class }
-                if self.reference.kind == PackageKind::Tool
-                    && self.required_tools.is_empty()
-                    && !matches!(data_class, DataClass::Credential | DataClass::DeviceOnlyRaw) => {}
-            PackageImplementation::Builtin { .. } if self.reference.kind == PackageKind::Expert => {
-                self.validate_requirements()?;
-            }
-            _ => return Err(AgentFailure::CapabilityDenied),
-        }
-        Ok(())
-    }
-
-    fn validate_requirements(&self) -> Result<(), AgentFailure> {
-        if self.required_tools.len() != 1
-            || self.required_tools.iter().any(|tool| {
-                tool.kind != PackageKind::Tool
-                    || !valid_name(&tool.id)
-                    || !valid_name(&tool.version)
-            })
-        {
-            Err(AgentFailure::InvalidInput)
-        } else {
-            Ok(())
-        }
-    }
+pub struct ExpertInstallResult {
+    pub receipt: ExpertInstallReceipt,
+    pub registry: RegistryOverview,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -165,7 +56,6 @@ pub struct PackageAssignment {
     pub person_id: PersonId,
     pub installation_id: Uuid,
     pub enabled: bool,
-    pub granted_tool_assignments: Vec<Uuid>,
     pub private_state: ExpertPrivateState,
 }
 
@@ -195,10 +85,10 @@ pub struct RegistrySnapshot {
     pub schema_version: u32,
     pub instance_id: Uuid,
     pub revision: u64,
-    pub packages: Vec<AgentPackage>,
+    pub manifests: Vec<ExpertManifest>,
     pub installations: Vec<PackageInstallation>,
     pub assignments: Vec<PackageAssignment>,
-    pub builtin_setups: Vec<BuiltinExpertSetupReceipt>,
+    pub install_receipts: Vec<ExpertInstallReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -241,101 +131,114 @@ pub struct AgentRegistry {
     snapshot: RegistrySnapshot,
 }
 
-/// One Expert resolved against the registry: the package installed for it, the
-/// assignment that grants it, and the data class it may read at.
 #[derive(Clone)]
 pub struct ResolvedExpert {
     pub registry_revision: u64,
-    pub package: AgentPackage,
+    pub manifest: ExpertManifest,
     pub assignment: PackageAssignment,
     pub data_class: DataClass,
 }
 
 impl AgentRegistry {
-    pub fn validate_settled_invocation(
-        &self,
-        instance_id: Uuid,
-        person_id: PersonId,
-        assignment_id: Uuid,
-        package: &PackageRef,
-        state_revision: u64,
-        data_class: DataClass,
-    ) -> Result<(), AgentFailure> {
-        if instance_id != self.instance_id() || state_revision == 0 {
-            return Err(AgentFailure::NotFound);
-        }
-        let assignment = self.assignment(person_id, assignment_id)?;
-        if state_revision > assignment.private_state.revision {
-            return Err(AgentFailure::Conflict);
-        }
-        let installation = self.installation(assignment.installation_id)?;
-        let installed = self.package(&installation.package)?;
-        if &installed.reference != package || package.kind != PackageKind::Expert {
-            return Err(AgentFailure::Conflict);
-        }
-        let [required_tool] = installed.required_tools.as_slice() else {
-            return Err(AgentFailure::Conflict);
-        };
-        let PackageImplementation::TimelineRead {
-            data_class: installed_class,
-        } = self.package(required_tool)?.implementation
-        else {
-            return Err(AgentFailure::Conflict);
-        };
-        if installed_class != data_class {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(())
-    }
-
-    pub fn validate_active_assignment(
-        &self,
-        person_id: PersonId,
-        assignment_id: Uuid,
-    ) -> Result<(), AgentFailure> {
-        let assignment = self.assignment(person_id, assignment_id)?;
-        let installation = self.installation(assignment.installation_id)?;
-        if !assignment.enabled || !installation.enabled {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        self.validate_tool_linkage(assignment)
-    }
-
-    pub fn overview(&self, person_id: PersonId) -> RegistryOverview {
-        RegistryOverview {
-            schema_version: AGENT_VERSION,
-            person_id,
-            instance_id: self.instance_id(),
-            revision: self.revision(),
-            installations: self.snapshot.installations.clone(),
-            assignments: self
-                .snapshot
-                .assignments
-                .iter()
-                .filter(|assignment| assignment.person_id == person_id)
-                .map(|assignment| AssignmentOverview {
-                    id: assignment.id,
-                    installation_id: assignment.installation_id,
-                    enabled: assignment.enabled,
-                    state_revision: assignment.private_state.revision,
-                    completed_invocations: assignment.private_state.completed_invocations,
-                })
-                .collect(),
-        }
-    }
-
     pub fn new(instance_id: Uuid) -> Self {
         Self {
             snapshot: RegistrySnapshot {
-                schema_version: AGENT_VERSION,
+                schema_version: EXPERT_REGISTRY_SCHEMA_VERSION,
                 instance_id,
                 revision: 0,
-                packages: vec![],
+                manifests: vec![],
                 installations: vec![],
                 assignments: vec![],
-                builtin_setups: vec![],
+                install_receipts: vec![],
             },
         }
+    }
+
+    pub fn restore(snapshot: RegistrySnapshot, instance_id: Uuid) -> Result<Self, AgentFailure> {
+        if snapshot.schema_version != EXPERT_REGISTRY_SCHEMA_VERSION {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        if snapshot.instance_id != instance_id || instance_id.is_nil() {
+            return Err(AgentFailure::NotFound);
+        }
+        if snapshot.manifests.len() > 64
+            || snapshot.installations.len() > 128
+            || snapshot.assignments.len() > 256
+            || snapshot.install_receipts.len() > 64
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let registry = Self { snapshot };
+        let mut packages = HashSet::new();
+        for manifest in &registry.snapshot.manifests {
+            manifest.validate()?;
+            if !packages.insert((manifest.package.id.clone(), manifest.package.version.clone())) {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        let mut installations = HashSet::new();
+        for installation in &registry.snapshot.installations {
+            if installation.id.is_nil()
+                || !installations.insert(installation.id)
+                || registry.manifest(&installation.package).is_err()
+            {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        let mut assignments = HashSet::new();
+        for assignment in &registry.snapshot.assignments {
+            if assignment.id.is_nil() || !assignments.insert(assignment.id) {
+                return Err(AgentFailure::Conflict);
+            }
+            registry.installation(assignment.installation_id)?;
+            let state = &assignment.private_state;
+            if state.schema_version != 1
+                || state.revision != state.completed_invocations
+                || state.revision > registry.revision()
+                || (state.revision == 0) != state.last_invocation_id.is_none()
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+        }
+        let mut operations = HashSet::new();
+        let mut received_installations = HashSet::new();
+        let mut received_assignments = HashSet::new();
+        let mut received_packages = HashSet::new();
+        for receipt in &registry.snapshot.install_receipts {
+            if receipt.operation_id.is_nil()
+                || !operations.insert(receipt.operation_id)
+                || receipt.expected_revision >= registry.revision()
+                || receipt.installed.is_empty()
+                || receipt.installed.len() > 64
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut manifests = Vec::with_capacity(receipt.installed.len());
+            let mut receipt_packages = HashSet::new();
+            for installed in &receipt.installed {
+                if !receipt_packages.insert((installed.package.id.clone(), installed.package.version.clone()))
+                    || !received_installations.insert(installed.installation_id)
+                    || !received_assignments.insert(installed.assignment_id)
+                    || registry.installation(installed.installation_id)?.package != installed.package
+                    || registry.assignment(receipt.person_id, installed.assignment_id)?.installation_id
+                        != installed.installation_id
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                received_packages.insert((installed.package.id.clone(), installed.package.version.clone()));
+                manifests.push(registry.manifest(&installed.package)?.clone());
+            }
+            if manifest_set_digest(&manifests)? != receipt.manifest_digest {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        if received_installations.len() != registry.snapshot.installations.len()
+            || received_assignments.len() != registry.snapshot.assignments.len()
+            || received_packages.len() != registry.snapshot.manifests.len()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(registry)
     }
 
     pub fn revision(&self) -> u64 {
@@ -350,503 +253,208 @@ impl AgentRegistry {
         self.snapshot.clone()
     }
 
-    /// Restore a registry without validating any Expert-specific setup.
-    pub fn restore(snapshot: RegistrySnapshot, instance_id: Uuid) -> Result<Self, AgentFailure> {
-        Self::restore_with_setups(snapshot, instance_id, &NoSetupValidator)
+    pub fn overview(&self, person_id: PersonId) -> RegistryOverview {
+        let installation_ids: HashSet<_> = self.snapshot.assignments.iter()
+            .filter(|assignment| assignment.person_id == person_id)
+            .map(|assignment| assignment.installation_id)
+            .collect();
+        RegistryOverview {
+            schema_version: EXPERT_REGISTRY_SCHEMA_VERSION,
+            person_id,
+            instance_id: self.instance_id(),
+            revision: self.revision(),
+            installations: self.snapshot.installations.iter()
+                .filter(|installation| installation_ids.contains(&installation.id))
+                .cloned()
+                .collect(),
+            assignments: self.snapshot.assignments.iter()
+                .filter(|assignment| assignment.person_id == person_id)
+                .map(|assignment| AssignmentOverview {
+                    id: assignment.id,
+                    installation_id: assignment.installation_id,
+                    enabled: assignment.enabled,
+                    state_revision: assignment.private_state.revision,
+                    completed_invocations: assignment.private_state.completed_invocations,
+                })
+                .collect(),
+        }
     }
 
-    /// Restore a registry, letting the supplied owner validate its own setup.
-    pub fn restore_with_setups(
-        snapshot: RegistrySnapshot,
-        instance_id: Uuid,
-        setups: &impl SetupValidator,
-    ) -> Result<Self, AgentFailure> {
-        if snapshot.schema_version != AGENT_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        if snapshot.instance_id != instance_id {
+    pub fn install_bundle(
+        &mut self,
+        person_id: PersonId,
+        operation: &ExpertInstallOperation,
+        manifests: &[ExpertManifest],
+    ) -> Result<ExpertInstallReceipt, AgentFailure> {
+        if operation.instance_id != self.instance_id() {
             return Err(AgentFailure::NotFound);
         }
-        if snapshot.packages.len() > 64
-            || snapshot.installations.len() > 128
-            || snapshot.assignments.len() > 256
-            || snapshot.builtin_setups.len() > 64
-        {
-            return Err(AgentFailure::BudgetExceeded);
+        if operation.operation_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
         }
-        let registry = Self { snapshot };
-        for (index, package) in registry.snapshot.packages.iter().enumerate() {
-            package.validate()?;
-            if registry.snapshot.packages[..index]
-                .iter()
-                .any(|other| other.reference == package.reference)
-            {
-                return Err(AgentFailure::Conflict);
-            }
+        let digest = manifest_set_digest(manifests)?;
+        if let Some(receipt) = self.snapshot.install_receipts.iter().find(|receipt| receipt.operation_id == operation.operation_id) {
+            return if receipt.person_id == person_id
+                && receipt.expected_revision == operation.expected_revision
+                && receipt.manifest_digest == digest
+            { Ok(receipt.clone()) } else { Err(AgentFailure::Conflict) };
         }
-        for (index, installation) in registry.snapshot.installations.iter().enumerate() {
-            registry.package(&installation.package)?;
-            if registry.snapshot.installations[..index]
-                .iter()
-                .any(|other| other.id == installation.id)
-            {
-                return Err(AgentFailure::Conflict);
-            }
+        if let Some(receipt) = self.snapshot.install_receipts.iter().find(|receipt| receipt.person_id == person_id) {
+            return if receipt.manifest_digest == digest { Ok(receipt.clone()) } else { Err(AgentFailure::Conflict) };
         }
-        for (index, assignment) in registry.snapshot.assignments.iter().enumerate() {
-            if registry.snapshot.assignments[..index]
-                .iter()
-                .any(|other| other.id == assignment.id)
-            {
-                return Err(AgentFailure::Conflict);
+        self.check_revision(operation.expected_revision)?;
+        let mut next = self.snapshot();
+        next.revision = next.revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
+        let mut installed = Vec::with_capacity(manifests.len());
+        for manifest in manifests {
+            if let Some(existing) = next.manifests.iter().find(|existing| existing.package == manifest.package) {
+                if existing != manifest { return Err(AgentFailure::Conflict); }
+            } else {
+                next.manifests.push(manifest.clone());
             }
-            registry.validate_grants(assignment)?;
-            let state = &assignment.private_state;
-            if state.schema_version != 1
-                || state.revision != state.completed_invocations
-                || state.revision > registry.revision()
-                || (state.revision == 0) != state.last_invocation_id.is_none()
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
+            let installation_id = Uuid::new_v4();
+            let assignment_id = Uuid::new_v4();
+            next.installations.push(PackageInstallation { id: installation_id, package: manifest.package.clone(), enabled: true });
+            next.assignments.push(PackageAssignment { id: assignment_id, person_id, installation_id, enabled: true, private_state: ExpertPrivateState::default() });
+            installed.push(InstalledExpert { package: manifest.package.clone(), installation_id, assignment_id });
         }
-        // The registry keeps these records, so it validates them itself; the
-        // port is for setup an owner outside this crate adds on top.
-        registry.validate_builtin_setups()?;
-        setups.validate_setups(&registry)?;
-        Ok(registry)
+        let receipt = ExpertInstallReceipt { operation_id: operation.operation_id, person_id, expected_revision: operation.expected_revision, manifest_digest: digest, installed };
+        next.install_receipts.push(receipt.clone());
+        *self = Self::restore(next, self.instance_id())?;
+        Ok(receipt)
     }
 
-    pub fn register(
-        &mut self,
-        expected_revision: u64,
-        package: AgentPackage,
-    ) -> Result<(), AgentFailure> {
-        self.check_revision(expected_revision)?;
-        package.validate()?;
-        if self.snapshot.packages.len() >= 64 {
-            return Err(AgentFailure::BudgetExceeded);
+    pub fn enabled_expert_admissions(&self, person_id: PersonId) -> Result<Vec<(crate::AgentCard, ExpertAdmissionIdentity)>, AgentFailure> {
+        let mut entries = Vec::new();
+        let mut seen = HashSet::new();
+        for assignment in self.snapshot.assignments.iter().filter(|assignment| assignment.person_id == person_id && assignment.enabled) {
+            let installation = self.installation(assignment.installation_id)?;
+            if !installation.enabled { continue; }
+            let manifest = self.manifest(&installation.package)?;
+            if !seen.insert(&manifest.definition.card.id) { return Err(AgentFailure::Conflict); }
+            entries.push((manifest.definition.card.clone(), ExpertAdmissionIdentity {
+                registry_instance_id: self.instance_id(),
+                assignment_id: assignment.id,
+                installation_id: installation.id,
+                package: manifest.package.clone(),
+                definition_revision: manifest.definition.definition_revision,
+            }));
         }
-        if self
-            .snapshot
-            .packages
-            .iter()
-            .any(|entry| entry.reference == package.reference)
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        self.advance()?;
-        self.snapshot.packages.push(package);
+        Ok(entries)
+    }
+
+    pub fn enabled_expert_cards(&self, person_id: PersonId) -> Result<Vec<crate::AgentCard>, AgentFailure> {
+        Ok(self.enabled_expert_admissions(person_id)?.into_iter().map(|(card, _)| card).collect())
+    }
+
+    pub fn resolve_assignment(
+        &self,
+        instance_id: Uuid,
+        person_id: PersonId,
+        assignment_id: Uuid,
+        package: &PackageRef,
+        definition_revision: u64,
+    ) -> Result<ResolvedExpert, AgentFailure> {
+        if instance_id != self.instance_id() { return Err(AgentFailure::NotFound); }
+        let assignment = self.assignment(person_id, assignment_id)?;
+        let installation = self.installation(assignment.installation_id)?;
+        if !assignment.enabled || !installation.enabled { return Err(AgentFailure::CapabilityDenied); }
+        if &installation.package != package { return Err(AgentFailure::Conflict); }
+        let manifest = self.manifest(package)?;
+        if manifest.definition.definition_revision != definition_revision { return Err(AgentFailure::Conflict); }
+        Ok(ResolvedExpert { registry_revision: self.revision(), manifest: manifest.clone(), assignment: assignment.clone(), data_class: manifest.data_class })
+    }
+
+    pub fn resolve_admitted(&self, person_id: PersonId, admission: &ExpertAdmissionIdentity) -> Result<ResolvedExpert, AgentFailure> {
+        if admission.registry_instance_id != self.instance_id() { return Err(AgentFailure::NotFound); }
+        let assignment = self.assignment(person_id, admission.assignment_id)?;
+        if assignment.installation_id != admission.installation_id { return Err(AgentFailure::Conflict); }
+        let installation = self.installation(assignment.installation_id)?;
+        if installation.package != admission.package { return Err(AgentFailure::Conflict); }
+        let manifest = self.manifest(&installation.package)?;
+        if manifest.definition.definition_revision != admission.definition_revision { return Err(AgentFailure::Conflict); }
+        Ok(ResolvedExpert { registry_revision: self.revision(), manifest: manifest.clone(), assignment: assignment.clone(), data_class: manifest.data_class })
+    }
+
+    pub fn validate_settled_invocation(&self, instance_id: Uuid, person_id: PersonId, assignment_id: Uuid, package: &PackageRef, state_revision: u64, data_class: DataClass) -> Result<(), AgentFailure> {
+        if instance_id != self.instance_id() || state_revision == 0 { return Err(AgentFailure::NotFound); }
+        let assignment = self.assignment(person_id, assignment_id)?;
+        if state_revision > assignment.private_state.revision { return Err(AgentFailure::Conflict); }
+        let installation = self.installation(assignment.installation_id)?;
+        if &installation.package != package || package.kind != PackageKind::Expert || self.manifest(package)?.data_class != data_class { return Err(AgentFailure::Conflict); }
         Ok(())
     }
 
-    pub fn install(
-        &mut self,
-        expected_revision: u64,
-        package: &PackageRef,
-    ) -> Result<Uuid, AgentFailure> {
-        self.check_revision(expected_revision)?;
-        self.package(package)?;
-        if self.snapshot.installations.len() >= 128 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let id = Uuid::new_v4();
-        self.advance()?;
-        self.snapshot.installations.push(PackageInstallation {
-            id,
-            package: package.clone(),
-            enabled: false,
-        });
-        Ok(id)
+    pub fn validate_active_assignment(&self, person_id: PersonId, assignment_id: Uuid) -> Result<(), AgentFailure> {
+        let assignment = self.assignment(person_id, assignment_id)?;
+        let installation = self.installation(assignment.installation_id)?;
+        if !assignment.enabled || !installation.enabled { return Err(AgentFailure::CapabilityDenied); }
+        self.manifest(&installation.package)?;
+        Ok(())
     }
 
-    pub fn assign(
-        &mut self,
-        expected_revision: u64,
-        person_id: PersonId,
-        installation_id: Uuid,
-        granted_tool_assignments: Vec<Uuid>,
-    ) -> Result<Uuid, AgentFailure> {
-        self.check_revision(expected_revision)?;
-        if self.snapshot.assignments.len() >= 256 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let assignment = PackageAssignment {
-            id: Uuid::new_v4(),
-            person_id,
-            installation_id,
-            enabled: false,
-            granted_tool_assignments,
-            private_state: ExpertPrivateState::default(),
-        };
-        self.validate_grants(&assignment)?;
-        self.advance()?;
-        let id = assignment.id;
-        self.snapshot.assignments.push(assignment);
-        Ok(id)
-    }
-
-    pub fn set_installation_enabled(
-        &mut self,
-        expected_revision: u64,
-        installation_id: Uuid,
-        enabled: bool,
-    ) -> Result<(), AgentFailure> {
+    pub fn set_installation_enabled(&mut self, expected_revision: u64, installation_id: Uuid, enabled: bool) -> Result<(), AgentFailure> {
         self.check_revision(expected_revision)?;
         self.installation(installation_id)?;
         self.advance()?;
-        self.snapshot
-            .installations
-            .iter_mut()
-            .find(|entry| entry.id == installation_id)
-            .ok_or(AgentFailure::NotFound)?
-            .enabled = enabled;
+        self.snapshot.installations.iter_mut().find(|entry| entry.id == installation_id).ok_or(AgentFailure::NotFound)?.enabled = enabled;
         Ok(())
     }
 
-    pub fn set_assignment_enabled(
-        &mut self,
-        expected_revision: u64,
-        person_id: PersonId,
-        assignment_id: Uuid,
-        enabled: bool,
-    ) -> Result<(), AgentFailure> {
+    pub fn set_assignment_enabled(&mut self, expected_revision: u64, person_id: PersonId, assignment_id: Uuid, enabled: bool) -> Result<(), AgentFailure> {
         self.check_revision(expected_revision)?;
         self.assignment(person_id, assignment_id)?;
         self.advance()?;
-        self.snapshot
-            .assignments
-            .iter_mut()
-            .find(|entry| entry.id == assignment_id)
-            .ok_or(AgentFailure::NotFound)?
-            .enabled = enabled;
+        self.snapshot.assignments.iter_mut().find(|entry| entry.id == assignment_id).ok_or(AgentFailure::NotFound)?.enabled = enabled;
         Ok(())
     }
 
-    pub fn private_state(
-        &self,
-        person_id: PersonId,
-        assignment_id: Uuid,
-    ) -> Result<ExpertPrivateState, AgentFailure> {
-        Ok(self
-            .assignment(person_id, assignment_id)?
-            .private_state
-            .clone())
+    pub fn private_state(&self, person_id: PersonId, assignment_id: Uuid) -> Result<ExpertPrivateState, AgentFailure> {
+        Ok(self.assignment(person_id, assignment_id)?.private_state.clone())
     }
 
-    /// Resolve one built-in assignment to the Expert it installs.
-    ///
-    /// This validates Registry/package/tool/private-state identity only.
-    /// Source evidence is validated by Access/Context, never here.
-    pub fn resolve_builtin(
-        &self,
-        instance_id: Uuid,
-        person_id: PersonId,
-        assignment_id: Uuid,
-        expected_revision: u64,
-        expected_expert: &AgentId,
-    ) -> Result<ResolvedExpert, AgentFailure> {
-        if instance_id != self.snapshot.instance_id {
-            return Err(AgentFailure::NotFound);
-        }
-        self.check_revision(expected_revision)?;
-        let assignment = self.assignment(person_id, assignment_id)?;
-        let installation = self.installation(assignment.installation_id)?;
-        if !assignment.enabled || !installation.enabled {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let package = self.package(&installation.package)?;
-        if package.reference.kind != PackageKind::Expert
-            || package.reference.id != expected_expert.as_str()
-        {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        match &package.implementation {
-            PackageImplementation::Builtin { expert } if expert == expected_expert => {}
-            _ => return Err(AgentFailure::CapabilityDenied),
-        }
-        self.validate_tool_linkage(assignment)?;
-        let tool = self.assignment(person_id, assignment.granted_tool_assignments[0])?;
-        let tool_installation = self.installation(tool.installation_id)?;
-        if !tool.enabled || !tool_installation.enabled {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let PackageImplementation::TimelineRead { data_class } =
-            self.package(&tool_installation.package)?.implementation
-        else {
-            return Err(AgentFailure::CapabilityDenied);
-        };
-        Ok(ResolvedExpert {
-            registry_revision: self.revision(),
-            package: package.clone(),
-            assignment: assignment.clone(),
-            data_class,
-        })
-    }
-
-    pub fn resolve_admitted(
-        &self,
-        person_id: PersonId,
-        admission: &crate::ExpertAdmissionIdentity,
-    ) -> Result<ResolvedExpert, AgentFailure> {
-        if admission.registry_instance_id != self.instance_id()
-            || admission.package.kind != PackageKind::Expert
-            || admission.definition_revision == 0
-        {
-            return Err(AgentFailure::NotFound);
-        }
-        let assignment = self.assignment(person_id, admission.assignment_id)?;
-        if assignment.installation_id != admission.installation_id {
-            return Err(AgentFailure::Conflict);
-        }
-        let installation = self.installation(assignment.installation_id)?;
-        if installation.package != admission.package {
-            return Err(AgentFailure::Conflict);
-        }
-        let package = self.package(&installation.package)?;
-        self.validate_tool_linkage(assignment)?;
-        let tool = self.assignment(person_id, assignment.granted_tool_assignments[0])?;
-        let tool_installation = self.installation(tool.installation_id)?;
-        let PackageImplementation::TimelineRead { data_class } =
-            self.package(&tool_installation.package)?.implementation
-        else {
-            return Err(AgentFailure::Conflict);
-        };
-        Ok(ResolvedExpert {
-            registry_revision: self.revision(),
-            package: package.clone(),
-            assignment: assignment.clone(),
-            data_class,
-        })
-    }
-
-    /// Record that this Expert completed `invocation_id` exactly once.
-    pub fn complete(
-        &mut self,
-        resolved: &ResolvedExpert,
-        invocation_id: Uuid,
-    ) -> Result<u64, AgentFailure> {
+    pub fn complete(&mut self, resolved: &ResolvedExpert, invocation_id: Uuid) -> Result<u64, AgentFailure> {
         self.check_revision(resolved.registry_revision)?;
         let previous = &resolved.assignment.private_state;
-        if previous.last_invocation_id == Some(invocation_id) {
-            return Err(AgentFailure::Conflict);
-        }
-        let revision = previous
-            .revision
-            .checked_add(1)
-            .ok_or(AgentFailure::BudgetExceeded)?;
+        if previous.last_invocation_id == Some(invocation_id) { return Err(AgentFailure::Conflict); }
+        let revision = previous.revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
         self.advance()?;
-        let assignment = self
-            .snapshot
-            .assignments
-            .iter_mut()
-            .find(|entry| entry.id == resolved.assignment.id)
-            .ok_or(AgentFailure::NotFound)?;
-        assignment.private_state = ExpertPrivateState {
-            schema_version: 1,
-            revision,
-            completed_invocations: revision,
-            last_invocation_id: Some(invocation_id),
-        };
+        self.snapshot.assignments.iter_mut().find(|entry| entry.id == resolved.assignment.id).ok_or(AgentFailure::NotFound)?.private_state = ExpertPrivateState { schema_version: 1, revision, completed_invocations: revision, last_invocation_id: Some(invocation_id) };
         Ok(revision)
     }
 
-    pub(crate) fn validate_grants(
-        &self,
-        assignment: &PackageAssignment,
-    ) -> Result<(), AgentFailure> {
-        self.validate_tool_linkage(assignment)
+    pub fn settle_registered_expert_invocation(&self, owner: impl Into<String>, person_id: PersonId, admission: ExpertAdmissionIdentity, invocation_id: Uuid, dependencies: Vec<floe_agent_contract::ContextDependency>, task_result: String) -> Result<crate::ExpertSettlement, AgentFailure> {
+        let resolved = self.resolve_admitted(person_id, &admission)?;
+        if resolved.assignment.private_state.last_invocation_id != Some(invocation_id) { return Err(AgentFailure::Conflict); }
+        let expected = resolved.assignment.private_state.revision.checked_sub(1).ok_or(AgentFailure::Conflict)?;
+        Ok(crate::ExpertSettlement::new(owner, admission, expected, resolved.assignment.private_state, invocation_id, dependencies, task_result))
     }
 
-    pub(crate) fn validate_tool_linkage(
-        &self,
-        assignment: &PackageAssignment,
-    ) -> Result<(), AgentFailure> {
-        let installation = self.installation(assignment.installation_id)?;
-        let package = self.package(&installation.package)?;
-        match package.reference.kind {
-            PackageKind::Tool if assignment.granted_tool_assignments.is_empty() => Ok(()),
-            PackageKind::Expert if assignment.granted_tool_assignments.len() == 1 => {
-                let tool =
-                    self.assignment(assignment.person_id, assignment.granted_tool_assignments[0])?;
-                let tool_installation = self.installation(tool.installation_id)?;
-                if package.required_tools != [tool_installation.package.clone()] {
-                    return Err(AgentFailure::CapabilityDenied);
-                }
-                Ok(())
-            }
-            _ => Err(AgentFailure::CapabilityDenied),
-        }
+    fn manifest(&self, package: &PackageRef) -> Result<&ExpertManifest, AgentFailure> {
+        self.snapshot.manifests.iter().find(|manifest| &manifest.package == package).ok_or(AgentFailure::NotFound)
     }
 
-    pub(crate) fn package(&self, reference: &PackageRef) -> Result<&AgentPackage, AgentFailure> {
-        self.snapshot
-            .packages
-            .iter()
-            .find(|package| &package.reference == reference)
-            .ok_or(AgentFailure::NotFound)
+    fn installation(&self, id: Uuid) -> Result<&PackageInstallation, AgentFailure> {
+        self.snapshot.installations.iter().find(|installation| installation.id == id).ok_or(AgentFailure::NotFound)
     }
 
-    pub(crate) fn installation(&self, id: Uuid) -> Result<&PackageInstallation, AgentFailure> {
-        self.snapshot
-            .installations
-            .iter()
-            .find(|installation| installation.id == id)
-            .ok_or(AgentFailure::NotFound)
+    fn assignment(&self, person_id: PersonId, id: Uuid) -> Result<&PackageAssignment, AgentFailure> {
+        self.snapshot.assignments.iter().find(|assignment| assignment.id == id && assignment.person_id == person_id).ok_or(AgentFailure::NotFound)
     }
 
-    pub(crate) fn assignment(
-        &self,
-        person_id: PersonId,
-        id: Uuid,
-    ) -> Result<&PackageAssignment, AgentFailure> {
-        self.snapshot
-            .assignments
-            .iter()
-            .find(|assignment| assignment.id == id && assignment.person_id == person_id)
-            .ok_or(AgentFailure::NotFound)
+    fn check_revision(&self, expected: u64) -> Result<(), AgentFailure> {
+        if self.revision() == expected { Ok(()) } else { Err(AgentFailure::Conflict) }
     }
 
-    pub(crate) fn check_revision(&self, expected: u64) -> Result<(), AgentFailure> {
-        if self.revision() == expected {
-            Ok(())
-        } else {
-            Err(AgentFailure::Conflict)
-        }
-    }
-
-    pub(crate) fn advance(&mut self) -> Result<(), AgentFailure> {
-        self.snapshot.revision = self
-            .snapshot
-            .revision
-            .checked_add(1)
-            .ok_or(AgentFailure::BudgetExceeded)?;
+    fn advance(&mut self) -> Result<(), AgentFailure> {
+        self.snapshot.revision = self.snapshot.revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
         Ok(())
     }
 }
 
-fn valid_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
-}
-
-/// Validation of Expert-specific durable setup recorded in a registry snapshot.
-///
-/// The generic registry does not know what any builtin Expert's setup means. The
-/// crate that owns those Experts implements this port and the caller supplies it.
-pub trait SetupValidator {
-    fn validate_setups(&self, registry: &AgentRegistry) -> Result<(), AgentFailure>;
-}
-
-/// A registry restored without any Expert-specific setup to validate.
-pub struct NoSetupValidator;
-
-impl SetupValidator for NoSetupValidator {
-    fn validate_setups(&self, _registry: &AgentRegistry) -> Result<(), AgentFailure> {
-        Ok(())
-    }
-}
-
-impl AgentRegistry {
-    /// Describe only the completed assignment state; the Vault applies it to
-    /// the current Registry under the Task settlement transaction.
-    pub fn settle_registered_expert_invocation(
-        &self,
-        owner: impl Into<String>,
-        person_id: PersonId,
-        admission: crate::ExpertAdmissionIdentity,
-        invocation_id: Uuid,
-        dependencies: Vec<floe_agent_contract::ContextDependency>,
-        task_result: String,
-    ) -> Result<crate::ExpertSettlement, AgentFailure> {
-        let assignment = self.assignment(person_id, admission.assignment_id)?;
-        if admission.registry_instance_id != self.instance_id()
-            || assignment.installation_id != admission.installation_id
-            || self.installation(assignment.installation_id)?.package != admission.package
-            || assignment.private_state.last_invocation_id != Some(invocation_id)
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        let expected_private_state_revision = assignment
-            .private_state
-            .revision
-            .checked_sub(1)
-            .ok_or(AgentFailure::Conflict)?;
-        Ok(crate::ExpertSettlement::new(
-            owner,
-            admission,
-            expected_private_state_revision,
-            assignment.private_state.clone(),
-            invocation_id,
-            dependencies,
-            task_result,
-        ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn assignment_overview_exposes_state_without_synthetic_grant_counts() {
-        let person_id = PersonId::new();
-        let registry = AgentRegistry::new(Uuid::new_v4());
-        let overview = registry.overview(person_id);
-        let value = serde_json::to_value(overview).unwrap();
-        assert!(value["assignments"].as_array().unwrap().is_empty());
-        let assignment = AssignmentOverview {
-            id: Uuid::new_v4(),
-            installation_id: Uuid::new_v4(),
-            enabled: true,
-            state_revision: 3,
-            completed_invocations: 3,
-        };
-        let value = serde_json::to_value(assignment).unwrap();
-        assert!(value.get("granted_tool_count").is_none());
-        assert_eq!(value["state_revision"], 3);
-        assert_eq!(value["completed_invocations"], 3);
-    }
-
-    #[test]
-    fn settlement_carries_only_assignment_local_state() {
-        let assignment_id = Uuid::new_v4();
-        let invocation_id = Uuid::new_v4();
-        let admission = crate::ExpertAdmissionIdentity {
-            registry_instance_id: Uuid::new_v4(),
-            assignment_id,
-            installation_id: Uuid::new_v4(),
-            package: PackageRef {
-                kind: PackageKind::Expert,
-                id: "example.test.expert".into(),
-                version: "1.0.0".into(),
-            },
-            definition_revision: 1,
-        };
-        let next_private_state = ExpertPrivateState {
-            schema_version: 1,
-            revision: 1,
-            completed_invocations: 1,
-            last_invocation_id: Some(invocation_id),
-        };
-        let settlement = crate::ExpertSettlement::new(
-            "test-owner",
-            admission.clone(),
-            0,
-            next_private_state.clone(),
-            invocation_id,
-            vec![],
-            "task result".into(),
-        );
-        assert_eq!(settlement.admission, admission);
-        assert_eq!(settlement.invocation_id, invocation_id);
-        assert_eq!(settlement.expected_private_state_revision, 0);
-        assert_eq!(settlement.next_private_state, next_private_state);
-        assert_eq!(settlement.task_result, "task result");
-        assert!(settlement.dependencies.is_empty());
-        assert!(serde_json::to_value(settlement).unwrap().get("staged_registry").is_none());
-    }
+pub fn eligible_cards_for_availability(cards: &[crate::AgentCard], availability: floe_inference::InferenceAvailability) -> Vec<crate::AgentCard> {
+    use floe_agent_contract::ModelPlacement;
+    use floe_inference::InferenceExecutionConstraint;
+    let mut seen = HashSet::new();
+    cards.iter().filter(|card| (availability.can_execute(InferenceExecutionConstraint::DeviceOnly) && card.runs_at(ModelPlacement::DeviceLocal)) || (availability.can_execute(InferenceExecutionConstraint::RemoteOnly) && card.runs_at(ModelPlacement::Remote))).filter(|card| seen.insert(card.id.clone())).cloned().collect()
 }

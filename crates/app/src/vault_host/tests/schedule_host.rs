@@ -1,8 +1,8 @@
-use floe_agent_contract::{AgentFailure, DataClass};
+use floe_agent_contract::AgentFailure;
 use floe_experts::{
-    A2AMessageRole, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard, AgentId,
-    AgentPackage, AgentRegistry, ExpertMetadata, InProcessAgent, PackageImplementation,
-    PackageKind, PackageRef, RegistrySnapshot,
+    A2AMessageRole, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
+    AgentRegistry, ExpertInstallOperation, InProcessAgent, PackageKind, PackageRef,
+    RegistrySnapshot,
 };
 use floe_kernel::PersonId;
 use std::sync::Mutex;
@@ -29,68 +29,17 @@ impl TestScheduleHost {
         instance_id: Uuid,
     ) -> Result<Self, AgentFailure> {
         let mut registry = AgentRegistry::new(instance_id);
-        let tool = PackageRef {
-            kind: PackageKind::Tool,
-            id: "floe.timeline.read".into(),
-            version: "1.0.0".into(),
-        };
-        let expert = PackageRef {
-            kind: PackageKind::Expert,
-            id: "floe.schedule".into(),
-            version: "1.0.0".into(),
-        };
-        registry.register(
-            registry.revision(),
-            AgentPackage {
-                schema_version: 1,
-                reference: tool.clone(),
-                publisher: "floe".into(),
-                implementation: PackageImplementation::TimelineRead {
-                    data_class: DataClass::Synthetic,
-                },
-                expert_metadata: None,
-                required_tools: vec![],
-                state_schema_version: 1,
-            },
-        )?;
-        registry.register(
-            registry.revision(),
-            AgentPackage {
-                schema_version: 1,
-                reference: expert.clone(),
-                publisher: "floe".into(),
-                implementation: PackageImplementation::Builtin {
-                    expert: AgentId::try_new("floe.schedule").expect("fixture ids are valid"),
-                },
-                expert_metadata: Some(ExpertMetadata {
-                    name: "Schedule Expert".into(),
-                    description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),
-                    domain_tags: vec!["schedule".into(), "calendar".into()],
-                    skills: vec!["Provide independent scheduling judgment".into()],
-                    supported_placements: floe_experts_builtin::BuiltinExpertKind::Schedule
-                        .declaration()
-                        .supported_placements,
-                }),
-                required_tools: vec![tool.clone()],
-                state_schema_version: 1,
-            },
-        )?;
-        let tool_installation = registry.install(registry.revision(), &tool)?;
-        let expert_installation = registry.install(registry.revision(), &expert)?;
-        let tool_assignment =
-            registry.assign(registry.revision(), person_id, tool_installation, vec![])?;
-        let assignment_id = registry.assign(
-            registry.revision(),
-            person_id,
-            expert_installation,
-            vec![tool_assignment],
-        )?;
-        for installation in [tool_installation, expert_installation] {
-            registry.set_installation_enabled(registry.revision(), installation, true)?;
-        }
-        for assignment in [tool_assignment, assignment_id] {
-            registry.set_assignment_enabled(registry.revision(), person_id, assignment, true)?;
-        }
+        let mut manifest = floe_experts_builtin::manifests()
+            .into_iter()
+            .find(|manifest| manifest.package.id == "floe.builtin.schedule")
+            .ok_or(AgentFailure::NotFound)?;
+        manifest.package.id = "floe.schedule".into();
+        manifest.definition.card.id = manifest.package.id.clone();
+        registry.install_bundle(person_id, &ExpertInstallOperation {
+            instance_id,
+            expected_revision: 0,
+            operation_id: Uuid::new_v4(),
+        }, &[manifest])?;
         Self::from_snapshot(person_id, registry.snapshot())
     }
 
@@ -139,7 +88,7 @@ impl InProcessAgent for TestScheduleHost {
         self.registry
             .lock()
             .ok()
-            .map(|registry| registry.enabled_expert_cards(person_id))
+            .and_then(|registry| registry.enabled_expert_cards(person_id).ok())
             .unwrap_or_default()
     }
 
@@ -159,13 +108,12 @@ impl InProcessAgent for TestScheduleHost {
             .registry
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        let expected = AgentId::try_new("floe.schedule").unwrap();
-        let resolved = registry.resolve_builtin(
+        let resolved = registry.resolve_assignment(
             registry.instance_id(),
             self.person_id,
             self.assignment_id,
-            registry.revision(),
-            &expected,
+            &PackageRef { kind: PackageKind::Expert, id: "floe.schedule".into(), version: "1.0.0".into() },
+            1,
         )?;
         registry.complete(&resolved, task_id)?;
         Ok(A2ATask {

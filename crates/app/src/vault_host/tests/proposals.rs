@@ -28,18 +28,15 @@ async fn seed(
     )
     .unwrap();
     let mut seeded = host.snapshot().unwrap();
-    for package in &mut seeded.packages {
-        if let floe_experts::PackageImplementation::TimelineRead { data_class } =
-            &mut package.implementation
-        {
-            *data_class = DataClass::Personal;
-        }
+    for manifest in &mut seeded.manifests {
+        manifest.data_class = DataClass::Personal;
     }
+    seeded.install_receipts[0].manifest_digest = floe_experts::manifest_set_digest(&seeded.manifests).unwrap();
     vault.initialize_expert_registry(&seeded).await.unwrap();
     let expert_assignment_id = seeded
         .assignments
         .iter()
-        .find(|entry| !entry.granted_tool_assignments.is_empty())
+        .find(|entry| entry.person_id == person)
         .unwrap()
         .id;
     let now = fixture_now();
@@ -74,15 +71,14 @@ async fn seed(
         .unwrap();
     let snapshot = vault.expert_registry().await.unwrap().unwrap();
     let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
-    let registry_revision = registry.revision();
-    let schedule = floe_experts::AgentId::try_new("floe.schedule").unwrap();
+    let package = seeded.manifests[0].package.clone();
     let resolved = registry
-        .resolve_builtin(
+        .resolve_assignment(
             registry.instance_id(),
             person,
             expert_assignment_id,
-            registry_revision,
-            &schedule,
+            &package,
+            1,
         )
         .unwrap();
     let evidence_id = Uuid::new_v4();
@@ -98,13 +94,13 @@ async fn seed(
             "test-device",
             &["home".into()],
             connection.source_authority,
-            &[GrantConsumer::builtin(resolved.package.reference.id.clone()).unwrap()],
+            &[GrantConsumer::builtin(resolved.manifest.package.id.clone()).unwrap()],
             &fingerprint,
             None,
         )
         .await
         .unwrap();
-    let consumer = GrantConsumer::builtin(resolved.package.reference.id.clone()).unwrap();
+    let consumer = GrantConsumer::builtin(resolved.manifest.package.id.clone()).unwrap();
     let admission = vault
         .authorize_current_native_calendar_grant(
             "eventkit-connection",
@@ -155,7 +151,7 @@ async fn seed(
         instance_id: vault.registry_instance_id(),
         person_id: person,
         assignment_id: expert_assignment_id,
-        package: resolved.package.reference.clone(),
+        package: resolved.manifest.package.clone(),
         evidence_id,
         data_class: DataClass::Personal,
         expires_at_unix_ms: (now + chrono::Duration::minutes(2)).timestamp_millis() as u64,

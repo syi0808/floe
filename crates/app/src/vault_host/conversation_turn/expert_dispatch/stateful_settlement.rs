@@ -50,8 +50,8 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
             }
             let assignment_id = self.admission.assignment_id;
             let resolved = registry.resolve_admitted(request.person_id, self.admission)?;
-            if resolved.package.reference.id != request.agent_id
-                || resolved.package.reference != self.admission.package
+            if resolved.manifest.package.id != request.agent_id
+                || resolved.manifest.package != self.admission.package
                 || resolved.assignment.installation_id != self.admission.installation_id
                 || dependencies.is_empty()
                 || dependencies
@@ -98,7 +98,7 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                     instance_id: registry.instance_id(),
                     person_id: request.person_id,
                     assignment_id,
-                    package: resolved.package.reference.clone(),
+                    package: resolved.manifest.package.clone(),
                     task_id: request.task_id,
                     invocation_id: request.invocation_id,
                     state_revision,
@@ -166,7 +166,7 @@ mod tests {
     };
     use floe_execution::Cancellation;
     use floe_experts::{
-        A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, BuiltinExpertSetup,
+        A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, ExpertInstallOperation,
         Directory, DirectoryEntry, TaskCoordinator, task_receipt_to_a2a,
     };
     use floe_experts_builtin::BuiltinExpertKind;
@@ -291,13 +291,13 @@ mod tests {
                 .unwrap(),
         );
         vault
-            .install_builtin_experts_enabled(
-                BuiltinExpertSetup {
+            .install_expert_bundle(
+                ExpertInstallOperation {
                     instance_id: vault.registry_instance_id(),
                     expected_revision: 0,
-                    setup_id: Uuid::new_v4(),
+                    operation_id: Uuid::new_v4(),
                 },
-                &crate::vault_host::builtin_setup_specs(),
+                &floe_experts_builtin::manifests(),
                 Cancellation::default(),
             )
             .await

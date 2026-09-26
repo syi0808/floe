@@ -27,7 +27,7 @@ final class AgentRegistryView {
       assignments = List.unmodifiable(
         _entries(json['assignments'], 256).map(AgentAssignment.fromJson),
       ) {
-    if (json['schema_version'] != 1 ||
+    if (json['schema_version'] != 2 ||
         installations.map((entry) => entry.id).toSet().length !=
             installations.length ||
         assignments.map((entry) => entry.id).toSet().length !=
@@ -55,7 +55,7 @@ final class AgentInstallation {
       packageId = _text((json['package'] as Map)['id']),
       version = _text((json['package'] as Map)['version']),
       kind = _text((json['package'] as Map)['kind']) {
-    if (kind != 'tool' && kind != 'expert') {
+    if (kind != 'expert') {
       throw const FormatException('Invalid package kind');
     }
   }

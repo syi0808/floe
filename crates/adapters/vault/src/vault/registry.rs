@@ -9,35 +9,35 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub async fn builtin_expert_overview(
+    pub async fn expert_install_overview(
         &self,
-    ) -> Result<Option<floe_experts::BuiltinExpertSetupResult>, AgentFailure> {
+    ) -> Result<Option<floe_experts::ExpertInstallResult>, AgentFailure> {
         let Some(snapshot) = self.expert_registry().await? else {
             return Ok(None);
         };
         let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
-        let Some(setup) = registry
+        let Some(receipt) = registry
             .snapshot()
-            .builtin_setups
+            .install_receipts
             .iter()
-            .find(|setup| setup.person_id == self.person_id)
+            .find(|receipt| receipt.person_id == self.person_id)
             .cloned()
         else {
             return Ok(None);
         };
         self.check_access()?;
-        Ok(Some(floe_experts::BuiltinExpertSetupResult {
-            setup,
+        Ok(Some(floe_experts::ExpertInstallResult {
+            receipt,
             registry: registry.overview(self.person_id),
         }))
     }
 
-    pub async fn install_builtin_experts(
+    pub async fn install_expert_bundle(
         &self,
-        request: floe_experts::BuiltinExpertSetup,
-        specs: &[floe_experts::ExpertSetupSpec],
+        operation: floe_experts::ExpertInstallOperation,
+        manifests: &[floe_experts::ExpertManifest],
         cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::BuiltinExpertSetupResult, AgentFailure> {
+    ) -> Result<floe_experts::ExpertInstallResult, AgentFailure> {
         let check = || {
             cancellation
                 .is_cancelled()
@@ -45,7 +45,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_or(Ok(()), Err)
         };
         check()?;
-        if request.instance_id != self.vault_id {
+        if operation.instance_id != self.vault_id {
             return Err(AgentFailure::NotFound);
         }
         let previous = self.expert_registry().await?;
@@ -54,7 +54,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None => AgentRegistry::new(self.vault_id),
         };
         let revision = registry.revision();
-        let setup = registry.install_builtin_experts(self.person_id, &request, specs)?;
+        let receipt = registry.install_bundle(self.person_id, &operation, manifests)?;
         if registry.revision() != revision {
             match previous {
                 Some(_) => {
@@ -69,56 +69,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         check()?;
-        Ok(floe_experts::BuiltinExpertSetupResult {
-            setup,
-            registry: registry.overview(self.person_id),
-        })
-    }
-
-    pub async fn install_builtin_experts_enabled(
-        &self,
-        request: floe_experts::BuiltinExpertSetup,
-        specs: &[floe_experts::ExpertSetupSpec],
-        cancellation: floe_execution::Cancellation,
-    ) -> Result<floe_experts::BuiltinExpertSetupResult, AgentFailure> {
-        let check = || {
-            cancellation
-                .is_cancelled()
-                .then_some(AgentFailure::Cancelled)
-                .map_or(Ok(()), Err)
-        };
-        check()?;
-        if request.instance_id != self.vault_id {
-            return Err(AgentFailure::NotFound);
-        }
-        let previous = self.expert_registry().await?;
-        let mut registry = match &previous {
-            Some(snapshot) => AgentRegistry::restore(snapshot.clone(), self.vault_id)?,
-            None => AgentRegistry::new(self.vault_id),
-        };
-        let revision = registry.revision();
-        let setup = registry.install_builtin_experts_enabled(self.person_id, &request, specs)?;
-        if registry.revision() != revision {
-            match previous {
-                Some(_) => {
-                    self.save_expert_registry_change_checked(
-                        revision,
-                        &registry.snapshot(),
-                        Some(setup.setup_id),
-                        &check,
-                    )
-                    .await?;
-                }
-                None => {
-                    self.initialize_expert_registry_checked(&registry.snapshot(), &check)
-                        .await?
-                }
-            }
-        }
-        self.check_access()?;
-        check()?;
-        Ok(floe_experts::BuiltinExpertSetupResult {
-            setup,
+        Ok(floe_experts::ExpertInstallResult {
+            receipt,
             registry: registry.overview(self.person_id),
         })
     }
@@ -126,7 +78,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn enabled_expert_cards(&self) -> Result<Vec<floe_experts::AgentCard>, AgentFailure> {
         let cards = match self.expert_registry().await? {
             Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?
-                .enabled_expert_cards(self.person_id),
+                .enabled_expert_cards(self.person_id)?,
             None => vec![],
         };
         self.check_access()?;
@@ -149,18 +101,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         self.check_access()?;
         Ok(entries)
-    }
-
-    pub async fn enabled_builtin_expert_cards(
-        &self,
-    ) -> Result<Vec<floe_experts::AgentCard>, AgentFailure> {
-        let cards = match self.expert_registry().await? {
-            Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?
-                .enabled_builtin_expert_cards(self.person_id),
-            None => vec![],
-        };
-        self.check_access()?;
-        Ok(cards)
     }
 
     pub async fn registry_overview(
@@ -291,12 +231,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         snapshot: &RegistrySnapshot,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
-        self.save_expert_registry_change_checked(
-            expected_revision,
-            snapshot,
-            None,
-            check,
-        )
+        self.save_expert_registry_change_checked(expected_revision, snapshot, check)
         .await?;
         Ok(())
     }
@@ -435,7 +370,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
-        mutable_builtin_setup: Option<uuid::Uuid>,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
         check()?;
@@ -456,64 +390,32 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if previous.revision != expected_revision {
                 return Err(AgentFailure::Conflict);
             }
-            let builtin_receipt_allowed =
-                |before: &floe_experts::BuiltinExpertSetupReceipt,
-                 after: &floe_experts::BuiltinExpertSetupReceipt| {
-                    before == after
-                        || (mutable_builtin_setup == Some(before.setup_id)
-                            && before.setup_id == after.setup_id
-                            && before.person_id == after.person_id
-                            && before.expected_revision == after.expected_revision
-                            && before.assignments.len() == after.assignments.len()
-                            && before.assignments.iter().zip(&after.assignments).all(
-                                |(before, after)| {
-                                    before.expert == after.expert
-                                        && before.tool_installation_id == after.tool_installation_id
-                                        && before.expert_installation_id
-                                            == after.expert_installation_id
-                                        && before.tool_assignment_id == after.tool_assignment_id
-                                        && before.expert_assignment_id == after.expert_assignment_id
-                                },
-                            ))
-                };
-            if previous.builtin_setups.iter().any(|before| {
+            if previous.install_receipts.iter().any(|before| {
                 !snapshot
-                    .builtin_setups
+                    .install_receipts
                     .iter()
-                    .any(|after| builtin_receipt_allowed(before, after))
+                    .any(|after| before == after)
             }) {
                 return Err(AgentFailure::Conflict);
             }
-            for receipt in &snapshot.builtin_setups {
+            for receipt in &snapshot.install_receipts {
                 if previous
-                    .builtin_setups
+                    .install_receipts
                     .iter()
-                    .any(|before| builtin_receipt_allowed(before, receipt))
+                    .any(|before| before == receipt)
                 {
                     continue;
                 }
                 if receipt.expected_revision != expected_revision
                     || previous
-                        .builtin_setups
+                        .install_receipts
                         .iter()
-                        .any(|entry| entry.setup_id == receipt.setup_id)
-                    || receipt.assignments.iter().any(|created| {
+                        .any(|entry| entry.operation_id == receipt.operation_id)
+                    || receipt.installed.iter().any(|created| {
                         previous.installations.iter().any(|entry| {
-                            [created.tool_installation_id, created.expert_installation_id]
-                                .contains(&entry.id)
+                            entry.id == created.installation_id
                         }) || previous.assignments.iter().any(|entry| {
-                            [created.tool_assignment_id, created.expert_assignment_id]
-                                .contains(&entry.id)
-                        }) || snapshot.installations.iter().any(|entry| {
-                            [created.tool_installation_id, created.expert_installation_id]
-                                .contains(&entry.id)
-                                && entry.enabled
-                                && mutable_builtin_setup != Some(receipt.setup_id)
-                        }) || snapshot.assignments.iter().any(|entry| {
-                            [created.tool_assignment_id, created.expert_assignment_id]
-                                .contains(&entry.id)
-                                && entry.enabled
-                                && mutable_builtin_setup != Some(receipt.setup_id)
+                            entry.id == created.assignment_id
                         })
                     })
                 {
@@ -540,9 +442,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .iter()
                 .any(|entry| !snapshot.assignments.iter().any(|next| next.id == entry.id))
                 || previous
-                    .packages
+                    .manifests
                     .iter()
-                    .any(|entry| !snapshot.packages.contains(entry))
+                    .any(|entry| !snapshot.manifests.contains(entry))
                 || previous.installations.iter().any(|entry| {
                     !snapshot
                         .installations
@@ -649,6 +551,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .assignments
             .iter()
             .any(|assignment| assignment.person_id != self.person_id)
+            || snapshot.install_receipts.iter().any(|receipt| receipt.person_id != self.person_id)
         {
             return Err(AgentFailure::NotFound);
         }

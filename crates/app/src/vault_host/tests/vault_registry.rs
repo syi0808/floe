@@ -14,7 +14,7 @@ use floe_agent_contract::{
 use floe_conversation::AgentMessage;
 use floe_execution::Cancellation;
 use floe_experts::{
-    AgentId, AgentRegistry, ExpertSettlement, ExpertTaskCompletion, RegistryConfiguration,
+    AgentRegistry, ExpertSettlement, ExpertTaskCompletion, RegistryConfiguration,
     RegistryConfigurationTarget, RegistrySnapshot,
 };
 use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider, VaultTaskRecord};
@@ -101,16 +101,16 @@ impl Fixture {
         let assignment = current
             .assignments
             .iter()
-            .find(|entry| entry.person_id == self.person && !entry.granted_tool_assignments.is_empty())
+            .find(|entry| entry.person_id == self.person)
             .unwrap();
-        let agent_id = AgentId::try_new("floe.schedule").unwrap();
+        let package = current.installations.iter().find(|entry| entry.id == assignment.installation_id).unwrap().package.clone();
         let resolved = registry
-            .resolve_builtin(
+            .resolve_assignment(
                 registry.instance_id(),
                 self.person,
                 assignment.id,
-                current.revision,
-                &agent_id,
+                &package,
+                1,
             )
             .unwrap();
         registry.complete(&resolved, invocation_id).unwrap();
@@ -120,7 +120,7 @@ impl Fixture {
             task_id,
             parent_run_id: None,
             principal: self.person.to_string(),
-            agent_id: agent_id.as_str().into(),
+            agent_id: package.id.clone(),
             definition_revision: 1,
             state: TaskState::Submitted,
             result: None,
@@ -167,7 +167,7 @@ impl Fixture {
         let result = "Synthetic schedule review completed.".to_owned();
         let completion = ExpertTaskCompletion {
             settlement: ExpertSettlement::new(
-                agent_id.as_str(),
+                &package.id,
                 admission,
                 assignment.private_state.revision,
                 staged
@@ -230,7 +230,7 @@ async fn registry_and_private_state_survive_reopen_with_settled_tasks() {
     let expert = before
         .assignments
         .iter()
-        .find(|entry| !entry.granted_tool_assignments.is_empty())
+        .find(|entry| entry.person_id == fixture.person)
         .unwrap();
     assert_eq!(expert.private_state.revision, 2);
     for entry in fs::read_dir(fixture.root.path().join(fixture.person.to_string())).unwrap() {
@@ -268,7 +268,7 @@ async fn configuration_preserves_private_state_and_rejects_stale_authority() {
     let expert = before
         .assignments
         .iter()
-        .find(|entry| !entry.granted_tool_assignments.is_empty())
+        .find(|entry| entry.person_id == fixture.person)
         .unwrap();
     let next = fixture
         .vault

@@ -11,7 +11,7 @@ const registryInstallation = '00000000-0000-4000-8000-000000000003';
 const registryAssignment = '00000000-0000-4000-8000-000000000004';
 
 Map<String, dynamic> registryFixture() => {
-  'schema_version': 1,
+  'schema_version': 2,
   'person_id': registryPerson,
   'instance_id': registryInstance,
   'revision': 10,

@@ -843,7 +843,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let session = runtime.block_on(vault.create_session()).unwrap();
     assert!(
         runtime
-            .block_on(vault.builtin_expert_overview())
+            .block_on(vault.expert_install_overview())
             .unwrap()
             .is_none()
     );
@@ -905,7 +905,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         .unwrap();
     assert!(
         runtime
-            .block_on(vault.builtin_expert_overview())
+            .block_on(vault.expert_install_overview())
             .unwrap()
             .is_none()
     );
@@ -1199,15 +1199,15 @@ fn install_builtin_mail_setup(
     let vault = runtime
         .block_on(EncryptedAgentVault::open(root, person, keys.clone()))
         .unwrap();
-    let setup = floe_experts::BuiltinExpertSetup {
+    let setup = floe_experts::ExpertInstallOperation {
         instance_id: vault.registry_instance_id(),
         expected_revision: 0,
-        setup_id: Uuid::new_v4(),
+        operation_id: Uuid::new_v4(),
     };
     runtime
-        .block_on(vault.install_builtin_experts_enabled(
+        .block_on(vault.install_expert_bundle(
             setup,
-            &crate::vault_host::builtin_setup_specs(),
+            &floe_experts_builtin::manifests(),
             floe_execution::Cancellation::default(),
         ))
         .unwrap();
@@ -1230,13 +1230,13 @@ fn install_builtin_calendar_setup(
         .block_on(EncryptedAgentVault::open(root, person, keys.clone()))
         .unwrap();
     runtime
-        .block_on(vault.install_builtin_experts_enabled(
-            floe_experts::BuiltinExpertSetup {
+        .block_on(vault.install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
                 instance_id: vault.registry_instance_id(),
                 expected_revision: 0,
-                setup_id: Uuid::new_v4(),
+                operation_id: Uuid::new_v4(),
             },
-            &crate::vault_host::builtin_setup_specs(),
+            &floe_experts_builtin::manifests(),
             floe_execution::Cancellation::default(),
         ))
         .unwrap();
@@ -1271,10 +1271,10 @@ fn production_builtin_setup_installs_through_vault_without_sources() {
         .block_on(EncryptedAgentVault::open(&root, person, keys))
         .unwrap();
     let overview = runtime
-        .block_on(vault.builtin_expert_overview())
+        .block_on(vault.expert_install_overview())
         .unwrap()
         .unwrap();
-    assert_eq!(overview.setup.assignments.len(), 8);
+    assert_eq!(overview.receipt.installed.len(), 8);
     let cards = runtime.block_on(vault.enabled_expert_cards()).unwrap();
     assert_eq!(cards.len(), 8);
 }
@@ -2553,13 +2553,13 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
             .unwrap();
         fixture
             .vault
-            .install_builtin_experts_enabled(
-                floe_experts::BuiltinExpertSetup {
+            .install_expert_bundle(
+                floe_experts::ExpertInstallOperation {
                     instance_id: fixture.vault.registry_instance_id(),
                     expected_revision: 0,
-                    setup_id: Uuid::new_v4(),
+                    operation_id: Uuid::new_v4(),
                 },
-                &crate::vault_host::builtin_setup_specs(),
+                &floe_experts_builtin::manifests(),
                 floe_execution::Cancellation::default(),
             )
             .await
@@ -2718,10 +2718,10 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
         .unwrap()
         .unwrap();
     assert_eq!(after.revision, before.revision);
-    assert!(after.builtin_setups.iter().any(|setup| {
-        setup.person_id == person
-            && setup.assignments.iter().any(|assignment| {
-                assignment.expert.as_str()
+    assert!(after.install_receipts.iter().any(|receipt| {
+        receipt.person_id == person
+            && receipt.installed.iter().any(|installed| {
+                installed.package.id
                     == floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()
             })
     }));
@@ -3155,16 +3155,16 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
     // failure, never CapabilityDenied.
     let fixture = direct_endpoint_fixture();
     fixture.runtime.block_on(async {
-        let setup = floe_experts::BuiltinExpertSetup {
+        let setup = floe_experts::ExpertInstallOperation {
             instance_id: fixture.vault.registry_instance_id(),
             expected_revision: 0,
-            setup_id: Uuid::new_v4(),
+            operation_id: Uuid::new_v4(),
         };
         fixture
             .vault
-            .install_builtin_experts_enabled(
+            .install_expert_bundle(
                 setup,
-                &crate::vault_host::builtin_setup_specs(),
+                &floe_experts_builtin::manifests(),
                 floe_execution::Cancellation::default(),
             )
             .await

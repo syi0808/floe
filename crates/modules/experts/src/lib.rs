@@ -5,7 +5,7 @@
 //! agent identity and a role-neutral invocation.
 
 mod a2a;
-mod builtin_setup;
+mod bundle_install;
 mod directory;
 mod dispatch;
 mod manifest;
@@ -18,9 +18,9 @@ pub use a2a::{
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard, InProcessA2ATransport,
     InProcessAgent, NoA2AHost,
 };
-pub use builtin_setup::{
-    BoxFuture, BuiltinExpertRefresh, BuiltinExpertStore, ExpertRefreshOutcome,
-    ensure_builtin_experts, expert_refresh_outcome,
+pub use bundle_install::{
+    BoxFuture, ExpertInstallRefresh, ExpertInstallStore, ExpertRefreshOutcome,
+    ensure_expert_bundle, expert_refresh_outcome,
 };
 pub use directory::{
     Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity, ResolvedDirectoryEntry,
@@ -37,12 +37,10 @@ pub use manifest::{
     ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES, manifest_set_digest,
 };
 pub use registry::{
-    AgentId, AgentPackage, AgentRegistry, AssignmentOverview, BuiltinExpertAssignmentReceipt,
-    BuiltinExpertSetup, BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, ExpertMetadata,
-    ExpertPackaging, ExpertPrivateState, ExpertSetupSpec, NoSetupValidator, PackageAssignment,
-    PackageImplementation, PackageInstallation, RegistryConfiguration, RegistryConfigurationTarget,
-    RegistryOverview, RegistrySnapshot, ResolvedExpert, SetupValidator,
-    eligible_cards_for_availability,
+    AgentRegistry, AssignmentOverview, EXPERT_REGISTRY_SCHEMA_VERSION, ExpertInstallOperation,
+    ExpertInstallReceipt, ExpertInstallResult, ExpertPrivateState, InstalledExpert,
+    PackageAssignment, PackageInstallation, RegistryConfiguration, RegistryConfigurationTarget,
+    RegistryOverview, RegistrySnapshot, ResolvedExpert, eligible_cards_for_availability,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

@@ -2040,17 +2040,17 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
     request: &ConversationTurnRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
     let _ = (core, local_context, request);
-    let refreshed = Box::pin(ensure_builtin_experts(
+    let refreshed = Box::pin(ensure_expert_bundle(
         vault,
         job.cancellation.clone(),
-        floe_experts::BuiltinExpertRefresh::ExistingOnly,
+        floe_experts::ExpertInstallRefresh::ExistingOnly,
     ))
     .await;
     match floe_experts::expert_refresh_outcome(refreshed) {
         floe_experts::ExpertRefreshOutcome::Ready => {}
         floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
             failure = ?failure,
-            stage = "ensure_builtin_experts",
+            stage = "ensure_expert_bundle",
             "conversation_turn_degraded"
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
@@ -2132,17 +2132,17 @@ async fn execute_conversation_resume_action<Keys: VaultKeyProvider + 'static>(
     job: &Job,
     request: &ConversationResumeRequest,
 ) -> Result<VaultExecutionResult, AgentFailure> {
-    let refreshed = Box::pin(ensure_builtin_experts(
+    let refreshed = Box::pin(ensure_expert_bundle(
         vault,
         job.cancellation.clone(),
-        floe_experts::BuiltinExpertRefresh::ExistingOnly,
+        floe_experts::ExpertInstallRefresh::ExistingOnly,
     ))
     .await;
     match floe_experts::expert_refresh_outcome(refreshed) {
         floe_experts::ExpertRefreshOutcome::Ready => {}
         floe_experts::ExpertRefreshOutcome::Degraded(failure) => tracing::warn!(
             failure = ?failure,
-            stage = "ensure_builtin_experts",
+            stage = "ensure_expert_bundle",
             "conversation_resume_degraded"
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
@@ -2408,10 +2408,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {
                 ConversationSessionOperation::Start => {
-                    ensure_builtin_experts(
+                    ensure_expert_bundle(
                         vault,
                         job.cancellation.clone(),
-                        floe_experts::BuiltinExpertRefresh::InstallIfAbsent,
+                        floe_experts::ExpertInstallRefresh::InstallIfAbsent,
                     )
                     .await?;
                     let receipt = floe_conversation::start_session(
@@ -3068,62 +3068,20 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
     })
 }
 
-async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
+async fn ensure_expert_bundle<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     cancellation: Cancellation,
-    when: floe_experts::BuiltinExpertRefresh,
+    when: floe_experts::ExpertInstallRefresh,
 ) -> Result<(), AgentFailure> {
-    floe_experts::ensure_builtin_experts(
-        &expert_setup::VaultBuiltinExperts {
+    floe_experts::ensure_expert_bundle(
+        &expert_setup::VaultExpertBundle {
             vault,
-            specs: builtin_setup_specs(),
+            manifests: floe_experts_builtin::manifests(),
             cancellation,
         },
-        floe_experts_builtin::manifests().len(),
         when,
     )
     .await
-}
-
-/// What the builtin Experts declare about themselves, in the shape the registry
-/// installs. The declarations are the Experts'; the packaging is the registry's.
-fn builtin_setup_specs() -> Vec<floe_experts::ExpertSetupSpec> {
-    floe_experts_builtin::builtin_setup_declarations()
-        .into_iter()
-        .map(expert_setup_spec)
-        .collect()
-}
-
-fn expert_setup_spec(
-    declaration: floe_experts_builtin::BuiltinExpertDeclaration,
-) -> floe_experts::ExpertSetupSpec {
-    let expert = floe_experts::AgentId::try_new(declaration.expert_id)
-        .expect("builtin expert ids are valid");
-    let packaging = expert_packaging(&declaration, expert.clone());
-    floe_experts::ExpertSetupSpec {
-        packages: packaging.packages(declaration.data_class),
-        expert,
-    }
-}
-
-fn expert_packaging(
-    declaration: &floe_experts_builtin::BuiltinExpertDeclaration,
-    expert: floe_experts::AgentId,
-) -> floe_experts::ExpertPackaging {
-    floe_experts::ExpertPackaging {
-        expert,
-        tool_id: declaration.tool_id.clone(),
-        version: declaration.version.to_owned(),
-        publisher: declaration.publisher.to_owned(),
-        metadata: floe_experts::ExpertMetadata {
-            name: declaration.name.to_owned(),
-            description: declaration.description.to_owned(),
-            domain_tags: declaration.domain_tags.clone(),
-            skills: declaration.skills.clone(),
-            supported_placements: declaration.supported_placements.clone(),
-        },
-        state_schema_version: floe_experts_builtin::BUILTIN_EXPERT_STATE_SCHEMA_VERSION,
-    }
 }
 
 /// Whether the client must reload the session before continuing.

@@ -23,7 +23,7 @@ void main() {
       final assignment = (fixture['assignments'] as List).single as Map;
       switch (mode) {
         case 0:
-          fixture['schema_version'] = 2;
+          fixture['schema_version'] = 1;
         case 1:
           fixture['instance_id'] = 'invalid';
         case 2:

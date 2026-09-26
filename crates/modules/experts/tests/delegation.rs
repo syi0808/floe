@@ -27,8 +27,10 @@ use floe_execution::{
     budget::{BudgetConfig, BudgetLedger},
 };
 use floe_experts::{
-    Directory, DirectoryEntry, DirectoryQuery, ExpertAdmissionIdentity, TaskActivation,
-    TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository,
+    AgentRegistry, ContractRef, Directory, DirectoryEntry, DirectoryQuery,
+    ExpertAdmissionIdentity, ExpertInstallOperation, ExpertManifest, ExpertRegistration,
+    ExpertSourceRequirement, EXPERT_MANIFEST_SCHEMA_VERSION, TaskActivation, TaskAdmission,
+    TaskCoordinator, TaskRecord, TaskRepository,
 };
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -313,6 +315,82 @@ fn publication_entry(id: &str) -> (DirectoryEntry, Arc<dyn AgentEndpoint>) {
             calls: Arc::new(AtomicUsize::new(0)),
         }),
     )
+}
+
+#[tokio::test]
+async fn nonbuiltin_registration_installs_publishes_and_completes_without_source_binding() {
+    let person = floe_agent_contract::PersonId::new();
+    let package_id = "example.test.expert";
+    let package = floe_agent_contract::PackageRef {
+        kind: floe_agent_contract::PackageKind::Expert,
+        id: package_id.into(),
+        version: "1.0.0".into(),
+    };
+    let manifest = ExpertManifest {
+        schema_version: EXPERT_MANIFEST_SCHEMA_VERSION,
+        package: package.clone(),
+        publisher: "example.test".into(),
+        definition: definition(package_id, 1),
+        data_class: DataClass::Personal,
+        prompt_contract: ContractRef { id: "example.test.prompt".into(), revision: 1 },
+        result_contracts: vec![],
+        source_requirements: vec![ExpertSourceRequirement {
+            key: "calendar".into(),
+            capability: "calendar.timeline".into(),
+            minimum_sources: 1,
+            maximum_sources: 1,
+        }],
+        capability_requirements: vec![],
+        state_schema_version: 1,
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registration = ExpertRegistration {
+        manifest: manifest.clone(),
+        runner: Arc::new(Endpoint { result: Ok("extension result"), calls: Arc::clone(&calls) }) as Arc<dyn AgentEndpoint>,
+    };
+    let instance = Uuid::new_v4();
+    let mut registry = AgentRegistry::new(instance);
+    let receipt = registry.install_bundle(person, &ExpertInstallOperation {
+        instance_id: instance,
+        expected_revision: 0,
+        operation_id: Uuid::new_v4(),
+    }, &[registration.manifest.clone()]).unwrap();
+    assert_eq!(receipt.installed.len(), 1);
+    let directory = Directory::default();
+    let publish = |registry: &AgentRegistry| {
+        let entries = registry.enabled_expert_admissions(person).unwrap().into_iter().map(|(card, admission)| {
+            assert_eq!(card, registration.manifest.definition.card);
+            (DirectoryEntry {
+                definition: registration.manifest.definition.clone(),
+                admission,
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec![person.to_string()],
+                purposes: vec!["everyday-assistance".into()],
+            }, Arc::clone(&registration.runner))
+        }).collect();
+        directory.publish("test-extension", entries).unwrap();
+    };
+    publish(&registry);
+    assert_eq!(directory.list_cards(DirectoryQuery { principal: &person.to_string(), purpose: "everyday-assistance" }).unwrap().cards.len(), 1);
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(directory.clone(), Arc::clone(&repository), "everyday-assistance", 16 * 1024).await.unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let mut request = delegation(run_id, task_id, package_id);
+    request.principal = person.to_string();
+    let first = coordinator.delegate(request.clone(), &scope(run_id, Some(task_id))).await.unwrap();
+    assert_eq!(first.snapshot.result.as_deref(), Some("extension result"));
+    assert_eq!(repository.get(task_id).await.unwrap().unwrap().admission.package, package);
+    registry.set_assignment_enabled(registry.revision(), person, receipt.installed[0].assignment_id, false).unwrap();
+    publish(&registry);
+    assert!(directory.list_cards(DirectoryQuery { principal: &person.to_string(), purpose: "everyday-assistance" }).unwrap().cards.is_empty());
+    assert_eq!(coordinator.delegate(request, &scope(run_id, Some(task_id))).await.unwrap().snapshot, first.snapshot);
+    let new_task_id = TaskId::new();
+    let mut next = delegation(run_id, new_task_id, package_id);
+    next.principal = person.to_string();
+    assert_eq!(coordinator.delegate(next, &scope(run_id, Some(new_task_id))).await, Err(AgentFailure::CapabilityDenied));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

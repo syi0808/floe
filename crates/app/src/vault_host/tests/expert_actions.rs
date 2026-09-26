@@ -47,8 +47,7 @@ use floe_day::CalendarSelection;
 use floe_day::Event;
 use floe_experts::A2APart;
 use floe_experts::AgentRegistry;
-use floe_experts::BuiltinExpertSetup;
-use floe_experts::PackageImplementation;
+use floe_experts::ExpertInstallOperation;
 use floe_experts::PackageRef;
 use uuid::Uuid;
 
@@ -156,27 +155,24 @@ impl Fixture {
         )
         .unwrap();
         let mut snapshot = seed.snapshot().unwrap();
-        for package in &mut snapshot.packages {
-            if let PackageImplementation::TimelineRead { data_class } = &mut package.implementation
-            {
-                *data_class = class;
-            }
+        for manifest in &mut snapshot.manifests {
+            manifest.data_class = class;
         }
+        snapshot.install_receipts[0].manifest_digest = floe_experts::manifest_set_digest(&snapshot.manifests).unwrap();
         vault.initialize_expert_registry(&snapshot).await.unwrap();
         let assignment = snapshot
             .assignments
             .iter()
-            .find(|assignment| !assignment.granted_tool_assignments.is_empty())
+            .find(|assignment| assignment.person_id == person)
             .unwrap();
         let evidence_id = Uuid::new_v4();
         let assignment_id = assignment.id;
-        let revision = snapshot.revision;
         let package = snapshot
-            .packages
+            .manifests
             .iter()
-            .find(|entry| entry.reference.kind == floe_experts::PackageKind::Expert)
+            .find(|entry| entry.package.kind == floe_experts::PackageKind::Expert)
             .unwrap()
-            .reference
+            .package
             .clone();
         let mut registry = AgentRegistry::restore(snapshot, vault.registry_instance_id()).unwrap();
         let start = u64::try_from(now().timestamp_millis()).unwrap() + 3_600_000;
@@ -194,14 +190,13 @@ impl Fixture {
         vault.compare_and_swap(&session, 0).await.unwrap();
         let invocation_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
-        let expected = floe_experts::AgentId::try_new("floe.schedule").unwrap();
         let resolved = registry
-            .resolve_builtin(
+            .resolve_assignment(
                 registry.instance_id(),
                 person,
                 assignment_id,
-                revision,
-                &expected,
+                &package,
+                1,
             )
             .unwrap();
         let state_revision = registry.complete(&resolved, invocation_id).unwrap();
@@ -1203,13 +1198,13 @@ impl GovernedFocus {
             .await
             .unwrap();
         vault
-            .install_builtin_experts_enabled(
-                BuiltinExpertSetup {
+            .install_expert_bundle(
+                ExpertInstallOperation {
                     instance_id: vault.registry_instance_id(),
                     expected_revision: 0,
-                    setup_id: Uuid::new_v4(),
+                    operation_id: Uuid::new_v4(),
                 },
-                &crate::vault_host::builtin_setup_specs(),
+                &floe_experts_builtin::manifests(),
                 Cancellation::default(),
             )
             .await
@@ -1271,24 +1266,24 @@ impl GovernedFocus {
         let snapshot = vault.expert_registry().await.unwrap().unwrap();
         let schedule = floe_experts_builtin::BuiltinExpertKind::Schedule.package_id();
         let assignment_id = snapshot
-            .builtin_setups
+            .install_receipts
             .iter()
-            .find(|setup| setup.person_id == person)
+            .find(|receipt| receipt.person_id == person)
             .unwrap()
-            .assignments
+            .installed
             .iter()
-            .find(|assignment| assignment.expert.as_str() == schedule)
+            .find(|installed| installed.package.id == schedule)
             .unwrap()
-            .expert_assignment_id;
+            .assignment_id;
         let package = snapshot
-            .packages
+            .manifests
             .iter()
             .find(|entry| {
-                entry.reference.kind == floe_experts::PackageKind::Expert
-                    && entry.reference.id == schedule
+                entry.package.kind == floe_experts::PackageKind::Expert
+                    && entry.package.id == schedule
             })
             .unwrap()
-            .reference
+            .package
             .clone();
         let mut session = vault.create_session().await.unwrap();
         session.data_classes = vec![DataClass::Personal];
@@ -1355,12 +1350,12 @@ impl GovernedFocus {
         let current = self.vault.expert_registry().await.unwrap().unwrap();
         let mut registry = AgentRegistry::restore(current.clone(), current.instance_id).unwrap();
         let resolved = registry
-            .resolve_builtin(
+            .resolve_assignment(
                 registry.instance_id(),
                 self.person,
                 self.assignment_id,
-                current.revision,
-                &floe_experts::AgentId::try_new(self.package.id.clone()).unwrap(),
+                &self.package,
+                1,
             )
             .unwrap();
         let state_revision = registry.complete(&resolved, invocation_id).unwrap();
