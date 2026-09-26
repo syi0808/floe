@@ -36,7 +36,7 @@ async fn generic_assignment_disablement_survives_reopen_and_ensure() {
     assert_eq!(fixture.vault.enabled_expert_cards().await.unwrap().len(), manifests.len() - 1);
     drop(fixture.vault);
     fixture.vault = EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone()).await.unwrap();
-    let persisted = fixture.vault.expert_install_overview().await.unwrap().unwrap();
+    let persisted = fixture.vault.expert_install_overview(&floe_experts::manifest_set_digest(&manifests).unwrap()).await.unwrap().unwrap();
     assert_eq!(persisted.receipt.operation_id, request.operation_id);
     assert_eq!(persisted.registry.revision, disabled.revision);
     assert_eq!(fixture.vault.install_expert_bundle(request, &manifests, Cancellation::default()).await.unwrap().registry.revision, disabled.revision);

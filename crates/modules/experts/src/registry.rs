@@ -299,7 +299,7 @@ impl AgentRegistry {
                 && receipt.manifest_digest == digest
             { Ok(receipt.clone()) } else { Err(AgentFailure::Conflict) };
         }
-        if let Some(receipt) = self.snapshot.install_receipts.iter().find(|receipt| receipt.person_id == person_id) {
+        if let Some(receipt) = self.snapshot.install_receipts.iter().find(|receipt| receipt.person_id == person_id && receipt.manifest_digest == digest) {
             return if receipt.manifest_digest == digest { Ok(receipt.clone()) } else { Err(AgentFailure::Conflict) };
         }
         self.check_revision(operation.expected_revision)?;
@@ -307,6 +307,11 @@ impl AgentRegistry {
         next.revision = next.revision.checked_add(1).ok_or(AgentFailure::BudgetExceeded)?;
         let mut installed = Vec::with_capacity(manifests.len());
         for manifest in manifests {
+            if next.assignments.iter().filter(|assignment| assignment.person_id == person_id).any(|assignment| {
+                next.installations.iter().any(|installation| installation.id == assignment.installation_id && installation.package == manifest.package)
+            }) {
+                return Err(AgentFailure::Conflict);
+            }
             if let Some(existing) = next.manifests.iter().find(|existing| existing.package == manifest.package) {
                 if existing != manifest { return Err(AgentFailure::Conflict); }
             } else {

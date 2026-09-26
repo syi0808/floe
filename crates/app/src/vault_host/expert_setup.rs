@@ -29,7 +29,9 @@ impl<Keys: VaultKeyProvider> ExpertInstallStore for VaultExpertBundle<'_, Keys> 
     }
 
     fn overview<'a>(&'a self) -> BoxFuture<'a, Result<Option<ExpertInstallResult>, AgentFailure>> {
-        Box::pin(self.vault.expert_install_overview())
+        Box::pin(async move {
+            self.vault.expert_install_overview(&self.manifest_digest()?).await
+        })
     }
 
     fn registry_revision<'a>(&'a self) -> BoxFuture<'a, Result<u64, AgentFailure>> {

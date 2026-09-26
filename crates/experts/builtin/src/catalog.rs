@@ -6,44 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use floe_agent_contract::{DataClass, ModelPlacement};
+use floe_agent_contract::DataClass;
 
 pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
 pub const BUILTIN_EXPERT_PUBLISHER: &str = "floe";
 pub const BUILTIN_EXPERT_STATE_SCHEMA_VERSION: u32 = 1;
-
-/// What one builtin Expert declares about itself.
-///
-/// The composition root installs this; the generic registry stores only the
-/// resulting identities, so no module below it needs to know a builtin kind.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BuiltinExpertDeclaration {
-    pub expert_id: &'static str,
-    pub tool_id: String,
-    pub version: &'static str,
-    pub publisher: &'static str,
-    pub name: &'static str,
-    pub description: &'static str,
-    pub domain_tags: Vec<String>,
-    pub skills: Vec<String>,
-    pub data_class: DataClass,
-    /// The sources this Expert reads, in its own declared order.
-    pub required_sources: Vec<&'static str>,
-    /// The one source it cannot answer without.
-    pub mandatory_source: &'static str,
-    /// Whether its judgment can run on the on-device model.
-    /// Where this Expert's judgment can run. The registry records it, so no
-    /// caller decides eligibility from what an agent id looks like.
-    pub supported_placements: Vec<ModelPlacement>,
-}
-
-/// Every Expert the builtin setup installs together.
-pub fn builtin_setup_declarations() -> Vec<BuiltinExpertDeclaration> {
-    BuiltinExpertKind::ALL
-        .into_iter()
-        .map(BuiltinExpertKind::declaration)
-        .collect()
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,37 +54,6 @@ impl BuiltinExpertKind {
         Self::ALL
             .into_iter()
             .find(|expert| expert.package_id() == package_id)
-    }
-
-    pub fn tool_id(self) -> String {
-        format!("{}.context", self.package_id())
-    }
-
-    /// What this Expert states about itself to whoever installs it.
-    pub fn declaration(self) -> BuiltinExpertDeclaration {
-        let metadata = self.metadata();
-        BuiltinExpertDeclaration {
-            expert_id: self.package_id(),
-            tool_id: self.tool_id(),
-            version: BUILTIN_EXPERT_PACKAGE_VERSION,
-            publisher: BUILTIN_EXPERT_PUBLISHER,
-            name: metadata.0,
-            description: metadata.1,
-            domain_tags: metadata.2.into_iter().map(str::to_owned).collect(),
-            skills: vec![metadata.3.to_owned()],
-            data_class: self.context_data_class(),
-            required_sources: self
-                .required_sources()
-                .iter()
-                .map(|source| source.source_id())
-                .collect(),
-            mandatory_source: self.mandatory_source().source_id(),
-            supported_placements: if self.supports_device_model() {
-                vec![ModelPlacement::DeviceLocal, ModelPlacement::Remote]
-            } else {
-                vec![ModelPlacement::Remote]
-            },
-        }
     }
 
     pub const fn context_data_class(self) -> DataClass {
@@ -175,7 +111,7 @@ impl BuiltinExpertKind {
         }
     }
 
-    fn metadata(self) -> (&'static str, &'static str, Vec<&'static str>, &'static str) {
+    pub(crate) fn metadata(self) -> (&'static str, &'static str, Vec<&'static str>, &'static str) {
         match self {
             Self::Schedule => (
                 "Schedule Expert",

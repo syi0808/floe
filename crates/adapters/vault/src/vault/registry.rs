@@ -11,6 +11,7 @@ const MAX_REGISTRY_BYTES: usize = 262_144;
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn expert_install_overview(
         &self,
+        manifest_digest: &str,
     ) -> Result<Option<floe_experts::ExpertInstallResult>, AgentFailure> {
         let Some(snapshot) = self.expert_registry().await? else {
             return Ok(None);
@@ -20,7 +21,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .snapshot()
             .install_receipts
             .iter()
-            .find(|receipt| receipt.person_id == self.person_id)
+            .find(|receipt| receipt.person_id == self.person_id && receipt.manifest_digest == manifest_digest)
             .cloned()
         else {
             return Ok(None);

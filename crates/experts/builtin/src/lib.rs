@@ -21,8 +21,7 @@ mod shared;
 
 pub use catalog::{
     BUILTIN_EXPERT_PACKAGE_VERSION, BUILTIN_EXPERT_PUBLISHER, BUILTIN_EXPERT_STATE_SCHEMA_VERSION,
-    BuiltinContextSource, BuiltinExpertDeclaration, BuiltinExpertKind, BuiltinSourceRequirement,
-    builtin_setup_declarations,
+    BuiltinContextSource, BuiltinExpertKind, BuiltinSourceRequirement,
 };
 pub use host::{
     Acquiring, BlockedExpertResult, BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput,

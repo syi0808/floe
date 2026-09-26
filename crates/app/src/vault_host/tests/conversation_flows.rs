@@ -843,7 +843,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let session = runtime.block_on(vault.create_session()).unwrap();
     assert!(
         runtime
-            .block_on(vault.expert_install_overview())
+            .block_on(vault.expert_install_overview(&floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()))
             .unwrap()
             .is_none()
     );
@@ -905,7 +905,7 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         .unwrap();
     assert!(
         runtime
-            .block_on(vault.expert_install_overview())
+            .block_on(vault.expert_install_overview(&floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()))
             .unwrap()
             .is_none()
     );
@@ -1271,7 +1271,7 @@ fn production_builtin_setup_installs_through_vault_without_sources() {
         .block_on(EncryptedAgentVault::open(&root, person, keys))
         .unwrap();
     let overview = runtime
-        .block_on(vault.expert_install_overview())
+        .block_on(vault.expert_install_overview(&floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()))
         .unwrap()
         .unwrap();
     assert_eq!(overview.receipt.installed.len(), 8);
@@ -2983,20 +2983,12 @@ fn direct_endpoint_admission(agent_id: &str) -> floe_experts::ExpertAdmissionIde
 }
 
 fn direct_endpoint_card(agent_id: &str) -> floe_agent_contract::AgentCard {
-    let declaration = floe_experts_builtin::BuiltinExpertKind::from_package_id(agent_id)
+    floe_experts_builtin::manifests()
+        .into_iter()
+        .find(|manifest| manifest.package.id == agent_id)
         .unwrap()
-        .declaration();
-    floe_agent_contract::AgentCard {
-        schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
-        protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
-        id: agent_id.into(),
-        version: declaration.version.into(),
-        name: declaration.name.into(),
-        description: declaration.description.into(),
-        domain_tags: declaration.domain_tags,
-        skills: declaration.skills,
-        supported_placements: declaration.supported_placements,
-    }
+        .definition
+        .card
 }
 
 fn direct_invocation_in_session(

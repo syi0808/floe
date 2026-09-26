@@ -53,11 +53,11 @@ pub fn manifests() -> Vec<ExpertManifest> {
 }
 
 fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
-    let declaration = kind.declaration();
+    let (name, description, domain_tags, skill) = kind.metadata();
     let package = PackageRef {
         kind: PackageKind::Expert,
-        id: declaration.expert_id.into(),
-        version: declaration.version.into(),
+        id: kind.package_id().into(),
+        version: crate::BUILTIN_EXPERT_PACKAGE_VERSION.into(),
     };
     let definition = AgentDefinition {
         card: AgentCard {
@@ -65,26 +65,30 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
             protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
             id: package.id.clone(),
             version: package.version.clone(),
-            name: declaration.name.into(),
-            description: declaration.description.into(),
-            domain_tags: declaration.domain_tags,
-            skills: declaration.skills,
-            supported_placements: declaration.supported_placements,
+            name: name.into(),
+            description: description.into(),
+            domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
+            skills: vec![skill.into()],
+            supported_placements: if kind.supports_device_model() {
+                vec![floe_agent_contract::ModelPlacement::DeviceLocal, floe_agent_contract::ModelPlacement::Remote]
+            } else {
+                vec![floe_agent_contract::ModelPlacement::Remote]
+            },
         },
         definition_revision: 1,
     };
     ExpertManifest {
         schema_version: EXPERT_MANIFEST_SCHEMA_VERSION,
         package,
-        publisher: declaration.publisher.into(),
+        publisher: crate::BUILTIN_EXPERT_PUBLISHER.into(),
         definition,
-        data_class: declaration.data_class,
+        data_class: kind.context_data_class(),
         prompt_contract: ContractRef {
-            id: format!("{}.prompt", declaration.expert_id),
+            id: format!("{}.prompt", kind.package_id()),
             revision: 1,
         },
         result_contracts: vec![ContractRef {
-            id: format!("{}.result", declaration.expert_id),
+            id: format!("{}.result", kind.package_id()),
             revision: 1,
         }],
         source_requirements: kind

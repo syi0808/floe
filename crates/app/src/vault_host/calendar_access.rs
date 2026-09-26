@@ -288,14 +288,14 @@ mod tests {
     #[test]
     fn calendar_consumers_are_derived_from_builtin_declarations() {
         let consumers = crate::first_party_observe::calendar_policy().unwrap().consumers;
-        let expected = BuiltinExpertKind::ALL
+        let expected = floe_experts_builtin::manifests()
             .into_iter()
-            .filter(|kind| {
-                kind.declaration()
-                    .required_sources
-                    .contains(&BuiltinContextSource::Calendar.source_id())
+            .filter(|manifest| {
+                manifest.source_requirements.iter().any(|requirement| {
+                    requirement.capability == BuiltinContextSource::Calendar.capability_id()
+                })
             })
-            .map(|kind| kind.package_id())
+            .map(|manifest| manifest.package.id)
             .collect::<Vec<_>>();
 
         for package_id in expected {
