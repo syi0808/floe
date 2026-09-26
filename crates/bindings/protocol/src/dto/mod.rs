@@ -25,7 +25,10 @@ mod errors;
 mod events;
 mod experts;
 mod interactions;
-pub use experts::ExpertOperationResultDto;
+pub use experts::{
+    ExpertBindingSelectionDto, ExpertCandidateCatalogDto, ExpertOperationResultDto,
+    ExpertSourceCandidateDto,
+};
 mod context;
 mod local_context;
 pub use context::{

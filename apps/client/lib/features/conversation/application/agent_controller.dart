@@ -596,6 +596,30 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> loadRegistry() => registryController.load();
 
+  AgentCandidateCatalog? get expertCandidates =>
+      registryController.candidateCatalog;
+  String? get expertCandidateFailure => registryController.candidateFailure;
+  bool get expertCandidateBusy => registryController.candidateBusy;
+
+  Future<void> loadExpertCandidates(
+    String assignmentId,
+    String requirementKey,
+  ) => registryController.loadCandidates(assignmentId, requirementKey);
+
+  Future<void> replaceExpertSelection(
+    AgentInstallation installation,
+    AgentExpertDefinition definition,
+    AgentAssignment assignment,
+    AgentSourceRequirement requirement,
+    List<String> candidateIds,
+  ) => registryController.replaceSelection(
+    installation,
+    definition,
+    assignment,
+    requirement,
+    candidateIds,
+  );
+
   Future<void> configureRegistry(
     AgentRegistryTarget target,
     String id,
@@ -603,10 +627,7 @@ final class AgentController extends ChangeNotifier {
   ) => registryController.configure(target, id, enabled);
 
   Future<void> configureCapability(String installationId, bool enabled) async {
-    await registryController.configureCapability(
-      installationId,
-      enabled,
-    );
+    await registryController.configureCapability(installationId, enabled);
   }
 
   bool get usesVault => owners.vault != null;
@@ -627,9 +648,7 @@ final class AgentController extends ChangeNotifier {
       ? (gateway as ConversationRuntimeProvider).conversationRuntime
       : null;
   bool get _conversationBusy =>
-      _busy ||
-      registryController.busy ||
-      memoryController.busy;
+      _busy || registryController.busy || memoryController.busy;
   bool get canStartConversation => !_conversationBusy && !_disposed && !running;
   bool get canSend =>
       !_conversationBusy &&

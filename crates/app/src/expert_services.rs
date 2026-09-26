@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::local_operations::{LocalOperationIntent, LocalOperationOwner};
@@ -8,11 +9,46 @@ pub use floe_experts::{RegistryConfiguration, RegistryConfigurationTarget, Regis
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpertCommand {
     ConfigureRegistry(RegistryConfiguration),
+    ReplaceBinding(ExpertBindingSelectionIntent),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpertInspection {
     Registry,
+    Candidates {
+        assignment_id: Uuid,
+        requirement_key: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpertBindingSelectionIntent {
+    pub assignment_id: Uuid,
+    pub package_id: String,
+    pub package_version: String,
+    pub definition_revision: u64,
+    pub requirement_key: String,
+    pub expected_binding_revision: u64,
+    pub candidate_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertSourceCandidateView {
+    pub candidate_id: String,
+    pub title: String,
+    pub detail: String,
+    pub availability: String,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertCandidateCatalog {
+    pub assignment_id: Uuid,
+    pub requirement_key: String,
+    pub binding_revision: u64,
+    pub candidates: Vec<ExpertSourceCandidateView>,
 }
 
 #[derive(Clone, Debug)]
@@ -22,6 +58,7 @@ pub struct ExpertOperationResult {
     pub done: bool,
     pub state: Option<VaultState>,
     pub registry: Option<RegistryOverview>,
+    pub candidates: Option<ExpertCandidateCatalog>,
     pub failure: Option<AgentFailure>,
 }
 
@@ -113,6 +150,7 @@ impl AppComposition {
             done: result.done,
             state: result.state,
             registry: result.registry,
+            candidates: result.expert_candidates,
             failure: result.failure,
         })
     }

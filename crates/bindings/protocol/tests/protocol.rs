@@ -21,6 +21,54 @@ fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operati
     forged["change"]["target"]["kind"] = serde_json::json!("grant_calendar");
     assert!(serde_json::from_value::<AppCommandDto>(forged).is_err());
 }
+
+#[test]
+fn expert_binding_wire_accepts_only_opaque_candidate_ids() {
+    let action = serde_json::json!({
+        "kind": "experts.binding.replace",
+        "selection": {
+            "assignment_id": uuid::Uuid::new_v4(),
+            "package_id": "example.test.expert",
+            "package_version": "1.0.0",
+            "definition_revision": 1,
+            "requirement_key": "required_attention",
+            "expected_binding_revision": 1,
+            "candidate_ids": ["a".repeat(64)],
+        },
+    });
+    let command = AppCommandRequestDto {
+        schema_version: 2,
+        request_id: uuid::Uuid::new_v4(),
+        command_id: uuid::Uuid::new_v4(),
+        command: serde_json::from_value(action.clone()).unwrap(),
+    };
+    command.validate().unwrap();
+    for field in [
+        "connector_id",
+        "connection_id",
+        "execution_owner_id",
+        "resource",
+        "grant_id",
+        "source_authority",
+        "person_id",
+        "device_id",
+        "consumer",
+    ] {
+        let mut forged = action.clone();
+        forged["selection"][field] = serde_json::json!("forged");
+        assert!(
+            serde_json::from_value::<AppCommandDto>(forged).is_err(),
+            "{field}"
+        );
+    }
+    let query = serde_json::json!({
+        "kind": "experts.sources.candidates",
+        "assignment_id": uuid::Uuid::new_v4(),
+        "requirement_key": "required_attention",
+    });
+    let parsed: AppQueryDto = serde_json::from_value(query.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), query);
+}
 use serde_json::json;
 use uuid::Uuid;
 

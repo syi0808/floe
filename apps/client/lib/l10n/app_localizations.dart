@@ -322,6 +322,54 @@ abstract class AppLocalizations {
   /// **'Expert setup needed'**
   String get agentInteractionExpertBindingTitle;
 
+  /// No description provided for @expertSourceOptional.
+  ///
+  /// In en, this message translates to:
+  /// **'Optional source'**
+  String get expertSourceOptional;
+
+  /// No description provided for @expertSourceRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Required source'**
+  String get expertSourceRequired;
+
+  /// No description provided for @expertSourceSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'selected'**
+  String get expertSourceSelected;
+
+  /// No description provided for @expertSourceSelectionBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Choosing a source does not grant access. Permissions are reviewed separately when needed.'**
+  String get expertSourceSelectionBoundary;
+
+  /// No description provided for @expertSourceNoCompatible.
+  ///
+  /// In en, this message translates to:
+  /// **'No compatible source is connected.'**
+  String get expertSourceNoCompatible;
+
+  /// No description provided for @expertSourceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved source unavailable'**
+  String get expertSourceUnavailable;
+
+  /// No description provided for @expertSourceSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save sources'**
+  String get expertSourceSave;
+
+  /// No description provided for @expertSourceRemove.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove selection'**
+  String get expertSourceRemove;
+
   /// No description provided for @agentInteractionRequestPermission.
   ///
   /// In en, this message translates to:

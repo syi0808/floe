@@ -123,6 +123,16 @@ void main() {
     (definition['package'] as Map)['id'] = 'example.test.expert';
     definition['name'] = 'Example test Expert';
     definition['description'] = 'An installed extension for a specific task.';
+    (((gateway.snapshot!['assignments'] as List).single as Map)['requirements']
+            as List)
+        .add({
+          'key': 'required_attention',
+          'capability': 'attention.coarse',
+          'contract_version': 1,
+          'minimum_sources': 1,
+          'maximum_sources': 1,
+          'selected_count': 0,
+        });
     final controller = AgentController(
       gateway: gateway,
       personId: registryPerson,
@@ -138,5 +148,21 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Specialized assistance'), findsNothing);
+    await tester.tap(find.text('required_attention'));
+    await tester.pumpAndSettle();
+    expect(find.text('Attention'), findsOneWidget);
+    expect(
+      find.textContaining('Choosing a source does not grant access'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Attention'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save sources'));
+    await tester.pumpAndSettle();
+    expect(controller.registry!.assignments.single.bindingRevision, 2);
+    expect(
+      controller.registry!.assignments.single.requirements.single.selectedCount,
+      1,
+    );
   });
 }

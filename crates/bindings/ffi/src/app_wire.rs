@@ -182,6 +182,29 @@ where
                 result: expert_result(result, request.command_id)?,
             })
         }
+        AppCommandDto::ExpertsBindingReplace { selection } => {
+            let result = host_request
+                .services()
+                .expert_command(
+                    host_request.caller(),
+                    request.command_id,
+                    floe_app::ExpertCommand::ReplaceBinding(
+                        floe_app::ExpertBindingSelectionIntent {
+                            assignment_id: selection.assignment_id,
+                            package_id: selection.package_id,
+                            package_version: selection.package_version,
+                            definition_revision: selection.definition_revision,
+                            requirement_key: selection.requirement_key,
+                            expected_binding_revision: selection.expected_binding_revision,
+                            candidate_ids: selection.candidate_ids,
+                        },
+                    ),
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::ExpertOperation {
+                result: expert_result(result, request.command_id)?,
+            })
+        }
         AppCommandDto::ConversationSessionStart {}
         | AppCommandDto::ConversationSessionResume {}
         | AppCommandDto::ConversationSessionRecover { .. } => {
@@ -605,6 +628,24 @@ fn query_with_host<
                 result: expert_result(result, request.request_id)?,
             })
         }
+        AppQueryDto::ExpertsSourceCandidates {
+            assignment_id,
+            requirement_key,
+        } => {
+            let result = services
+                .inspect_experts(
+                    caller,
+                    request.request_id,
+                    floe_app::ExpertInspection::Candidates {
+                        assignment_id,
+                        requirement_key,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppQueryResultDto::ExpertOperation {
+                result: expert_result(result, request.request_id)?,
+            })
+        }
         AppQueryDto::ExpertsReadResult {
             operation_id,
             release,
@@ -878,6 +919,24 @@ fn expert_result(
             .map(floe_protocol::wire::protocol_payload)
             .transpose()
             .map_err(|_| service_error(floe_app::ServiceError::Internal))?,
+        candidates: result
+            .candidates
+            .map(|catalog| floe_protocol::ExpertCandidateCatalogDto {
+                assignment_id: catalog.assignment_id,
+                requirement_key: catalog.requirement_key,
+                binding_revision: catalog.binding_revision,
+                candidates: catalog
+                    .candidates
+                    .into_iter()
+                    .map(|candidate| floe_protocol::ExpertSourceCandidateDto {
+                        candidate_id: candidate.candidate_id,
+                        title: candidate.title,
+                        detail: candidate.detail,
+                        availability: candidate.availability,
+                        selected: candidate.selected,
+                    })
+                    .collect(),
+            }),
         failure: result.failure.as_ref().map(|failure| {
             crate::conversion::owners::failure_envelope(
                 failure,

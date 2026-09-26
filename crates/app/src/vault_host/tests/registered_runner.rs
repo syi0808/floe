@@ -804,6 +804,111 @@ async fn registered_runner_undeclared_requirement_is_denied_before_source_io() {
 }
 
 #[tokio::test]
+async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_save() {
+    let cancellation = Cancellation::default();
+    let person = PersonId::new();
+    let registration = required_source_registration(required_source_runner);
+    let manifest = registration.manifest.clone();
+    let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment_id = snapshot.assignments[0].id;
+    let first = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "required_attention",
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.candidates.len(), 1);
+    assert_eq!(first.candidates[0].availability, "available");
+    let intent = crate::ExpertBindingSelectionIntent {
+        assignment_id,
+        package_id: "example.test.expert".into(),
+        package_version: "1.0.0".into(),
+        definition_revision: 1,
+        requirement_key: "required_attention".into(),
+        expected_binding_revision: first.binding_revision,
+        candidate_ids: vec![first.candidates[0].candidate_id.clone()],
+    };
+    let operation_id = Uuid::new_v4();
+    let saved = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "mac-local",
+        operation_id,
+        &intent,
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved.binding_revision, first.binding_revision + 1);
+    assert!(saved.candidates[0].selected);
+    let retry = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "mac-local",
+        operation_id,
+        &intent,
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(retry, saved);
+    let mut changed = intent.clone();
+    changed.candidate_ids.clear();
+    assert_eq!(
+        crate::vault_host::expert_binding_settings::replace(
+            &open,
+            person,
+            "mac-local",
+            operation_id,
+            &changed,
+            &cancellation
+        )
+        .await
+        .unwrap_err(),
+        AgentFailure::Conflict,
+    );
+    let mut unknown = intent.clone();
+    unknown.expected_binding_revision = saved.binding_revision;
+    unknown.candidate_ids = vec!["b".repeat(64)];
+    assert_eq!(
+        crate::vault_host::expert_binding_settings::replace(
+            &open,
+            person,
+            "mac-local",
+            Uuid::new_v4(),
+            &unknown,
+            &cancellation
+        )
+        .await
+        .unwrap_err(),
+        AgentFailure::Conflict,
+    );
+    let unavailable = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "other-device",
+        assignment_id,
+        "required_attention",
+        &cancellation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        unavailable
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.availability == "unavailable" && candidate.selected)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn registered_runner_admission_and_manifest_mismatches_fail_closed() {
     RUNNER_CALLS.store(0, Ordering::SeqCst);
     let person = PersonId::new();

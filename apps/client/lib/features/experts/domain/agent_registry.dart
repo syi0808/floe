@@ -13,6 +13,60 @@ abstract interface class AgentRegistryGateway {
     required String id,
     required bool enabled,
   });
+  Future<AgentCandidateCatalog> readCandidates(
+    String personId, {
+    required String assignmentId,
+    required String requirementKey,
+  });
+  Future<AgentCandidateCatalog> replaceSelection(
+    String personId, {
+    required AgentInstallation installation,
+    required AgentExpertDefinition definition,
+    required AgentAssignment assignment,
+    required AgentSourceRequirement requirement,
+    required List<String> candidateIds,
+  });
+}
+
+final class AgentCandidateCatalog {
+  AgentCandidateCatalog.fromJson(Map<String, dynamic> json)
+    : assignmentId = _identifier(json['assignment_id']),
+      requirementKey = _text(json['requirement_key']),
+      bindingRevision = _number(json['binding_revision']),
+      candidates = List.unmodifiable(
+        _entries(json['candidates'], 32).map(AgentSourceCandidate.fromJson),
+      ) {
+    if (bindingRevision == 0 ||
+        candidates.map((candidate) => candidate.id).toSet().length !=
+            candidates.length) {
+      throw const FormatException('Invalid Expert candidate catalog');
+    }
+  }
+
+  final String assignmentId;
+  final String requirementKey;
+  final int bindingRevision;
+  final List<AgentSourceCandidate> candidates;
+}
+
+final class AgentSourceCandidate {
+  AgentSourceCandidate.fromJson(Map<String, dynamic> json)
+    : id = _text(json['candidate_id'], maximum: 64),
+      title = _text(json['title']),
+      detail = _text(json['detail']),
+      availability = _text(json['availability']),
+      selected = _boolean(json['selected']) {
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(id) ||
+        !const {'available', 'unavailable'}.contains(availability)) {
+      throw const FormatException('Invalid Expert source candidate');
+    }
+  }
+
+  final String id;
+  final String title;
+  final String detail;
+  final String availability;
+  final bool selected;
 }
 
 final class AgentRegistryView {

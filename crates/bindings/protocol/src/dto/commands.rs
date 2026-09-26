@@ -67,6 +67,10 @@ pub enum AppCommandDto {
     ExpertsRegistryConfigure {
         change: super::RegistryConfigurationDto,
     },
+    #[serde(rename = "experts.binding.replace")]
+    ExpertsBindingReplace {
+        selection: super::ExpertBindingSelectionDto,
+    },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
     #[serde(rename = "conversation.session.resume")]
@@ -157,6 +161,7 @@ impl AppCommandDto {
                     Ok(())
                 }
             }
+            Self::ExpertsBindingReplace { selection } => selection.validate(),
             Self::ConversationSessionStart {} | Self::ConversationSessionResume {} => Ok(()),
             Self::ConversationSessionRecover { session_id, .. } => {
                 if session_id.is_nil() {

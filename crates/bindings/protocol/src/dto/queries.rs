@@ -72,6 +72,11 @@ pub enum AppQueryDto {
     AccessLocalReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "experts.registry.inspect")]
     ExpertsRegistryInspect {},
+    #[serde(rename = "experts.sources.candidates")]
+    ExpertsSourceCandidates {
+        assignment_id: Uuid,
+        requirement_key: String,
+    },
     #[serde(rename = "experts.read_result")]
     ExpertsReadResult { operation_id: Uuid, release: bool },
     #[serde(rename = "conversation.session.get")]
@@ -145,6 +150,20 @@ impl AppQueryDto {
                 ("query.operation_id", operation_id)
             }
             Self::ExpertsRegistryInspect {} => return Ok(()),
+            Self::ExpertsSourceCandidates {
+                assignment_id,
+                requirement_key,
+            } => {
+                if assignment_id.is_nil()
+                    || requirement_key.is_empty()
+                    || requirement_key.len() > 128
+                    || requirement_key.trim() != requirement_key
+                    || requirement_key.chars().any(char::is_control)
+                {
+                    return Err("query.expert_candidates");
+                }
+                return Ok(());
+            }
             Self::ExpertsReadResult { operation_id, .. } => ("query.operation_id", operation_id),
             Self::ConversationSessionGet { session_id } => ("query.session_id", session_id),
             Self::ConversationSessionReadResult { operation_id, .. } => {

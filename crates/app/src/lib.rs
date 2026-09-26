@@ -110,7 +110,8 @@ pub use day_services::{
 pub use error::{CoreError, ErrorCode};
 #[cfg(unix)]
 pub use expert_services::{
-    ExpertCommand, ExpertCommands, ExpertInspection, ExpertOperationResult, ExpertQueries,
+    ExpertBindingSelectionIntent, ExpertCandidateCatalog, ExpertCommand, ExpertCommands,
+    ExpertInspection, ExpertOperationResult, ExpertQueries, ExpertSourceCandidateView,
     RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
 };
 /// The acquisition values one local-context command carries.

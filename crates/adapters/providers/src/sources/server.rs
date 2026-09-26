@@ -3,14 +3,14 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use crate::control::PreparedServerSource;
 use crate::control::authorization::{
     RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
 };
-use crate::control::PreparedServerSource;
 use floe_access::{RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation};
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation};
+use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation, ConnectorSnapshot};
 use floe_context::{
     AttentionView, CalendarContextView, CommunicationView, ConfirmedInteractionView, LogisticsView,
     MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
@@ -104,6 +104,15 @@ struct ObservedConnectorCatalog {
     person_id: String,
     device_id: String,
     connectors: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservedConnectionSnapshots {
+    schema_version: u32,
+    person_id: String,
+    device_id: String,
+    connections: Vec<ConnectorSnapshot>,
 }
 
 /// Largest connector catalog the transport will read.
@@ -374,6 +383,28 @@ impl ServerSourceClient {
             self.source.device_id(),
         )
         .ok_or(AgentFailure::CapabilityUnavailable)
+    }
+
+    pub async fn observe_source_connections(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<Vec<ConnectorSnapshot>, AgentFailure> {
+        let observed: ObservedConnectionSnapshots = self
+            .authenticated_get("/v1/connections", deadline, cancellation)
+            .await?;
+        if observed.schema_version != 1
+            || observed.person_id != self.source.person_id()
+            || observed.device_id != self.source.device_id()
+            || observed.connections.len() > 64
+            || observed.connections.iter().any(|snapshot| {
+                snapshot.descriptor.id != snapshot.connection.connector_id
+                    || snapshot.connection.person_id.as_deref() != Some(self.source.person_id())
+            })
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(observed.connections)
     }
 
     async fn authenticated_get<Response: DeserializeOwned>(
@@ -1067,6 +1098,53 @@ mod tests {
                 connection_id: "00000000-0000-4000-8000-000000000010".into(),
                 connection_revision: 7,
             }]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn source_connection_catalog_is_metadata_only_and_caller_scoped() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut snapshot: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../server/internal/connectors/gmail/testdata/ready_snapshot.json"
+        ))
+        .unwrap();
+        snapshot["connection"]["connection_id"] = json!("00000000-0000-4000-8000-000000000012");
+        snapshot["connection"]["person_id"] = json!(PERSON);
+        let body = json!({
+            "schema_version": 1,
+            "person_id": PERSON,
+            "device_id": DEVICE,
+            "connections": [snapshot],
+        })
+        .to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let size = socket.read(&mut request).await.unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..size])
+                    .starts_with("GET /v1/connections HTTP/1.1\r\n")
+            );
+            socket.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            ).as_bytes()).await.unwrap();
+        });
+        let client = ServerSourceClient::new(source(&format!("http://{address}")));
+        let catalog = client
+            .observe_source_connections(
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].connection.connector_id, "gmail");
+        assert_eq!(
+            catalog[0].connection.connection_id.as_deref(),
+            Some("00000000-0000-4000-8000-000000000012")
         );
         server.await.unwrap();
     }

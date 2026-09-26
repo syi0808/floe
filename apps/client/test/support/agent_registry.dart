@@ -56,6 +56,8 @@ final class TestRegistryGateway extends TestVaultGateway
   String? registryError;
   int reads = 0;
   int changes = 0;
+  final candidateId = 'a' * 64;
+  List<String> selectedCandidateIds = [];
 
   @override
   Future<AgentRegistryView?> readRegistry(String personId) async {
@@ -100,5 +102,54 @@ final class TestRegistryGateway extends TestVaultGateway
         enabled;
     snapshot!['revision'] = current.revision + 1;
     return AgentRegistryView.fromJson(snapshot!);
+  }
+
+  @override
+  Future<AgentCandidateCatalog> readCandidates(
+    String personId, {
+    required String assignmentId,
+    required String requirementKey,
+  }) async => AgentCandidateCatalog.fromJson({
+    'assignment_id': assignmentId,
+    'requirement_key': requirementKey,
+    'binding_revision':
+        ((snapshot!['assignments'] as List).single as Map)['binding_revision'],
+    'candidates': [
+      {
+        'candidate_id': candidateId,
+        'title': 'Attention',
+        'detail': 'This device',
+        'availability': 'available',
+        'selected': selectedCandidateIds.contains(candidateId),
+      },
+    ],
+  });
+
+  @override
+  Future<AgentCandidateCatalog> replaceSelection(
+    String personId, {
+    required AgentInstallation installation,
+    required AgentExpertDefinition definition,
+    required AgentAssignment assignment,
+    required AgentSourceRequirement requirement,
+    required List<String> candidateIds,
+  }) async {
+    if (candidateIds.any((id) => id != candidateId) ||
+        assignment.bindingRevision !=
+            ((snapshot!['assignments'] as List).single
+                as Map)['binding_revision']) {
+      throw const AgentVaultException('conflict');
+    }
+    selectedCandidateIds = List.of(candidateIds);
+    final entry = (snapshot!['assignments'] as List).single as Map;
+    entry['binding_revision'] = assignment.bindingRevision + 1;
+    ((entry['requirements'] as List).single as Map)['selected_count'] =
+        candidateIds.length;
+    snapshot!['revision'] = (snapshot!['revision'] as int) + 1;
+    return readCandidates(
+      personId,
+      assignmentId: assignment.id,
+      requirementKey: requirement.key,
+    );
   }
 }

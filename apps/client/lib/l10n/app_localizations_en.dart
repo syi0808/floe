@@ -130,6 +130,31 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentInteractionExpertBindingTitle => 'Expert setup needed';
 
   @override
+  String get expertSourceOptional => 'Optional source';
+
+  @override
+  String get expertSourceRequired => 'Required source';
+
+  @override
+  String get expertSourceSelected => 'selected';
+
+  @override
+  String get expertSourceSelectionBoundary =>
+      'Choosing a source does not grant access. Permissions are reviewed separately when needed.';
+
+  @override
+  String get expertSourceNoCompatible => 'No compatible source is connected.';
+
+  @override
+  String get expertSourceUnavailable => 'Saved source unavailable';
+
+  @override
+  String get expertSourceSave => 'Save sources';
+
+  @override
+  String get expertSourceRemove => 'Remove selection';
+
+  @override
   String get agentInteractionRequestPermission => 'Request access';
 
   @override

@@ -20,9 +20,122 @@ final class AgentRegistryController extends ChangeNotifier {
   String? failure;
   bool loaded = false;
   bool busy = false;
+  AgentCandidateCatalog? candidateCatalog;
+  String? candidateFailure;
+  bool candidateBusy = false;
 
   bool get available => gateway != null;
   bool get canManage => available && !busy && canOperate();
+
+  Future<void> loadCandidates(
+    String assignmentId,
+    String requirementKey,
+  ) async {
+    if (!canManage || candidateBusy) return;
+    candidateBusy = true;
+    candidateFailure = null;
+    notifyListeners();
+    try {
+      final result = await gateway!.readCandidates(
+        personId,
+        assignmentId: assignmentId,
+        requirementKey: requirementKey,
+      );
+      if (!canOperate()) return;
+      if (result.assignmentId != assignmentId ||
+          result.requirementKey != requirementKey) {
+        throw const FormatException('Expert candidate scope mismatch');
+      }
+      candidateCatalog = result;
+    } on Object catch (error) {
+      if (!canOperate()) return;
+      candidateCatalog = null;
+      candidateFailure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      if (error is AgentVaultException &&
+          (error.reloadRequired == true || error.sealSession == true)) {
+        onFatalFailure(error);
+      }
+    } finally {
+      candidateBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> replaceSelection(
+    AgentInstallation installation,
+    AgentExpertDefinition definition,
+    AgentAssignment assignment,
+    AgentSourceRequirement requirement,
+    List<String> candidateIds,
+  ) async {
+    if (!canManage || candidateBusy) return;
+    final current = candidateCatalog;
+    if (current == null ||
+        current.assignmentId != assignment.id ||
+        current.requirementKey != requirement.key ||
+        current.bindingRevision != assignment.bindingRevision ||
+        candidateIds.length > requirement.maximumSources ||
+        candidateIds.toSet().length != candidateIds.length ||
+        candidateIds.any(
+          (id) => !current.candidates.any(
+            (candidate) =>
+                candidate.id == id && candidate.availability == 'available',
+          ),
+        )) {
+      candidateFailure = 'conflict';
+      notifyListeners();
+      return;
+    }
+    candidateBusy = true;
+    candidateFailure = null;
+    notifyListeners();
+    try {
+      final result = await gateway!.replaceSelection(
+        personId,
+        installation: installation,
+        definition: definition,
+        assignment: assignment,
+        requirement: requirement,
+        candidateIds: candidateIds,
+      );
+      if (!canOperate()) return;
+      if (result.assignmentId != assignment.id ||
+          result.requirementKey != requirement.key ||
+          result.bindingRevision != assignment.bindingRevision + 1) {
+        throw const FormatException('Expert binding result mismatch');
+      }
+      candidateCatalog = result;
+      try {
+        registry = await gateway!.readRegistry(personId);
+        loaded = true;
+      } on Object {
+        registry = null;
+        loaded = false;
+      }
+    } on Object catch (error) {
+      if (!canOperate()) return;
+      candidateCatalog = null;
+      candidateFailure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      try {
+        registry = await gateway!.readRegistry(personId);
+        loaded = true;
+      } on Object {
+        registry = null;
+        loaded = false;
+      }
+      if (error is AgentVaultException &&
+          (error.reloadRequired == true || error.sealSession == true)) {
+        onFatalFailure(error);
+      }
+    } finally {
+      candidateBusy = false;
+      notifyListeners();
+    }
+  }
 
   Future<void> load() => _operation(null);
 
@@ -101,6 +214,8 @@ final class AgentRegistryController extends ChangeNotifier {
     registry = null;
     failure = null;
     loaded = false;
+    candidateCatalog = null;
+    candidateFailure = null;
     notifyListeners();
   }
 

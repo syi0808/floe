@@ -131,6 +131,15 @@ pub enum WorkerAction {
     Registry {
         change: Option<floe_experts::RegistryConfiguration>,
     },
+    ExpertCandidates {
+        assignment_id: Uuid,
+        requirement_key: String,
+        device_id: String,
+    },
+    ExpertReplaceBinding {
+        change: crate::ExpertBindingSelectionIntent,
+        device_id: String,
+    },
     CalendarSubjectPreview {
         request: Box<CalendarSubjectRequest>,
     },
@@ -195,6 +204,8 @@ impl WorkerAction {
             Self::Unlock => "unlock",
             Self::Lock => "lock",
             Self::Registry { .. } => "registry",
+            Self::ExpertCandidates { .. } => "expert_candidates",
+            Self::ExpertReplaceBinding { .. } => "expert_binding",
             Self::PersonalAccess { .. } => "personal_access",
             Self::ContactsAccess { .. } => "contacts_access",
             Self::CalendarAction { .. } => "calendar_action",
@@ -223,6 +234,8 @@ impl WorkerAction {
             self,
             Self::Status
                 | Self::Registry { .. }
+                | Self::ExpertCandidates { .. }
+                | Self::ExpertReplaceBinding { .. }
                 | Self::PersonalAccess { .. }
                 | Self::ContactsAccess { .. }
                 | Self::CalendarAccess { .. }
@@ -256,6 +269,7 @@ pub struct WorkerResult {
     pub state: Option<VaultState>,
     pub session: Option<floe_conversation::AgentSession>,
     pub registry: Option<floe_experts::RegistryOverview>,
+    pub expert_candidates: Option<crate::ExpertCandidateCatalog>,
     pub calendar_subject_preview: Option<CalendarSubjectPreview>,
     pub proposal: Option<CalendarProposalInspection>,
     pub memory_review: Option<MemoryReviewResult>,

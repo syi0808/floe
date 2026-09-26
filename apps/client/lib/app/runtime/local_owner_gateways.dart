@@ -654,17 +654,67 @@ final class NativeRegistryGateway implements AgentRegistryGateway {
     );
   }
 
+  @override
+  Future<AgentCandidateCatalog> readCandidates(
+    String personId, {
+    required String assignmentId,
+    required String requirementKey,
+  }) => _observe(
+    personId,
+    {
+      'kind': 'experts.sources.candidates',
+      'assignment_id': assignmentId,
+      'requirement_key': requirementKey,
+    },
+    decode: (result) => AgentCandidateCatalog.fromJson(
+      Map<String, dynamic>.from(result['candidates'] as Map),
+    ),
+  );
+
+  @override
+  Future<AgentCandidateCatalog> replaceSelection(
+    String personId, {
+    required AgentInstallation installation,
+    required AgentExpertDefinition definition,
+    required AgentAssignment assignment,
+    required AgentSourceRequirement requirement,
+    required List<String> candidateIds,
+  }) => _observe(
+    personId,
+    {
+      'kind': 'experts.binding.replace',
+      'selection': {
+        'assignment_id': assignment.id,
+        'package_id': installation.packageId,
+        'package_version': installation.version,
+        'definition_revision': definition.definitionRevision,
+        'requirement_key': requirement.key,
+        'expected_binding_revision': assignment.bindingRevision,
+        'candidate_ids': candidateIds,
+      },
+    },
+    decode: (result) => AgentCandidateCatalog.fromJson(
+      Map<String, dynamic>.from(result['candidates'] as Map),
+    ),
+  );
+
   Future<T> _observe<T>(
     String personId,
     Map<String, Object?> intent, {
     required T Function(Map<String, dynamic>) decode,
   }) {
-    final command = const <String>{'experts.registry.configure'}
-        .contains(intent['kind']);
+    final command = const <String>{
+      'experts.registry.configure',
+      'experts.binding.replace',
+    }.contains(intent['kind']);
     return _operations.observe(
       scope: personId,
       intent: ownerIntent(intent),
-      stage: 'registry',
+      stage: switch (intent['kind']) {
+        'experts.sources.candidates' => 'expert_candidates',
+        'experts.binding.replace' => 'expert_binding',
+        _ => 'registry',
+      },
       resultKind: 'expert_operation',
       start: (operationId) => command
           ? ownerCommand(_transport, operationId, intent)

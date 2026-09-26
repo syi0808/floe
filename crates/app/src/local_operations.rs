@@ -60,9 +60,23 @@ impl LocalOperationIntent {
             Self::ExpertInspection(ExpertInspection::Registry) => {
                 WorkerAction::Registry { change: None }
             }
+            Self::ExpertInspection(ExpertInspection::Candidates {
+                assignment_id,
+                requirement_key,
+            }) => WorkerAction::ExpertCandidates {
+                assignment_id: *assignment_id,
+                requirement_key: requirement_key.clone(),
+                device_id: caller.device_id().to_owned(),
+            },
             Self::ExpertCommand(ExpertCommand::ConfigureRegistry(change)) => {
                 WorkerAction::Registry {
                     change: Some(change.clone()),
+                }
+            }
+            Self::ExpertCommand(ExpertCommand::ReplaceBinding(change)) => {
+                WorkerAction::ExpertReplaceBinding {
+                    change: change.clone(),
+                    device_id: caller.device_id().to_owned(),
                 }
             }
             Self::LocalAccessCommand(command) => command.action(caller),

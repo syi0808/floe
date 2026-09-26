@@ -44,6 +44,7 @@ use crate::{FloeCore, diagnostics};
 
 mod calendar_access;
 mod conversation_turn;
+mod expert_binding_settings;
 mod expert_setup;
 mod interaction_owners;
 mod interaction_resolution;
@@ -620,6 +621,7 @@ struct Progress {
     state: Option<VaultState>,
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
+    expert_candidates: Option<crate::ExpertCandidateCatalog>,
     calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
     memory_review: Option<floe_knowledge::MemoryReviewResult>,
@@ -1282,6 +1284,7 @@ impl Worker {
             state: progress.state,
             session: progress.session.clone(),
             registry: progress.registry.clone(),
+            expert_candidates: progress.expert_candidates.clone(),
             calendar_subject_preview: progress.calendar_subject_preview.clone(),
             proposal: progress.proposal.clone(),
             memory_review: progress.memory_review.clone(),
@@ -1790,6 +1793,7 @@ struct VaultExecutionResult {
     state: VaultState,
     session: Option<AgentSession>,
     registry: Option<floe_experts::RegistryOverview>,
+    expert_candidates: Option<crate::ExpertCandidateCatalog>,
     calendar_subject_preview: Option<CalendarSubjectPreview>,
     proposal: Option<CalendarProposalInspection>,
     memory_review: Option<floe_knowledge::MemoryReviewResult>,
@@ -1854,6 +1858,7 @@ fn finish_job(
                 progress.state = Some(result.state);
                 progress.session = result.session;
                 progress.registry = result.registry;
+                progress.expert_candidates = result.expert_candidates;
                 progress.calendar_subject_preview = result.calendar_subject_preview;
                 progress.proposal = result.proposal;
                 progress.memory_review = result.memory_review;
@@ -2378,6 +2383,42 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
             }
             Ok(VaultExecutionResult {
                 registry,
+                ..VaultExecutionResult::ready()
+            })
+        }
+        WorkerAction::ExpertCandidates {
+            assignment_id,
+            requirement_key,
+            device_id,
+        } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let candidates = expert_binding_settings::inspect(
+                vault,
+                job.person,
+                device_id,
+                *assignment_id,
+                requirement_key,
+                &job.cancellation,
+            )
+            .await?;
+            Ok(VaultExecutionResult {
+                expert_candidates: Some(candidates),
+                ..VaultExecutionResult::ready()
+            })
+        }
+        WorkerAction::ExpertReplaceBinding { change, device_id } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let candidates = expert_binding_settings::replace(
+                vault,
+                job.person,
+                device_id,
+                job.id,
+                change,
+                &job.cancellation,
+            )
+            .await?;
+            Ok(VaultExecutionResult {
+                expert_candidates: Some(candidates),
                 ..VaultExecutionResult::ready()
             })
         }
