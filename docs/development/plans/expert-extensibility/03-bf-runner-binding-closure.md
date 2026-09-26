@@ -254,3 +254,35 @@ Report:
 10. residual findings, golden code/PNG comparison, unchanged 04 source behavior and any unexpected scope expansion;
 11. current architecture and README changes; 03 closed only when the evidence supports it, 04 still Not started;
 12. final local commit(s), no push, and any remaining blocker stated concretely.
+
+## Closure evidence (2026-09-26)
+
+BF-0 started from clean `8ad661d3849b73b66c7b19de97a14dfbe78f7d8d`; fetched `origin/main` was the same commit and the safe fast-forward was a no-op. The only delta from source-review baseline `683b118b00eafb0d931c0a5f5701d16d978d96ba` was this plan and the reopened README status. The starting filesystem had 114 GiB available. All BF-0 commands completed successfully before production edits: Experts delegation, shipped bundle, App first-party Observe (5), App Vault Registry (10), architecture checker (zero errors/warnings), and Flutter Registry (8).
+
+Implementation commits are `bd197be1` (client target) and `dd4f8df8` (bound runner, App product-path tests, A2A caller migration and current runtime architecture). `OpenVault` validates a supplied manifest-plus-runner set and publishes the exact installed-manifest/admission join. Each endpoint retains `Arc<ExpertRegistration<BoundExpertRunner>>`. Shipped runners are opaque bundle-owned compiled factories; additional statically supplied runners are higher-ranked function pointers over the borrowed product host and request. Execution invokes that retained runner, with no shipped catalog or package-ID lookup. The existing invocation-scoped host, `AuthorizedRead` lifetime, Task admission pin, coverage, blockers, artifacts and assignment-local settlement remain in place. The old `shipped_bundle_dispatch`, `execute_builtin`, `task_runners` override and A2A shipped fallback are absent. The generic Experts-owned `ExpertDispatchTable` remains an independent owner API, not the product endpoint's dispatch path.
+
+The seven `registered_runner_` App tests all passed through fresh encrypted Vault, real install/publication, `RegisteredExpertEndpoint`, production `DelegatedMessageExperts` and `TaskCoordinator<VaultTaskRepository<_>>`:
+
+- `registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task`: non-shipped `example.test.expert` returns its unique marker and covered artifact; one runner call and no call on durable replay.
+- `registered_runner_required_unconfigured_source_returns_typed_outcome`: a declared required Attention read returns actual `NeedsUserAction`; the completed Task carries the trusted durable Task-origin interaction reference, without a fake grant.
+- `registered_runner_undeclared_requirement_is_denied_before_source_io`: the host returns `CapabilityDenied` for an absent key even with an invalid payload query.
+- `registered_runner_admission_and_manifest_mismatches_fail_closed` and `registered_runner_missing_and_duplicate_supplied_implementations_do_not_fallback`: foreign Person, wrong package/definition/device, changed installed manifest, missing exact version/registration and duplicate/conflicting definitions cannot dispatch; failed publication preserves the old Directory set.
+- `registered_runner_product_endpoint_pins_a_across_b_publication_and_replay`: an explicit `Notify` holds A after admission; disabling its assignment, installing changed package version/definition revision and publishing B gives the old Task A's marker and the new Task B's marker. Durable records retain distinct exact admissions; A/B each run once, completed A replay runs neither, and a new A admission is blocked.
+- `registered_runner_extension_does_not_change_first_party_observe_policy`: an installed extension declaring an existing Attention capability changes neither shipped/native consumers nor their fingerprint; Calendar and Gmail policy fingerprints remain unchanged.
+
+BF-4 targeted gate passed: `cargo test -p floe-experts --test delegation` (20), `cargo test -p floe-experts-builtin`, `cargo test -p floe-app registered_runner_ --lib -- --test-threads=1` (7), `cargo test -p floe-app first_party_observe --lib -- --test-threads=1` (6), `cargo test -p floe-app vault_registry --lib -- --test-threads=1` (10), `cargo test -p floe-app schedule_settlement_binds_evidence_to_the_exact_grant_policy_dependency --lib -- --test-threads=1` (1), `cargo test -p floe-protocol` (integration tests executed; the library's zero-test binary was not counted), `python3 tools/architecture/check_boundaries.py` (zero errors/warnings), `git diff --check`, and the three specified focused Flutter tests (Registry 9, delegation fixture 1, non-golden proposal-card behavior 11). After deleting the A2A test-runner override, `cargo test -p floe-app vault_host::conversation_turn --lib -- --test-threads=1` passed 53 and the seven product tests passed again. The Rust-to-Dart fixture was not regenerated.
+
+The BF-4 broad gate passed in the explicitly qualified serial mode:
+
+```sh
+cargo check --workspace --lib
+CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 cargo test --workspace --no-fail-fast
+python3 tools/architecture/check_boundaries.py
+cargo build -p floe-ffi
+(cd apps/client && flutter analyze && flutter test && flutter build macos)
+git diff --check
+```
+
+The workspace run had no failures; App's main suite reported 265 passed and one pre-existing ignored test. Flutter's full suite reported 365 passed; analyze found no issues and the macOS release app built. This is not a claim of default-parallel reliability; no additional parallel run was performed. The ignored tests were `authorized_eventkit_response_loss_recovers_exact_disposable_event` (explicit authorization, copied debug app and real EventKit response-loss shim required) and `live_codex_model_uses_canonical_inference_and_exact_recipient` (explicitly approved existing Codex OAuth credential and model required). Neither was counted as passed.
+
+Residual searches found no App `shipped_bundle_dispatch`, `execute_builtin`, `task_runners`, `ExpertTaskRunner`, `from_package_id` execution lookup, old Registry setup symbols, or client Registry `calendarView`/`calendar_view` target. Remaining `manifests()` calls in App are first-party policy/bootstrap or test-only fixtures, not endpoint execution. The proposal-card test file and PNG have identical Git blobs to task-start commit `8ad661d`; its commented golden assertion was neither enabled nor counted. No schema/protocol, source-binding, `ConfirmedInteractions` unavailable-to-empty-Ready, Go/server, Android, profile/database/key, or external-account behavior changed. Checkpoint 04 remains Not started.
