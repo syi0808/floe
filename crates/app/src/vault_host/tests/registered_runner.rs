@@ -62,6 +62,10 @@ static RUNNER_B_CALLS: AtomicUsize = AtomicUsize::new(0);
 static REQUIRED_SOURCE_RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_A_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static RUNNER_A_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static SOURCE_READ_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static SOURCE_READ_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static OUTPUT_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static OUTPUT_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
 fn runner_a<'turn, 'model, 'msg, 'call>(
     _host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
@@ -262,6 +266,316 @@ fn required_source_runner<'turn, 'model, 'msg, 'call>(
             &serde_json::json!({"outcome": marker}),
         )
     })
+}
+
+fn paused_requirement_runner<'turn, 'model, 'msg, 'call>(
+    host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
+    request: &'call BuiltinExpertRequest,
+) -> floe_agent_contract::BoxFuture<'call, Result<BuiltinExpertOutput, AgentFailure>> {
+    Box::pin(async move {
+        SOURCE_READ_ENTERED
+            .get_or_init(tokio::sync::Notify::new)
+            .notify_one();
+        SOURCE_READ_RELEASE
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+        host.read_requirement(
+            request,
+            "required_attention",
+            serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+        )
+        .await?;
+        BuiltinExpertOutput::from_result(
+            "source-outcome",
+            "application/vnd.example.result+json",
+            "source-read-after-rebind".into(),
+            &serde_json::json!({"outcome": "read"}),
+        )
+    })
+}
+
+fn paused_output_runner<'turn, 'model, 'msg, 'call>(
+    _host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
+    _request: &'call BuiltinExpertRequest,
+) -> floe_agent_contract::BoxFuture<'call, Result<BuiltinExpertOutput, AgentFailure>> {
+    Box::pin(async move {
+        OUTPUT_ENTERED
+            .get_or_init(tokio::sync::Notify::new)
+            .notify_one();
+        OUTPUT_RELEASE
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+        BuiltinExpertOutput::from_result(
+            "output",
+            "application/vnd.example.result+json",
+            "stale-output".into(),
+            &serde_json::json!({"output": true}),
+        )
+    })
+}
+
+#[tokio::test]
+async fn rebound_selection_discards_runner_result_before_final_release() {
+    let person = PersonId::new();
+    let (_root, open, server) =
+        installed_open(person, required_source_registration(paused_output_runner)).await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = &snapshot.assignments[0];
+    let source_a = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+        person_id: person,
+        device_id: "mac-local",
+        capability: "attention.coarse",
+        contract_version: 1,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        calendar_connection: None,
+    })
+    .unwrap()
+    .remove(0)
+    .reference;
+    let package = snapshot.installations[0].package.clone();
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_attention".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![source_a],
+            },
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let scope = task_scope(run_id, task_id);
+    let execution = open
+        .task_coordinator
+        .delegate(request(person, run_id, task_id), &scope);
+    let rebind = async {
+        OUTPUT_ENTERED
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+        open.vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package,
+                    definition_revision: 1,
+                    requirement_key: "required_attention".into(),
+                    expected_binding_revision: assignment.binding.revision + 1,
+                    selected: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        OUTPUT_RELEASE
+            .get_or_init(tokio::sync::Notify::new)
+            .notify_one();
+    };
+    let (result, ()) = tokio::join!(execution, rebind);
+    let receipt = result.unwrap();
+    assert_eq!(receipt.snapshot.state, TaskState::Failed, "{receipt:?}");
+    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+    assert_ne!(receipt.snapshot.result.as_deref(), Some("stale-output"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn completed_task_replays_historical_result_after_rebinding_and_disable() {
+    let person = PersonId::new();
+    let (_root, open, server) =
+        installed_open(person, required_source_registration(example_runner)).await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = &snapshot.assignments[0];
+    let source = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+        person_id: person,
+        device_id: "mac-local",
+        capability: "attention.coarse",
+        contract_version: 1,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        calendar_connection: None,
+    })
+    .unwrap()
+    .remove(0)
+    .reference;
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: snapshot.installations[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_attention".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![source],
+            },
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let original_request = request(person, run_id, task_id);
+    let scope = task_scope(run_id, task_id);
+    let completed = open
+        .task_coordinator
+        .delegate(original_request.clone(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(completed.snapshot.state, TaskState::Completed);
+    let current = open.vault.expert_registry().await.unwrap().unwrap();
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: snapshot.installations[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_attention".into(),
+                expected_binding_revision: current.assignments[0].binding.revision,
+                selected: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let current = open.vault.expert_registry().await.unwrap().unwrap();
+    open.vault
+        .configure_registry(
+            floe_experts::RegistryConfiguration {
+                instance_id: current.instance_id,
+                expected_revision: current.revision,
+                target: floe_experts::RegistryConfigurationTarget::Assignment {
+                    id: assignment.id,
+                    enabled: false,
+                },
+            },
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let replay = open
+        .task_coordinator
+        .delegate(original_request, &scope)
+        .await
+        .unwrap();
+    assert_eq!(replay.snapshot, completed.snapshot);
+    assert_eq!(
+        open.task_coordinator
+            .get_task(&person.to_string(), Some(run_id.as_uuid()), task_id, &scope)
+            .await
+            .unwrap()
+            .unwrap()
+            .snapshot,
+        completed.snapshot,
+    );
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn admitted_source_a_rebound_before_read_never_uses_b() {
+    let person = PersonId::new();
+    let (_root, open, server) = installed_open(
+        person,
+        required_source_registration(paused_requirement_runner),
+    )
+    .await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = &snapshot.assignments[0];
+    let source_a = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+        person_id: person,
+        device_id: "mac-local",
+        capability: "attention.coarse",
+        contract_version: 1,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        calendar_connection: None,
+    })
+    .unwrap()
+    .remove(0)
+    .reference;
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: snapshot.installations[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_attention".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![source_a.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let scope = task_scope(run_id, task_id);
+    let execution = open
+        .task_coordinator
+        .delegate(request(person, run_id, task_id), &scope);
+    let rebind = async {
+        SOURCE_READ_ENTERED
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+        let mut source_b = source_a.clone();
+        source_b.connection_id =
+            floe_context_contract::ConnectionId::try_new("attention-b").unwrap();
+        open.vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package: snapshot.installations[0].package.clone(),
+                    definition_revision: 1,
+                    requirement_key: "required_attention".into(),
+                    expected_binding_revision: assignment.binding.revision + 1,
+                    selected: vec![source_b],
+                },
+            )
+            .await
+            .unwrap();
+        SOURCE_READ_RELEASE
+            .get_or_init(tokio::sync::Notify::new)
+            .notify_one();
+    };
+    let (result, ()) = tokio::join!(execution, rebind);
+    let receipt = result.unwrap();
+    assert_eq!(receipt.snapshot.state, TaskState::Failed, "{receipt:?}");
+    assert_eq!(receipt.snapshot.issue, Some(AgentFailure::Conflict));
+    assert_eq!(
+        open.vault
+            .task(task_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .selection
+            .requirements[0]
+            .selected[0]
+            .connection_id
+            .as_str(),
+        source_a.connection_id.as_str(),
+    );
+    server.join().unwrap();
 }
 
 fn undeclared_source_runner<'turn, 'model, 'msg, 'call>(
@@ -833,6 +1147,29 @@ async fn expert_settings_resolve_only_current_candidate_ids_and_rejoin_exact_sav
         expected_binding_revision: first.binding_revision,
         candidate_ids: vec![first.candidates[0].candidate_id.clone()],
     };
+    assert_eq!(
+        crate::vault_host::expert_binding_settings::replace(
+            &open,
+            person,
+            "other-device",
+            Uuid::new_v4(),
+            &intent,
+            &cancellation,
+        )
+        .await,
+        Err(AgentFailure::Conflict),
+    );
+    assert_eq!(
+        open.vault
+            .expert_registry()
+            .await
+            .unwrap()
+            .unwrap()
+            .assignments[0]
+            .binding
+            .revision,
+        first.binding_revision,
+    );
     let operation_id = Uuid::new_v4();
     let saved = crate::vault_host::expert_binding_settings::replace(
         &open,

@@ -663,6 +663,27 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
     )
     .await
     .unwrap();
+    let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = snapshot
+        .assignments
+        .iter()
+        .find(|entry| entry.id == fixture.evidence.assignment_id)
+        .unwrap();
+    fixture
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: fixture.evidence.package.clone(),
+                definition_revision: 1,
+                requirement_key: "floe.source.calendar".into(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![],
+            },
+        )
+        .await
+        .unwrap();
     let provider = Provider::default();
     let receipt = CalendarCreateReceipt {
         execution_id: action.execution_id,

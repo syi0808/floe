@@ -576,3 +576,152 @@ async fn cancelled_configuration_and_missing_registry_fail_closed() {
     drop(fixture.vault);
     assert!(EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys).await.is_err());
 }
+
+#[tokio::test]
+async fn superseded_selection_cannot_settle_recovered_task() {
+    let fixture = Fixture::new().await;
+    fixture.prepare().await;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
+    let task_id = completion.task_id;
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = before
+        .assignments
+        .iter()
+        .find(|entry| entry.id == completion.settlement.admission.assignment_id)
+        .unwrap();
+    let installation = before
+        .installations
+        .iter()
+        .find(|entry| entry.id == assignment.installation_id)
+        .unwrap();
+    let requirement = before
+        .manifests
+        .iter()
+        .find(|entry| entry.package == installation.package)
+        .unwrap()
+        .source_requirements
+        .iter()
+        .find(|entry| entry.capability == "calendar.timeline")
+        .unwrap();
+    fixture
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: installation.package.clone(),
+                definition_revision: completion.settlement.admission.definition_revision,
+                requirement_key: requirement.key.clone(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![calendar_selection("calendar:b")],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .settle_expert_task_checked(completion, || Ok(()))
+            .await,
+        Err(AgentFailure::Conflict),
+    );
+    let task = fixture.vault.task(task_id).await.unwrap().unwrap();
+    assert_eq!(task.snapshot.state, TaskState::Working);
+    assert_ne!(
+        task.selection.digest,
+        AgentRegistry::restore(
+            fixture.vault.expert_registry().await.unwrap().unwrap(),
+            before.instance_id,
+        )
+        .unwrap()
+        .execution_selection(fixture.person, &task.admission)
+        .unwrap()
+        .digest,
+    );
+}
+
+#[tokio::test]
+async fn concurrent_private_state_settlement_and_binding_preserve_both_fields() {
+    let fixture = Fixture::new().await;
+    fixture.prepare().await;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = before
+        .assignments
+        .iter()
+        .find(|entry| entry.id == completion.settlement.admission.assignment_id)
+        .unwrap();
+    let installation = before
+        .installations
+        .iter()
+        .find(|entry| entry.id == assignment.installation_id)
+        .unwrap();
+    let requirement = before
+        .manifests
+        .iter()
+        .find(|entry| entry.package == installation.package)
+        .unwrap()
+        .source_requirements
+        .iter()
+        .find(|entry| entry.capability == "calendar.timeline")
+        .unwrap();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let settle_barrier = Arc::clone(&barrier);
+    let settle = async {
+        settle_barrier.wait().await;
+        fixture
+            .vault
+            .settle_expert_task_checked(completion, || Ok(()))
+            .await
+    };
+    let bind = async {
+        barrier.wait().await;
+        fixture
+            .vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                ExpertBindingCommand {
+                    assignment_id: assignment.id,
+                    package: installation.package.clone(),
+                    definition_revision: 1,
+                    requirement_key: requirement.key.clone(),
+                    expected_binding_revision: assignment.binding.revision,
+                    selected: vec![calendar_selection("calendar:b")],
+                },
+            )
+            .await
+    };
+    let (settled, bound) = tokio::join!(settle, bind);
+    assert!(bound.is_ok());
+    assert!(settled.is_ok() || settled == Err(AgentFailure::Conflict));
+    let after = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let current = after
+        .assignments
+        .iter()
+        .find(|entry| entry.id == assignment.id)
+        .unwrap();
+    assert_eq!(current.binding.revision, assignment.binding.revision + 1);
+    assert_eq!(
+        current
+            .binding
+            .entries
+            .iter()
+            .find(|entry| entry.requirement_key == requirement.key)
+            .unwrap()
+            .selected,
+        vec![calendar_selection("calendar:b")],
+    );
+    assert_eq!(current.private_state.revision, u64::from(settled.is_ok()));
+}
