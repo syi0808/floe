@@ -270,10 +270,16 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         })
     }
 
-    async fn sync_expert_directory(&self) -> Result<(), AgentFailure> {
+    async fn publish_expert_directory(&self) -> Result<(), AgentFailure> {
         let mut entries = Vec::new();
         let manifests = floe_experts_builtin::manifests();
-        for (card, admission) in self.vault.enabled_expert_admissions().await? {
+        let Some(snapshot) = self.vault.expert_registry().await? else {
+            self.directory.publish("product.experts", entries)?;
+            return Ok(());
+        };
+        let registry =
+            floe_experts::AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
+        for (card, admission) in registry.enabled_expert_admissions(self.vault.person_id())? {
             let Some(manifest) = manifests
                 .iter()
                 .find(|manifest| manifest.package == admission.package)
@@ -281,7 +287,8 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 continue;
             };
             manifest.validate()?;
-            if card != manifest.definition.card {
+            let installed = registry.resolve_admitted(self.vault.person_id(), &admission)?;
+            if card != manifest.definition.card || installed.manifest != *manifest {
                 return Err(AgentFailure::Conflict);
             }
             entries.push((
@@ -294,13 +301,13 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                     purposes: vec!["everyday-assistance".into()],
                 },
                 Arc::new(
-                    conversation_turn::expert_dispatch::BuiltinExpertEndpoint::new(
+                    conversation_turn::expert_dispatch::RegisteredExpertEndpoint::new(
                         Arc::clone(&self.core),
                         Arc::clone(&self.vault),
                         Arc::clone(&self.local_context),
                         self.connections.clone(),
                         admission.clone(),
-                        card.clone(),
+                        manifest.clone(),
                     ),
                 ) as Arc<dyn floe_agent_contract::AgentEndpoint>,
             ));
@@ -2055,7 +2062,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
     }
-    vault.sync_expert_directory().await?;
+    vault.publish_expert_directory().await?;
     let session = match Box::pin(conversation_turn::run(
         core,
         vault,
@@ -2147,7 +2154,7 @@ async fn execute_conversation_resume_action<Keys: VaultKeyProvider + 'static>(
         ),
         floe_experts::ExpertRefreshOutcome::Fatal(failure) => return Err(failure),
     }
-    vault.sync_expert_directory().await?;
+    vault.publish_expert_directory().await?;
     let origin_run_id = request.origin_run_id;
     let link = floe_conversation::InteractionResumeRef {
         origin_run_id,
@@ -3126,7 +3133,7 @@ mod tests {
     mod schedule_host;
     mod vault_registry;
 
-    use super::conversation_turn::expert_dispatch::BuiltinExpertEndpoint;
+    use super::conversation_turn::expert_dispatch::RegisteredExpertEndpoint;
     use floe_provider_adapters::control::CurrentSavedConnectionStore;
 
     impl Worker {

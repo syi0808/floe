@@ -25,7 +25,7 @@ pub use catalog::{
 };
 pub use host::{
     Acquiring, BlockedExpertResult, BlockedExpertStatus, BuiltinExpertHost, BuiltinExpertOutput,
-    BuiltinExpertRequest, StatefulExpertDraft, granted_context,
+    BuiltinExpertRequest, DeclaredSourceRead, StatefulExpertDraft, granted_context,
 };
 #[cfg(test)]
 mod test_host;

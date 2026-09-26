@@ -21,6 +21,33 @@ use floe_context_contract::{
     validate_communication_view,
 };
 
+pub(crate) async fn read_declared_view<Host, View>(
+    host: &Host,
+    request: &crate::BuiltinExpertRequest,
+    key: &str,
+    query: serde_json::Value,
+) -> Result<SourceReadOutcome<View>, AgentFailure>
+where
+    Host: crate::BuiltinExpertHost + ?Sized,
+    View: DeserializeOwned,
+{
+    Ok(match host.read_requirement(request, key, query).await? {
+        SourceReadOutcome::Ready(read) => {
+            for dependency in read.dependencies() {
+                host.record_dependency(request.task_id, request.task_id, dependency.clone())?;
+            }
+            SourceReadOutcome::Ready(
+                serde_json::from_value(read.payload().clone())
+                    .map_err(|_| AgentFailure::CapabilityUnavailable)?,
+            )
+        }
+        SourceReadOutcome::Unavailable(reason) => SourceReadOutcome::Unavailable(reason),
+        SourceReadOutcome::NeedsUserAction(blockers) => {
+            SourceReadOutcome::NeedsUserAction(blockers)
+        }
+    })
+}
+
 pub(crate) fn optional_calendar_views(
     context: &mut AgentContext,
     outcome: SourceReadOutcome<Vec<CalendarContextView>>,

@@ -120,6 +120,17 @@ pub fn manager_direct_remote_view(view_id: &str) -> bool {
         .any(|tool| tool.remote_view == Some(view_id))
 }
 
+pub fn manager_direct_native_connector(connector_id: &str) -> bool {
+    let tool_id = match connector_id {
+        "attention.macos" => ATTENTION_COARSE_READ,
+        "contacts.apple" | "contacts.android" => PEOPLE_IDENTITY_READ,
+        "health.apple" => WELLBEING_DERIVED_READ,
+        "feasibility.apple" => SCHEDULE_FEASIBILITY_READ,
+        _ => return false,
+    };
+    MANAGER_TOOLS.iter().any(|tool| tool.id == tool_id)
+}
+
 /// The seven Manager tools, always and regardless of model route.
 pub fn manager_tool_descriptors() -> Vec<ToolDescriptor> {
     MANAGER_TOOLS
@@ -980,6 +991,16 @@ mod tests {
 
     #[test]
     fn catalog_contains_all_seven_tools_with_stable_canonical_shape() {
+        for connector in [
+            "attention.macos",
+            "contacts.apple",
+            "contacts.android",
+            "health.apple",
+            "feasibility.apple",
+        ] {
+            assert!(manager_direct_native_connector(connector));
+        }
+        assert!(!manager_direct_native_connector("example.test.connector"));
         let descriptors = manager_tool_descriptors();
         let ids: Vec<&str> = descriptors
             .iter()

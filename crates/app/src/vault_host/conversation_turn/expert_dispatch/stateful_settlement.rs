@@ -89,10 +89,9 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                 let [contributor] = contributors.as_slice() else {
                     return Err(AgentFailure::PolicyDenied);
                 };
-                let coverage = floe_agent_contract::DependencyCoverage::dependent(
-                    (*contributor).clone(),
-                )
-                .map_err(|_| AgentFailure::PolicyDenied)?;
+                let coverage =
+                    floe_agent_contract::DependencyCoverage::dependent((*contributor).clone())
+                        .map_err(|_| AgentFailure::PolicyDenied)?;
                 let evidence = floe_actions::ExpertCalendarProposal {
                     schema_version: 1,
                     instance_id: registry.instance_id(),
@@ -118,8 +117,7 @@ impl<Keys: VaultKeyProvider> StatefulExpertSettlement for VaultStatefulExpertSet
                     request.invocation_id,
                     dependencies,
                     draft.result.clone(),
-                )
-                ?
+                )?
                 .into_endpoint_settlement()?;
             Ok(BuiltinExpertOutput {
                 result: draft.result,
@@ -166,8 +164,8 @@ mod tests {
     };
     use floe_execution::Cancellation;
     use floe_experts::{
-        A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, ExpertInstallOperation,
-        Directory, DirectoryEntry, TaskCoordinator, task_receipt_to_a2a,
+        A2AMessage, A2AMessageRole, A2APart, A2ASendMessageRequest, Directory, DirectoryEntry,
+        ExpertInstallOperation, TaskCoordinator, task_receipt_to_a2a,
     };
     use floe_experts_builtin::BuiltinExpertKind;
     use floe_kernel::PersonId;
@@ -380,6 +378,8 @@ mod tests {
                 memories: vec![],
                 evidence: vec![],
             },
+            staged_task_views: vec![],
+            context_inputs_available: false,
             max_output_bytes: 16_384,
             deadline: Instant::now() + Duration::from_secs(5),
             cancellation: Cancellation::default(),
@@ -390,10 +390,12 @@ mod tests {
             floe_experts_builtin::schedule::RESULT_MEDIA_TYPE,
             "One focus window".into(),
             &floe_experts_builtin::schedule::ScheduleAssessment {
-                insights: vec![floe_experts_builtin::schedule::ScheduleInsight::FocusWindow {
-                    starts_at_unix_ms: window_start,
-                    ends_at_unix_ms: window_start + 1_800_000,
-                }],
+                insights: vec![
+                    floe_experts_builtin::schedule::ScheduleInsight::FocusWindow {
+                        starts_at_unix_ms: window_start,
+                        ends_at_unix_ms: window_start + 1_800_000,
+                    },
+                ],
             },
         )
         .unwrap();
@@ -444,27 +446,34 @@ mod tests {
                 .err(),
             Some(AgentFailure::CapabilityDenied)
         );
-        let output =
-            StatefulExpertSettlement::settle(&settlement, &request, draft, vec![dependency.clone()])
-                .await
-                .unwrap();
+        let output = StatefulExpertSettlement::settle(
+            &settlement,
+            &request,
+            draft,
+            vec![dependency.clone()],
+        )
+        .await
+        .unwrap();
         assert_eq!(output.result, "One focus window");
         let artifacts: Vec<_> = output
             .artifacts
             .iter()
             .filter(|artifact| {
-                artifact.parts.iter().any(|part| matches!(
-                    part,
-                    floe_agent_contract::ArtifactPart::Data { media_type, .. }
-                        if media_type == floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE
-                ))
+                artifact.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        floe_agent_contract::ArtifactPart::Data { media_type, .. }
+                            if media_type == floe_actions::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE
+                    )
+                })
             })
             .collect();
         let [artifact] = artifacts.as_slice() else {
             panic!("exactly one Actions proposal");
         };
         let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
-            &artifact.coverage else {
+            &artifact.coverage
+        else {
             panic!("exact contributor coverage");
         };
         let [contributor] = dependencies.as_slice() else {
@@ -476,7 +485,10 @@ mod tests {
         };
         let proposal: floe_actions::ExpertCalendarProposal = serde_json::from_str(data).unwrap();
         assert_eq!(proposal.evidence_id, observation_id);
-        assert_eq!(proposal.package.id, BuiltinExpertKind::Schedule.package_id());
+        assert_eq!(
+            proposal.package.id,
+            BuiltinExpertKind::Schedule.package_id()
+        );
         assert_eq!(proposal.draft.starts_at_unix_ms, window_start);
 
         let coverage = DependencyCoverage::dependent(dependency).unwrap();
@@ -550,9 +562,18 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(receipt.snapshot.state, floe_agent_contract::TaskState::Completed);
+        assert_eq!(
+            receipt.snapshot.state,
+            floe_agent_contract::TaskState::Completed
+        );
         assert_eq!(receipt.snapshot.coverage, coverage);
-        assert!(receipt.snapshot.artifacts.iter().all(|artifact| artifact.coverage != DependencyCoverage::Unknown));
+        assert!(
+            receipt
+                .snapshot
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.coverage != DependencyCoverage::Unknown)
+        );
         let context_id = Uuid::new_v4();
         let product = task_receipt_to_a2a(
             A2ASendMessageRequest {

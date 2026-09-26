@@ -7,6 +7,7 @@ mod application {
     pub mod coverage;
     pub mod day_context_views;
     pub mod expert_context;
+    pub mod expert_sources;
     pub mod history;
     pub mod leases;
     pub mod model_coverage;
@@ -48,6 +49,10 @@ pub use application::coverage::{
 };
 pub use application::day_context_views::{note_context_view, task_context_view};
 pub use application::expert_context::{ExpertContextRequest, prepare_expert_context};
+pub use application::expert_sources::{
+    DeclaredSourceRequirement, DeclaredSourceValue, LocalExpertSource, LocalExpertSourceDriver,
+    read_declared_source,
+};
 pub use application::history::read_history_coverage;
 pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
@@ -77,10 +82,10 @@ pub use application::personal_lineage::{
     feasibility_query_fingerprint, people_query_fingerprint, wellbeing_query_fingerprint,
 };
 pub use application::personal_sources::{
-    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_EXPERT_CONSUMER, ATTENTION_RESOURCE,
-    FEASIBILITY_CONNECTION, FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE,
-    WELLBEING_CONNECTION, WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention,
-    admit_attention_outcome, apple_execution_owner, attention_execution_owner, attention_source,
+    ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,
+    FEASIBILITY_CONNECTOR, FEASIBILITY_RESOURCE, PEOPLE_RESOURCE, WELLBEING_CONNECTION,
+    WELLBEING_CONNECTOR, WELLBEING_RESOURCE, admit_attention, admit_attention_outcome,
+    apple_execution_owner, attention_execution_owner, attention_source,
     authorize_personal_dependency, contacts_connection, contacts_execution_owner,
     feasibility_source, personal_dependency_holds, read_feasibility, read_feasibility_outcome,
     read_manager_people, read_manager_people_outcome, read_people, read_wellbeing,
@@ -101,8 +106,8 @@ pub use application::source_view::SourceView;
 pub use application::tools::{
     ATTENTION_COARSE_READ, ContextToolService, LIFE_LOGISTICS_READ, MAIL_COMMUNICATION_READ,
     MANAGER_TOOL_DEFINITION_REVISION, PEOPLE_IDENTITY_READ, SCHEDULE_FEASIBILITY_READ,
-    WELLBEING_DERIVED_READ, WORK_CONTEXT_READ, manager_direct_remote_view,
-    manager_tool_descriptors,
+    WELLBEING_DERIVED_READ, WORK_CONTEXT_READ, manager_direct_native_connector,
+    manager_direct_remote_view, manager_tool_descriptors,
 };
 /// The authorization input Context's own coverage entry points take.
 pub use floe_access::{

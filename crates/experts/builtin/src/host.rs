@@ -14,18 +14,15 @@ use floe_agent_contract::{
     InferencePolicyDecision,
 };
 use floe_agent_contract::{AgentFailure, ExpertModel};
+use floe_context_contract::ContextDependency;
 use floe_context_contract::SourceReadOutcome;
-use floe_context_contract::{
-    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery, NativeContextView,
-    PeopleView, WellbeingView, WorkContextView,
-};
-use floe_context_contract::{ContextDependency, MemoryContextSnapshot};
+use floe_context_contract::{AuthorizedRead, CalendarViewQuery, NativeContextView};
 use floe_execution::Cancellation;
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{MailExpertInvocation, PersonalExpertInvocation, PortfolioExpertInvocation};
-use floe_context_contract::{CommunicationView, ConfirmedInteractionView};
+use floe_context_contract::CommunicationView;
 
 /// Every builtin Expert runs one bounded model call with the same ceiling.
 const MAX_EXPERT_MODEL_TOKENS: u64 = 40_960;
@@ -47,9 +44,43 @@ pub struct BuiltinExpertRequest {
     pub current_time_unix_ms: i64,
     /// The conversation context this Expert is allowed to see.
     pub context: AgentContext,
+    pub context_inputs_available: bool,
+    pub staged_task_views: Vec<NativeContextView>,
     pub max_output_bytes: usize,
     pub deadline: Instant,
     pub cancellation: Cancellation,
+}
+
+pub struct DeclaredSourceRead<Read> {
+    payload: serde_json::Value,
+    dependencies: Vec<ContextDependency>,
+    held: Option<Read>,
+}
+
+impl<Read> DeclaredSourceRead<Read> {
+    pub fn new(
+        payload: serde_json::Value,
+        dependencies: Vec<ContextDependency>,
+        held: Option<Read>,
+    ) -> Self {
+        Self {
+            payload,
+            dependencies,
+            held,
+        }
+    }
+
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
+
+    pub fn dependencies(&self) -> &[ContextDependency] {
+        &self.dependencies
+    }
+
+    pub fn held(&self) -> Option<&Read> {
+        self.held.as_ref()
+    }
 }
 
 impl BuiltinExpertRequest {
@@ -148,14 +179,16 @@ pub struct BlockedExpertResult {
 
 impl BuiltinExpertOutput {
     pub fn data_part(&self, media_type: &str) -> Option<&str> {
-        self.artifacts.iter().flat_map(|artifact| &artifact.parts).find_map(|part| {
-            match part {
-                ArtifactPart::Data { media_type: found, data } if found == media_type => {
-                    Some(data.as_str())
-                }
+        self.artifacts
+            .iter()
+            .flat_map(|artifact| &artifact.parts)
+            .find_map(|part| match part {
+                ArtifactPart::Data {
+                    media_type: found,
+                    data,
+                } if found == media_type => Some(data.as_str()),
                 _ => None,
-            }
-        })
+            })
     }
 
     /// Serialize a package-owned result as an unsettled domain artifact.
@@ -231,14 +264,12 @@ pub trait BuiltinExpertHost: Sync {
 
     fn policy(&self) -> &InferencePolicyDecision;
 
-    /// Read one authorized remote source view for this Expert. A
-    /// recoverable blocker arrives typed; only hard failures raise.
-    fn read_source_view<'a>(
+    fn read_requirement<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
-        view_id: &'a str,
+        key: &'a str,
         query: serde_json::Value,
-    ) -> Acquiring<'a, SourceReadOutcome<Self::SourceRead>>;
+    ) -> Acquiring<'a, SourceReadOutcome<DeclaredSourceRead<Self::SourceRead>>>;
 
     /// Record that this Expert's result depends on a source it read.
     fn record_dependency(
@@ -248,58 +279,11 @@ pub trait BuiltinExpertHost: Sync {
         dependency: ContextDependency,
     ) -> Result<(), AgentFailure>;
 
-    fn calendar_views<'a>(
-        &'a self,
-        request: &'a BuiltinExpertRequest,
-        query: CalendarViewQuery,
-    ) -> Acquiring<'a, SourceReadOutcome<Vec<CalendarContextView>>>;
-
     fn settle_stateful_result<'a>(
         &'a self,
         request: &'a BuiltinExpertRequest,
         draft: StatefulExpertDraft,
     ) -> Acquiring<'a, BuiltinExpertOutput>;
-
-    fn work_context_views<'a>(
-        &'a self,
-        request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<Vec<WorkContextView>>>;
-
-    fn people_view<'a>(
-        &'a self,
-        request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<PeopleView>>;
-
-    fn confirmed_interaction_views<'a>(
-        &'a self,
-        request: &'a BuiltinExpertRequest,
-        people: &'a PeopleView,
-    ) -> Acquiring<'a, Vec<ConfirmedInteractionView>>;
-
-    fn wellbeing_view<'a>(
-        &'a self,
-        request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<WellbeingView>>;
-
-    fn attention_view<'a>(
-        &'a self,
-        request: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<(AttentionView, ContextDependency)>>;
-
-    /// Whether this turn can read the Person's own conversation context at all.
-    ///
-    /// An Expert that would enrich its context skips the enrichment when the
-    /// reader is absent, exactly as it does when the source was never granted.
-    fn conversation_context_available(&self) -> bool;
-
-    /// The confirmed memories this Person has, for an Expert granted them.
-    fn memory_context<'a>(&'a self) -> Acquiring<'a, MemoryContextSnapshot>;
-
-    /// The Person's own task view, for an Expert granted it.
-    fn task_view<'a>(&'a self) -> Acquiring<'a, NativeContextView>;
-
-    /// The task views already settled for this turn.
-    fn staged_task_views(&self) -> &[NativeContextView];
 }
 
 /// The context one Expert may see.

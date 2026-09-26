@@ -13,19 +13,23 @@ use crate::{
     granted_context,
 };
 
-/// This Expert reads attention under its own consumer identity.
-pub const CONSUMER: &str = "attention.expert";
-
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    let (attention, dependency) = match host.attention_view(request).await? {
+    let attention = match crate::shared::read_declared_view(
+        host,
+        request,
+        "floe.source.attention",
+        serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+    )
+    .await?
+    {
         SourceReadOutcome::Ready(read) => read,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
-super::RESULT_MEDIA_TYPE,
+                crate::BuiltinExpertKind::FocusAttention.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Attention is temporarily unavailable, so there is no focus assessment.".into(),
             );
@@ -42,24 +46,37 @@ super::RESULT_MEDIA_TYPE,
             );
         }
     };
-    host.record_dependency(request.task_id, request.task_id, dependency)?;
     let mut context = granted_context(host, request);
     let calendars = crate::shared::optional_calendar_views(
         &mut context,
-        host.calendar_views(request, request.nearby_calendar_query()?)
-            .await?,
+        crate::shared::read_declared_view(
+            host,
+            request,
+            "floe.source.calendar",
+            serde_json::to_value(request.nearby_calendar_query()?)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .await?,
     );
     // Work context enriches but never gates: an optional blocker is
     // preserved by the host while reasoning continues over admitted evidence.
-    let active_work = match host.work_context_views(request).await? {
-        SourceReadOutcome::Ready(views) => views,
-        SourceReadOutcome::Unavailable(_) => vec![],
-        SourceReadOutcome::NeedsUserAction(blockers) => {
+    let active_work = match crate::shared::read_declared_view(
+        host,
+        request,
+        "floe.source.work-context",
+        serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+    )
+    .await
+    {
+        Ok(SourceReadOutcome::Ready(view)) => vec![view],
+        Ok(SourceReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => vec![],
+        Ok(SourceReadOutcome::NeedsUserAction(blockers)) => {
             blockers
                 .validate()
                 .map_err(|_| AgentFailure::StaleContext)?;
             vec![]
         }
+        Err(error) => return Err(error),
     };
     let result = match run_focus_expert_with_views(
         host.model(),

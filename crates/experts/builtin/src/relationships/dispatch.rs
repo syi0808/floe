@@ -13,19 +13,23 @@ use crate::{
     granted_context,
 };
 
-/// This Expert reads people context as itself, not as the assistant.
-pub const CONSUMER: &str = "contacts.expert";
-
 pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    let people = match host.people_view(request).await? {
+    let people = match crate::shared::read_declared_view(
+        host,
+        request,
+        "floe.source.contacts",
+        serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+    )
+    .await?
+    {
         SourceReadOutcome::Ready(view) => view,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-crate::BuiltinExpertKind::Relationships.result_artifact_name(),
-super::RESULT_MEDIA_TYPE,
+                crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Contacts are temporarily unavailable, so there is no relationship assessment."
                     .into(),
@@ -43,7 +47,17 @@ super::RESULT_MEDIA_TYPE,
             );
         }
     };
-    let confirmed_interactions = host.confirmed_interaction_views(request, &people).await?;
+    let confirmed_interactions = match crate::shared::read_declared_view(
+        host,
+        request,
+        "floe.source.confirmed-interactions",
+        serde_json::to_value(&people).map_err(|_| AgentFailure::InvalidInput)?,
+    )
+    .await?
+    {
+        SourceReadOutcome::Ready(views) => views,
+        SourceReadOutcome::Unavailable(_) | SourceReadOutcome::NeedsUserAction(_) => vec![],
+    };
     let result = match run_relationships_expert_with_views(
         host.model(),
         host.policy(),

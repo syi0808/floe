@@ -199,13 +199,27 @@ pub(crate) fn remote_policies(
 }
 
 pub(crate) fn native_consumers(connector_id: &str) -> Result<Vec<String>, AgentFailure> {
-    let consumers: &[&str] = match connector_id {
-        "attention.macos" => &["assistant", "attention.expert"],
-        "contacts.apple" | "contacts.android" => &["assistant", "contacts.expert"],
-        "health.apple" | "feasibility.apple" => &["assistant"],
+    let source = match connector_id {
+        "attention.macos" => Some(BuiltinContextSource::Attention),
+        "contacts.apple" | "contacts.android" => Some(BuiltinContextSource::Contacts),
+        "health.apple" => Some(BuiltinContextSource::Wellbeing),
+        "feasibility.apple" => None,
         _ => return Err(AgentFailure::InvalidInput),
     };
-    Ok(consumers.iter().map(|value| (*value).to_owned()).collect())
+    let mut consumers = Vec::new();
+    if floe_context::manager_direct_native_connector(connector_id) {
+        consumers.push("assistant".to_owned());
+    }
+    if let Some(source) = source {
+        consumers.extend(
+            builtin_consumers(source)?
+                .into_iter()
+                .map(|consumer| consumer.identifier().to_owned()),
+        );
+    }
+    consumers.sort();
+    consumers.dedup();
+    Ok(consumers)
 }
 
 #[cfg(test)]
@@ -230,6 +244,27 @@ mod tests {
                 "floe.builtin.schedule",
                 "floe.builtin.wellbeing",
             ]
+        );
+    }
+
+    #[test]
+    fn native_consumers_come_only_from_shipped_manifests() {
+        assert_eq!(
+            native_consumers("attention.macos").unwrap(),
+            ["assistant", "floe.builtin.focus-attention"]
+        );
+        assert_eq!(
+            native_consumers("contacts.apple").unwrap(),
+            ["assistant", "floe.builtin.relationships"]
+        );
+        assert_eq!(
+            native_consumers("health.apple").unwrap(),
+            ["assistant", "floe.builtin.wellbeing"]
+        );
+        assert!(
+            !native_consumers("attention.macos")
+                .unwrap()
+                .contains(&"example.test.expert".into())
         );
     }
 

@@ -4,7 +4,7 @@
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
+use floe_context_contract::SourceReadOutcome;
 
 use floe_context_contract::CommunicationView;
 
@@ -24,9 +24,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     let model = host.model();
     let source_view = match host
-        .read_source_view(
+        .read_requirement(
             request,
-            "mail.communication",
+            "floe.source.mail",
             serde_json::json!({
                 "schema_version": AGENT_VERSION,
                 "query": "",
@@ -39,8 +39,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         SourceReadOutcome::Ready(view) => view,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-crate::BuiltinExpertKind::Communication.result_artifact_name(),
-super::RESULT_MEDIA_TYPE,
+                crate::BuiltinExpertKind::Communication.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Mail is temporarily unavailable, so there is no communication assessment.".into(),
             );
@@ -57,8 +57,8 @@ super::RESULT_MEDIA_TYPE,
             );
         }
     };
-    for binding in source_view.bindings() {
-        host.record_dependency(request.task_id, request.task_id, binding.dependency.clone())?;
+    for dependency in source_view.dependencies() {
+        host.record_dependency(request.task_id, request.task_id, dependency.clone())?;
     }
     let view: CommunicationView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;

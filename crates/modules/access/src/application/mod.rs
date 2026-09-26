@@ -32,10 +32,9 @@ pub use native_calendar::{
     reviewed_native_subject,
 };
 pub use personal_grants::{
-    ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
-    ContactsAccessConfiguration, PersonalAccessChange, PersonalAccessConfiguration,
-    PersonalAccessOverview, PersonalAccessState, attention_consumer, matches_source,
-    source_and_scope,
+    ATTENTION_ASSISTANT_CONSUMER, ContactsAccessChange, ContactsAccessConfiguration,
+    PersonalAccessChange, PersonalAccessConfiguration, PersonalAccessOverview, PersonalAccessState,
+    attention_consumer, matches_source, source_and_scope,
 };
 pub use personal_read::{
     FeasibilityGrantQuery, PersonalReadRequirement, active_read_grant, active_resource_grant,

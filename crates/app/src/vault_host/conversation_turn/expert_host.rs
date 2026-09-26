@@ -498,12 +498,10 @@ impl floe_agent_contract::ExpertReasoner for ExpertModelHost<'_> {
 }
 
 pub(super) struct PersonalViewSource<'a> {
-    pub(super) source_client: Option<&'a ServerSourceClient>,
     pub(super) calendar_reader: Option<&'a dyn CalendarContextReaderApi>,
     pub(super) person_id: PersonId,
     pub(super) people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
     pub(super) wellbeing_reader: Option<&'a dyn PersonalWellbeingReaderApi>,
-    pub(super) remote_reader: Option<&'a dyn floe_context::SourceReader>,
     pub(super) recorder: Option<&'a dyn ResultRecorder>,
     pub(super) dependency_turn_id: Uuid,
     pub(super) dependency_result_id: Uuid,
@@ -640,103 +638,6 @@ impl PersonalViewSource<'_> {
         }
         Ok(floe_context_contract::SourceReadOutcome::Ready(views))
     }
-
-    pub(super) async fn confirmed_interaction_views(
-        &self,
-        people: &PeopleView,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<Vec<floe_context::ConfirmedInteractionView>, AgentFailure> {
-        if self.source_client.is_none() {
-            return Ok(vec![]);
-        }
-        let source_client = self
-            .source_client
-            .ok_or(AgentFailure::CapabilityUnavailable)?;
-        match source_client
-            .read_confirmed_interaction_view(people, deadline, cancellation)
-            .await
-        {
-            Ok(view) => Ok(vec![view]),
-            Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
-            Err(error) => Err(error),
-        }
-    }
-
-    pub(super) async fn work_context_views(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<
-        floe_context_contract::SourceReadOutcome<Vec<floe_context::WorkContextView>>,
-        AgentFailure,
-    > {
-        if self.source_client.is_none() {
-            return Ok(floe_context_contract::SourceReadOutcome::Ready(vec![]));
-        }
-        let Some(reader) = self.remote_reader else {
-            return Err(AgentFailure::CapabilityUnavailable);
-        };
-        match read_context_source(
-            reader,
-            self.person_id,
-            "work.context",
-            self.consumer_name,
-            serde_json::json!({"schema_version": AGENT_VERSION}),
-            deadline,
-            cancellation,
-        )
-        .await?
-        {
-            floe_context_contract::SourceReadOutcome::Ready(source_view) => {
-                if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
-                    for binding in source_view.bindings() {
-                        recorder.record(
-                            self.dependency_turn_id,
-                            self.dependency_turn_id,
-                            binding.dependency.clone(),
-                        )?;
-                    }
-                }
-                let view = serde_json::from_value(source_view.payload().clone())
-                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-                Ok(floe_context_contract::SourceReadOutcome::Ready(vec![view]))
-            }
-            // Unavailable paired state reads as absent, as before; only a
-            // concrete blocker propagates for review.
-            floe_context_contract::SourceReadOutcome::Unavailable(_) => {
-                Ok(floe_context_contract::SourceReadOutcome::Ready(vec![]))
-            }
-            floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) => Ok(
-                floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers),
-            ),
-        }
-    }
-}
-
-pub(super) async fn read_context_source(
-    reader: &dyn floe_context::SourceReader,
-    person_id: PersonId,
-    source_id: &str,
-    consumer: &str,
-    query: serde_json::Value,
-    deadline: tokio::time::Instant,
-    cancellation: &floe_execution::Cancellation,
-) -> Result<
-    floe_context_contract::SourceReadOutcome<floe_context::SourceView<serde_json::Value>>,
-    AgentFailure,
-> {
-    let prepared = floe_context::ContextService::new(Some(reader)).prepare(person_id)?;
-    let source_request = prepared.source_request(
-        source_id,
-        floe_context_contract::GrantConsumer::builtin(consumer)
-            .map_err(|_| AgentFailure::InvalidInput)?,
-        floe_context_contract::GrantPurpose::Assistant,
-        query,
-        deadline,
-        cancellation.clone(),
-    )?;
-    prepared.read_source(&source_request).await
 }
 
 pub(super) trait ResultRecorder: Send + Sync {
@@ -790,7 +691,7 @@ pub(super) trait PersonalAttentionReaderApi: Send + Sync {
     fn read<'a>(
         &'a self,
         person_id: PersonId,
-        consumer: &'static str,
+        consumer: &'a str,
         call_id: uuid::Uuid,
         turn_id: uuid::Uuid,
         deadline: tokio::time::Instant,
@@ -1270,7 +1171,7 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
     fn read<'a>(
         &'a self,
         person_id: PersonId,
-        consumer: &'static str,
+        consumer: &'a str,
         call_id: uuid::Uuid,
         turn_id: uuid::Uuid,
         deadline: tokio::time::Instant,

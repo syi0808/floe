@@ -53,7 +53,13 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
             cursor.clone(),
             MAX_CALENDAR_CONTEXT_ITEMS,
         )?;
-        let outcome = host.calendar_views(request, query.clone()).await?;
+        let outcome = crate::shared::read_declared_view::<_, Vec<CalendarContextView>>(
+            host,
+            request,
+            "floe.source.calendar",
+            serde_json::to_value(&query).map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .await?;
         let views = match outcome {
             SourceReadOutcome::Ready(views) => views,
             SourceReadOutcome::Unavailable(reason) => {
@@ -152,8 +158,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
                 // The host publishes the model requirement it captured; the
                 // report proposes no requirement of its own.
                 return BuiltinExpertOutput::from_blocked(
-BuiltinExpertKind::Schedule.result_artifact_name(),
-super::RESULT_MEDIA_TYPE,
+                    BuiltinExpertKind::Schedule.result_artifact_name(),
+                    super::RESULT_MEDIA_TYPE,
                     BlockedExpertStatus::NeedsUserAction,
                     "Model approval needs your review, so there is no schedule assessment.".into(),
                 );
@@ -169,10 +175,12 @@ fn blocked(
     artifacts: Vec<Artifact>,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     let result_text = match &result {
-        BlockedResult::Unavailable { .. } =>
-            "Calendar information is not available for this Schedule task.",
-        BlockedResult::NeedsUserAction =>
-            "Calendar access needs your review before this Schedule task can continue.",
+        BlockedResult::Unavailable { .. } => {
+            "Calendar information is not available for this Schedule task."
+        }
+        BlockedResult::NeedsUserAction => {
+            "Calendar access needs your review before this Schedule task can continue."
+        }
     };
     BuiltinExpertOutput::from_result(
         BuiltinExpertKind::Schedule.result_artifact_name(),
@@ -196,10 +204,8 @@ mod tests {
         ExpertModelOutcome, PersonId,
     };
     use floe_context_contract::{
-        AttentionView, AuthorizedRead, CalendarContextItem, ConfirmedInteractionView,
-        ContextDependency, GrantConsumer, GrantOperation, GrantPurpose, MemoryContextSnapshot,
-        NativeContextView, PeopleView, SourceAccessBlockers, SourceAccessRequirement,
-        SourceAccessRequirementKind, WellbeingView, WorkContextView,
+        AuthorizedRead, CalendarContextItem, ContextDependency, GrantConsumer, GrantOperation,
+        GrantPurpose, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
     };
     use floe_execution::Cancellation;
     use tokio::time::Instant;
@@ -270,6 +276,67 @@ mod tests {
                 queries: Mutex::new(Vec::new()),
             }
         }
+
+        async fn calendar_views(
+            &self,
+            query: CalendarViewQuery,
+        ) -> Result<SourceReadOutcome<Vec<CalendarContextView>>, AgentFailure> {
+            self.queries.lock().unwrap().push(query.clone());
+            match self.scenario {
+                Scenario::Unavailable => Ok(SourceReadOutcome::Unavailable(
+                    SourceUnavailable::TemporarilyUnavailable,
+                )),
+                Scenario::NeedsUserAction => {
+                    let requirement = SourceAccessRequirement::try_new(
+                        "floe.source.calendar",
+                        None,
+                        None,
+                        GrantOperation::Read,
+                        GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
+                        GrantPurpose::Assistant,
+                        vec![],
+                        None,
+                        SourceAccessRequirementKind::SelectResource,
+                        None,
+                        None,
+                        false,
+                    )
+                    .unwrap();
+                    Ok(SourceReadOutcome::NeedsUserAction(
+                        SourceAccessBlockers::try_new(vec![requirement]).unwrap(),
+                    ))
+                }
+                Scenario::Failure => Err(AgentFailure::StorageUnavailable),
+                _ => {
+                    let now = Utc::now();
+                    let first = query.cursor().is_none();
+                    let next_cursor = match self.scenario {
+                        Scenario::Paginated if first => Some("next".into()),
+                        Scenario::Cycle => Some("next".into()),
+                        _ => None,
+                    };
+                    Ok(SourceReadOutcome::Ready(vec![CalendarContextView {
+                        schema_version: floe_agent_contract::AGENT_VERSION,
+                        view_id: floe_context_contract::CALENDAR_CONTEXT_VIEW_ID.into(),
+                        source_handle: "calendar:test".into(),
+                        observed_at_unix_ms: (now - Duration::seconds(1)).timestamp_millis(),
+                        expires_at_unix_ms: (now + Duration::minutes(2)).timestamp_millis(),
+                        range_start_unix_ms: query.range_start_unix_ms(),
+                        range_end_unix_ms: query.range_end_unix_ms(),
+                        coverage_complete: next_cursor.is_none(),
+                        next_cursor,
+                        items: vec![CalendarContextItem {
+                            evidence_handle: if first { "event:first" } else { "event:next" }
+                                .into(),
+                            untrusted_title: "Appointment".into(),
+                            starts_at_unix_ms: query.range_start_unix_ms() + 60_000,
+                            ends_at_unix_ms: query.range_start_unix_ms() + 120_000,
+                            all_day: false,
+                        }],
+                    }]))
+                }
+            }
+        }
     }
 
     impl BuiltinExpertHost for Host {
@@ -284,13 +351,34 @@ mod tests {
             &self.policy
         }
 
-        fn read_source_view<'a>(
+        fn read_requirement<'a>(
             &'a self,
-            _: &'a BuiltinExpertRequest,
-            _: &'a str,
-            _: serde_json::Value,
-        ) -> Acquiring<'a, SourceReadOutcome<Self::SourceRead>> {
-            panic!("Schedule must use Calendar Context")
+            _request: &'a BuiltinExpertRequest,
+            key: &'a str,
+            query: serde_json::Value,
+        ) -> Acquiring<'a, SourceReadOutcome<crate::DeclaredSourceRead<Self::SourceRead>>> {
+            Box::pin(async move {
+                if key != "floe.source.calendar" {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                let query: CalendarViewQuery =
+                    serde_json::from_value(query).map_err(|_| AgentFailure::InvalidInput)?;
+                Ok(match self.calendar_views(query).await? {
+                    SourceReadOutcome::Ready(views) => {
+                        SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                            serde_json::to_value(views).map_err(|_| AgentFailure::InvalidInput)?,
+                            vec![],
+                            None,
+                        ))
+                    }
+                    SourceReadOutcome::Unavailable(reason) => {
+                        SourceReadOutcome::Unavailable(reason)
+                    }
+                    SourceReadOutcome::NeedsUserAction(blockers) => {
+                        SourceReadOutcome::NeedsUserAction(blockers)
+                    }
+                })
+            })
         }
 
         fn record_dependency(
@@ -300,70 +388,6 @@ mod tests {
             _: ContextDependency,
         ) -> Result<(), AgentFailure> {
             panic!("Calendar Context records dependencies")
-        }
-
-        fn calendar_views<'a>(
-            &'a self,
-            _: &'a BuiltinExpertRequest,
-            query: CalendarViewQuery,
-        ) -> Acquiring<'a, SourceReadOutcome<Vec<CalendarContextView>>> {
-            Box::pin(async move {
-                self.queries.lock().unwrap().push(query.clone());
-                match self.scenario {
-                    Scenario::Unavailable => Ok(SourceReadOutcome::Unavailable(
-                        SourceUnavailable::TemporarilyUnavailable,
-                    )),
-                    Scenario::NeedsUserAction => {
-                        let requirement = SourceAccessRequirement::try_new(
-                            "floe.source.calendar",
-                            None,
-                            None,
-                            GrantOperation::Read,
-                            GrantConsumer::builtin("floe.builtin.schedule").unwrap(),
-                            GrantPurpose::Assistant,
-                            vec![],
-                            None,
-                            SourceAccessRequirementKind::SelectResource,
-                            None,
-                            None,
-                            false,
-                        )
-                        .unwrap();
-                        Ok(SourceReadOutcome::NeedsUserAction(
-                            SourceAccessBlockers::try_new(vec![requirement]).unwrap(),
-                        ))
-                    }
-                    Scenario::Failure => Err(AgentFailure::StorageUnavailable),
-                    _ => {
-                        let now = Utc::now();
-                        let first = query.cursor().is_none();
-                        let next_cursor = match self.scenario {
-                            Scenario::Paginated if first => Some("next".into()),
-                            Scenario::Cycle => Some("next".into()),
-                            _ => None,
-                        };
-                        Ok(SourceReadOutcome::Ready(vec![CalendarContextView {
-                            schema_version: floe_agent_contract::AGENT_VERSION,
-                            view_id: floe_context_contract::CALENDAR_CONTEXT_VIEW_ID.into(),
-                            source_handle: "calendar:test".into(),
-                            observed_at_unix_ms: (now - Duration::seconds(1)).timestamp_millis(),
-                            expires_at_unix_ms: (now + Duration::minutes(2)).timestamp_millis(),
-                            range_start_unix_ms: query.range_start_unix_ms(),
-                            range_end_unix_ms: query.range_end_unix_ms(),
-                            coverage_complete: next_cursor.is_none(),
-                            next_cursor,
-                            items: vec![CalendarContextItem {
-                                evidence_handle: if first { "event:first" } else { "event:next" }
-                                    .into(),
-                                untrusted_title: "Appointment".into(),
-                                starts_at_unix_ms: query.range_start_unix_ms() + 60_000,
-                                ends_at_unix_ms: query.range_start_unix_ms() + 120_000,
-                                all_day: false,
-                            }],
-                        }]))
-                    }
-                }
-            })
         }
 
         fn settle_stateful_result<'a>(
@@ -378,58 +402,6 @@ mod tests {
                     settlement: None,
                 })
             })
-        }
-
-        fn work_context_views<'a>(
-            &'a self,
-            _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, SourceReadOutcome<Vec<WorkContextView>>> {
-            panic!("unused")
-        }
-
-        fn people_view<'a>(
-            &'a self,
-            _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, SourceReadOutcome<PeopleView>> {
-            panic!("unused")
-        }
-
-        fn confirmed_interaction_views<'a>(
-            &'a self,
-            _: &'a BuiltinExpertRequest,
-            _: &'a PeopleView,
-        ) -> Acquiring<'a, Vec<ConfirmedInteractionView>> {
-            panic!("unused")
-        }
-
-        fn wellbeing_view<'a>(
-            &'a self,
-            _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, SourceReadOutcome<WellbeingView>> {
-            panic!("unused")
-        }
-
-        fn attention_view<'a>(
-            &'a self,
-            _: &'a BuiltinExpertRequest,
-        ) -> Acquiring<'a, SourceReadOutcome<(AttentionView, ContextDependency)>> {
-            panic!("unused")
-        }
-
-        fn conversation_context_available(&self) -> bool {
-            false
-        }
-
-        fn memory_context<'a>(&'a self) -> Acquiring<'a, MemoryContextSnapshot> {
-            panic!("unused")
-        }
-
-        fn task_view<'a>(&'a self) -> Acquiring<'a, NativeContextView> {
-            panic!("unused")
-        }
-
-        fn staged_task_views(&self) -> &[NativeContextView] {
-            &[]
         }
     }
 
@@ -448,6 +420,8 @@ mod tests {
                 optional_context_issues: vec![],
                 evidence: vec![],
             },
+            staged_task_views: vec![],
+            context_inputs_available: false,
             max_output_bytes: 16_384,
             deadline: Instant::now() + std::time::Duration::from_secs(30),
             cancellation: Cancellation::default(),
@@ -481,10 +455,21 @@ mod tests {
             let result = dispatch(&host, &request()).await;
             assert_eq!(host.model.0.load(Ordering::SeqCst), 0);
             match host.scenario {
-                Scenario::Unavailable => assert!(result.unwrap().data_part(crate::schedule::RESULT_MEDIA_TYPE).unwrap().contains("unavailable")),
+                Scenario::Unavailable => assert!(
+                    result
+                        .unwrap()
+                        .data_part(crate::schedule::RESULT_MEDIA_TYPE)
+                        .unwrap()
+                        .contains("unavailable")
+                ),
                 Scenario::NeedsUserAction => {
                     let output = result.unwrap();
-                    assert!(output.data_part(crate::schedule::RESULT_MEDIA_TYPE).unwrap().contains("needs_user_action"));
+                    assert!(
+                        output
+                            .data_part(crate::schedule::RESULT_MEDIA_TYPE)
+                            .unwrap()
+                            .contains("needs_user_action")
+                    );
                     assert!(
                         output.artifacts.len() == 1,
                         "blocked reports propose no requirement of their own"

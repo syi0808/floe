@@ -392,10 +392,6 @@ pub async fn read_wellbeing(
     cancellation: &Cancellation,
 ) -> Result<(WellbeingView, ContextDependency), AgentFailure> {
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    // Wellbeing is the Person's own; no Expert reads it on their behalf.
-    if consumer.identifier() != crate::ASSISTANT_CONSUMER {
-        return Err(AgentFailure::PolicyDenied);
-    }
     let read = PersonalRead {
         person_id,
         device_id,
@@ -542,9 +538,6 @@ pub async fn admit_attention(
     Ok((view, dependency))
 }
 
-/// The consumer an Expert reads attention as.
-pub const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
-
 /// Whether a stored personal dependency still describes a read this host made.
 ///
 /// A dependency names the source it came from, the shape it was read under and
@@ -563,10 +556,6 @@ pub fn personal_dependency_holds(
         if dependency.source().connection_id().as_str() != ATTENTION_CONNECTION
             || dependency.source().execution_owner().as_str()
                 != attention_execution_owner(device_id)
-            || !matches!(
-                dependency.consumer().identifier(),
-                crate::ASSISTANT_CONSUMER | ATTENTION_EXPERT_CONSUMER
-            )
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -624,7 +613,6 @@ pub fn personal_dependency_holds(
     if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
         if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
             || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
-            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
             || dependency.processing() != &ProcessingRestriction::LocalOnly
@@ -657,10 +645,6 @@ pub fn personal_dependency_holds(
         != contacts_connection(dependency.source().connector().as_str())
         || dependency.source().execution_owner().as_str()
             != contacts_execution_owner(dependency.source().connector().as_str(), device_id)
-        || !matches!(
-            dependency.consumer().identifier(),
-            "assistant" | "contacts.expert"
-        )
         || dependency.operation() != GrantOperation::Read
         || dependency.purpose() != GrantPurpose::Assistant
         || dependency.processing() != &ProcessingRestriction::LocalOnly
@@ -720,10 +704,6 @@ pub async fn authorize_personal_dependency(
                 != [ResourceHandle::try_new(PEOPLE_RESOURCE)
                     .map_err(|_| AgentFailure::PolicyDenied)?]
             || dependency.categories() != [GrantDataCategory::Derived]
-            || !matches!(
-                dependency.consumer().identifier(),
-                "assistant" | "contacts.expert"
-            )
             || dependency.lease_invocation_id().is_nil()
         {
             return Err(AgentFailure::PolicyDenied);
@@ -823,7 +803,6 @@ pub async fn authorize_personal_dependency(
     if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
         if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
             || dependency.source().execution_owner().as_str() != apple_execution_owner(device_id)
-            || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
             || dependency.operation() != GrantOperation::Read
             || dependency.purpose() != GrantPurpose::Assistant
             || dependency.processing() != &ProcessingRestriction::LocalOnly
@@ -884,8 +863,6 @@ pub async fn authorize_personal_dependency(
         || dependency.resources().len() != 1
         || dependency.resources()[0].as_str() != ATTENTION_RESOURCE
         || dependency.categories() != [GrantDataCategory::Derived]
-        || dependency.consumer().identifier() != crate::ASSISTANT_CONSUMER
-            && dependency.consumer().identifier() != ATTENTION_EXPERT_CONSUMER
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -995,9 +972,9 @@ fn people_identity(
                     .map_err(|_| AgentFailure::InvalidInput)?,
                 floe_context_contract::ConnectorId::try_new(connector)
                     .map_err(|_| AgentFailure::InvalidInput)?,
-                floe_context_contract::ExecutionOwnerId::try_new(
-                    contacts_execution_owner(connector, device_id),
-                )
+                floe_context_contract::ExecutionOwnerId::try_new(contacts_execution_owner(
+                    connector, device_id,
+                ))
                 .map_err(|_| AgentFailure::InvalidInput)?,
                 authority,
             )
@@ -1072,9 +1049,7 @@ fn personal_requirement(
     observed: Option<floe_context_contract::ObservedGrant>,
 ) -> Result<floe_context_contract::SourceAccessRequirement, AgentFailure> {
     let resources = if connector.is_some() && connection.is_some() {
-        vec![
-            ResourceHandle::try_new(identity.resource).map_err(|_| AgentFailure::InvalidInput)?,
-        ]
+        vec![ResourceHandle::try_new(identity.resource).map_err(|_| AgentFailure::InvalidInput)?]
     } else {
         vec![]
     };
@@ -1270,13 +1245,7 @@ async fn classify_personal_blocker(
                 SourceAccessRequirementKind::ReviewChangedSource
             };
             personal_requirement(
-                identity,
-                connector,
-                connection,
-                consumer,
-                reason,
-                authority,
-                observed,
+                identity, connector, connection, consumer, reason, authority, observed,
             )?
         }
         // Mid-read drift: the grant the read started under is no longer the
@@ -1368,10 +1337,8 @@ pub async fn read_manager_people_outcome(
     consumer: GrantConsumer,
     deadline: Instant,
     cancellation: &Cancellation,
-) -> Result<
-    floe_context_contract::SourceReadOutcome<(PeopleView, ContextDependency)>,
-    AgentFailure,
-> {
+) -> Result<floe_context_contract::SourceReadOutcome<(PeopleView, ContextDependency)>, AgentFailure>
+{
     let identity = people_identity(person_id, device_id)?;
     match read_manager_people(
         records,
@@ -1430,9 +1397,11 @@ pub async fn read_feasibility_outcome(
     .await
     {
         Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
-        Err(error) => Ok(classify_personal_blocker(records, &identity, consumer, error)
-            .await?
-            .into_outcome()),
+        Err(error) => Ok(
+            classify_personal_blocker(records, &identity, consumer, error)
+                .await?
+                .into_outcome(),
+        ),
     }
 }
 
@@ -1467,9 +1436,11 @@ pub async fn read_wellbeing_outcome(
     .await
     {
         Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
-        Err(error) => Ok(classify_personal_blocker(records, &identity, consumer, error)
-            .await?
-            .into_outcome()),
+        Err(error) => Ok(
+            classify_personal_blocker(records, &identity, consumer, error)
+                .await?
+                .into_outcome(),
+        ),
     }
 }
 
@@ -1503,9 +1474,11 @@ pub async fn admit_attention_outcome(
     .await
     {
         Ok(read) => Ok(floe_context_contract::SourceReadOutcome::Ready(read)),
-        Err(error) => Ok(classify_personal_blocker(records, &identity, consumer, error)
-            .await?
-            .into_outcome()),
+        Err(error) => Ok(
+            classify_personal_blocker(records, &identity, consumer, error)
+                .await?
+                .into_outcome(),
+        ),
     }
 }
 

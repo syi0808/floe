@@ -148,7 +148,10 @@ fn local_expert_and_access_intents_inject_only_the_admitted_device() {
         panic!("wrong owner action")
     };
     assert_eq!(change.device_id, caller.device_id());
-    assert_eq!(change.consumers, ["assistant", "attention.expert"]);
+    assert_eq!(
+        change.consumers,
+        ["assistant", "floe.builtin.focus-attention"]
+    );
     let crate::PersonalAccessChange::Review {
         expected_grant_id: actual_id,
         expected_grant_authority: actual_authority,

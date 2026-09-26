@@ -6,9 +6,16 @@
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::{AgentFailure, ContextSource};
-use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
+use floe_context_contract::SourceReadOutcome;
 
 use floe_context_contract::CommunicationView;
+use floe_context_contract::{ContextIssueReason, ContextMemory, NativeContextView};
+
+#[derive(serde::Deserialize)]
+struct ConfirmedMemoryInput {
+    memories: Vec<ContextMemory>,
+    issue: Option<ContextIssueReason>,
+}
 
 use crate::commitments::{CommitmentsContextViews, run_commitments_expert_with_views};
 use crate::shared::ExpertJudgment;
@@ -24,33 +31,72 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     host: &Host,
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
-    let readable = host.conversation_context_available();
     let mut context = granted_context(host, request);
-    if readable {
-        let snapshot = host.memory_context().await?;
-        context.memories = snapshot.memories;
-        floe_context_contract::record_source_issue(
-            &mut context.optional_context_issues,
-            ContextSource::Memory,
-            snapshot.issue,
-        );
-    }
-    let mut task_views = host.staged_task_views().to_vec();
-    if readable {
-        let acquired =
-            floe_context_contract::acquire_optional_source(ContextSource::Tasks, host.task_view())
-                .await?;
-        floe_context_contract::record_source_issue(
-            &mut context.optional_context_issues,
-            ContextSource::Tasks,
-            acquired.issue.map(|issue| issue.reason),
-        );
-        task_views = acquired.value.into_iter().collect();
+    let mut task_views = request.staged_task_views.clone();
+    if request.context_inputs_available {
+        let simple_query = serde_json::json!({"schema_version": AGENT_VERSION});
+        match crate::shared::read_declared_view::<_, ConfirmedMemoryInput>(
+            host,
+            request,
+            "floe.source.confirmed-memory",
+            simple_query.clone(),
+        )
+        .await
+        {
+            Ok(SourceReadOutcome::Ready(snapshot)) => {
+                context.memories = snapshot.memories;
+                floe_context_contract::record_source_issue(
+                    &mut context.optional_context_issues,
+                    ContextSource::Memory,
+                    snapshot.issue,
+                );
+            }
+            Ok(SourceReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => {
+                floe_context_contract::record_source_issue(
+                    &mut context.optional_context_issues,
+                    ContextSource::Memory,
+                    Some(ContextIssueReason::Unavailable),
+                );
+            }
+            Ok(SourceReadOutcome::NeedsUserAction(_)) => {
+                floe_context_contract::record_source_issue(
+                    &mut context.optional_context_issues,
+                    ContextSource::Memory,
+                    Some(ContextIssueReason::NeedsUserAction),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+        match crate::shared::read_declared_view::<_, NativeContextView>(
+            host,
+            request,
+            "floe.source.tasks",
+            simple_query,
+        )
+        .await
+        {
+            Ok(SourceReadOutcome::Ready(view)) => task_views = vec![view],
+            Ok(SourceReadOutcome::Unavailable(_)) | Err(AgentFailure::CapabilityUnavailable) => {
+                floe_context_contract::record_source_issue(
+                    &mut context.optional_context_issues,
+                    ContextSource::Tasks,
+                    Some(ContextIssueReason::Unavailable),
+                );
+            }
+            Ok(SourceReadOutcome::NeedsUserAction(_)) => {
+                floe_context_contract::record_source_issue(
+                    &mut context.optional_context_issues,
+                    ContextSource::Tasks,
+                    Some(ContextIssueReason::NeedsUserAction),
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     let source_view = match host
-        .read_source_view(
+        .read_requirement(
             request,
-            "mail.communication",
+            "floe.source.mail",
             serde_json::json!({
                 "schema_version": AGENT_VERSION,
                 "query": "",
@@ -63,8 +109,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         SourceReadOutcome::Ready(view) => view,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-crate::BuiltinExpertKind::Commitments.result_artifact_name(),
-super::RESULT_MEDIA_TYPE,
+                crate::BuiltinExpertKind::Commitments.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Mail is temporarily unavailable, so there are no commitment findings.".into(),
             );
@@ -81,16 +127,22 @@ super::RESULT_MEDIA_TYPE,
             );
         }
     };
-    for binding in source_view.bindings() {
-        host.record_dependency(request.task_id, request.task_id, binding.dependency.clone())?;
+    for dependency in source_view.dependencies() {
+        host.record_dependency(request.task_id, request.task_id, dependency.clone())?;
     }
     let view: CommunicationView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
     let model = host.model();
     let calendars = crate::shared::optional_calendar_views(
         &mut context,
-        host.calendar_views(request, request.nearby_calendar_query()?)
-            .await?,
+        crate::shared::read_declared_view(
+            host,
+            request,
+            "floe.source.calendar",
+            serde_json::to_value(request.nearby_calendar_query()?)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .await?,
     );
     let result = match run_commitments_expert_with_views(
         model,

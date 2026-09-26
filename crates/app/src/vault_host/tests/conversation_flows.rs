@@ -9,8 +9,13 @@ use super::*;
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum WireStep {
-    Answer { text: String },
-    Call { capability_id: String, input: String },
+    Answer {
+        text: String,
+    },
+    Call {
+        capability_id: String,
+        input: String,
+    },
     Delegate {
         agent_id: String,
         message: String,
@@ -843,7 +848,9 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let session = runtime.block_on(vault.create_session()).unwrap();
     assert!(
         runtime
-            .block_on(vault.expert_install_overview(&floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()))
+            .block_on(vault.expert_install_overview(
+                &floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()
+            ))
             .unwrap()
             .is_none()
     );
@@ -905,7 +912,9 @@ fn production_general_turn_does_not_require_or_install_builtin_setup() {
         .unwrap();
     assert!(
         runtime
-            .block_on(vault.expert_install_overview(&floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()))
+            .block_on(vault.expert_install_overview(
+                &floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()
+            ))
             .unwrap()
             .is_none()
     );
@@ -1271,7 +1280,9 @@ fn production_builtin_setup_installs_through_vault_without_sources() {
         .block_on(EncryptedAgentVault::open(&root, person, keys))
         .unwrap();
     let overview = runtime
-        .block_on(vault.expert_install_overview(&floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap()))
+        .block_on(vault.expert_install_overview(
+            &floe_experts::manifest_set_digest(&floe_experts_builtin::manifests()).unwrap(),
+        ))
         .unwrap()
         .unwrap();
     assert_eq!(overview.receipt.installed.len(), 8);
@@ -1458,9 +1469,7 @@ fn canonical_inventory_body() -> String {
     .to_string()
 }
 
-fn answer_server(
-    steps: Vec<WireStep>,
-) -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
+fn answer_server(steps: Vec<WireStep>) -> (MockServer, std::thread::JoinHandle<Vec<String>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -2587,13 +2596,13 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     });
     let mut connection = fixture_saved_connection(person, "mac-local");
     connection.base_url = base_url;
-    let endpoint = BuiltinExpertEndpoint::new(
+    let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
         direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
-        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
+        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
     );
     // The direct invocation still needs the validated origin the common
     // endpoint publishes under: an admitted run with the DelegationIntent
@@ -2678,7 +2687,8 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     );
     assert!(report.settlement.is_none());
     assert_eq!(report.artifacts.len(), 2);
-    let data = report.artifacts
+    let data = report
+        .artifacts
         .iter()
         .flat_map(|artifact| &artifact.parts)
         .find_map(|part| match part {
@@ -2982,13 +2992,11 @@ fn direct_endpoint_admission(agent_id: &str) -> floe_experts::ExpertAdmissionIde
     }
 }
 
-fn direct_endpoint_card(agent_id: &str) -> floe_agent_contract::AgentCard {
+fn direct_endpoint_manifest(agent_id: &str) -> floe_experts::ExpertManifest {
     floe_experts_builtin::manifests()
         .into_iter()
         .find(|manifest| manifest.package.id == agent_id)
         .unwrap()
-        .definition
-        .card
 }
 
 fn direct_invocation_in_session(
@@ -3067,13 +3075,15 @@ fn fixture_saved_connection(
 fn builtin_endpoint_denies_forged_principal_without_touching_state() {
     // 2-C C4: a forged principal fails closed before any store read.
     let fixture = direct_endpoint_fixture();
-    let endpoint = BuiltinExpertEndpoint::new(
+    let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
-        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
-        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_admission(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        ),
+        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
     );
     let (invocation, scope) = direct_invocation(
         "person:foreign",
@@ -3096,15 +3106,17 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
     // reach admission independently; both fail on the forged device with the
     // same policy denial, never a staging Conflict.
     let fixture = direct_endpoint_fixture();
-    let endpoint = BuiltinExpertEndpoint::new(
+    let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
             fixture_saved_connection(fixture.person, "mac-local"),
         )),
-        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
-        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_admission(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        ),
+        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
     );
     let parent_run_id = Uuid::new_v4();
     let agent_id = floe_experts_builtin::BuiltinExpertKind::Commitments.package_id();
@@ -3162,15 +3174,17 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
             .await
             .unwrap();
     });
-    let endpoint = BuiltinExpertEndpoint::new(
+    let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
             fixture_saved_connection(fixture.person, "mac-local"),
         )),
-        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
-        direct_endpoint_card(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
+        direct_endpoint_admission(
+            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+        ),
+        direct_endpoint_manifest(floe_experts_builtin::BuiltinExpertKind::Commitments.package_id()),
     );
     let (invocation, scope) = direct_invocation(
         &fixture.person.to_string(),

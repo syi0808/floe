@@ -16,10 +16,9 @@ pub use application::recipient_consent::{
     revoke_recipient_consent,
 };
 pub use application::{
-    ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER, ContactsAccessChange,
-    ContactsAccessConfiguration, PersonalAccessChange, PersonalAccessConfiguration,
-    PersonalAccessOverview, PersonalAccessState, attention_consumer, matches_source,
-    source_and_scope,
+    ATTENTION_ASSISTANT_CONSUMER, ContactsAccessChange, ContactsAccessConfiguration,
+    PersonalAccessChange, PersonalAccessConfiguration, PersonalAccessOverview, PersonalAccessState,
+    attention_consumer, matches_source, source_and_scope,
 };
 pub use application::{
     ATTENTION_CONNECTION, ATTENTION_CONNECTOR, ATTENTION_RESOURCE, FEASIBILITY_CONNECTION,

@@ -2,7 +2,7 @@
 
 use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
-use floe_context_contract::{AuthorizedRead, HeldGrant, SourceReadOutcome};
+use floe_context_contract::SourceReadOutcome;
 
 use floe_context_contract::LogisticsView;
 
@@ -18,9 +18,9 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
     request: &BuiltinExpertRequest,
 ) -> Result<BuiltinExpertOutput, AgentFailure> {
     let source_view = match host
-        .read_source_view(
+        .read_requirement(
             request,
-            "life.logistics",
+            "floe.source.logistics",
             serde_json::json!({ "schema_version": AGENT_VERSION }),
         )
         .await?
@@ -28,8 +28,8 @@ pub async fn dispatch<Host: BuiltinExpertHost + ?Sized>(
         SourceReadOutcome::Ready(view) => view,
         SourceReadOutcome::Unavailable(_) => {
             return BuiltinExpertOutput::from_blocked(
-crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
-super::RESULT_MEDIA_TYPE,
+                crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
+                super::RESULT_MEDIA_TYPE,
                 BlockedExpertStatus::Unavailable,
                 "Logistics are temporarily unavailable, so there is no logistics plan.".into(),
             );
@@ -46,8 +46,8 @@ super::RESULT_MEDIA_TYPE,
             );
         }
     };
-    for binding in source_view.bindings() {
-        host.record_dependency(request.task_id, request.task_id, binding.dependency.clone())?;
+    for dependency in source_view.dependencies() {
+        host.record_dependency(request.task_id, request.task_id, dependency.clone())?;
     }
     let view: LogisticsView = serde_json::from_value(source_view.payload().clone())
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;

@@ -9,11 +9,10 @@ use floe_agent_contract::{
     InferencePolicyDecision,
 };
 use floe_context_contract::{
-    AttentionView, AuthorizedRead, CalendarContextView, CalendarViewQuery,
-    ConfirmedInteractionView, ConnectionId, ConnectorId, ConsumerPolicyAuthority,
-    ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
-    GrantOperation, GrantPurpose, GrantSourceBinding, HeldGrant, MemoryContextSnapshot,
-    NativeContextView, PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
+    AttentionView, AuthorizedRead, CalendarContextView, ConfirmedInteractionView, ConnectionId,
+    ConnectorId, ConsumerPolicyAuthority, ContextDependency, ExecutionOwnerId, GrantAuthority,
+    GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+    HeldGrant, PeopleView, ProcessingRestriction, ResourceHandle, SourceAccessBlockers,
     SourceAccessRequirement, SourceAccessRequirementKind, SourceAuthority, SourceReadOutcome,
     SourceUnavailable, WellbeingView, WorkContextView,
 };
@@ -109,6 +108,24 @@ impl ScriptedHost {
             .clone()
             .unwrap_or_else(|| panic!("{what} was not scripted"))
     }
+
+    fn encode<T: serde::Serialize>(
+        outcome: SourceReadOutcome<T>,
+    ) -> Result<SourceReadOutcome<crate::DeclaredSourceRead<TestRead>>, AgentFailure> {
+        Ok(match outcome {
+            SourceReadOutcome::Ready(value) => {
+                SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                    serde_json::to_value(value).map_err(|_| AgentFailure::InvalidInput)?,
+                    vec![],
+                    None,
+                ))
+            }
+            SourceReadOutcome::Unavailable(reason) => SourceReadOutcome::Unavailable(reason),
+            SourceReadOutcome::NeedsUserAction(blockers) => {
+                SourceReadOutcome::NeedsUserAction(blockers)
+            }
+        })
+    }
 }
 
 impl BuiltinExpertHost for ScriptedHost {
@@ -123,13 +140,76 @@ impl BuiltinExpertHost for ScriptedHost {
         &self.policy
     }
 
-    fn read_source_view<'a>(
+    fn read_requirement<'a>(
         &'a self,
-        _: &'a BuiltinExpertRequest,
-        _: &'a str,
+        request: &'a BuiltinExpertRequest,
+        key: &'a str,
         _: serde_json::Value,
-    ) -> Acquiring<'a, SourceReadOutcome<Self::SourceRead>> {
-        Box::pin(async move { Self::take(&self.source, "source view") })
+    ) -> Acquiring<'a, SourceReadOutcome<crate::DeclaredSourceRead<Self::SourceRead>>> {
+        Box::pin(async move {
+            if !crate::manifests().into_iter().any(|manifest| {
+                manifest.package.id == request.agent_id
+                    && manifest
+                        .source_requirements
+                        .iter()
+                        .any(|requirement| requirement.key == key)
+            }) {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let has_work = self.work.lock().unwrap().is_some();
+            match key {
+                "floe.source.calendar" => {
+                    Self::encode(Self::take(&self.calendar, "calendar views")?)
+                }
+                "floe.source.contacts" => Self::encode(Self::take(&self.people, "people view")?),
+                "floe.source.wellbeing" => {
+                    Self::encode(Self::take(&self.wellbeing, "wellbeing view")?)
+                }
+                "floe.source.attention" => {
+                    Ok(match Self::take(&self.attention, "attention view")? {
+                        SourceReadOutcome::Ready((view, dependency)) => {
+                            SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                                serde_json::to_value(view)
+                                    .map_err(|_| AgentFailure::InvalidInput)?,
+                                vec![dependency],
+                                None,
+                            ))
+                        }
+                        SourceReadOutcome::Unavailable(reason) => {
+                            SourceReadOutcome::Unavailable(reason)
+                        }
+                        SourceReadOutcome::NeedsUserAction(blockers) => {
+                            SourceReadOutcome::NeedsUserAction(blockers)
+                        }
+                    })
+                }
+                "floe.source.work-context" if has_work => {
+                    Self::encode(Self::take(&self.work, "work context views")?)
+                }
+                "floe.source.confirmed-interactions" => {
+                    Ok(SourceReadOutcome::Ready(crate::DeclaredSourceRead::new(
+                        serde_json::to_value(Vec::<ConfirmedInteractionView>::new())
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                        vec![],
+                        None,
+                    )))
+                }
+                "floe.source.confirmed-memory" | "floe.source.tasks" => {
+                    Err(AgentFailure::CapabilityUnavailable)
+                }
+                _ => Ok(match Self::take(&self.source, "source view")? {
+                    SourceReadOutcome::Ready(read) => SourceReadOutcome::Ready(
+                        crate::DeclaredSourceRead::new(read.payload.clone(), vec![], Some(read)),
+                    ),
+                    SourceReadOutcome::Unavailable(reason) => {
+                        SourceReadOutcome::Unavailable(reason)
+                    }
+                    SourceReadOutcome::NeedsUserAction(blockers) => {
+                        SourceReadOutcome::NeedsUserAction(blockers)
+                    }
+                }),
+            }
+        })
     }
 
     fn record_dependency(
@@ -142,72 +222,12 @@ impl BuiltinExpertHost for ScriptedHost {
         Ok(())
     }
 
-    fn calendar_views<'a>(
-        &'a self,
-        _: &'a BuiltinExpertRequest,
-        _: CalendarViewQuery,
-    ) -> Acquiring<'a, SourceReadOutcome<Vec<CalendarContextView>>> {
-        Box::pin(async move { Self::take(&self.calendar, "calendar views") })
-    }
-
     fn settle_stateful_result<'a>(
         &'a self,
         _: &'a BuiltinExpertRequest,
         _: StatefulExpertDraft,
     ) -> Acquiring<'a, BuiltinExpertOutput> {
         Box::pin(async { panic!("no stateful settlement in dispatch tests") })
-    }
-
-    fn work_context_views<'a>(
-        &'a self,
-        _: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<Vec<WorkContextView>>> {
-        Box::pin(async move { Self::take(&self.work, "work context views") })
-    }
-
-    fn people_view<'a>(
-        &'a self,
-        _: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<PeopleView>> {
-        Box::pin(async move { Self::take(&self.people, "people view") })
-    }
-
-    fn confirmed_interaction_views<'a>(
-        &'a self,
-        _: &'a BuiltinExpertRequest,
-        _: &'a PeopleView,
-    ) -> Acquiring<'a, Vec<ConfirmedInteractionView>> {
-        Box::pin(async move { Ok(vec![]) })
-    }
-
-    fn wellbeing_view<'a>(
-        &'a self,
-        _: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<WellbeingView>> {
-        Box::pin(async move { Self::take(&self.wellbeing, "wellbeing view") })
-    }
-
-    fn attention_view<'a>(
-        &'a self,
-        _: &'a BuiltinExpertRequest,
-    ) -> Acquiring<'a, SourceReadOutcome<(AttentionView, ContextDependency)>> {
-        Box::pin(async move { Self::take(&self.attention, "attention view") })
-    }
-
-    fn conversation_context_available(&self) -> bool {
-        false
-    }
-
-    fn memory_context<'a>(&'a self) -> Acquiring<'a, MemoryContextSnapshot> {
-        Box::pin(async { panic!("no memory in dispatch tests") })
-    }
-
-    fn task_view<'a>(&'a self) -> Acquiring<'a, NativeContextView> {
-        Box::pin(async { panic!("no task view in dispatch tests") })
-    }
-
-    fn staged_task_views(&self) -> &[NativeContextView] {
-        &[]
     }
 }
 
@@ -255,6 +275,8 @@ pub fn request(agent_id: &str) -> BuiltinExpertRequest {
             optional_context_issues: vec![],
             evidence: vec![],
         },
+        staged_task_views: vec![],
+        context_inputs_available: false,
         max_output_bytes: 16_384,
         deadline: Instant::now() + std::time::Duration::from_secs(30),
         cancellation: Cancellation::default(),

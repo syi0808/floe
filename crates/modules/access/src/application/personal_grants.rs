@@ -27,7 +27,6 @@ use crate::ports::personal_grants::{
 };
 
 pub const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
-pub const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
 
 /// What the Person is asking to change about one source.
 #[derive(Clone, Debug, PartialEq)]
@@ -237,18 +236,20 @@ pub fn source_and_scope(
 
 /// The consumers an attention grant may name, canonical and without repeats.
 fn reviewed_consumers(consumers: &[String]) -> Result<Vec<String>, AgentFailure> {
-    canonical_consumers(consumers, 2, |value| {
-        matches!(
-            value,
-            ATTENTION_ASSISTANT_CONSUMER | ATTENTION_EXPERT_CONSUMER
-        )
-    })
+    canonical_consumers(consumers, 2, valid_consumer)
 }
 
 fn reviewed_contacts_consumers(consumers: &[String]) -> Result<Vec<String>, AgentFailure> {
-    canonical_consumers(consumers, 2, |value| {
-        matches!(value, "assistant" | "contacts.expert")
-    })
+    canonical_consumers(consumers, 2, valid_consumer)
+}
+
+fn valid_consumer(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        && GrantConsumer::builtin(value).is_ok()
 }
 
 fn reviewed_feasibility_consumers(consumers: &[String]) -> Result<Vec<String>, AgentFailure> {
@@ -292,11 +293,9 @@ fn feasibility_scope(consumer_names: Vec<String>) -> Result<GrantScope, AgentFai
     scope_for(FEASIBILITY_RESOURCE, consumer_names)
 }
 
-fn wellbeing_scope() -> Result<GrantScope, AgentFailure> {
-    scope_for(
-        WELLBEING_RESOURCE,
-        vec![ATTENTION_ASSISTANT_CONSUMER.to_owned()],
-    )
+fn wellbeing_scope(consumers: &[String]) -> Result<GrantScope, AgentFailure> {
+    let consumers = canonical_consumers(consumers, 2, valid_consumer)?;
+    scope_for(WELLBEING_RESOURCE, consumers)
 }
 
 /// The subject the device answers for now, refused if it moved mid-inspection.
@@ -624,9 +623,7 @@ async fn apply_wellbeing(
             expected_grant_authority,
         } => {
             let expected = expected_grant(expected_grant_id, expected_grant_authority)?;
-            if request.consumers != [ATTENTION_ASSISTANT_CONSUMER] {
-                return Err(AgentFailure::InvalidInput);
-            }
+            let consumers = reviewed_consumers(&request.consumers)?;
             inspected_subject(
                 inspector,
                 person_id,
@@ -643,7 +640,7 @@ async fn apply_wellbeing(
             let grant = store
                 .review_grant(
                     wellbeing_source(person_id, &request.device_id, authority)?,
-                    wellbeing_scope()?,
+                    wellbeing_scope(&consumers)?,
                     &expected_native_subject_fingerprint,
                     expected,
                 )
@@ -677,7 +674,7 @@ async fn apply_wellbeing(
                         &request.device_id,
                         grant.source().source_authority(),
                     )?,
-                    wellbeing_scope()?,
+                    grant.scope().clone(),
                     &fingerprint,
                     Some((grant.id(), grant.authority())),
                 )
@@ -839,10 +836,7 @@ pub async fn apply_contacts(
 
 /// Which consumer may read attention, and under which name.
 pub fn attention_consumer(value: &str) -> Result<GrantConsumer, AgentFailure> {
-    if !matches!(
-        value,
-        ATTENTION_ASSISTANT_CONSUMER | ATTENTION_EXPERT_CONSUMER
-    ) {
+    if !valid_consumer(value) {
         return Err(AgentFailure::PolicyDenied);
     }
     GrantConsumer::builtin(value).map_err(|_| AgentFailure::InvalidInput)
@@ -856,11 +850,11 @@ mod tests {
     fn review_consumers_are_finite_and_canonical() {
         assert_eq!(
             reviewed_consumers(&[
-                ATTENTION_EXPERT_CONSUMER.into(),
+                "floe.builtin.focus-attention".into(),
                 ATTENTION_ASSISTANT_CONSUMER.into()
             ])
             .unwrap(),
-            vec![ATTENTION_ASSISTANT_CONSUMER, ATTENTION_EXPERT_CONSUMER]
+            vec![ATTENTION_ASSISTANT_CONSUMER, "floe.builtin.focus-attention"]
         );
         assert_eq!(
             reviewed_consumers(&[
@@ -870,7 +864,7 @@ mod tests {
             Err(AgentFailure::InvalidInput)
         );
         assert_eq!(
-            reviewed_consumers(&["unknown".into()]),
+            reviewed_consumers(&["bad consumer".into()]),
             Err(AgentFailure::InvalidInput)
         );
     }
