@@ -44,6 +44,10 @@ impl ExpertManifest {
             || self.package.id != self.definition.card.id
             || self.package.version != self.definition.card.version
             || !bounded_identifier(&self.publisher)
+            || matches!(
+                self.data_class,
+                DataClass::Credential | DataClass::DeviceOnlyRaw
+            )
             || self.state_schema_version == 0
             || self.result_contracts.len() > 16
             || self.source_requirements.len() > 32
@@ -59,6 +63,15 @@ impl ExpertManifest {
                 .result_contracts
                 .iter()
                 .any(|contract| !valid_contract(contract))
+            || self
+                .result_contracts
+                .iter()
+                .enumerate()
+                .any(|(index, contract)| {
+                    self.result_contracts[..index]
+                        .iter()
+                        .any(|other| other.id == contract.id)
+                })
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -172,6 +185,25 @@ mod tests {
         assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
         manifest.definition.card.version = "1.0.0".into();
         manifest.package.kind = PackageKind::Tool;
+        assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
+    }
+
+    #[test]
+    fn manifest_rejects_raw_authority_and_duplicate_result_identity() {
+        let mut manifest = manifest();
+        manifest.data_class = DataClass::Credential;
+        assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
+        manifest.data_class = DataClass::Personal;
+        manifest.result_contracts = vec![
+            ContractRef {
+                id: "result".into(),
+                revision: 1,
+            },
+            ContractRef {
+                id: "result".into(),
+                revision: 2,
+            },
+        ];
         assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
     }
 }
