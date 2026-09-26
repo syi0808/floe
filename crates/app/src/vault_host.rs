@@ -335,6 +335,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
             let manifest = &registration.manifest;
             manifest.validate()?;
             let installed = registry.resolve_admitted(self.vault.person_id(), &admission)?;
+            let selection = registry.execution_selection(self.vault.person_id(), &admission)?;
             if card != manifest.definition.card || installed.manifest != *manifest {
                 return Err(AgentFailure::Conflict);
             }
@@ -342,6 +343,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                 DirectoryEntry {
                     definition: manifest.definition.clone(),
                     admission: admission.clone(),
+                    selection: selection.clone(),
                     reviewed: true,
                     enabled: true,
                     admitted_principals: vec![self.vault.person_id().to_string()],
@@ -354,6 +356,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
                         Arc::clone(&self.local_context),
                         self.connections.clone(),
                         admission.clone(),
+                        selection,
                         Arc::clone(registration),
                     ),
                 ) as Arc<dyn floe_agent_contract::AgentEndpoint>,

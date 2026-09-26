@@ -119,6 +119,7 @@ fn to_vault_record(record: TaskRecord) -> VaultTaskRecord {
     VaultTaskRecord {
         snapshot: record.snapshot,
         admission: record.admission,
+        selection: record.selection,
         invocation_key: record.invocation_key,
         request_digest: record.request_digest,
         aggregate_revision: record.aggregate_revision,
@@ -130,6 +131,7 @@ fn from_vault_record(record: VaultTaskRecord) -> TaskRecord {
     TaskRecord {
         snapshot: record.snapshot,
         admission: record.admission,
+        selection: record.selection,
         invocation_key: record.invocation_key,
         request_digest: record.request_digest,
         aggregate_revision: record.aggregate_revision,

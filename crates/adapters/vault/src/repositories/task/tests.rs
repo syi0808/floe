@@ -40,7 +40,12 @@ impl VaultKeyProvider for Keys {
     }
 }
 
-fn submitted(person_id: PersonId, task_id: TaskId, generation: u64) -> TaskRecord {
+fn submitted(
+    person_id: PersonId,
+    task_id: TaskId,
+    generation: u64,
+    admission: floe_experts::ExpertAdmissionIdentity,
+) -> TaskRecord {
     TaskRecord {
         snapshot: TaskSnapshot {
             task_id,
@@ -54,17 +59,8 @@ fn submitted(person_id: PersonId, task_id: TaskId, generation: u64) -> TaskRecor
             coverage: DependencyCoverage::Unknown,
             issue: None,
         },
-        admission: floe_experts::ExpertAdmissionIdentity {
-            registry_instance_id: Uuid::new_v4(),
-            assignment_id: Uuid::new_v4(),
-            installation_id: Uuid::new_v4(),
-            package: floe_agent_contract::PackageRef {
-                kind: floe_agent_contract::PackageKind::Expert,
-                id: "floe.builtin.schedule".into(),
-                version: "1.0.0".into(),
-            },
-            definition_revision: 3,
-        },
+        admission,
+        selection: floe_experts::ExpertExecutionSelection::without_requirements(1).unwrap(),
         invocation_key: InvocationKey::new(),
         request_digest: [4; 32],
         aggregate_revision: 1,
@@ -83,6 +79,7 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
             .await
             .unwrap(),
     );
+    let admission = crate::test_expert_registry::install(&vault, person_id, 3).await.unwrap();
     let repository = VaultTaskRepository::new(Arc::clone(&vault));
     assert_eq!(
         repository.validate_settlement(
@@ -92,7 +89,7 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
     );
     let activation = repository.activate().await.unwrap();
     let task_id = TaskId::new();
-    let proposed = submitted(person_id, task_id, activation.executor_generation);
+    let proposed = submitted(person_id, task_id, activation.executor_generation, admission);
     assert_eq!(
         repository.admit(proposed.clone()).await.unwrap(),
         TaskAdmission::Created(proposed.clone())

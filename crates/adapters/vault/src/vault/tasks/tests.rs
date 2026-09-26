@@ -37,7 +37,12 @@ impl VaultKeyProvider for Keys {
     }
 }
 
-fn submitted(person_id: PersonId, task_id: TaskId, generation: u64) -> VaultTaskRecord {
+fn submitted(
+    person_id: PersonId,
+    task_id: TaskId,
+    generation: u64,
+    admission: floe_experts::ExpertAdmissionIdentity,
+) -> VaultTaskRecord {
     VaultTaskRecord {
         snapshot: TaskSnapshot {
             task_id,
@@ -51,17 +56,8 @@ fn submitted(person_id: PersonId, task_id: TaskId, generation: u64) -> VaultTask
             coverage: DependencyCoverage::Unknown,
             issue: None,
         },
-        admission: floe_experts::ExpertAdmissionIdentity {
-            registry_instance_id: Uuid::new_v4(),
-            assignment_id: Uuid::new_v4(),
-            installation_id: Uuid::new_v4(),
-            package: floe_agent_contract::PackageRef {
-                kind: floe_agent_contract::PackageKind::Expert,
-                id: "floe.builtin.schedule".into(),
-                version: "1.0.0".into(),
-            },
-            definition_revision: 7,
-        },
+        admission,
+        selection: floe_experts::ExpertExecutionSelection::without_requirements(1).unwrap(),
         invocation_key: InvocationKey::new(),
         request_digest: [7; 32],
         aggregate_revision: 1,
@@ -78,8 +74,9 @@ async fn durable_task_admission_cas_and_generation_recovery_are_fail_closed() {
     let mut vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
         .await
         .unwrap();
+    let admission = crate::test_expert_registry::install(&vault, person_id, 7).await.unwrap();
     let task_id = TaskId::new();
-    let proposed = submitted(person_id, task_id, 1);
+    let proposed = submitted(person_id, task_id, 1, admission.clone());
 
     assert_eq!(
         vault.admit_task(proposed.clone()).await,
@@ -152,7 +149,7 @@ async fn durable_task_admission_cas_and_generation_recovery_are_fail_closed() {
     );
 
     let second_id = TaskId::new();
-    let second = submitted(person_id, second_id, 2);
+    let second = submitted(person_id, second_id, 2, admission.clone());
     vault.admit_task(second.clone()).await.unwrap();
     drop(vault);
     vault = EncryptedAgentVault::open(root.path(), person_id, keys)
@@ -160,7 +157,7 @@ async fn durable_task_admission_cas_and_generation_recovery_are_fail_closed() {
         .unwrap();
     assert_eq!(
         vault
-            .admit_task(submitted(person_id, TaskId::new(), 2))
+            .admit_task(submitted(person_id, TaskId::new(), 2, admission.clone()))
             .await,
         Err(AgentFailure::Conflict)
     );
@@ -194,19 +191,20 @@ async fn task_store_rejects_foreign_principals_and_illegal_terminal_shapes() {
     let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
         .await
         .unwrap();
+    let admission = crate::test_expert_registry::install(&vault, person_id, 7).await.unwrap();
     let generation = vault
         .activate_task_executor()
         .await
         .unwrap()
         .executor_generation;
     let task_id = TaskId::new();
-    let mut foreign = submitted(person_id, task_id, generation);
+    let mut foreign = submitted(person_id, task_id, generation, admission.clone());
     foreign.snapshot.principal = PersonId::new().to_string();
     assert_eq!(
         vault.admit_task(foreign).await,
         Err(AgentFailure::CapabilityDenied)
     );
-    let proposed = submitted(person_id, task_id, generation);
+    let proposed = submitted(person_id, task_id, generation, admission);
     vault.admit_task(proposed.clone()).await.unwrap();
     let invalid = TaskSnapshot {
         state: TaskState::Completed,

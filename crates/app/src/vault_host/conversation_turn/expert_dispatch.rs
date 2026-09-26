@@ -116,6 +116,7 @@ pub(crate) struct RegisteredExpertEndpoint<Keys> {
     local_context: Arc<LocalContextHost>,
     connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
     admission: floe_experts::ExpertAdmissionIdentity,
+    selection: floe_experts::ExpertExecutionSelection,
     registration: Arc<BoundExpertRegistration>,
 }
 
@@ -126,6 +127,7 @@ impl<Keys> RegisteredExpertEndpoint<Keys> {
         local_context: Arc<LocalContextHost>,
         connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
         admission: floe_experts::ExpertAdmissionIdentity,
+        selection: floe_experts::ExpertExecutionSelection,
         registration: Arc<BoundExpertRegistration>,
     ) -> Self {
         Self {
@@ -134,6 +136,7 @@ impl<Keys> RegisteredExpertEndpoint<Keys> {
             local_context,
             connections,
             admission,
+            selection,
             registration,
         }
     }
@@ -164,6 +167,14 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 return Err(AgentFailure::CapabilityDenied);
             }
             let person_id = self.vault.person_id();
+            let registry = self.vault.expert_registry().await?.ok_or(AgentFailure::NotFound)?;
+            floe_experts::AgentRegistry::restore(registry, self.vault.registry_instance_id())?
+                .validate_current_execution_selection(
+                    person_id,
+                    &self.admission,
+                    &self.selection,
+                    true,
+                )?;
             let source_client = ServerSourceClient::from_current_connection(
                 &self.connections,
                 &person_id.to_string(),
@@ -282,7 +293,6 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 executor: &service,
                 scope,
                 availability,
-                source_client: source_client.as_ref(),
                 calendar_reader: Some(&calendar_reader as &dyn CalendarContextReaderApi),
                 policy: &policy,
                 context: &context.agent_context,
@@ -338,6 +348,14 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                     artifact.coverage = coverage.clone();
                 }
             }
+            let current_registry = self.vault.expert_registry().await?.ok_or(AgentFailure::NotFound)?;
+            floe_experts::AgentRegistry::restore(current_registry, self.vault.registry_instance_id())?
+                .validate_current_execution_selection(
+                    person_id,
+                    &self.admission,
+                    &self.selection,
+                    true,
+                )?;
             Ok(ExpertReport {
                 task_id: invocation.request.task_id,
                 principal: invocation.request.principal,
@@ -377,7 +395,6 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) executor: &'model dyn floe_inference::InferenceExecutor,
     pub(super) scope: &'model floe_execution::ExecutionScope,
     pub(super) availability: floe_inference::InferenceAvailability,
-    pub(super) source_client: Option<&'model floe_provider_adapters::sources::ServerSourceClient>,
     pub(super) calendar_reader: Option<&'model dyn CalendarContextReaderApi>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
@@ -577,20 +594,9 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                     }
                 }
                 LocalExpertSource::ConfirmedInteractions => {
-                    let people =
-                        serde_json::from_value(query).map_err(|_| AgentFailure::InvalidInput)?;
-                    let client = self
-                        .host
-                        .experts
-                        .source_client
-                        .ok_or(AgentFailure::CapabilityUnavailable)?;
-                    let view = client
-                        .read_confirmed_interaction_view(&people, deadline, cancellation)
-                        .await?;
-                    Ok(SourceReadOutcome::Ready((
-                        serde_json::to_value(vec![view]).map_err(|_| AgentFailure::InvalidInput)?,
-                        vec![],
-                    )))
+                    Ok(SourceReadOutcome::Unavailable(
+                        floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+                    ))
                 }
                 LocalExpertSource::ConfirmedMemory => {
                     let snapshot = self
@@ -1108,7 +1114,6 @@ mod capture_tests {
             executor: &executor,
             scope: &scope,
             availability: floe_inference::InferenceAvailability::default(),
-            source_client: None,
             calendar_reader: Some(&calendar),
             policy: &policy,
             context: &context,
@@ -1362,7 +1367,6 @@ mod capture_tests {
             executor: &executor,
             scope: &scope,
             availability: floe_inference::InferenceAvailability::default(),
-            source_client: None,
             calendar_reader: Some(&calendar),
             policy: &policy,
             context: &context,
@@ -1524,7 +1528,6 @@ mod capture_tests {
             executor: &executor,
             scope: &scope,
             availability: floe_inference::InferenceAvailability::default(),
-            source_client: None,
             calendar_reader: Some(&calendar),
             policy: &policy,
             context: &context,
@@ -1829,7 +1832,6 @@ mod capture_tests {
             executor: &executor,
             scope: &scope,
             availability,
-            source_client: None,
             calendar_reader: Some(&calendar),
             policy: &policy,
             context: &context,

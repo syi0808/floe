@@ -10,6 +10,7 @@ mod directory;
 mod dispatch;
 mod manifest;
 mod registry;
+mod selection;
 mod settlement;
 mod task;
 
@@ -46,4 +47,5 @@ pub use registry::{
     eligible_cards_for_availability,
 };
 pub use settlement::{ExpertSettlement, ExpertTaskCompletion};
+pub use selection::{AdmittedRequirementSelection, EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION, ExpertExecutionSelection};
 pub use task::{TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository};

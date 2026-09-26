@@ -190,21 +190,7 @@ pub async fn read_declared_source(
         {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let acquired = match local_driver
-            .read(source, query, deadline, cancellation)
-            .await
-        {
-            Err(AgentFailure::CapabilityUnavailable)
-                if source == LocalExpertSource::ConfirmedInteractions =>
-            {
-                return Ok(SourceReadOutcome::Ready(DeclaredSourceValue {
-                    payload: serde_json::json!([]),
-                    dependencies: vec![],
-                    held: None,
-                }));
-            }
-            result => result?,
-        };
+        let acquired = local_driver.read(source, query, deadline, cancellation).await?;
         return Ok(match acquired {
             SourceReadOutcome::Ready((payload, dependencies)) => {
                 SourceReadOutcome::Ready(DeclaredSourceValue {

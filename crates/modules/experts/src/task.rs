@@ -11,13 +11,14 @@ use floe_agent_contract::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Directory, DirectoryQuery, ExpertAdmissionIdentity};
+use crate::{Directory, DirectoryQuery, ExpertAdmissionIdentity, ExpertExecutionSelection};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRecord {
     pub snapshot: TaskSnapshot,
     pub admission: ExpertAdmissionIdentity,
+    pub selection: ExpertExecutionSelection,
     pub invocation_key: floe_agent_contract::InvocationKey,
     pub request_digest: [u8; 32],
     pub aggregate_revision: u64,
@@ -34,6 +35,7 @@ impl TaskRecord {
                 &self.snapshot.agent_id,
                 self.snapshot.definition_revision,
             ).is_err()
+            || self.selection.validate().is_err()
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -99,6 +101,7 @@ impl TaskRecord {
         let next = Self {
             snapshot,
             admission: self.admission.clone(),
+            selection: self.selection.clone(),
             invocation_key: self.invocation_key,
             request_digest: self.request_digest,
             aggregate_revision: self
@@ -387,6 +390,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
                 None,
             ),
             admission: endpoint.admission.clone(),
+            selection: endpoint.selection.clone(),
             invocation_key: request.invocation_key,
             request_digest,
             aggregate_revision: 1,
@@ -397,7 +401,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             TaskAdmission::Created(record) => {
                 validate_replay(&request, request_digest, &record)?;
                 validate_owned_record(&record, self.maximum_output_bytes)?;
-                if record.admission != endpoint.admission {
+                if record.admission != endpoint.admission || record.selection != endpoint.selection {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 record
@@ -405,7 +409,7 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             TaskAdmission::Existing(record) => {
                 validate_replay(&request, request_digest, &record)?;
                 validate_owned_record(&record, self.maximum_output_bytes)?;
-                if record.admission != endpoint.admission {
+                if record.admission != endpoint.admission || record.selection != endpoint.selection {
                     return Err(AgentFailure::Conflict);
                 }
                 return Ok(TaskReceipt {
@@ -673,6 +677,7 @@ fn validate_saved_transition(
     validate_owned_record(saved, maximum_bytes)?;
     if saved.snapshot != *expected_snapshot
         || saved.admission != previous.admission
+        || saved.selection != previous.selection
         || saved.invocation_key != previous.invocation_key
         || saved.request_digest != previous.request_digest
         || saved.executor_generation != previous.executor_generation

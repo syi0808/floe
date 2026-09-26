@@ -32,6 +32,7 @@ use floe_execution::{
 use floe_experts::{
     AgentRegistry, ContractRef, Directory, DirectoryEntry, DirectoryQuery,
     EXPERT_MANIFEST_SCHEMA_VERSION, ExpertAdmissionIdentity, ExpertBindingCommand,
+    ExpertExecutionSelection,
     ExpertInstallOperation, ExpertManifest, ExpertRegistration, ExpertSourceRequirement,
     TaskActivation, TaskAdmission, TaskCoordinator, TaskRecord, TaskRepository,
 };
@@ -93,6 +94,7 @@ impl TaskRepository for MemoryTasks {
                 if record.invocation_key != proposed.invocation_key
                     || record.request_digest != proposed.request_digest
                     || record.admission != proposed.admission
+                    || record.selection != proposed.selection
                     || record.snapshot.task_id != proposed.snapshot.task_id
                     || record.snapshot.parent_run_id != proposed.snapshot.parent_run_id
                     || record.snapshot.principal != proposed.snapshot.principal
@@ -293,6 +295,7 @@ fn register(directory: &Directory, id: &str, endpoint: Endpoint) -> Result<(), A
         DirectoryEntry {
             definition: definition(id, 1),
             admission: admission(id, 1),
+            selection: empty_selection(),
             reviewed: true,
             enabled: true,
             admitted_principals: vec!["person-a".into()],
@@ -303,11 +306,16 @@ fn register(directory: &Directory, id: &str, endpoint: Endpoint) -> Result<(), A
     Ok(())
 }
 
+fn empty_selection() -> ExpertExecutionSelection {
+    ExpertExecutionSelection::without_requirements(1).unwrap()
+}
+
 fn publication_entry(id: &str) -> (DirectoryEntry, Arc<dyn AgentEndpoint>) {
     (
         DirectoryEntry {
             definition: definition(id, 1),
             admission: admission(id, 1),
+            selection: empty_selection(),
             reviewed: true,
             enabled: true,
             admitted_principals: vec!["person-a".into()],
@@ -449,6 +457,7 @@ async fn nonbuiltin_registration_installs_publishes_and_completes_without_source
                     (
                         DirectoryEntry {
                             definition: registration.manifest.definition.clone(),
+                            selection: registry.execution_selection(person, &admission).unwrap(),
                             admission,
                             reviewed: true,
                             enabled: true,
@@ -877,6 +886,7 @@ async fn trusted_endpoint_settlement_reaches_the_repository_once() {
             DirectoryEntry {
                 definition: definition("floe.test.settlement", 1),
                 admission: admission("floe.test.settlement", 1),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -924,6 +934,7 @@ async fn unsupported_endpoint_settlement_becomes_a_failed_task_before_commit() {
             DirectoryEntry {
                 definition: definition("floe.test.unsupported-settlement", 1),
                 admission: admission("floe.test.unsupported-settlement", 1),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -986,6 +997,7 @@ async fn explicit_task_cancel_is_authorized_persisted_and_does_not_cancel_parent
             DirectoryEntry {
                 definition: definition("floe.test.blocking", 1),
                 admission: admission("floe.test.blocking", 1),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -1055,6 +1067,7 @@ async fn restart_recovery_interrupts_only_an_orphaned_nonterminal_task() {
             issue: None,
         },
         admission: admission("floe.test.recovery", 1),
+        selection: empty_selection(),
         invocation_key: request.invocation_key,
         request_digest,
         aggregate_revision: 1,
@@ -1503,6 +1516,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
             DirectoryEntry {
                 definition: remote_only,
                 admission: admission("floe.test.remote-only", 3),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -1528,6 +1542,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
             DirectoryEntry {
                 definition: definition("floe.test.disabled", 1),
                 admission: admission("floe.test.disabled", 1),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: false,
                 admitted_principals: vec!["person-a".into()],
@@ -1544,6 +1559,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
             DirectoryEntry {
                 definition: definition("floe.test.unreviewed", 1),
                 admission: admission("floe.test.unreviewed", 1),
+                selection: empty_selection(),
                 reviewed: false,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],
@@ -1560,6 +1576,7 @@ async fn coordinator_catalog_lists_directory_admitted_cards_without_model_placem
             DirectoryEntry {
                 definition: definition("floe.test.other-principal", 1),
                 admission: admission("floe.test.other-principal", 1),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-b".into()],
@@ -1804,6 +1821,7 @@ async fn deadline_during_execution_produces_timed_out_terminal_task() {
             DirectoryEntry {
                 definition: definition("floe.test.deadline", 1),
                 admission: admission("floe.test.deadline", 1),
+                selection: empty_selection(),
                 reviewed: true,
                 enabled: true,
                 admitted_principals: vec!["person-a".into()],

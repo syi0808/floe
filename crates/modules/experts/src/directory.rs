@@ -9,6 +9,8 @@ use floe_agent_contract::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::ExpertExecutionSelection;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpertAdmissionIdentity {
@@ -66,6 +68,7 @@ pub struct DirectoryQuery<'a> {
 pub struct DirectoryEntry {
     pub definition: AgentDefinition,
     pub admission: ExpertAdmissionIdentity,
+    pub selection: ExpertExecutionSelection,
     pub reviewed: bool,
     pub enabled: bool,
     pub admitted_principals: Vec<String>,
@@ -76,6 +79,7 @@ impl DirectoryEntry {
     fn validate(&self) -> Result<(), AgentFailure> {
         self.definition.validate()?;
         self.admission.validate(&self.definition)?;
+        self.selection.validate()?;
         if self
             .admitted_principals
             .iter()
@@ -108,6 +112,7 @@ struct RegisteredEndpoint {
 
 pub struct ResolvedDirectoryEntry {
     pub admission: ExpertAdmissionIdentity,
+    pub selection: ExpertExecutionSelection,
     pub endpoint: Arc<dyn AgentEndpoint>,
 }
 
@@ -319,6 +324,7 @@ impl Directory {
         }
         Ok(ResolvedDirectoryEntry {
             admission: registered.entry.admission.clone(),
+            selection: registered.entry.selection.clone(),
             endpoint: Arc::clone(&registered.endpoint),
         })
     }

@@ -500,6 +500,14 @@ mod tests {
             .into_iter()
             .find(|(card, _)| card.id == request.agent_id)
             .unwrap();
+        let registry_snapshot = vault.expert_registry().await.unwrap().unwrap();
+        let selection = floe_experts::AgentRegistry::restore(
+            registry_snapshot,
+            vault.registry_instance_id(),
+        )
+        .unwrap()
+        .execution_selection(person_id, &admission)
+        .unwrap();
         directory
             .register(
                 DirectoryEntry {
@@ -508,6 +516,7 @@ mod tests {
                         definition_revision: 1,
                     },
                     admission,
+                    selection,
                     reviewed: true,
                     enabled: true,
                     admitted_principals: vec![person_id.to_string()],

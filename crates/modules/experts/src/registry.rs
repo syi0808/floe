@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{ExpertAdmissionIdentity, ExpertManifest, manifest_set_digest};
+use crate::{ExpertAdmissionIdentity, ExpertExecutionSelection, ExpertManifest, manifest_set_digest};
 
 pub const EXPERT_REGISTRY_SCHEMA_VERSION: u32 = 3;
 pub const EXPERT_BINDING_SCHEMA_VERSION: u32 = 1;
@@ -697,6 +697,37 @@ impl AgentRegistry {
         assignment_id: Uuid,
     ) -> Result<ExpertBindingState, AgentFailure> {
         Ok(self.assignment(person_id, assignment_id)?.binding.clone())
+    }
+
+    pub fn execution_selection(
+        &self,
+        person_id: PersonId,
+        admission: &ExpertAdmissionIdentity,
+    ) -> Result<ExpertExecutionSelection, AgentFailure> {
+        let resolved = self.resolve_admitted(person_id, admission)?;
+        ExpertExecutionSelection::from_binding(&resolved.manifest, &resolved.assignment.binding)
+    }
+
+    pub fn validate_current_execution_selection(
+        &self,
+        person_id: PersonId,
+        admission: &ExpertAdmissionIdentity,
+        selection: &ExpertExecutionSelection,
+        require_enabled: bool,
+    ) -> Result<(), AgentFailure> {
+        selection.validate()?;
+        let resolved = self.resolve_admitted(person_id, admission)?;
+        if require_enabled {
+            self.validate_active_assignment(person_id, admission.assignment_id)?;
+        }
+        let current = ExpertExecutionSelection::from_binding(
+            &resolved.manifest,
+            &resolved.assignment.binding,
+        )?;
+        if &current != selection {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
     }
 
     pub fn replace_binding(

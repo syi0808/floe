@@ -2596,12 +2596,17 @@ fn common_schedule_endpoint_completes_review_required_task_without_old_setup() {
     });
     let mut connection = fixture_saved_connection(person, "mac-local");
     connection.base_url = base_url;
+    let (admission, selection) = direct_endpoint_identity(
+        &fixture,
+        floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
+    );
     let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(connection)),
-        direct_endpoint_admission(floe_experts_builtin::BuiltinExpertKind::Schedule.package_id()),
+        admission,
+        selection,
         direct_endpoint_registration(
             floe_experts_builtin::BuiltinExpertKind::Schedule.package_id(),
         ),
@@ -2980,18 +2985,29 @@ fn direct_invocation(
     )
 }
 
-fn direct_endpoint_admission(agent_id: &str) -> floe_experts::ExpertAdmissionIdentity {
-    floe_experts::ExpertAdmissionIdentity {
-        registry_instance_id: Uuid::new_v4(),
-        assignment_id: Uuid::new_v4(),
-        installation_id: Uuid::new_v4(),
-        package: floe_agent_contract::PackageRef {
-            kind: floe_agent_contract::PackageKind::Expert,
-            id: agent_id.into(),
-            version: "1.0.0".into(),
-        },
-        definition_revision: 1,
-    }
+fn direct_endpoint_identity(
+    fixture: &DirectEndpointFixture,
+    agent_id: &str,
+) -> (floe_experts::ExpertAdmissionIdentity, floe_experts::ExpertExecutionSelection) {
+    fixture.runtime.block_on(async {
+        if fixture.vault.expert_registry().await.unwrap().is_none() {
+            fixture.vault.install_expert_bundle(
+                floe_experts::ExpertInstallOperation {
+                    instance_id: fixture.vault.registry_instance_id(),
+                    expected_revision: 0,
+                    operation_id: Uuid::new_v4(),
+                },
+                &floe_experts_builtin::manifests(),
+                floe_execution::Cancellation::default(),
+            ).await.unwrap();
+        }
+        let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
+        let registry = floe_experts::AgentRegistry::restore(snapshot, fixture.vault.registry_instance_id()).unwrap();
+        let admission = registry.enabled_expert_admissions(fixture.person).unwrap()
+            .into_iter().find(|(card, _)| card.id == agent_id).unwrap().1;
+        let selection = registry.execution_selection(fixture.person, &admission).unwrap();
+        (admission, selection)
+    })
 }
 
 fn direct_endpoint_registration(
@@ -3080,14 +3096,17 @@ fn fixture_saved_connection(
 fn builtin_endpoint_denies_forged_principal_without_touching_state() {
     // 2-C C4: a forged principal fails closed before any store read.
     let fixture = direct_endpoint_fixture();
+    let (admission, selection) = direct_endpoint_identity(
+        &fixture,
+        floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+    );
     let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
         Arc::clone(&fixture.local_context),
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(None),
-        direct_endpoint_admission(
-            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
-        ),
+        admission,
+        selection,
         direct_endpoint_registration(
             floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
         ),
@@ -3113,6 +3132,10 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
     // reach admission independently; both fail on the forged device with the
     // same policy denial, never a staging Conflict.
     let fixture = direct_endpoint_fixture();
+    let (admission, selection) = direct_endpoint_identity(
+        &fixture,
+        floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+    );
     let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
@@ -3120,9 +3143,8 @@ fn builtin_endpoint_concurrent_tasks_under_one_run_are_not_run_gated() {
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
             fixture_saved_connection(fixture.person, "mac-local"),
         )),
-        direct_endpoint_admission(
-            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
-        ),
+        admission,
+        selection,
         direct_endpoint_registration(
             floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
         ),
@@ -3183,6 +3205,10 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
             .await
             .unwrap();
     });
+    let (admission, selection) = direct_endpoint_identity(
+        &fixture,
+        floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
+    );
     let endpoint = RegisteredExpertEndpoint::new(
         Arc::clone(&fixture.core),
         Arc::clone(&fixture.vault),
@@ -3190,9 +3216,8 @@ fn builtin_endpoint_offers_only_observed_execution_classes() {
         floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
             fixture_saved_connection(fixture.person, "mac-local"),
         )),
-        direct_endpoint_admission(
-            floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
-        ),
+        admission,
+        selection,
         direct_endpoint_registration(
             floe_experts_builtin::BuiltinExpertKind::Commitments.package_id(),
         ),

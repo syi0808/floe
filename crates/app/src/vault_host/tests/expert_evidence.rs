@@ -106,10 +106,7 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
         coverage: DependencyCoverage::Unknown,
         ..terminal.clone()
     };
-    vault
-        .admit_task(VaultTaskRecord {
-            snapshot: submitted.clone(),
-            admission: floe_experts::ExpertAdmissionIdentity {
+    let admission = floe_experts::ExpertAdmissionIdentity {
                 registry_instance_id: evidence.instance_id,
                 assignment_id: evidence.assignment_id,
                 installation_id: completed_registry
@@ -120,7 +117,20 @@ pub(in crate::vault_host) async fn record_proposal_task_with_artifacts<Keys: Vau
                     .installation_id,
                 package: evidence.package.clone(),
                 definition_revision: 1,
-            },
+    };
+    let current_registry = vault.expert_registry().await.unwrap().unwrap();
+    let selection = floe_experts::AgentRegistry::restore(
+        current_registry,
+        vault.registry_instance_id(),
+    )
+    .unwrap()
+    .execution_selection(evidence.person_id, &admission)
+    .unwrap();
+    vault
+        .admit_task(VaultTaskRecord {
+            snapshot: submitted.clone(),
+            admission,
+            selection,
             invocation_key: InvocationKey::from_uuid(evidence.invocation_id).unwrap(),
             request_digest: [1; 32],
             aggregate_revision: 1,

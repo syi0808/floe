@@ -448,7 +448,7 @@ async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
 }
 
 #[tokio::test]
-async fn registered_runner_product_endpoint_pins_a_across_b_publication_and_replay() {
+async fn registered_runner_product_endpoint_fences_disabled_a_without_rerouting_to_b() {
     RUNNER_A_CALLS.store(0, Ordering::SeqCst);
     RUNNER_B_CALLS.store(0, Ordering::SeqCst);
     let root = tempfile::tempdir().unwrap();
@@ -581,8 +581,8 @@ async fn registered_runner_product_endpoint_pins_a_across_b_publication_and_repl
     };
     let (first, (second_task_id, second_admission)) = tokio::join!(first, replacement);
     let first = first.unwrap();
-    assert_eq!(first.snapshot.state, TaskState::Completed, "{first:?}");
-    assert_eq!(first.snapshot.result.as_deref(), Some("runner-A-marker"));
+    assert_eq!(first.snapshot.state, TaskState::Rejected, "{first:?}");
+    assert_eq!(first.snapshot.issue, Some(AgentFailure::CapabilityDenied));
     let repository = VaultTaskRepository::new(Arc::clone(&open.vault));
     let first_record = floe_experts::TaskRepository::get(&repository, task_id)
         .await

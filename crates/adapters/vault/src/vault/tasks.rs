@@ -7,7 +7,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MAX_TASK_RECORD_BYTES: usize = 128 * 1024;
 const MAX_TASK_ROWS: i64 = 4_096;
 
@@ -16,6 +16,7 @@ const MAX_TASK_ROWS: i64 = 4_096;
 pub struct VaultTaskRecord {
     pub snapshot: TaskSnapshot,
     pub admission: floe_experts::ExpertAdmissionIdentity,
+    pub selection: floe_experts::ExpertExecutionSelection,
     pub invocation_key: InvocationKey,
     pub request_digest: [u8; 32],
     pub aggregate_revision: u64,
@@ -45,6 +46,7 @@ impl VaultTaskRecord {
                 &self.snapshot.agent_id,
                 self.snapshot.definition_revision,
             ).is_err()
+            || self.selection.validate().is_err()
         {
             return Err(AgentFailure::CapabilityDenied);
         }
@@ -107,6 +109,7 @@ impl VaultTaskRecord {
         let next = Self {
             snapshot,
             admission: self.admission.clone(),
+            selection: self.selection.clone(),
             invocation_key: self.invocation_key,
             request_digest: self.request_digest,
             aggregate_revision: self
@@ -152,6 +155,7 @@ impl VaultTaskRecord {
             && self.snapshot.agent_id == proposed.snapshot.agent_id
             && self.snapshot.definition_revision == proposed.snapshot.definition_revision
             && self.admission == proposed.admission
+            && self.selection == proposed.selection
             && self.invocation_key == proposed.invocation_key
             && self.request_digest == proposed.request_digest
     }
@@ -266,6 +270,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if proposed.executor_generation != self.active_executor_generation(&transaction).await? {
                 return Err(AgentFailure::Conflict);
             }
+            let registry = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
+            floe_experts::AgentRegistry::restore(registry, self.registry_instance_id())?
+                .validate_current_execution_selection(
+                    self.person_id,
+                    &proposed.admission,
+                    &proposed.selection,
+                    true,
+                )?;
             let mut count = transaction
                 .query("SELECT count(*) FROM agent_tasks", ())
                 .await
@@ -422,7 +434,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
+                "CREATE TABLE agent_task_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 4))",
                 (),
             )
             .await
@@ -450,7 +462,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_task_schema (id, version) VALUES (1, 3)",
+                "INSERT INTO agent_task_schema (id, version) VALUES (1, 4)",
                 (),
             )
             .await

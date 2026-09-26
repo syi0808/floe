@@ -9,6 +9,8 @@ mod error;
 mod repositories;
 #[cfg(unix)]
 mod vault;
+#[cfg(all(test, unix))]
+mod test_expert_registry;
 
 pub use engine::TursoStore;
 pub use error::{StoreError, StoreErrorCode};

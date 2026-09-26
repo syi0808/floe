@@ -176,6 +176,32 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.registry_on(&self.connection()?).await
     }
 
+    pub async fn replace_expert_binding(
+        &self,
+        operation_id: Uuid,
+        command: floe_experts::ExpertBindingCommand,
+    ) -> Result<floe_experts::ExpertBindingState, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            let previous = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
+            let mut registry = AgentRegistry::restore(previous.clone(), self.registry_instance_id())?;
+            let binding = registry.replace_binding(self.person_id, operation_id, command)?;
+            if registry.revision() != previous.revision {
+                let payload = self.registry_payload(&registry.snapshot())?;
+                self.update_registry(&transaction, previous.revision, registry.revision(), payload)
+                    .await?;
+            }
+            self.check_access()?;
+            Ok(binding)
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result).await
+    }
+
     pub async fn initialize_expert_registry(
         &self,
         snapshot: &RegistrySnapshot,
@@ -288,6 +314,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .registry_on(&transaction)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
+            let current = self
+                .task_on(&transaction, task_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            AgentRegistry::restore(registry.clone(), self.registry_instance_id())?
+                .validate_current_execution_selection(
+                    self.person_id,
+                    &current.admission,
+                    &current.selection,
+                    true,
+                )?;
             if registry.instance_id != settlement.admission.registry_instance_id {
                 return Err(AgentFailure::Conflict);
             }
@@ -313,10 +350,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
-            let current = self
-                .task_on(&transaction, task_id)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
             if current.admission != settlement.admission
                 || current.invocation_key.as_uuid() != settlement.invocation_id
             {
@@ -431,6 +464,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 {
                     Some(entry)
                         if entry.private_state == assignment.private_state
+                            && entry.binding == assignment.binding
                             && entry.person_id == assignment.person_id
                             && entry.installation_id == assignment.installation_id => {}
                     None if assignment.private_state
