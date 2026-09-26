@@ -8,42 +8,44 @@ use crate::{BuiltinExpertHost, BuiltinExpertKind, BuiltinExpertOutput, BuiltinEx
 
 pub fn registrations<Host: BuiltinExpertHost>()
 -> Vec<ExpertRegistration<ExpertRun<Host, BuiltinExpertRequest, BuiltinExpertOutput>>> {
-    let runners: [(
-        BuiltinExpertKind,
-        ExpertRun<Host, BuiltinExpertRequest, BuiltinExpertOutput>,
-    ); 8] = [
-        (BuiltinExpertKind::Schedule, |host, request| {
-            Box::pin(crate::schedule::dispatch::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::Commitments, |host, request| {
-            Box::pin(crate::commitments::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::Communication, |host, request| {
-            Box::pin(crate::communication::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::Relationships, |host, request| {
-            Box::pin(crate::relationships::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::FocusAttention, |host, request| {
-            Box::pin(crate::focus_attention::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::Wellbeing, |host, request| {
-            Box::pin(crate::wellbeing::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::WorkContext, |host, request| {
-            Box::pin(crate::work_context::dispatch(host, request))
-        }),
-        (BuiltinExpertKind::LifeLogistics, |host, request| {
-            Box::pin(crate::life_logistics::dispatch(host, request))
-        }),
-    ];
-    runners
+    BuiltinExpertKind::ALL
         .into_iter()
-        .map(|(kind, runner)| ExpertRegistration {
+        .map(|kind| ExpertRegistration {
             manifest: manifest(kind),
-            runner,
+            runner: runner(kind),
         })
         .collect()
+}
+
+fn runner<Host: BuiltinExpertHost>(
+    kind: BuiltinExpertKind,
+) -> ExpertRun<Host, BuiltinExpertRequest, BuiltinExpertOutput> {
+    match kind {
+        BuiltinExpertKind::Schedule => {
+            |host, request| Box::pin(crate::schedule::dispatch::dispatch(host, request))
+        }
+        BuiltinExpertKind::Commitments => {
+            |host, request| Box::pin(crate::commitments::dispatch(host, request))
+        }
+        BuiltinExpertKind::Communication => {
+            |host, request| Box::pin(crate::communication::dispatch(host, request))
+        }
+        BuiltinExpertKind::Relationships => {
+            |host, request| Box::pin(crate::relationships::dispatch(host, request))
+        }
+        BuiltinExpertKind::FocusAttention => {
+            |host, request| Box::pin(crate::focus_attention::dispatch(host, request))
+        }
+        BuiltinExpertKind::Wellbeing => {
+            |host, request| Box::pin(crate::wellbeing::dispatch(host, request))
+        }
+        BuiltinExpertKind::WorkContext => {
+            |host, request| Box::pin(crate::work_context::dispatch(host, request))
+        }
+        BuiltinExpertKind::LifeLogistics => {
+            |host, request| Box::pin(crate::life_logistics::dispatch(host, request))
+        }
+    }
 }
 
 pub fn manifests() -> Vec<ExpertManifest> {
