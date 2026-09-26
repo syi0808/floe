@@ -23,6 +23,7 @@ mod application {
     pub mod routing;
     pub mod service;
     pub mod source_view;
+    pub mod source_candidates;
     pub mod tools;
 }
 
@@ -54,6 +55,10 @@ pub use application::expert_sources::{
     DeclaredSourceValue, LocalExpertSource, LocalExpertSourceDriver, classify_calendar_review,
     current_calendar_connector, observe_calendar_binding, read_declared_source,
     select_current_calendar_connection,
+};
+pub use application::source_candidates::{
+    LOCAL_CONTEXT_CONNECTOR, SourceCandidate, SourceCandidateRequest,
+    discover_source_candidates, source_candidate_id,
 };
 pub use application::history::read_history_coverage;
 pub use application::leases::{
