@@ -1796,6 +1796,20 @@ fn observing_server(
     Arc<AtomicBool>,
     std::thread::JoinHandle<()>,
 ) {
+    observing_server_with_inventories(vec![inventory], agent_script, external_routing)
+}
+
+fn observing_server_with_inventories(
+    inventories: Vec<serde_json::Value>,
+    agent_script: Vec<serde_json::Value>,
+    external_routing: bool,
+) -> (
+    MockServer,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<AtomicBool>,
+    std::thread::JoinHandle<()>,
+) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1806,9 +1820,20 @@ fn observing_server(
     let server_purposes = Arc::clone(&purposes);
     let server_posts = Arc::clone(&agent_posts);
     let server_done = Arc::clone(&done);
-    let inventory_text = inventory.to_string();
+    let inventory_observations: Vec<(String, bool)> = inventories
+        .into_iter()
+        .map(|value| {
+            let external = value
+                .pointer("/purposes/everyday_assistance/placement")
+                .and_then(serde_json::Value::as_str)
+                == Some("external");
+            (value.to_string(), external)
+        })
+        .collect();
+    assert!(!inventory_observations.is_empty());
     let server = std::thread::spawn(move || {
         let mut script = agent_script.into_iter();
+        let mut observed_external = external_routing;
         loop {
             if server_done.load(Ordering::Acquire) {
                 return;
@@ -1854,7 +1879,12 @@ fn observing_server(
                 .nth(1)
                 .unwrap_or_default();
             if path == "/v1/inference-purposes" {
-                server_purposes.fetch_add(1, Ordering::SeqCst);
+                let index = server_purposes.fetch_add(1, Ordering::SeqCst);
+                let (inventory_text, inventory_external) =
+                    &inventory_observations[index.min(inventory_observations.len() - 1)];
+                if inventory_observations.len() > 1 {
+                    observed_external = *inventory_external;
+                }
                 socket
                     .write_all(
                         format!(
@@ -1870,7 +1900,7 @@ fn observing_server(
             assert_eq!(path, "/v1/agent", "unexpected request: {headers}");
             server_posts.fetch_add(1, Ordering::SeqCst);
             let output = script.next().expect("unexpected model call").to_string();
-            let (placement, external_transfer) = if external_routing {
+            let (placement, external_transfer) = if observed_external {
                 ("remote", true)
             } else {
                 ("server_local", false)
@@ -3417,6 +3447,7 @@ struct ResumeHarness {
     vault: Arc<floe_vault::EncryptedAgentVault<Keys>>,
     repository: Arc<floe_vault::VaultConversationRepository<Keys>>,
     coordinator: floe_experts::TaskCoordinator<floe_vault::VaultTaskRepository<Keys>>,
+    directory: floe_experts::Directory,
     cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     local: Arc<crate::local_context::LocalContextHost>,
     connections: floe_provider_adapters::control::CurrentSavedConnectionStore,
@@ -3446,6 +3477,13 @@ fn consent_inventory() -> serde_json::Value {
 
 impl ResumeHarness {
     async fn open(agent_script: Vec<serde_json::Value>) -> Self {
+        Self::open_with_inventories(vec![consent_inventory()], agent_script).await
+    }
+
+    async fn open_with_inventories(
+        inventories: Vec<serde_json::Value>,
+        agent_script: Vec<serde_json::Value>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let person = PersonId::new();
@@ -3466,8 +3504,9 @@ impl ResumeHarness {
             &vault,
         )));
         let tasks = Arc::new(floe_vault::VaultTaskRepository::new(Arc::clone(&vault)));
+        let directory = floe_experts::Directory::default();
         let (coordinator, _recovered) = floe_experts::TaskCoordinator::activate(
-            floe_experts::Directory::default(),
+            directory.clone(),
             tasks,
             "everyday-assistance",
             floe_agent_contract::MAX_OUTPUT_BYTES,
@@ -3475,7 +3514,7 @@ impl ResumeHarness {
         .await
         .unwrap();
         let (mock, _purposes, agent_posts, done, server) =
-            observing_server(consent_inventory(), agent_script, true);
+            observing_server_with_inventories(inventories, agent_script, true);
         let connections = floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(
             Some(saved_server_connection(&mock, person, &device)),
         );
@@ -3494,6 +3533,7 @@ impl ResumeHarness {
             vault,
             repository,
             coordinator,
+            directory,
             cancellations: Arc::new(floe_conversation::RunCancellationRegistry::default()),
             local: Arc::new(crate::local_context::LocalContextHost::default()),
             connections,
@@ -3548,6 +3588,101 @@ impl ResumeHarness {
         .await
         .unwrap()
         .unwrap()
+    }
+
+    async fn install_nonbuiltin_tasks_model(
+        &self,
+    ) -> floe_context_contract::SourceSelectionReference {
+        use super::super::conversation_turn::expert_dispatch::{
+            BoundExpertRegistration, BoundExpertRunner, RegisteredExpertEndpoint,
+        };
+        let mut manifest = super::registered_runner::example_manifest();
+        manifest.source_requirements = vec![floe_experts::ExpertSourceRequirement {
+            key: "required_tasks".into(),
+            capability: "floe.tasks".into(),
+            contract_version: 1,
+            minimum_sources: 1,
+            maximum_sources: 1,
+        }];
+        let registration = Arc::new(BoundExpertRegistration {
+            manifest: manifest.clone(),
+            runner: BoundExpertRunner::Supplied(nonbuiltin_model_runner),
+        });
+        self.vault
+            .install_expert_bundle(
+                floe_experts::ExpertInstallOperation {
+                    instance_id: self.vault.registry_instance_id(),
+                    expected_revision: 0,
+                    operation_id: Uuid::new_v4(),
+                },
+                &[manifest.clone()],
+                floe_execution::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let snapshot = self.vault.expert_registry().await.unwrap().unwrap();
+        let candidate =
+            floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+                person_id: self.person,
+                device_id: &self.device,
+                capability: "floe.tasks",
+                contract_version: 1,
+                remote_connections: &[],
+                remote_execution_owner: None,
+                calendar_connection: None,
+            })
+            .unwrap()
+            .remove(0);
+        self.vault
+            .replace_expert_binding(
+                Uuid::new_v4(),
+                floe_experts::ExpertBindingCommand {
+                    assignment_id: snapshot.assignments[0].id,
+                    package: manifest.package.clone(),
+                    definition_revision: 1,
+                    requirement_key: "required_tasks".into(),
+                    expected_binding_revision: snapshot.assignments[0].binding.revision,
+                    selected: vec![candidate.reference.clone()],
+                },
+            )
+            .await
+            .unwrap();
+        let bound = self.vault.expert_registry().await.unwrap().unwrap();
+        let registry =
+            floe_experts::AgentRegistry::restore(bound, self.vault.registry_instance_id()).unwrap();
+        let (_, admission) = registry
+            .enabled_expert_admissions(self.person)
+            .unwrap()
+            .remove(0);
+        let selection = registry
+            .execution_selection(self.person, &admission)
+            .unwrap();
+        self.directory
+            .publish(
+                "product.experts",
+                vec![(
+                    floe_experts::DirectoryEntry {
+                        definition: manifest.definition,
+                        admission: admission.clone(),
+                        selection: selection.clone(),
+                        reviewed: true,
+                        enabled: true,
+                        admitted_principals: vec![self.person.to_string()],
+                        purposes: vec!["everyday-assistance".into()],
+                    },
+                    Arc::new(RegisteredExpertEndpoint::new(
+                        Arc::clone(&self.core),
+                        Arc::clone(&self.vault),
+                        Arc::clone(&self.local),
+                        self.connections.clone(),
+                        admission,
+                        selection,
+                        registration,
+                    )) as Arc<dyn floe_agent_contract::AgentEndpoint>,
+                )],
+            )
+            .unwrap();
+        candidate.reference
     }
 
     fn owners(
@@ -3613,6 +3748,183 @@ fn pending_consent_card(session: &floe_conversation::AgentSession) -> Uuid {
         .collect();
     assert_eq!(cards.len(), 1, "one blocked card: {session:?}");
     cards[0]
+}
+
+fn nonbuiltin_model_runner<'turn, 'model, 'msg, 'call>(
+    host: &'call super::super::conversation_turn::expert_dispatch::DelegatedMessageExperts<
+        'turn,
+        'model,
+        'msg,
+    >,
+    request: &'call floe_experts_builtin::BuiltinExpertRequest,
+) -> floe_agent_contract::BoxFuture<
+    'call,
+    Result<floe_experts_builtin::BuiltinExpertOutput, AgentFailure>,
+> {
+    use floe_agent_contract::ExpertModel;
+    use floe_experts_builtin::BuiltinExpertHost;
+    Box::pin(async move {
+        assert!(matches!(
+            host.read_requirement(
+                request,
+                "required_tasks",
+                serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+            )
+            .await?,
+            floe_experts::RequirementReadOutcome::Ready(_)
+        ));
+        let outcome = host
+            .model()
+            .answer(floe_agent_contract::ExpertModelCall {
+                person_id: request.person_id,
+                invocation_id: request.invocation_id,
+                prompt: floe_experts_builtin::prompts::focus_expert_prompt(),
+                policy: host.policy().clone(),
+                context: request.context.clone(),
+                assignment: request.assignment.clone(),
+                requirement: floe_agent_contract::ExpertModelRequirement::Any,
+                max_output_bytes: request.max_output_bytes,
+                max_tokens: 100,
+                max_cost_micros: 100,
+                deadline: request.deadline,
+                cancellation: request.cancellation.clone(),
+            })
+            .await?;
+        let (summary, model_answered) = match outcome {
+            floe_agent_contract::ExpertModelOutcome::Answered(_) => {
+                ("Extension model completed.", true)
+            }
+            floe_agent_contract::ExpertModelOutcome::Blocked(_) => {
+                ("Extension model needs recipient consent.", false)
+            }
+        };
+        floe_experts_builtin::BuiltinExpertOutput::from_result(
+            "extension-model",
+            "application/vnd.example.tasks+json",
+            summary.into(),
+            &serde_json::json!({"model_answered": model_answered}),
+        )
+    })
+}
+
+fn extension_inventory() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "purposes": {"everyday_assistance": {
+            "available": true,
+            "requires_external_consent": true,
+            "placement": "external",
+            "recipient": "expert-model.example"
+        }}
+    })
+}
+
+#[tokio::test]
+async fn nonbuiltin_model_consent_resolves_into_fresh_linked_task() {
+    let delegate = serde_json::json!({"output": [{"kind": "delegate", "agent_id": "example.test.expert", "message": "Inspect selected tasks", "context_refs": []}], "used_tokens": 7});
+    let answer = serde_json::json!({"output": [{"kind": "answer", "text": "Tasks reviewed."}], "used_tokens": 7});
+    let model = serde_json::json!({"output": [{"kind": "answer", "text": "Selected tasks seen."}], "used_tokens": 7});
+    let harness = ResumeHarness::open_with_inventories(
+        vec![
+            server_local_inventory(),
+            extension_inventory(),
+            extension_inventory(),
+            server_local_inventory(),
+            server_local_inventory(),
+            extension_inventory(),
+            extension_inventory(),
+            server_local_inventory(),
+        ],
+        vec![delegate.clone(), answer.clone(), delegate, model, answer],
+    )
+    .await;
+    let selected = harness.install_nonbuiltin_tasks_model().await;
+    let origin = harness.drive_origin("Inspect tasks", 0).await;
+    let blocked = floe_conversation::InteractionRepository::list_run_interactions(
+        harness.repository.as_ref(),
+        harness.person,
+        origin.run_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        blocked.len(),
+        1,
+        "delegated model must publish one card: {blocked:?}"
+    );
+    let floe_conversation::ReviewedTarget::RecipientConsent(target) = &blocked[0].target else {
+        panic!("model recipient card");
+    };
+    assert_eq!(
+        target.consumer,
+        floe_agent_contract::DELEGATED_EXPERT_INFERENCE_CONSUMER
+    );
+    harness
+        .allow(blocked[0].id, blocked[0].revision, blocked[0].target_digest)
+        .await;
+    let child = drive_evaluated_resume(
+        &harness.core,
+        &harness.vault,
+        &harness.local,
+        &harness.coordinator,
+        &harness.repository,
+        &harness.cancellations,
+        &harness.connections,
+        harness.person,
+        harness.session_id,
+        origin.run_id,
+        &harness.device,
+        floe_execution::Cancellation::default(),
+        |_| {},
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(child.resume_of, Some(origin.run_id));
+    let terminal = floe_conversation::ConversationRepository::load_receipt(
+        harness.repository.as_ref(),
+        child.run_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(terminal.state, floe_conversation::RunState::Completed);
+    let session = harness
+        .vault
+        .load(harness.person, harness.session_id)
+        .await
+        .unwrap();
+    let tasks: Vec<_> = session
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Delegation { task, .. } => Some(task),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        tasks.len(),
+        2,
+        "linked Run delegates a fresh Task: {tasks:?}"
+    );
+    assert_ne!(tasks[0].id, tasks[1].id);
+    let completed = tasks
+        .iter()
+        .find(|task| task.context_id == child.run_id.as_uuid())
+        .unwrap();
+    assert_eq!(
+        completed.result.as_deref(),
+        Some("Extension model completed.")
+    );
+    let stored = harness
+        .vault
+        .task(floe_agent_contract::TaskId::from_uuid(completed.id).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.selection.requirements[0].selected, vec![selected]);
+    assert_eq!(harness.agent_posts.load(Ordering::SeqCst), 5);
+    harness.finish().await;
 }
 
 #[tokio::test]

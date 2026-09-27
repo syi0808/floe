@@ -29,7 +29,8 @@ pub use history_projection::{
 pub use interactions::{
     DecideInteractionCommand, PublishInteractionRequest, PublishModelRequirement,
     decide_interaction, expire_interaction, list_run_interactions, load_interaction,
-    publish_interaction, publish_model_requirement, resolve_interaction, supersede_interaction,
+    publish_interaction, publish_model_requirement, rescope_blocked_requirement,
+    resolve_interaction, supersede_interaction,
 };
 pub use model_projection::ConversationModelProjection;
 pub use query::{get_command, get_run};

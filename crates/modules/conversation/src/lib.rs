@@ -24,8 +24,8 @@ pub use application::{
     get_command, get_run, get_session, list_run_interactions, load_interaction, precheck_turn,
     prepare_resume, prepare_turn, project_continuation, project_model_conversation_history,
     publish_interaction, publish_model_requirement, read_archive, recover_session,
-    recovered_session, resolve_interaction, resume_gate, resume_session, start_session,
-    supersede_interaction,
+    recovered_session, rescope_blocked_requirement, resolve_interaction, resume_gate,
+    resume_session, start_session, supersede_interaction,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, AuthorityRevision, CommandQuery, CompactionReceipt,

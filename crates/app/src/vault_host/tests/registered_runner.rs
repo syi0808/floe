@@ -108,7 +108,7 @@ fn runner_b<'turn, 'model, 'msg, 'call>(
     })
 }
 
-fn example_manifest() -> floe_experts::ExpertManifest {
+pub(super) fn example_manifest() -> floe_experts::ExpertManifest {
     let mut manifest = floe_experts_builtin::manifests()
         .into_iter()
         .find(|manifest| manifest.package.id == "floe.builtin.focus-attention")
@@ -1098,6 +1098,98 @@ async fn registered_runner_builtin_prefix_does_not_grant_first_party_observe() {
         )
         .unwrap()
         .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn registered_runner_extension_cannot_read_another_experts_selection() {
+    EXTENSION_CHAIN_RUNNER_CALLS.store(0, Ordering::SeqCst);
+    let person = PersonId::new();
+    let registration = extension_chain_registration();
+    let manifest = registration.manifest.clone();
+    let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    let mut other = extension_chain_registration();
+    other.manifest.package.id = "example.other.expert".into();
+    other.manifest.definition.card.id = "example.other.expert".into();
+    other.manifest.validate().unwrap();
+    let before = open.vault.expert_registry().await.unwrap().unwrap();
+    open.vault
+        .install_expert_bundle(
+            floe_experts::ExpertInstallOperation {
+                instance_id: open.vault.registry_instance_id(),
+                expected_revision: before.revision,
+                operation_id: Uuid::new_v4(),
+            },
+            &[other.manifest.clone()],
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let other_installation = snapshot
+        .installations
+        .iter()
+        .find(|installation| installation.package.id == "example.other.expert")
+        .unwrap();
+    let other_assignment = snapshot
+        .assignments
+        .iter()
+        .find(|assignment| assignment.installation_id == other_installation.id)
+        .unwrap();
+    let selected = floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+        person_id: person,
+        device_id: "mac-local",
+        capability: "floe.tasks",
+        contract_version: 1,
+        remote_connections: &[],
+        remote_execution_owner: None,
+        calendar_connection: None,
+    })
+    .unwrap()
+    .remove(0)
+    .reference;
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: other_assignment.id,
+                package: other_installation.package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_tasks".into(),
+                expected_binding_revision: other_assignment.binding.revision,
+                selected: vec![selected],
+            },
+        )
+        .await
+        .unwrap();
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let mut task_request = request(person, run_id, task_id);
+    journal_origin(&open, &mut task_request, run_id).await;
+    let receipt = open
+        .task_coordinator
+        .delegate(task_request, &task_scope(run_id, task_id))
+        .await
+        .unwrap();
+    assert_eq!(receipt.snapshot.state, TaskState::Completed);
+    assert_eq!(
+        receipt.snapshot.result.as_deref(),
+        Some("Expert settings are required before this task can run.")
+    );
+    assert_eq!(EXTENSION_CHAIN_RUNNER_CALLS.load(Ordering::SeqCst), 0);
+    assert!(
+        open.vault
+            .expert_registry()
+            .await
+            .unwrap()
+            .unwrap()
+            .assignments
+            .iter()
+            .any(|assignment| assignment.id != other_assignment.id
+                && assignment.binding.entries[0].selected.is_empty())
     );
 }
 

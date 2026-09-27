@@ -1051,9 +1051,24 @@ impl ConversationExperts<'_> {
         // carries none, and its external dispatches fail closed.
         let captured = Mutex::new(Vec::new());
         let model_blocked = Mutex::new(None);
+        let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
+            .ok_or(AgentFailure::InvalidInput)?;
+        let lineage_run_id = if let Some(receipt) = match self.runs {
+            Some(runs) => runs.load_receipt(origin_run_id).await?,
+            None => None,
+        } {
+            if receipt.principal != request.person_id.to_string()
+                || receipt.session_id != request.session_id
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            receipt.resume_of.unwrap_or(origin_run_id)
+        } else {
+            origin_run_id
+        };
         let lineage = floe_context_contract::RecipientLineage::try_new(
             request.session_id,
-            request.parent_turn_id,
+            lineage_run_id.as_uuid(),
         )
         .ok();
         manifest.validate()?;
@@ -1133,6 +1148,11 @@ impl ConversationExperts<'_> {
             let device_id = self.device_id.ok_or(AgentFailure::CapabilityUnavailable)?;
             let origin_run_id = floe_kernel::RunId::from_uuid(request.parent_turn_id)
                 .ok_or(AgentFailure::InvalidInput)?;
+            let requirement = floe_conversation::rescope_blocked_requirement(
+                requirement,
+                request.session_id,
+                origin_run_id,
+            )?;
             let reference = super::interaction_publication::publish_model_blocker(
                 runs,
                 interactions,
