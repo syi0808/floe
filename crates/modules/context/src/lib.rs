@@ -136,7 +136,9 @@ pub use ports::personal_source::{
     AcquiredSource, AttentionAcquisition, AttentionAcquisitionMode, PersonalAcquisition,
     PersonalDomain, PersonalGrantRecords, PersonalSourceDriver, TrustedObservation,
 };
-pub use ports::source_reader::{SourceKey, SourceRead, SourceReadRequest, SourceReader};
+pub use ports::source_reader::{
+    SelectedSourceReader, SourceKey, SourceRead, SourceReadRequest, SourceReader,
+};
 
 pub use application::routing::{
     ContextRouteResult, ContextRoutingRuntime, ContextTransferClass, DeviceClass, DevicePresence,

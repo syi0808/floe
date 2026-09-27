@@ -519,6 +519,7 @@ impl PersonalViewSource<'_> {
 
     pub(super) async fn people_view(
         &self,
+        selected: &floe_context_contract::SourceSelectionReference,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<floe_context_contract::SourceReadOutcome<PeopleView>, AgentFailure> {
@@ -527,7 +528,13 @@ impl PersonalViewSource<'_> {
             .people_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
         match reader
-            .read(self.person_id, self.consumer_name, deadline, cancellation)
+            .read(
+                self.person_id,
+                self.consumer_name,
+                selected,
+                deadline,
+                cancellation,
+            )
             .await?
         {
             floe_context_contract::SourceReadOutcome::Ready((view, dependency)) => {
@@ -551,6 +558,7 @@ impl PersonalViewSource<'_> {
 
     pub(super) async fn wellbeing_view(
         &self,
+        selected: &floe_context_contract::SourceSelectionReference,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
     ) -> Result<floe_context_contract::SourceReadOutcome<WellbeingView>, AgentFailure> {
@@ -562,6 +570,7 @@ impl PersonalViewSource<'_> {
             .read(
                 self.person_id,
                 self.consumer_name,
+                selected,
                 self.dependency_result_id,
                 deadline,
                 cancellation,
@@ -589,6 +598,7 @@ impl PersonalViewSource<'_> {
 
     pub(super) async fn calendar_views(
         &self,
+        selected: &[floe_context_contract::SourceSelectionReference],
         query: &floe_context_contract::CalendarViewQuery,
         deadline: tokio::time::Instant,
         cancellation: &floe_execution::Cancellation,
@@ -603,6 +613,7 @@ impl PersonalViewSource<'_> {
             .read(
                 self.person_id,
                 self.consumer_name,
+                selected,
                 query,
                 deadline,
                 cancellation,
@@ -693,6 +704,7 @@ pub(super) trait PersonalAttentionReaderApi: Send + Sync {
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a floe_context_contract::SourceSelectionReference,
         call_id: uuid::Uuid,
         turn_id: uuid::Uuid,
         deadline: tokio::time::Instant,
@@ -718,6 +730,7 @@ pub(super) trait PersonalPeopleReaderApi: Send + Sync {
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a floe_context_contract::SourceSelectionReference,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
     ) -> Pin<
@@ -741,6 +754,7 @@ pub(super) trait PersonalWellbeingReaderApi: Send + Sync {
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a floe_context_contract::SourceSelectionReference,
         call_id: Uuid,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
@@ -765,6 +779,7 @@ pub(super) trait CalendarContextReaderApi: Send + Sync {
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a [floe_context_contract::SourceSelectionReference],
         query: &'a floe_context_contract::CalendarViewQuery,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
@@ -877,7 +892,6 @@ pub(super) struct SelectedCalendarContextReader<'a, Keys: VaultKeyProvider> {
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) source_client: Option<&'a ServerSourceClient>,
     pub(super) device_id: &'a str,
-    pub(super) selected: &'a [floe_context_contract::SourceSelectionReference],
 }
 
 impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContextReader<'_, Keys> {
@@ -885,6 +899,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a [floe_context_contract::SourceSelectionReference],
         query: &'a floe_context_contract::CalendarViewQuery,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
@@ -916,10 +931,10 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
             let connection = connection.ok_or(AgentFailure::CapabilityUnavailable)?;
             let connector_id =
                 calendar_connector_id(&connection).ok_or(AgentFailure::CapabilityUnavailable)?;
-            if self.selected.is_empty()
+            if selected.is_empty()
                 || connection.disconnected
                 || connection.device_id != self.device_id
-                || self.selected.iter().any(|source| {
+                || selected.iter().any(|source| {
                     source.capability_id != "calendar.timeline"
                         || source.contract_version != 1
                         || source.connector_id.as_str() != connector_id
@@ -938,8 +953,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 } else {
                     self.vault.remote_pinned_producer().await?.execution_owner
                 };
-            if self
-                .selected
+            if selected
                 .iter()
                 .any(|source| source.execution_owner_id.as_str() != expected_owner)
             {
@@ -956,8 +970,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     let grants = crate::vault_host::calendar_access::VaultNativeCalendarGrants {
                         vault: self.vault,
                     };
-                    let calendar_ids: Vec<String> = self
-                        .selected
+                    let calendar_ids: Vec<String> = selected
                         .iter()
                         .map(|source| source.resource.as_str().to_owned())
                         .collect();
@@ -1019,8 +1032,8 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 source_client,
                 self.vault,
             );
-            let mut reads = Vec::with_capacity(self.selected.len());
-            for source in self.selected {
+            let mut reads = Vec::with_capacity(selected.len());
+            for source in selected {
                 let (view, dependency, _) = floe_context::read_remote_calendar_view(
                     self.vault,
                     &authorized_client,
@@ -1068,7 +1081,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 return calendar_read_outcome(
                     result,
                     &connection,
-                    self.selected,
+                    selected,
                     consumer,
                     &review,
                     reconnect,
@@ -1078,7 +1091,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                 reason: floe_context_contract::SourceAccessRequirementKind::SelectResource,
                 observed: None,
             };
-            calendar_read_outcome(result, &connection, self.selected, consumer, &unused, None)
+            calendar_read_outcome(result, &connection, selected, consumer, &unused, None)
         })
     }
 }
@@ -1087,7 +1100,6 @@ pub(super) struct PersonalAttentionReader<'a, Keys: VaultKeyProvider> {
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) local_context: &'a LocalContextHost,
     pub(super) device_id: &'a str,
-    pub(super) selected: Option<&'a floe_context_contract::SourceSelectionReference>,
 }
 
 impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionReader<'_, Keys> {
@@ -1095,6 +1107,7 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a floe_context_contract::SourceSelectionReference,
         call_id: uuid::Uuid,
         turn_id: uuid::Uuid,
         deadline: tokio::time::Instant,
@@ -1122,11 +1135,9 @@ impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionRea
                 });
             }
             let _ = turn_id;
-            if let Some(selected) = self.selected {
-                floe_context::validate_local_source_selection(selected, self.device_id)?;
-                if selected.capability_id != "attention.coarse" {
-                    return Err(AgentFailure::CapabilityDenied);
-                }
+            floe_context::validate_local_source_selection(selected, self.device_id)?;
+            if selected.capability_id != "attention.coarse" {
+                return Err(AgentFailure::CapabilityDenied);
             }
             floe_context::admit_attention_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
@@ -1147,14 +1158,12 @@ pub(super) struct PersonalPeopleReader<'a, Keys: VaultKeyProvider> {
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) local_context: &'a LocalContextHost,
     pub(super) device_id: &'a str,
-    pub(super) selected: Option<&'a floe_context_contract::SourceSelectionReference>,
 }
 
 pub(super) struct PersonalWellbeingReader<'a, Keys: VaultKeyProvider> {
     pub(super) vault: &'a EncryptedAgentVault<Keys>,
     pub(super) local_context: &'a LocalContextHost,
     pub(super) device_id: &'a str,
-    pub(super) selected: Option<&'a floe_context_contract::SourceSelectionReference>,
 }
 
 impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingReader<'_, Keys> {
@@ -1162,6 +1171,7 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a floe_context_contract::SourceSelectionReference,
         call_id: Uuid,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
@@ -1180,7 +1190,6 @@ impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingRea
         >,
     > {
         Box::pin(async move {
-            let selected = self.selected.ok_or(AgentFailure::CapabilityUnavailable)?;
             floe_context::validate_local_source_selection(selected, self.device_id)?;
             if selected.capability_id != "wellbeing.derived" {
                 return Err(AgentFailure::CapabilityDenied);
@@ -1208,6 +1217,7 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         &'a self,
         person_id: PersonId,
         consumer: &'a str,
+        selected: &'a floe_context_contract::SourceSelectionReference,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
     ) -> Pin<
@@ -1225,7 +1235,6 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
         >,
     > {
         Box::pin(async move {
-            let selected = self.selected.ok_or(AgentFailure::CapabilityUnavailable)?;
             floe_context::read_selected_people_outcome(
                 &floe_vault::VaultGrantRecords::new(self.vault),
                 &personal_grants::native_driver(self.local_context),

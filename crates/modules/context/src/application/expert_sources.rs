@@ -6,7 +6,7 @@ use floe_execution::Cancellation;
 use serde_json::Value;
 use tokio::time::Instant;
 
-use crate::{ContextService, SourceReader, SourceView};
+use crate::{ContextService, SelectedSourceReader, SourceView};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CalendarReviewClassification {
@@ -84,6 +84,8 @@ pub fn classify_calendar_review(
 pub struct DeclaredSourceRequirement<'a> {
     pub key: &'a str,
     pub capability: &'a str,
+    pub contract_version: u32,
+    pub selected_refs: &'a [floe_context_contract::SourceSelectionReference],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +103,7 @@ pub trait LocalExpertSourceDriver: Sync {
     fn read<'a>(
         &'a self,
         source: LocalExpertSource,
+        selected_refs: &'a [floe_context_contract::SourceSelectionReference],
         query: Value,
         deadline: Instant,
         cancellation: &'a Cancellation,
@@ -114,7 +117,7 @@ pub struct DeclaredSourceValue {
 }
 
 pub async fn read_declared_source(
-    remote_reader: Option<&dyn SourceReader>,
+    remote_reader: Option<&dyn SelectedSourceReader>,
     local_driver: &dyn LocalExpertSourceDriver,
     person_id: PersonId,
     consumer: &str,
@@ -156,7 +159,15 @@ pub async fn read_declared_source(
         {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let acquired = local_driver.read(source, query, deadline, cancellation).await?;
+        let acquired = local_driver
+            .read(
+                source,
+                requirement.selected_refs,
+                query,
+                deadline,
+                cancellation,
+            )
+            .await?;
         return Ok(match acquired {
             SourceReadOutcome::Ready((payload, dependencies)) => {
                 SourceReadOutcome::Ready(DeclaredSourceValue {
@@ -176,8 +187,7 @@ pub async fn read_declared_source(
             remote_reader,
             person_id,
             consumer,
-            requirements,
-            key,
+            requirement,
             query,
             deadline,
             cancellation,
@@ -202,19 +212,14 @@ pub async fn read_declared_source(
 }
 
 async fn read_declared_remote_source(
-    reader: Option<&dyn SourceReader>,
+    reader: Option<&dyn SelectedSourceReader>,
     person_id: PersonId,
     consumer: &str,
-    requirements: &[DeclaredSourceRequirement<'_>],
-    key: &str,
+    requirement: &DeclaredSourceRequirement<'_>,
     query: Value,
     deadline: Instant,
     cancellation: &Cancellation,
 ) -> Result<SourceReadOutcome<SourceView<Value>>, AgentFailure> {
-    let requirement = requirements
-        .iter()
-        .find(|requirement| requirement.key == key)
-        .ok_or(AgentFailure::CapabilityDenied)?;
     if !matches!(
         requirement.capability,
         "mail.communication" | "work.context" | "life.logistics"
@@ -222,7 +227,7 @@ async fn read_declared_remote_source(
         return Err(AgentFailure::CapabilityUnavailable);
     }
     crate::validate_remote_view_query(requirement.capability, &query)?;
-    let prepared = ContextService::new(reader).prepare(person_id)?;
+    let prepared = ContextService::new(None).prepare(person_id)?;
     let request = prepared.source_request(
         requirement.capability,
         GrantConsumer::builtin(consumer).map_err(|_| AgentFailure::InvalidInput)?,
@@ -231,7 +236,18 @@ async fn read_declared_remote_source(
         deadline,
         cancellation.clone(),
     )?;
-    prepared.read_source(&request).await
+    let reader = reader.ok_or(AgentFailure::CapabilityUnavailable)?;
+    if requirement.selected_refs.is_empty()
+        || requirement.selected_refs.iter().any(|selected| {
+            selected.capability_id != requirement.capability
+                || selected.contract_version != requirement.contract_version
+        })
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    prepared
+        .read_selected_source(&request, reader, requirement.selected_refs)
+        .await
 }
 
 #[cfg(test)]
@@ -241,10 +257,146 @@ mod tests {
 
     struct ProbeDriver(Mutex<Vec<LocalExpertSource>>);
 
+    fn selected_reference(
+        resource: &str,
+        capability: &str,
+    ) -> floe_context_contract::SourceSelectionReference {
+        floe_context_contract::SourceSelectionReference {
+            connector_id: floe_context_contract::ConnectorId::try_new("test.connector").unwrap(),
+            connection_id: floe_context_contract::ConnectionId::try_new("test-connection").unwrap(),
+            execution_owner_id: floe_context_contract::ExecutionOwnerId::try_new("test-owner")
+                .unwrap(),
+            capability_id: capability.into(),
+            resource: floe_context_contract::ResourceHandle::try_new(resource).unwrap(),
+            contract_version: 1,
+        }
+    }
+
+    struct SelectedProbeDriver;
+
+    impl LocalExpertSourceDriver for SelectedProbeDriver {
+        fn read<'a>(
+            &'a self,
+            _: LocalExpertSource,
+            selected_refs: &'a [floe_context_contract::SourceSelectionReference],
+            _: Value,
+            _: Instant,
+            _: &'a Cancellation,
+        ) -> BoxFuture<'a, Result<SourceReadOutcome<(Value, Vec<ContextDependency>)>, AgentFailure>>
+        {
+            Box::pin(async move {
+                Ok(SourceReadOutcome::Ready((
+                    serde_json::json!({"resource": selected_refs[0].resource.as_str()}),
+                    vec![],
+                )))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_requirement_keys_keep_distinct_selected_refs() {
+        let first = [selected_reference("calendar-a", "calendar.timeline")];
+        let second = [selected_reference("calendar-b", "calendar.timeline")];
+        let requirements = [
+            DeclaredSourceRequirement {
+                key: "calendar_a",
+                capability: "calendar.timeline",
+                contract_version: 1,
+                selected_refs: &first,
+            },
+            DeclaredSourceRequirement {
+                key: "calendar_b",
+                capability: "calendar.timeline",
+                contract_version: 1,
+                selected_refs: &second,
+            },
+        ];
+        let query = serde_json::json!({"range_start_unix_ms": 1, "range_end_unix_ms": 1000, "cursor": null, "limit": 1});
+        for (key, expected) in [("calendar_a", "calendar-a"), ("calendar_b", "calendar-b")] {
+            let outcome = read_declared_source(
+                None,
+                &SelectedProbeDriver,
+                PersonId::new(),
+                "example.test.expert",
+                &requirements,
+                key,
+                query.clone(),
+                Instant::now() + std::time::Duration::from_secs(5),
+                &Cancellation::default(),
+            )
+            .await
+            .unwrap();
+            let SourceReadOutcome::Ready(read) = outcome else {
+                panic!("expected selected read")
+            };
+            assert_eq!(read.payload["resource"], expected);
+        }
+    }
+
+    struct SelectedProbeReader(Mutex<Vec<String>>);
+
+    impl SelectedSourceReader for SelectedProbeReader {
+        fn read_selected<'a>(
+            &'a self,
+            _: &'a crate::SourceReadRequest,
+            selected: &'a [floe_context_contract::SourceSelectionReference],
+        ) -> BoxFuture<'a, Result<SourceReadOutcome<crate::SourceRead>, AgentFailure>> {
+            Box::pin(async move {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(selected[0].resource.as_str().into());
+                Ok(SourceReadOutcome::Unavailable(
+                    floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_remote_port_receives_exact_requirement_refs() {
+        let first = [selected_reference("work-a", "work.context")];
+        let second = [selected_reference("work-b", "work.context")];
+        let requirements = [
+            DeclaredSourceRequirement {
+                key: "work_a",
+                capability: "work.context",
+                contract_version: 1,
+                selected_refs: &first,
+            },
+            DeclaredSourceRequirement {
+                key: "work_b",
+                capability: "work.context",
+                contract_version: 1,
+                selected_refs: &second,
+            },
+        ];
+        let reader = SelectedProbeReader(Mutex::new(vec![]));
+        for key in ["work_a", "work_b"] {
+            assert!(matches!(
+                read_declared_source(
+                    Some(&reader),
+                    &SelectedProbeDriver,
+                    PersonId::new(),
+                    "example.test.expert",
+                    &requirements,
+                    key,
+                    serde_json::json!({"schema_version": AGENT_VERSION}),
+                    Instant::now() + std::time::Duration::from_secs(5),
+                    &Cancellation::default(),
+                )
+                .await,
+                Ok(SourceReadOutcome::Unavailable(_))
+            ));
+        }
+        assert_eq!(*reader.0.lock().unwrap(), vec!["work-a", "work-b"]);
+    }
+
     impl LocalExpertSourceDriver for ProbeDriver {
         fn read<'a>(
             &'a self,
             source: LocalExpertSource,
+            _: &'a [floe_context_contract::SourceSelectionReference],
             _: Value,
             _: Instant,
             _: &'a Cancellation,
@@ -263,6 +415,8 @@ mod tests {
         let requirements = [DeclaredSourceRequirement {
             key: "calendar",
             capability: "calendar.timeline",
+            contract_version: 1,
+            selected_refs: &[],
         }];
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
         let cancellation = Cancellation::default();
@@ -306,13 +460,16 @@ mod tests {
         let requirements = [DeclaredSourceRequirement {
             key: "mail",
             capability: "mail.communication",
+            contract_version: 1,
+            selected_refs: &[],
         }];
         let person = PersonId::new();
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
         let cancellation = Cancellation::default();
         assert!(matches!(
-            read_declared_remote_source(
+            read_declared_source(
                 None,
+                &ProbeDriver(Mutex::new(vec![])),
                 person,
                 "example.test.expert",
                 &requirements,
@@ -329,8 +486,7 @@ mod tests {
                 None,
                 person,
                 "example.test.expert",
-                &requirements,
-                "mail",
+                &requirements[0],
                 serde_json::json!({"limit": 100_000}),
                 deadline,
                 &cancellation

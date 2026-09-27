@@ -7,7 +7,10 @@ use floe_context_contract::{
 };
 
 use crate::ports::source_reader::SourceReadRequestParts;
-use crate::{MAX_LEASE_BYTES, SourceLeaseRegistry, SourceReadRequest, SourceReader, SourceView};
+use crate::{
+    MAX_LEASE_BYTES, SelectedSourceReader, SourceLeaseRegistry, SourceRead, SourceReadRequest,
+    SourceReader, SourceView,
+};
 
 static SOURCE_LEASES: OnceLock<Arc<SourceLeaseRegistry>> = OnceLock::new();
 
@@ -68,18 +71,38 @@ impl PreparedContext<'_> {
         &self,
         request: &SourceReadRequest,
     ) -> Result<SourceReadOutcome<SourceView<serde_json::Value>>, AgentFailure> {
+        let reader = self
+            .source_reader
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        self.read_source_from(request, reader.read(request)).await
+    }
+
+    pub async fn read_selected_source(
+        &self,
+        request: &SourceReadRequest,
+        reader: &dyn SelectedSourceReader,
+        selected: &[floe_context_contract::SourceSelectionReference],
+    ) -> Result<SourceReadOutcome<SourceView<serde_json::Value>>, AgentFailure> {
+        self.read_source_from(request, reader.read_selected(request, selected))
+            .await
+    }
+
+    async fn read_source_from(
+        &self,
+        request: &SourceReadRequest,
+        observation: impl std::future::Future<
+            Output = Result<SourceReadOutcome<SourceRead>, AgentFailure>,
+        >,
+    ) -> Result<SourceReadOutcome<SourceView<serde_json::Value>>, AgentFailure> {
         if request.person_id() != self.person_id {
             return Err(AgentFailure::PolicyDenied);
         }
         check_window(request)?;
-        let reader = self
-            .source_reader
-            .ok_or(AgentFailure::CapabilityUnavailable)?;
         let outcome = tokio::select! {
             biased;
             _ = request.cancellation().cancelled() => return Err(cancelled(request)),
             _ = tokio::time::sleep_until(request.deadline()) => return Err(AgentFailure::DeadlineExceeded),
-            observation = reader.read(request) => observation?,
+            observation = observation => observation?,
         };
         check_window(request)?;
         let source_read = match outcome {
@@ -88,7 +111,9 @@ impl PreparedContext<'_> {
                 return Ok(SourceReadOutcome::Unavailable(reason));
             }
             SourceReadOutcome::NeedsUserAction(blockers) => {
-                blockers.validate().map_err(|_| AgentFailure::PolicyDenied)?;
+                blockers
+                    .validate()
+                    .map_err(|_| AgentFailure::PolicyDenied)?;
                 for blocker in blockers.blockers() {
                     // A reader reports only what this consumer asked to read.
                     if blocker.consumer() != request.consumer()
@@ -235,9 +260,11 @@ mod tests {
             >,
         > {
             let blockers = self.blockers.clone();
-            Box::pin(
-                async move { Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers)) },
-            )
+            Box::pin(async move {
+                Ok(floe_context_contract::SourceReadOutcome::NeedsUserAction(
+                    blockers,
+                ))
+            })
         }
     }
 
@@ -412,9 +439,7 @@ mod tests {
         );
     }
 
-    fn blocked_fixture(
-        consumer: GrantConsumer,
-    ) -> floe_context_contract::SourceAccessBlockers {
+    fn blocked_fixture(consumer: GrantConsumer) -> floe_context_contract::SourceAccessBlockers {
         let requirement = floe_context_contract::SourceAccessRequirement::try_new(
             "floe.source.mail",
             None,
@@ -450,7 +475,10 @@ mod tests {
         let floe_context_contract::SourceReadOutcome::NeedsUserAction(blockers) = outcome else {
             panic!("typed blockers must pass through");
         };
-        assert_eq!(blockers, blocked_fixture(GrantConsumer::builtin("fixture.expert").unwrap()));
+        assert_eq!(
+            blockers,
+            blocked_fixture(GrantConsumer::builtin("fixture.expert").unwrap())
+        );
 
         let foreign = BlockedReader {
             blockers: blocked_fixture(GrantConsumer::builtin("fixture.other").unwrap()),

@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use floe_agent_contract::{AgentFailure, Cancellation};
 use floe_context_contract::{
     AuthorizedSourceBinding, ContextDependency, GrantConsumer, GrantPurpose, GrantScope, PersonId,
-    SourceReadOutcome,
+    SourceReadOutcome, SourceSelectionReference,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -169,6 +169,16 @@ pub trait SourceReader: Send + Sync {
     fn read<'a>(
         &'a self,
         request: &'a SourceReadRequest,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<SourceReadOutcome<SourceRead>, AgentFailure>> + Send + 'a>,
+    >;
+}
+
+pub trait SelectedSourceReader: Send + Sync {
+    fn read_selected<'a>(
+        &'a self,
+        request: &'a SourceReadRequest,
+        selected: &'a [SourceSelectionReference],
     ) -> Pin<
         Box<dyn Future<Output = Result<SourceReadOutcome<SourceRead>, AgentFailure>> + Send + 'a>,
     >;

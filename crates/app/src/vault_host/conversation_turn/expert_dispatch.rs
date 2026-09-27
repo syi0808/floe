@@ -352,19 +352,11 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 )),
                 None => None,
             };
-            let calendar_selection = self
-                .selection
-                .requirements
-                .iter()
-                .find(|requirement| requirement.capability == "calendar.timeline")
-                .map(|requirement| requirement.selected.as_slice())
-                .unwrap_or_default();
             let calendar_reader = SelectedCalendarContextReader {
                 core: &self.core,
                 vault: &self.vault,
                 source_client: source_client.as_ref(),
                 device_id: &context.device_id,
-                selected: calendar_selection,
             };
             let remote_resolver = remote_reader
                 .as_ref()
@@ -401,34 +393,16 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
-                selected: self
-                    .selection
-                    .requirements
-                    .iter()
-                    .find(|requirement| requirement.capability == "attention.coarse")
-                    .and_then(|requirement| requirement.selected.first()),
             };
             let people_reader = PersonalPeopleReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
-                selected: self
-                    .selection
-                    .requirements
-                    .iter()
-                    .find(|requirement| requirement.capability == "people.identity")
-                    .and_then(|requirement| requirement.selected.first()),
             };
             let wellbeing_reader = PersonalWellbeingReader {
                 vault: &self.vault,
                 local_context: &self.local_context,
                 device_id: &context.device_id,
-                selected: self
-                    .selection
-                    .requirements
-                    .iter()
-                    .find(|requirement| requirement.capability == "wellbeing.derived")
-                    .and_then(|requirement| requirement.selected.first()),
             };
             let governed_store = self.vault.governed_general_store(context.session_id);
             let recorder = StoreResultRecorder {
@@ -480,7 +454,7 @@ impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for RegisteredExpertEndpoin
                 recorder: Some(&recorder),
                 remote_reader: bound_remote_reader
                     .as_ref()
-                    .map(|reader| reader as &dyn floe_context::SourceReader),
+                    .map(|reader| reader as &dyn floe_context::SelectedSourceReader),
                 context_reader: Some(&context_reader),
                 task_views: &[],
                 cards,
@@ -589,7 +563,7 @@ pub(crate) struct ConversationExperts<'model> {
     pub(super) people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
     pub(super) wellbeing_reader: Option<&'model dyn PersonalWellbeingReaderApi>,
     pub(super) recorder: Option<&'model dyn ResultRecorder>,
-    pub(super) remote_reader: Option<&'model dyn floe_context::SourceReader>,
+    pub(super) remote_reader: Option<&'model dyn floe_context::SelectedSourceReader>,
     pub(super) context_reader: Option<&'model dyn ConversationContextReaderApi>,
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
@@ -685,6 +659,7 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
     fn read<'a>(
         &'a self,
         source: floe_context::LocalExpertSource,
+        selected_refs: &'a [floe_context_contract::SourceSelectionReference],
         query: serde_json::Value,
         deadline: tokio::time::Instant,
         cancellation: &'a floe_execution::Cancellation,
@@ -703,12 +678,18 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
             use floe_context_contract::SourceReadOutcome;
             let request = self.request;
             let personal = self.host.personal_views(request, &request.agent_id);
+            let selected = || {
+                if selected_refs.len() != 1 {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                Ok(&selected_refs[0])
+            };
             match source {
                 LocalExpertSource::Calendar => {
                     let calendar: floe_context_contract::CalendarViewQuery =
                         serde_json::from_value(query).map_err(|_| AgentFailure::InvalidInput)?;
                     match personal
-                        .calendar_views(&calendar, deadline, cancellation)
+                        .calendar_views(selected_refs, &calendar, deadline, cancellation)
                         .await?
                     {
                         SourceReadOutcome::Ready(value) => Ok(SourceReadOutcome::Ready((
@@ -724,7 +705,10 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                     }
                 }
                 LocalExpertSource::People => {
-                    match personal.people_view(deadline, cancellation).await? {
+                    match personal
+                        .people_view(selected()?, deadline, cancellation)
+                        .await?
+                    {
                         SourceReadOutcome::Ready(value) => Ok(SourceReadOutcome::Ready((
                             serde_json::to_value(value).map_err(|_| AgentFailure::InvalidInput)?,
                             vec![],
@@ -738,7 +722,10 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                     }
                 }
                 LocalExpertSource::Wellbeing => {
-                    match personal.wellbeing_view(deadline, cancellation).await? {
+                    match personal
+                        .wellbeing_view(selected()?, deadline, cancellation)
+                        .await?
+                    {
                         SourceReadOutcome::Ready(value) => Ok(SourceReadOutcome::Ready((
                             serde_json::to_value(value).map_err(|_| AgentFailure::InvalidInput)?,
                             vec![],
@@ -760,6 +747,7 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                         .read(
                             request.person_id,
                             &request.agent_id,
+                            selected()?,
                             request.task_id,
                             request.task_id,
                             deadline,
@@ -786,6 +774,13 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                     floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
                 )),
                 LocalExpertSource::ConfirmedMemory => {
+                    floe_context::validate_local_source_selection(
+                        selected()?,
+                        self.host
+                            .experts
+                            .device_id
+                            .ok_or(AgentFailure::CapabilityDenied)?,
+                    )?;
                     let snapshot = self
                         .host
                         .experts
@@ -799,6 +794,13 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                     )))
                 }
                 LocalExpertSource::Tasks => {
+                    floe_context::validate_local_source_selection(
+                        selected()?,
+                        self.host
+                            .experts
+                            .device_id
+                            .ok_or(AgentFailure::CapabilityDenied)?,
+                    )?;
                     let view = self
                         .host
                         .experts
@@ -892,15 +894,12 @@ impl<'turn, 'model, 'msg> BuiltinExpertHost for DelegatedMessageExperts<'turn, '
                         .ok_or(AgentFailure::CapabilityDenied)?,
                 )?;
             }
-            let requirements = self
-                .manifest
-                .source_requirements
-                .iter()
-                .map(|requirement| floe_context::DeclaredSourceRequirement {
-                    key: &requirement.key,
-                    capability: &requirement.capability,
-                })
-                .collect::<Vec<_>>();
+            let requirements = [floe_context::DeclaredSourceRequirement {
+                key: &admitted.key,
+                capability: &admitted.capability,
+                contract_version: admitted.contract_version,
+                selected_refs: &admitted.selected,
+            }];
             let local_driver = AppLocalExpertSource {
                 host: self,
                 request,
@@ -1289,6 +1288,7 @@ mod capture_tests {
             &'a self,
             _: floe_kernel::PersonId,
             _: &'a str,
+            _: &'a floe_context_contract::SourceSelectionReference,
             _: uuid::Uuid,
             _: uuid::Uuid,
             _: tokio::time::Instant,
@@ -1323,6 +1323,7 @@ mod capture_tests {
             &'a self,
             _: floe_kernel::PersonId,
             _: &str,
+            _: &[floe_context_contract::SourceSelectionReference],
             _: &floe_context_contract::CalendarViewQuery,
             _: tokio::time::Instant,
             _: &'a floe_execution::Cancellation,
@@ -1528,6 +1529,7 @@ mod capture_tests {
             &'a self,
             person: floe_kernel::PersonId,
             _: &'a str,
+            _: &'a floe_context_contract::SourceSelectionReference,
             _: uuid::Uuid,
             _: uuid::Uuid,
             _: tokio::time::Instant,

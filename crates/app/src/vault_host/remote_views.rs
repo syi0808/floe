@@ -86,10 +86,13 @@ impl<Keys: VaultKeyProvider> BoundRemoteViewReader<'_, Keys> {
     }
 }
 
-impl<Keys: VaultKeyProvider> floe_context::SourceReader for BoundRemoteViewReader<'_, Keys> {
-    fn read<'a>(
+impl<Keys: VaultKeyProvider> floe_context::SelectedSourceReader
+    for BoundRemoteViewReader<'_, Keys>
+{
+    fn read_selected<'a>(
         &'a self,
         request: &'a floe_context::SourceReadRequest,
+        selected: &'a [floe_context_contract::SourceSelectionReference],
     ) -> Pin<
         Box<
             dyn Future<
@@ -103,13 +106,12 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for BoundRemoteViewReade
     > {
         Box::pin(async move {
             self.validate_current().await?;
-            let selected = self
-                .selection
-                .requirements
-                .iter()
-                .find(|requirement| requirement.capability == request.source().as_str())
-                .ok_or(AgentFailure::CapabilityDenied)?;
-            if selected.selected.is_empty() {
+            if selected.is_empty()
+                || selected.iter().any(|reference| {
+                    reference.capability_id != request.source().as_str()
+                        || reference.contract_version != 1
+                })
+            {
                 return Err(AgentFailure::CapabilityUnavailable);
             }
             let outcome = floe_context::read_selected_remote_view(
@@ -119,7 +121,7 @@ impl<Keys: VaultKeyProvider> floe_context::SourceReader for BoundRemoteViewReade
                 self.reader.pairing(),
                 request.source().as_str(),
                 request.consumer().identifier(),
-                &selected.selected,
+                selected,
                 request.query().clone(),
                 &RemoteCallWindow {
                     deadline: request.deadline(),

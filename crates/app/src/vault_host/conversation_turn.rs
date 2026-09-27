@@ -841,11 +841,35 @@ mod tests {
         }
     }
 
+    impl floe_context::SelectedSourceReader for FixtureRemoteReader<'_> {
+        fn read_selected<'a>(
+            &'a self,
+            request: &'a floe_context::SourceReadRequest,
+            selected: &'a [floe_context_contract::SourceSelectionReference],
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            floe_context_contract::SourceReadOutcome<floe_context::SourceRead>,
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            if selected.len() != 1 || selected[0].capability_id != request.source().as_str() {
+                return Box::pin(async { Err(AgentFailure::CapabilityDenied) });
+            }
+            floe_context::SourceReader::read(self, request)
+        }
+    }
+
     impl CalendarContextReaderApi for FixtureRemoteReader<'_> {
         fn read<'a>(
             &'a self,
             person_id: PersonId,
             consumer: &'a str,
+            _: &'a [floe_context_contract::SourceSelectionReference],
             query: &'a floe_context_contract::CalendarViewQuery,
             deadline: tokio::time::Instant,
             cancellation: &'a Cancellation,
@@ -1747,8 +1771,20 @@ mod tests {
             vault: &vault,
             local_context: &local_context,
             device_id: "test-device",
-            selected: None,
         };
+        let selected =
+            floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+                person_id,
+                device_id: "test-device",
+                capability: "attention.coarse",
+                contract_version: 1,
+                remote_connections: &[],
+                remote_execution_owner: None,
+                calendar_connection: None,
+            })
+            .unwrap()
+            .remove(0)
+            .reference;
         let recorder = StoreResultRecorder { store: &store };
         let turn_id = Uuid::new_v4();
         let call_id = Uuid::new_v4();
@@ -1756,6 +1792,7 @@ mod tests {
             .read(
                 person_id,
                 floe_access::ATTENTION_ASSISTANT_CONSUMER,
+                &selected,
                 call_id,
                 turn_id,
                 tokio::time::Instant::now() + std::time::Duration::from_secs(5),
