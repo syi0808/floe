@@ -23,6 +23,7 @@ pub struct NativeCalendarViewRead<'a> {
     pub person_id: PersonId,
     pub device_id: &'a str,
     pub consumer: &'a str,
+    pub selected_calendar_ids: Option<&'a [String]>,
     pub query: &'a CalendarViewQuery,
     pub window: &'a RemoteCallWindow,
 }
@@ -46,6 +47,7 @@ pub async fn read_native_calendar_view(
         read.person_id,
         read.device_id,
         read.consumer,
+        read.selected_calendar_ids,
         read.window,
     )
     .await?;
@@ -97,6 +99,7 @@ pub async fn read_native_calendar_view(
         read.person_id,
         read.device_id,
         read.consumer,
+        read.selected_calendar_ids,
         read.window,
     )
     .await?;
@@ -187,6 +190,11 @@ pub async fn authorize_native_calendar_dependency(
         return Err(AgentFailure::CapabilityDenied);
     }
     let (_, subject_fingerprint) = leases.observation(dependency)?;
+    let selected_calendar_ids = dependency
+        .resources()
+        .iter()
+        .map(|resource| resource.as_str().to_owned())
+        .collect::<Vec<_>>();
     let admitted = admit_current_native_calendar_read(
         connections,
         source,
@@ -194,6 +202,7 @@ pub async fn authorize_native_calendar_dependency(
         dependency.person_id(),
         dependency.source().execution_owner().as_str(),
         dependency.consumer().identifier(),
+        Some(&selected_calendar_ids),
         window,
     )
     .await?;

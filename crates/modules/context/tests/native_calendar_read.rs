@@ -245,6 +245,7 @@ async fn native_admission_checks_subject_grant_and_current_connection() {
         person_id,
         "device",
         "floe.builtin.schedule",
+        None,
         &window(),
     )
     .await
@@ -269,6 +270,7 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
         person_id,
         "device",
         "floe.builtin.schedule",
+        None,
         &window(),
     )
     .await
@@ -280,6 +282,7 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
         person_id,
         "device",
         "floe.builtin.focus-attention",
+        None,
         &window(),
     )
     .await
@@ -307,6 +310,7 @@ async fn native_admission_rejects_missing_or_changed_authority() {
             person_id,
             "device",
             "floe.builtin.schedule",
+            None,
             &window(),
         )
         .await,
@@ -324,6 +328,7 @@ async fn native_admission_rejects_missing_or_changed_authority() {
             person_id,
             "device",
             "floe.builtin.schedule",
+            None,
             &window(),
         )
         .await,
@@ -344,6 +349,7 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             person_id,
             "device",
             "floe.builtin.schedule",
+            None,
             &window(),
         )
         .await,
@@ -361,6 +367,7 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             person_id,
             "device",
             "floe.builtin.schedule",
+            None,
             &window(),
         )
         .await,
@@ -377,6 +384,7 @@ async fn native_admission_rejects_unbound_stamp_and_grant() {
             person_id,
             "device",
             "floe.builtin.schedule",
+            None,
             &window(),
         )
         .await,
@@ -399,6 +407,7 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
+            selected_calendar_ids: None,
             query: &query,
             window: &window(),
         },
@@ -419,6 +428,63 @@ async fn native_view_records_complete_empty_coverage_and_exact_dependency() {
     assert_eq!(device.observations.load(Ordering::SeqCst), 1);
     assert_eq!(grants.calls.load(Ordering::SeqCst), 2);
     assert!(leases.observation(&dependency).is_ok());
+}
+
+#[tokio::test]
+async fn selected_native_calendar_subset_survives_read_and_reauthorization() {
+    let (connections, device, grants, person_id) = fixture();
+    connections
+        .value
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .calendars
+        .push(CalendarSelection {
+            calendar_id: "secondary".into(),
+            calendar_name: "Secondary".into(),
+        });
+    let selected = vec!["primary".to_owned()];
+    let now = chrono::Utc::now().timestamp_millis();
+    let query = CalendarViewQuery::try_new(now - 60_000, now + 60_000, None, 8).unwrap();
+    let leases = SourceLeaseRegistry::new();
+    let (view, dependency) = read_native_calendar_view(
+        &connections,
+        &device,
+        &grants,
+        &leases,
+        NativeCalendarViewRead {
+            person_id,
+            device_id: "device",
+            consumer: "floe.builtin.schedule",
+            selected_calendar_ids: Some(&selected),
+            query: &query,
+            window: &window(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(view.items.is_empty());
+    assert_eq!(
+        dependency
+            .resources()
+            .iter()
+            .map(|resource| resource.as_str())
+            .collect::<Vec<_>>(),
+        vec!["primary"]
+    );
+    authorize_native_calendar_dependency(
+        &connections,
+        &device,
+        &grants,
+        &leases,
+        &dependency,
+        &window(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(device.checks.load(Ordering::SeqCst), 3);
+    assert_eq!(grants.calls.load(Ordering::SeqCst), 3);
 }
 
 fn view_source_authority(connections: &Connections) -> SourceAuthority {
@@ -447,6 +513,7 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
+                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },
@@ -467,6 +534,7 @@ async fn native_view_rejects_partial_batch_and_unpageable_cursor() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
+                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },
@@ -494,6 +562,7 @@ async fn native_permission_denial_requires_review_without_issuing_a_view() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
+                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },
@@ -537,6 +606,7 @@ async fn native_view_preserves_all_day_calendar_evidence() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
+            selected_calendar_ids: None,
             query: &query,
             window: &window(),
         },
@@ -565,6 +635,7 @@ async fn native_dependency_rechecks_the_current_grant_source() {
             person_id,
             device_id: "device",
             consumer: "floe.builtin.schedule",
+            selected_calendar_ids: None,
             query: &query,
             window: &window(),
         },
@@ -618,6 +689,7 @@ async fn native_view_rejects_connection_change_after_observation() {
                 person_id,
                 device_id: "device",
                 consumer: "floe.builtin.schedule",
+                selected_calendar_ids: None,
                 query: &query,
                 window: &window(),
             },

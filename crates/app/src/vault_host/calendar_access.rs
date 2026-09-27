@@ -140,10 +140,10 @@ impl<Keys: VaultKeyProvider> floe_access::DependencyResolver
                         self.person_id,
                         self.device_id.to_owned(),
                         connection.provider,
-                        connection
-                            .calendars
+                        dependency
+                            .resources()
                             .iter()
-                            .map(|calendar| calendar.calendar_id.clone())
+                            .map(|resource| resource.as_str().to_owned())
                             .collect(),
                         connection.connection_id,
                         connection.revision,

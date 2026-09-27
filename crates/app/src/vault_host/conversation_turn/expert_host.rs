@@ -956,7 +956,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                     let grants = crate::vault_host::calendar_access::VaultNativeCalendarGrants {
                         vault: self.vault,
                     };
-                    let calendar_ids = self
+                    let calendar_ids: Vec<String> = self
                         .selected
                         .iter()
                         .map(|source| source.resource.as_str().to_owned())
@@ -965,7 +965,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                         person_id,
                         self.device_id.to_owned(),
                         connection.provider,
-                        calendar_ids,
+                        calendar_ids.clone(),
                         connection.connection_id.clone(),
                         connection.revision,
                     );
@@ -982,6 +982,7 @@ impl<Keys: VaultKeyProvider> CalendarContextReaderApi for SelectedCalendarContex
                             person_id,
                             device_id: self.device_id,
                             consumer,
+                            selected_calendar_ids: Some(&calendar_ids),
                             query,
                             window: &window,
                         },

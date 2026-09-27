@@ -112,6 +112,7 @@ pub async fn admit_current_native_calendar_read(
     person_id: PersonId,
     device_id: &str,
     consumer: &str,
+    expected_calendar_ids: Option<&[String]>,
     window: &RemoteCallWindow,
 ) -> Result<AdmittedNativeCalendarRead, AgentFailure> {
     check_window(window)?;
@@ -129,14 +130,19 @@ pub async fn admit_current_native_calendar_read(
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    let mut calendar_ids = connection_calendar_ids(&connection);
+    let current_calendar_ids = connection_calendar_ids(&connection);
+    let mut calendar_ids = expected_calendar_ids
+        .map(<[String]>::to_vec)
+        .unwrap_or_else(|| current_calendar_ids.clone());
     calendar_ids.sort();
     if calendar_ids.is_empty()
         || calendar_ids.len() > 4
         || calendar_ids.windows(2).any(|pair| pair[0] == pair[1])
-        || calendar_ids
-            .iter()
-            .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
+        || calendar_ids.iter().any(|identifier| {
+            identifier.trim().is_empty()
+                || identifier.len() > 512
+                || !current_calendar_ids.contains(identifier)
+        })
     {
         return Err(AgentFailure::AccessReviewRequired);
     }
