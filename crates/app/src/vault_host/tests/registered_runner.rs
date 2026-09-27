@@ -61,6 +61,7 @@ static RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_A_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_B_CALLS: AtomicUsize = AtomicUsize::new(0);
 static REQUIRED_SOURCE_RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static EXTENSION_CHAIN_RUNNER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static RUNNER_A_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static RUNNER_A_RELEASE: OnceLock<tokio::sync::Notify> = OnceLock::new();
 static SOURCE_READ_ENTERED: OnceLock<tokio::sync::Notify> = OnceLock::new();
@@ -144,6 +145,44 @@ fn example_registration() -> BoundExpertRegistration {
         manifest: example_manifest(),
         runner: BoundExpertRunner::Supplied(example_runner),
     }
+}
+
+fn extension_chain_registration() -> BoundExpertRegistration {
+    let mut manifest = example_manifest();
+    manifest.source_requirements = vec![floe_experts::ExpertSourceRequirement {
+        key: "required_tasks".into(),
+        capability: "floe.tasks".into(),
+        contract_version: 1,
+        minimum_sources: 1,
+        maximum_sources: 1,
+    }];
+    BoundExpertRegistration {
+        manifest,
+        runner: BoundExpertRunner::Supplied(extension_chain_runner),
+    }
+}
+
+fn extension_chain_runner<'turn, 'model, 'msg, 'call>(
+    host: &'call DelegatedMessageExperts<'turn, 'model, 'msg>,
+    request: &'call BuiltinExpertRequest,
+) -> floe_agent_contract::BoxFuture<'call, Result<BuiltinExpertOutput, AgentFailure>> {
+    Box::pin(async move {
+        EXTENSION_CHAIN_RUNNER_CALLS.fetch_add(1, Ordering::SeqCst);
+        let outcome = host
+            .read_requirement(
+                request,
+                "required_tasks",
+                serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION}),
+            )
+            .await?;
+        assert!(matches!(outcome, RequirementReadOutcome::Ready(_)));
+        BuiltinExpertOutput::from_result(
+            "extension-tasks",
+            "application/vnd.example.tasks+json",
+            "Selected local tasks are available.".into(),
+            &serde_json::json!({"selected_tasks": true}),
+        )
+    })
 }
 
 async fn installed_open(
@@ -913,6 +952,153 @@ async fn registered_runner_nonbuiltin_uses_product_endpoint_and_durable_task() {
         .unwrap();
     assert_eq!(replay.snapshot, receipt.snapshot);
     assert_eq!(RUNNER_CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn registered_runner_nonbuiltin_extension_chain_reads_only_its_exact_selection() {
+    EXTENSION_CHAIN_RUNNER_CALLS.store(0, Ordering::SeqCst);
+    let person = PersonId::new();
+    let (_root, open, server) = installed_open(person, extension_chain_registration()).await;
+    let overview = open.vault.registry_overview().await.unwrap().unwrap();
+    assert_eq!(overview.definitions.len(), 1);
+    assert_eq!(overview.definitions[0].package.id, "example.test.expert");
+    assert_eq!(overview.assignments.len(), 1);
+    assert_eq!(
+        overview.assignments[0].requirements[0].key,
+        "required_tasks"
+    );
+    let assignment_id = overview.assignments[0].id;
+    let inspected = crate::vault_host::expert_binding_settings::inspect(
+        &open,
+        person,
+        "mac-local",
+        assignment_id,
+        "required_tasks",
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(inspected.candidates.len(), 1);
+    assert_eq!(inspected.candidates[0].availability, "available");
+    let saved = crate::vault_host::expert_binding_settings::replace(
+        &open,
+        person,
+        "mac-local",
+        Uuid::new_v4(),
+        &crate::ExpertBindingSelectionIntent {
+            assignment_id,
+            package_id: "example.test.expert".into(),
+            package_version: "1.0.0".into(),
+            definition_revision: 1,
+            requirement_key: "required_tasks".into(),
+            expected_binding_revision: inspected.binding_revision,
+            candidate_ids: vec![inspected.candidates[0].candidate_id.clone()],
+        },
+        &Cancellation::default(),
+    )
+    .await
+    .unwrap();
+    assert!(saved.candidates[0].selected);
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let selected = &snapshot.assignments[0].binding.entries[0].selected[0];
+    assert_eq!(selected.capability_id, "floe.tasks");
+    assert!(
+        crate::first_party_observe::selected_shipped_consumers(
+            Some(&snapshot),
+            person,
+            "floe.tasks",
+            selected.connector_id.as_str(),
+            selected.connection_id.as_str(),
+            selected.execution_owner_id.as_str(),
+            selected.resource.as_str(),
+        )
+        .unwrap()
+        .is_empty()
+    );
+    open.publish_expert_directory(&open.registrations)
+        .await
+        .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let task_request = request(person, run_id, task_id);
+    let scope = task_scope(run_id, task_id);
+    let first = open
+        .task_coordinator
+        .delegate(task_request.clone(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(first.snapshot.state, TaskState::Completed, "{first:?}");
+    assert_eq!(
+        first.snapshot.result.as_deref(),
+        Some("Selected local tasks are available.")
+    );
+    assert!(first.snapshot.artifacts.iter().any(|artifact| artifact.parts.iter().any(|part| matches!(part, ArtifactPart::Data { media_type, data } if media_type == "application/vnd.example.tasks+json" && data.contains("selected_tasks")))));
+    let stored = open.vault.task(task_id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.selection.requirements[0].selected,
+        vec![selected.clone()]
+    );
+    let replay = open
+        .task_coordinator
+        .delegate(task_request, &scope)
+        .await
+        .unwrap();
+    assert_eq!(replay.snapshot, first.snapshot);
+    assert_eq!(EXTENSION_CHAIN_RUNNER_CALLS.load(Ordering::SeqCst), 1);
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn registered_runner_builtin_prefix_does_not_grant_first_party_observe() {
+    let person = PersonId::new();
+    let mut registration = extension_chain_registration();
+    registration.manifest.package.id = "floe.builtin.impostor".into();
+    registration.manifest.definition.card.id = "floe.builtin.impostor".into();
+    registration.manifest.validate().unwrap();
+    let manifest = registration.manifest.clone();
+    let (_root, open) = installed_open_without_provider(person, vec![registration], manifest).await;
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let candidate =
+        floe_context::discover_source_candidates(floe_context::SourceCandidateRequest {
+            person_id: person,
+            device_id: "mac-local",
+            capability: "floe.tasks",
+            contract_version: 1,
+            remote_connections: &[],
+            remote_execution_owner: None,
+            calendar_connection: None,
+        })
+        .unwrap()
+        .remove(0);
+    open.vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            floe_experts::ExpertBindingCommand {
+                assignment_id: snapshot.assignments[0].id,
+                package: snapshot.installations[0].package.clone(),
+                definition_revision: 1,
+                requirement_key: "required_tasks".into(),
+                expected_binding_revision: snapshot.assignments[0].binding.revision,
+                selected: vec![candidate.reference.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    let snapshot = open.vault.expert_registry().await.unwrap().unwrap();
+    let source = &candidate.reference;
+    assert!(
+        crate::first_party_observe::selected_shipped_consumers(
+            Some(&snapshot),
+            person,
+            "floe.tasks",
+            source.connector_id.as_str(),
+            source.connection_id.as_str(),
+            source.execution_owner_id.as_str(),
+            source.resource.as_str(),
+        )
+        .unwrap()
+        .is_empty()
+    );
 }
 
 #[tokio::test]
