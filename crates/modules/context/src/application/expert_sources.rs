@@ -1,6 +1,7 @@
 use floe_agent_contract::{AGENT_VERSION, AgentFailure, BoxFuture, PersonId};
 use floe_context_contract::{
     CalendarViewQuery, ContextDependency, GrantConsumer, GrantPurpose, SourceReadOutcome,
+    source_access_id_for_capability,
 };
 use floe_execution::Cancellation;
 use serde_json::Value;
@@ -103,6 +104,7 @@ pub trait LocalExpertSourceDriver: Sync {
     fn read<'a>(
         &'a self,
         source: LocalExpertSource,
+        source_access_id: &'static str,
         selected_refs: &'a [floe_context_contract::SourceSelectionReference],
         query: Value,
         deadline: Instant,
@@ -143,6 +145,8 @@ pub async fn read_declared_source(
         _ => return Err(AgentFailure::CapabilityUnavailable),
     };
     if let Some(source) = local {
+        let source_access_id = source_access_id_for_capability(requirement.capability)
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
         if source == LocalExpertSource::Calendar {
             let calendar: CalendarViewQuery =
                 serde_json::from_value(query.clone()).map_err(|_| AgentFailure::InvalidInput)?;
@@ -162,6 +166,7 @@ pub async fn read_declared_source(
         let acquired = local_driver
             .read(
                 source,
+                source_access_id,
                 requirement.selected_refs,
                 query,
                 deadline,
@@ -278,6 +283,7 @@ mod tests {
         fn read<'a>(
             &'a self,
             _: LocalExpertSource,
+            source_access_id: &'static str,
             selected_refs: &'a [floe_context_contract::SourceSelectionReference],
             _: Value,
             _: Instant,
@@ -286,7 +292,10 @@ mod tests {
         {
             Box::pin(async move {
                 Ok(SourceReadOutcome::Ready((
-                    serde_json::json!({"resource": selected_refs[0].resource.as_str()}),
+                    serde_json::json!({
+                        "resource": selected_refs[0].resource.as_str(),
+                        "source_access_id": source_access_id,
+                    }),
                     vec![],
                 )))
             })
@@ -330,6 +339,7 @@ mod tests {
                 panic!("expected selected read")
             };
             assert_eq!(read.payload["resource"], expected);
+            assert_eq!(read.payload["source_access_id"], "floe.source.calendar");
         }
     }
 
@@ -396,6 +406,7 @@ mod tests {
         fn read<'a>(
             &'a self,
             source: LocalExpertSource,
+            _: &'static str,
             _: &'a [floe_context_contract::SourceSelectionReference],
             _: Value,
             _: Instant,

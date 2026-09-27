@@ -35,6 +35,7 @@ pub use processing::{
 pub use source_access::{
     MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, SourceAccessBlockers, SourceAccessRequirement,
     SourceAccessRequirementKind, SourceReadOutcome, SourceUnavailable,
+    source_access_id_for_capability,
 };
 pub use source_selection::SourceSelectionReference;
 pub use views::*;

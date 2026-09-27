@@ -21,15 +21,17 @@ use floe_context_contract::{
     MAX_CALENDAR_CONTEXT_BYTES, MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, ProcessingRestriction,
     ResourceHandle, SourceAccessBlockers, SourceAccessRequirement, SourceAccessRequirementKind,
     SourceReadOutcome, SourceSelectionReference, SourceUnavailable,
+    source_access_id_for_capability,
     validate_calendar_context_view_for_query,
 };
 use serde_json::Value;
 use uuid::Uuid;
 
+#[cfg(test)]
+use crate::application::remote_views::{LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW};
 use crate::application::remote_views::{
-    LOGISTICS_VIEW, MAIL_VIEW, WORK_VIEW, merge_remote_views, remote_view_data_category,
-    remote_view_dependency, remote_view_resource, split_remote_view_resource, validate_remote_view,
-    validate_remote_view_query,
+    merge_remote_views, remote_view_data_category, remote_view_dependency, remote_view_resource,
+    split_remote_view_resource, validate_remote_view, validate_remote_view_query,
 };
 
 /// The read a remote transport performs once the grant has admitted it.
@@ -214,16 +216,6 @@ fn check_window(window: &RemoteCallWindow) -> Result<(), AgentFailure> {
         return Err(AgentFailure::DeadlineExceeded);
     }
     Ok(())
-}
-
-/// The source identity one remote view reports blockers under.
-fn remote_view_source_id(view_id: &str) -> Option<&'static str> {
-    match view_id {
-        MAIL_VIEW => Some("floe.source.mail"),
-        WORK_VIEW => Some("floe.source.work-context"),
-        LOGISTICS_VIEW => Some("floe.source.logistics"),
-        _ => None,
-    }
 }
 
 /// Whether this grant admits reading the view on its own connection.
@@ -543,7 +535,7 @@ pub async fn read_remote_view(
 ) -> Result<SourceReadOutcome<(Value, Vec<AuthorizedSourceBinding>)>, AgentFailure> {
     check_window(window)?;
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let source_id = remote_view_source_id(view_id).ok_or(AgentFailure::InvalidInput)?;
+    let source_id = source_access_id_for_capability(view_id).ok_or(AgentFailure::InvalidInput)?;
     let (max_items, max_bytes) = validate_remote_view_query(view_id, &query)?;
     let grants = store.grants(128).await?;
     let (admitted, blocked) =
@@ -606,7 +598,7 @@ pub async fn read_selected_remote_view(
 ) -> Result<SourceReadOutcome<(Value, Vec<AuthorizedSourceBinding>)>, AgentFailure> {
     check_window(window)?;
     let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
-    let source_id = remote_view_source_id(view_id).ok_or(AgentFailure::InvalidInput)?;
+    let source_id = source_access_id_for_capability(view_id).ok_or(AgentFailure::InvalidInput)?;
     let (max_items, max_bytes) = validate_remote_view_query(view_id, &query)?;
     let grants = store.grants(128).await?;
     let (admitted, blocked) = classify_selected_remote_sources(

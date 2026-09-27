@@ -827,6 +827,7 @@ mod tests {
             &'a self,
             person_id: PersonId,
             consumer: &'a str,
+            _: &'a str,
             selected: &'a [floe_context_contract::SourceSelectionReference],
             query: &'a floe_context_contract::CalendarViewQuery,
             _: tokio::time::Instant,

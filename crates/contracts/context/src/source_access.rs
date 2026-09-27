@@ -5,6 +5,22 @@ use crate::{
     GrantValidationError, MAX_RESOURCE_HANDLES, ResourceHandle, SourceAuthority,
 };
 
+pub fn source_access_id_for_capability(capability: &str) -> Option<&'static str> {
+    match capability {
+        "calendar.timeline" => Some("floe.source.calendar"),
+        "mail.communication" => Some("floe.source.mail"),
+        "floe.tasks" => Some("floe.source.tasks"),
+        "memory.confirmed" => Some("floe.source.confirmed-memory"),
+        "people.identity" => Some("floe.source.contacts"),
+        "relationships.confirmed_interactions" => Some("floe.source.confirmed-interactions"),
+        "attention.coarse" => Some("floe.source.attention"),
+        "work.context" => Some("floe.source.work-context"),
+        "wellbeing.derived" => Some("floe.source.wellbeing"),
+        "life.logistics" => Some("floe.source.logistics"),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SourceReadOutcome<Value> {

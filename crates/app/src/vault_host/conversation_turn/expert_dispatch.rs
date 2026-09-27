@@ -659,6 +659,7 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
     fn read<'a>(
         &'a self,
         source: floe_context::LocalExpertSource,
+        source_access_id: &'static str,
         selected_refs: &'a [floe_context_contract::SourceSelectionReference],
         query: serde_json::Value,
         deadline: tokio::time::Instant,
@@ -689,7 +690,13 @@ impl floe_context::LocalExpertSourceDriver for AppLocalExpertSource<'_, '_, '_, 
                     let calendar: floe_context_contract::CalendarViewQuery =
                         serde_json::from_value(query).map_err(|_| AgentFailure::InvalidInput)?;
                     match personal
-                        .calendar_views(selected_refs, &calendar, deadline, cancellation)
+                        .calendar_views(
+                            source_access_id,
+                            selected_refs,
+                            &calendar,
+                            deadline,
+                            cancellation,
+                        )
                         .await?
                     {
                         SourceReadOutcome::Ready(value) => Ok(SourceReadOutcome::Ready((
@@ -1323,6 +1330,7 @@ mod capture_tests {
             &'a self,
             _: floe_kernel::PersonId,
             _: &str,
+            _: &str,
             _: &[floe_context_contract::SourceSelectionReference],
             _: &floe_context_contract::CalendarViewQuery,
             _: tokio::time::Instant,
@@ -1528,6 +1536,7 @@ mod capture_tests {
         fn read<'a>(
             &'a self,
             person: floe_kernel::PersonId,
+            _: &str,
             _: &str,
             selected: &'a [floe_context_contract::SourceSelectionReference],
             query: &'a floe_context_contract::CalendarViewQuery,
