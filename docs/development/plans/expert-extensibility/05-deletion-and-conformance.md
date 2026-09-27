@@ -87,7 +87,8 @@ Current search results:
 
 - crates/experts/builtin/src/catalog.rs:53-57 BuiltinExpertKind::from_package_id has no production caller; only its local round-trip test uses it.
 - crates/experts/builtin/src/catalog.rs:185-223 BuiltinSourceRequirement and BuiltinContextSource::requirement have no repository caller outside their definition/export.
-- crates/contracts/agent/src/expert.rs:25,38 ExpertBudget.max_insights has no caller after the shared ExpertInsight contract was removed.
+- crates/contracts/agent/src/expert.rs:25-48 ExpertBudget and MAX_EXPERT_VIEW_BYTES have no repository runtime caller beyond their definition/re-exports; max_insights is additionally a historical shared-result name after ExpertInsight removal.
+- PackageKind::Tool has no production Registry/package caller; the current Rust match is a negative ExpertManifest test, while apps/client/lib/features/experts/presentation/agent_capability_label.dart still has a Tool-shaped Registry presentation branch.
 - apps/client/test/features/experts/agent_expert_result_test.dart is already absent; only historical plans still name it.
 - PackageImplementation, FindFocusWindow, StatefulFocusProposal and ExpertFocusProposal are historical-plan matches, not current production symbols.
 
@@ -229,7 +230,17 @@ For each test:
 
 The expired-dependency-before-I/O test may retain a prepared ServerSourceClient only as an external transport endpoint; it must not depend on a deleted convenience method.
 
-### 05-A4. Deletion gate
+### 05-A4. Preserve server denial of legacy unsuffixed routes
+
+The Go server already treats unsuffixed View reads as invalid/admission-required. Matches in server/internal/application/console_test.go and server/internal/application/person_test.go that deliberately POST legacy unsuffixed routes and assert rejection are RETAIN negative regressions, not compatibility clients.
+
+Do not delete those tests merely to obtain a zero string-search count. The final distinction is:
+
+- no Rust success caller or fixture uses an unsuffixed View route;
+- canonical server success uses admit/read/release;
+- Go may mention an unsuffixed route only to prove it is rejected.
+
+### 05-A5. Deletion gate
 
 At the end of 05-A:
 
@@ -276,17 +287,28 @@ Required regression:
 
 Do not change grant purpose, consumer identity, resource set, reviewed grant, source authority or inline-resolution rules.
 
-### 05-B2. Delete caller-zero historical API
+### 05-B2. Delete caller-zero historical API and synthetic Registry Tool package surface
 
 Delete after re-search confirms the baseline:
 
-- crates/experts/builtin/src/catalog.rs:53-57 BuiltinExpertKind::from_package_id
-- its self-only round-trip test around 248-253
-- BuiltinSourceRequirement at catalog.rs:185-194
-- BuiltinContextSource::requirement at catalog.rs:213-223
-- the BuiltinSourceRequirement re-export in crates/experts/builtin/src/lib.rs
-- crates/contracts/agent/src/expert.rs:25 ExpertBudget.max_insights
-- its default value at expert.rs:38
+- crates/experts/builtin/src/catalog.rs:53-57 BuiltinExpertKind::from_package_id;
+- its self-only round-trip test around 248-253;
+- BuiltinSourceRequirement at catalog.rs:185-194;
+- BuiltinContextSource::requirement at catalog.rs:213-223;
+- the BuiltinSourceRequirement re-export in crates/experts/builtin/src/lib.rs;
+- crates/contracts/agent/src/expert.rs ExpertBudget as a whole, not merely max_insights, if all fields remain caller-zero;
+- MAX_EXPERT_VIEW_BYTES and the ExpertBudget/MAX re-exports from floe-agent-contract and floe-experts when no independent caller remains.
+
+Also remove the obsolete Registry package Tool variant when latest-main search still shows no production caller:
+
+- delete PackageKind::Tool but retain PackageRef.kind / PackageKind::Expert if current persistence and wire identity intentionally serialize kind: expert;
+- update the ExpertManifest negative test so obsolete tool is rejected at the serialization/contract boundary rather than kept as a supported enum value;
+- remove the Tool-shaped branch from apps/client/lib/features/experts/presentation/agent_capability_label.dart and associated Tool-only Expert Registry fixtures;
+- re-run protocol/FFI/Dart compatibility if generated contract output is affected.
+
+This does not delete Manager ToolCall, ToolDescriptor or model tool execution. Those are Conversation/Model capabilities, not synthetic Registry Tool packages.
+
+Do not replace max_insights with a renamed shared insight budget. Package result/output limits remain with their actual runtime/package owners.
 
 Do not delete BuiltinExpertKind merely because it is closed-world inside the shipped bundle. A compile-time builtin catalogue is allowed. The prohibition is common-owner dispatch/trust based on that enum.
 
@@ -473,7 +495,8 @@ rg -n 'CalendarExpert|ScheduleEndpoint|experts\.calendar\.install|AgentCalendarE
 rg -n 'PackageImplementation|FindFocusWindow|focus_minimum_minutes|builtin_expert' crates apps/client server docs
 rg -n 'ExpertInput|ExpertInsight|ExpertFocusProposal|StatefulFocusProposal|experts\.builtin|calendar\.expert' crates apps/client server docs
 rg -n 'read_communication_view|read_work_context_view|read_calendar_context_view|read_confirmed_interaction_view|read_logistics_view|read_people_view|read_attention_view|read_wellbeing_view|read_personal_view' crates
-rg -n 'enabled_builtin_expert_cards|required_tools|granted_tool_assignments|modelCalls == 1|view_calls.*!= 1|max_insights|from_package_id' crates apps/client
+rg -n 'enabled_builtin_expert_cards|required_tools|granted_tool_assignments|modelCalls == 1|view_calls.*!= 1|ExpertBudget|MAX_EXPERT_VIEW_BYTES|max_insights|from_package_id|PackageKind::Tool' crates apps/client
+rg -n 'kind == .tool.|Connected information' apps/client/lib/features/experts apps/client/test/features/experts
 ~~~
 
 Also inspect:
@@ -503,10 +526,11 @@ The new checker should fail on at least these regressions:
 2. BuiltinContextSource use in production App;
 3. BuiltinExpertKind-based execution dispatch or package-ID switch in production App;
 4. common modules/runtime depending on floe-experts-builtin;
-5. removed shared result/Focus symbols in executable code;
-6. package-specific branching in the generic Flutter Expert registry/settings gateway;
-7. reappearance of ScheduleEndpoint/Calendar Expert wire commands;
-8. forwarding-only legacy source-read compatibility names.
+5. PackageKind::Tool or Tool-shaped Expert Registry/client presentation;
+6. removed shared result/Focus symbols in executable code;
+7. package-specific branching in the generic Flutter Expert registry/settings gateway;
+8. reappearance of ScheduleEndpoint/Calendar Expert wire commands;
+9. forwarding-only legacy source-read compatibility names.
 
 Narrow owner-scoped allowances are acceptable for:
 
@@ -677,16 +701,17 @@ Do not start checkpoint 06 implementation inside these commits.
 1. 05-A through 05-D are complete.
 2. All deleted ServerSourceClient convenience names have zero executable matches.
 3. No production App source identity comes from BuiltinContextSource.
-4. Caller-zero from_package_id, BuiltinSourceRequirement/requirement and max_insights are gone if still caller-zero at execution time.
-5. schedule_host old topology is removed and surviving assertions live under generic fixtures.
-6. E1 demonstrates zero common-production diff for adding one bundled Expert, and the temporary fake package is absent from final HEAD.
-7. E2 passes through real registration/admission/configuration/delegation/interaction/resume owners and does not receive first-party trust.
-8. Source-semantic architecture checker and its negative fixtures pass.
-9. Targeted and broad gates pass with exact results recorded.
-10. Proposal-card golden exception remains byte-identical and untouched.
-11. Current architecture docs match code.
-12. README checkpoint status is changed from 05 Not started to 05 Complete only after all evidence is green.
-13. Checkpoint 06 remains Not started.
+4. Caller-zero ExpertBudget/MAX_EXPERT_VIEW_BYTES, from_package_id and BuiltinSourceRequirement/requirement are gone if still caller-zero at execution time.
+5. PackageKind::Tool and Tool-shaped Expert Registry/client presentation are gone if still production-caller-zero at execution time.
+6. schedule_host old topology is removed and surviving assertions live under generic fixtures.
+7. E1 demonstrates zero common-production diff for adding one bundled Expert, and the temporary fake package is absent from final HEAD.
+8. E2 passes through real registration/admission/configuration/delegation/interaction/resume owners and does not receive first-party trust.
+9. Source-semantic architecture checker and its negative fixtures pass.
+10. Targeted and broad gates pass with exact results recorded.
+11. Proposal-card golden exception remains byte-identical and untouched.
+12. Current architecture docs match code.
+13. README checkpoint status is changed from 05 Not started to 05 Complete only after all evidence is green.
+14. Checkpoint 06 remains Not started.
 
 ## Required agent completion report
 
@@ -697,11 +722,12 @@ Report:
 3. final ServerSourceClient public read surface;
 4. deleted legacy methods/helpers/tests and replacement safety coverage;
 5. final Calendar blocker/source identity owner and path;
-6. caller-zero cleanup results including max_insights/from_package_id;
-7. generic test-fixture migration and deleted schedule_host evidence;
-8. E1 temporary package diff, commands/results and proof of zero common-production changes;
-9. proof the E1 fake package is absent from final HEAD;
-10. E2 non-builtin registration/binding/read/interaction/linked-resume evidence;
+6. caller-zero cleanup results including ExpertBudget/MAX_EXPERT_VIEW_BYTES and from_package_id;
+7. PackageKind::Tool / Flutter Tool-presentation cleanup and protocol compatibility result;
+8. generic test-fixture migration and deleted schedule_host evidence;
+9. E1 temporary package diff, commands/results and proof of zero common-production changes;
+10. proof the E1 fake package is absent from final HEAD;
+11. E2 non-builtin registration/binding/read/interaction/linked-resume evidence;
 11. proof non-builtin package does not enter first-party Observe policy;
 12. generic result/action artifact evidence;
 13. source-semantic checker rules and negative fixture results;
