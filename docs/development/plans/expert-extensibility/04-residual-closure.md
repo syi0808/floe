@@ -396,13 +396,19 @@ Every match is classified. In particular:
 
 The caller-zero `read_confirmed_interaction_view` remains explicitly deferred to checkpoint 05.
 
-## Partial execution evidence
+## Closure execution evidence
 
 - RC-1 candidate/settings continuity: `60e91e82`; hosted Calendar product inspection and offline saved/Remove/lost-ack test pass, as does Flutter saved-source Remove.
-- RC-2 native Calendar subset only: `37512014`; selected-subset read and dependency reauthorization test passes. Requirement-key selected-read seam and duplicate-key acceptance remain open.
-- RC-3 generic Inference handoff fence: `303548aa`; Inference zero-transport/no-fallback test passes. The deterministic App rebind-at-handoff integration test remains open.
+- RC-2 native Calendar subset: `37512014`; selected-subset read and dependency reauthorization test passes.
+- RC-3 generic Inference handoff fence: `303548aa`; Inference zero-transport/no-fallback test passes.
 - RC-4 stateless terminal transaction fence: `63962a6b`; Vault success rejection, failure write and historical replay test passes.
-- Focused `floe-context`, `floe-inference`, `floe-vault` and App `registered_runner_` suites, Flutter Expert tests/analyze, architecture checker and diff check passed for this partial state. RC-5/RC-6 and the broad gate have not been run to completion, so checkpoint 04 remains reopened and 05 remains Not started.
+- RC-2 requirement-key selected-read seam: `fd43a952`; Context duplicate-key local and selected-port tests pass.
+- RC-4 stateful failure-category correction `1c26b55b`; exact A→B stateless-completion race `e110cf85` passes through the real Vault transaction.
+- RC-5 cross-owner regressions `8ed83160`, `d3650a26`; App product-host duplicate Calendar keys return A/B payloads and capture only their corresponding A/B dependencies. App deterministic Inference profile-preparation barrier rebinds A→B after outer validation; the inner handoff fence is observed exactly once, returns `Conflict`, and leaves both primary and fallback provider generate counts at zero.
+- Focused `floe-context`, `floe-inference`, `floe-experts`, `floe-vault`, `floe-protocol`, `floe-ffi` and App `registered_runner_`, `vault_registry`, `first_party_observe` suites passed; new tests were also run by name. Flutter Expert, Conversation and Connections suites passed.
+- The serial broad Rust gate (`cargo check --workspace --lib`; `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 cargo test --workspace --no-fail-fast`), architecture checker, FFI build, Flutter analyze/full test/macOS build and diff check passed. This does not qualify default-parallel Rust execution. Two ignored tests remain: disposable EventKit response-loss recovery and live Codex provider integration.
+- RC-5 residual audit: Expert selected reads have no capability-only selection lookup; native selected Calendar and dependency reauthorization use exact admitted resources; Inference checks the generic fence directly before provider `generate`; new stateless `Completed` CAS validates inside its Vault transaction; empty-selection Remove does not invoke live candidate discovery. Capability checks in Actions and settlement match retained evidence rather than choosing a selected source. Manager's direct current-selection path remains distinct. `ServerSourceClient::read_confirmed_interaction_view` has no caller and remains a checkpoint-05 target.
+- RC-6 status: all required closure gates passed on this snapshot. The full Rust pass is qualified as serial only; no default-parallel reliability claim is made. Checkpoint 05 remains Not started.
 
 ## RC-6: verification, docs and status convergence
 
