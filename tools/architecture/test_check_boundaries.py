@@ -57,8 +57,19 @@ class GraphTests(unittest.TestCase):
 
 class CliTests(unittest.TestCase):
     checker = Path(__file__).with_name("check_boundaries.py")
+    kernel_policy = {
+        "target": [
+            {
+                "id": "kernel",
+                "package": "floe-kernel",
+                "path": "crates/contracts/kernel",
+                "group": "contracts",
+                "allowed_internal_dependencies": [],
+            }
+        ]
+    }
 
-    def run_check(self, cargo_manifests, extra_args=(), include_repo=True, workspace_members=None):
+    def run_check(self, cargo_manifests, extra_args=(), include_repo=True, workspace_members=None, policy=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             members = [path for _, path, _ in cargo_manifests] if workspace_members is None else workspace_members
@@ -75,6 +86,10 @@ class CliTests(unittest.TestCase):
             command = [sys.executable, str(self.checker)]
             if include_repo:
                 command.append(str(root))
+            if policy is not None:
+                policy_path = root / "policy.json"
+                policy_path.write_text(json.dumps(policy), encoding="utf-8")
+                command.extend(["--policy", str(policy_path)])
             command.extend(extra_args)
             result = subprocess.run(
                 command,
@@ -111,7 +126,7 @@ platform-fixture = "1"
 """
         result, report = self.run_check(
             [("floe-kernel", "crates/contracts/kernel", manifest)],
-            workspace_members=[],
+            policy=self.kernel_policy,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
@@ -152,7 +167,9 @@ name = "floe-kernel"
 version = "0.1.0"
 """
         result, report = self.run_check(
-            [("floe-kernel", "crates/contracts/kernel", manifest)]
+            [("floe-kernel", "crates/contracts/kernel", manifest)],
+            workspace_members=[],
+            policy=self.kernel_policy,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
