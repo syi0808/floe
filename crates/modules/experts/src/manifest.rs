@@ -213,8 +213,7 @@ mod tests {
         manifest.definition.card.version = "2.0.0".into();
         assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
         manifest.definition.card.version = "1.0.0".into();
-        manifest.package.kind = PackageKind::Tool;
-        assert_eq!(manifest.validate(), Err(AgentFailure::InvalidInput));
+        assert!(serde_json::from_value::<PackageKind>(serde_json::json!("tool")).is_err());
     }
 
     #[test]

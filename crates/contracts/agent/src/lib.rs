@@ -44,9 +44,7 @@ pub use envelope::{
     EvidenceManifestEntry, MAX_RESPONSE_CONTRACT_BYTES, MAX_SCOPED_PURPOSE_BYTES,
     MemoryManifestEntry, PromptManifestEntry, RuntimeContext, ScopedInstructions,
 };
-pub use expert::{
-    ExpertBudget, MAX_EXPERT_VIEW_BYTES, PackageKind, PackageRef,
-};
+pub use expert::{PackageKind, PackageRef};
 pub use expert_model::{
     CapabilityDescriptor, DELEGATED_EXPERT_INFERENCE_CONSUMER, ExpertCapabilityObservation, ExpertModel,
     ExpertModelAnswer, ExpertModelCall, ExpertModelOutcome, ExpertModelRequirement, ExpertReasoner,

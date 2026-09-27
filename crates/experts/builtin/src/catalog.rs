@@ -50,12 +50,6 @@ impl BuiltinExpertKind {
         }
     }
 
-    pub fn from_package_id(package_id: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|expert| expert.package_id() == package_id)
-    }
-
     pub const fn context_data_class(self) -> DataClass {
         if matches!(self, Self::Wellbeing) {
             DataClass::HighlySensitive
@@ -180,19 +174,6 @@ pub enum BuiltinContextSource {
     Logistics,
 }
 
-/// What has to be answering for a builtin source to serve a run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BuiltinSourceRequirement {
-    /// This device's own connection to the source serves it.
-    DeviceConnection,
-    /// This device serves it with nothing to connect to.
-    Device,
-    /// Only the Person's paired server serves it.
-    PairedServer,
-    /// Nothing serves it yet.
-    Unserved,
-}
-
 impl BuiltinContextSource {
     pub const fn capability_id(self) -> &'static str {
         match self {
@@ -206,20 +187,6 @@ impl BuiltinContextSource {
             Self::WorkContext => "work.context",
             Self::Wellbeing => "wellbeing.derived",
             Self::Logistics => "life.logistics",
-        }
-    }
-
-    /// What has to be answering for this source to serve a run.
-    pub const fn requirement(self) -> BuiltinSourceRequirement {
-        match self {
-            Self::Calendar => BuiltinSourceRequirement::DeviceConnection,
-            Self::Tasks | Self::ConfirmedMemory => BuiltinSourceRequirement::Device,
-            Self::Mail | Self::ConfirmedInteractions | Self::WorkContext | Self::Logistics => {
-                BuiltinSourceRequirement::PairedServer
-            }
-            Self::Contacts | Self::Attention | Self::Wellbeing => {
-                BuiltinSourceRequirement::Unserved
-            }
         }
     }
 
@@ -245,12 +212,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_builtin_package_id_round_trips() {
+    fn every_builtin_package_declares_its_mandatory_source() {
         for expert in BuiltinExpertKind::ALL {
-            assert_eq!(
-                BuiltinExpertKind::from_package_id(expert.package_id()),
-                Some(expert)
-            );
             assert!(
                 expert
                     .required_sources()
