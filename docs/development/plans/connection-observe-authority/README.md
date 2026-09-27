@@ -4,8 +4,9 @@
 
 This is the authoritative execution plan for replacing Floe's current resource-by-resource Observe/grant model with a connection-owned source scope and connection/View permission model. It is a target and ordered cutover, not a claim that the target is already implemented.
 
-- Source baseline: main at 1af55ea6264cb536f458717a8727c784431e4918, rechecked on 2026-09-27.
-- Evidence at plan creation: current Rust, Go, Flutter, architecture docs, accepted ADRs and the September 27 first-party Observe history were inspected. No runtime/code verification is claimed by this documentation commit.
+- Source baseline: the original plan was authored from main at 1af55ea6264cb536f458717a8727c784431e4918. Checkpoint 00 line-level anchors were re-resolved on 2026-09-28 against main at eb55389dc66ce30ad9693f739569dc1b58f2b2f3.
+- Intervening convergence: eb55389dc66ce30ad9693f739569dc1b58f2b2f3 removed fixed Calendar selection-count limits and added >4/>128 regression coverage. Checkpoint 00 treats that as existing code to verify, not work to re-implement.
+- Evidence at plan creation: current Rust, Go, Flutter, architecture docs, accepted ADRs and the September 27 first-party Observe history were inspected. No runtime/code verification is claimed by the planning commits.
 - Compatibility policy: no internal backward compatibility is required. Disposable development profiles may be recreated when persisted meaning changes. Do not add legacy decoders, vNext paths, dual schemas, forwarding adapters or old/new runtime branches.
 - Destructive scope: obsolete files, types, fields, tests, fixtures, storage tables, protocol operations and package-private abstractions may be deleted when the checkpoint's canonical replacement is complete.
 - External boundaries remain real: provider OAuth contracts, OS APIs, cryptographic proof, external side effects and exact-recipient consent are not weakened by this plan.
@@ -21,7 +22,7 @@ The current Calendar failure is not one isolated invalid_input. The present mode
 3. Access grants source use to consumers;
 4. Context acquires current evidence.
 
-Today Calendar leaf resources leak through all four layers. first_party_observe::native_calendar_policy_for_target computes the intersection of Expert consumers selected for every Calendar resource. GrantScope then rejects the resulting empty consumer set. Even if that is patched, native_calendar currently rejects more than four calendar IDs, so an 11-calendar connection can fail again later.
+Today Calendar leaf resources still leak through all four layers. first_party_observe::native_calendar_policy_for_target computes the intersection of Expert consumers selected for every Calendar resource, and GrantScope rejects the resulting empty consumer set. The former fixed >4 Calendar authorization/read caps were removed by eb55389dc66ce30ad9693f739569dc1b58f2b2f3; that cleanup is useful but does not change the incorrect permission ownership or leaf-scoped Expert binding model.
 
 The same representation also created:
 
