@@ -1,28 +1,15 @@
-use std::{
-    sync::OnceLock,
-    time::{Duration, SystemTime},
-};
+use std::{sync::OnceLock, time::Duration};
 
 use crate::control::PreparedServerSource;
 use crate::control::authorization::{
     RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
 };
 use floe_access::{RemoteAuthorizationKeys, RemoteCalendarAuthorizationExpectation};
-use floe_agent_contract::AGENT_VERSION;
 use floe_agent_contract::AgentFailure;
 use floe_connections::{CalendarConnectionRef, ConnectorCatalogObservation, ConnectorSnapshot};
-use floe_context::{
-    AttentionView, CalendarContextView, CommunicationView, ConfirmedInteractionView, LogisticsView,
-    MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
-    MAX_PERSONAL_CONTEXT_BYTES, MAX_PORTFOLIO_VIEW_BYTES, PeopleView, WellbeingView,
-    WorkContextView, validate_attention_view, validate_calendar_context_view,
-    validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view,
-    validate_people_view, validate_wellbeing_view, validate_work_context_view,
-};
 use floe_execution::limits::{CallLimiter, CallLimits};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, de::DeserializeOwned};
-use serde_json::json;
 
 /// One authorized view read, as the grant it runs under states it.
 ///
@@ -66,26 +53,6 @@ fn provider_call_limit() -> CallLimiter {
         max_total_context_bytes: 12 * 65_536,
     })
     .expect("valid static provider limits")
-}
-
-pub struct CalendarContextRequest<'input> {
-    pub connector_id: &'input str,
-    pub connection_id: &'input str,
-    pub connection_revision: u64,
-    pub range_start_unix_ms: i64,
-    pub range_end_unix_ms: i64,
-    pub cursor: &'input str,
-    pub limit: usize,
-}
-
-fn valid_connection_id(value: &str) -> bool {
-    uuid::Uuid::parse_str(value).is_ok_and(|identifier| {
-        identifier.get_version_num() == 4
-            && identifier
-                .hyphenated()
-                .to_string()
-                .eq_ignore_ascii_case(value)
-    })
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -309,49 +276,6 @@ impl ServerSourceClient {
             .await
     }
 
-    pub async fn read_communication_view(
-        &self,
-        query: &str,
-        cursor: usize,
-        limit: usize,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<CommunicationView, AgentFailure> {
-        if query.len() > 512 || cursor > 10_000 || !(1..=MAX_COMMUNICATION_ITEMS).contains(&limit) {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.read_view(
-            "/v1/views/mail.communication",
-            json!({
-                "schema_version": AGENT_VERSION,
-                "query": query,
-                "cursor": cursor,
-                "limit": limit,
-            }),
-            MAX_COMMUNICATION_BYTES,
-            deadline,
-            cancellation,
-            |view, now| validate_communication_view(view, now, limit, MAX_COMMUNICATION_BYTES),
-        )
-        .await
-    }
-
-    pub async fn read_work_context_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<WorkContextView, AgentFailure> {
-        self.read_view(
-            "/v1/views/work.context",
-            json!({"schema_version": AGENT_VERSION}),
-            MAX_PORTFOLIO_VIEW_BYTES,
-            deadline,
-            cancellation,
-            validate_work_context_view,
-        )
-        .await
-    }
-
     /// Observe the paired server's connector catalog, projected to the
     /// connected calendar sources.
     ///
@@ -456,224 +380,57 @@ impl ServerSourceClient {
         }
         serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)
     }
-
-    pub async fn read_calendar_context_view(
-        &self,
-        request: CalendarContextRequest<'_>,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<CalendarContextView, AgentFailure> {
-        if !matches!(
-            request.connector_id,
-            "calendar.google" | "calendar.microsoft"
-        ) || !valid_connection_id(request.connection_id)
-            || request.connection_revision == 0
-            || request.range_start_unix_ms < 0
-            || request.range_end_unix_ms <= request.range_start_unix_ms
-            || request.range_end_unix_ms - request.range_start_unix_ms > 32 * 86_400_000
-            || request.cursor.len() > 2048
-            || request.cursor.chars().any(char::is_control)
-            || !(1..=128).contains(&request.limit)
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let input = json!({
-            "schema_version": AGENT_VERSION,
-            "connector_id": request.connector_id,
-            "connection_id": request.connection_id,
-            "connection_revision": request.connection_revision,
-            "range_start_unix_ms": request.range_start_unix_ms,
-            "range_end_unix_ms": request.range_end_unix_ms,
-            "cursor": request.cursor,
-            "limit": request.limit,
-        });
-        self.read_view(
-            "/v1/views/calendar.timeline",
-            input,
-            MAX_CALENDAR_CONTEXT_BYTES,
-            deadline,
-            cancellation,
-            validate_calendar_context_view,
-        )
-        .await
-    }
-
-    pub async fn read_confirmed_interaction_view(
-        &self,
-        people: &PeopleView,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<ConfirmedInteractionView, AgentFailure> {
-        self.read_personal_view(
-            "/v1/views/relationships.confirmed_interactions",
-            deadline,
-            cancellation,
-            |view, now| validate_confirmed_interaction_view(view, people, now),
-        )
-        .await
-    }
-
-    pub async fn read_logistics_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<LogisticsView, AgentFailure> {
-        self.read_view(
-            "/v1/views/life.logistics",
-            json!({"schema_version": AGENT_VERSION}),
-            MAX_PORTFOLIO_VIEW_BYTES,
-            deadline,
-            cancellation,
-            validate_logistics_view,
-        )
-        .await
-    }
-
-    pub async fn read_people_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<PeopleView, AgentFailure> {
-        self.read_personal_view(
-            "/v1/views/people.identity",
-            deadline,
-            cancellation,
-            validate_people_view,
-        )
-        .await
-    }
-
-    pub async fn read_attention_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<AttentionView, AgentFailure> {
-        self.read_personal_view(
-            "/v1/views/attention.coarse",
-            deadline,
-            cancellation,
-            validate_attention_view,
-        )
-        .await
-    }
-
-    pub async fn read_wellbeing_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-    ) -> Result<WellbeingView, AgentFailure> {
-        self.read_personal_view(
-            "/v1/views/wellbeing.derived",
-            deadline,
-            cancellation,
-            validate_wellbeing_view,
-        )
-        .await
-    }
-
-    async fn read_personal_view<View: DeserializeOwned>(
-        &self,
-        path: &str,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-        validate: impl FnOnce(&View, i64) -> Result<(), AgentFailure>,
-    ) -> Result<View, AgentFailure> {
-        self.read_view(
-            path,
-            json!({"schema_version": AGENT_VERSION}),
-            MAX_PERSONAL_CONTEXT_BYTES,
-            deadline,
-            cancellation,
-            validate,
-        )
-        .await
-    }
-
-    async fn read_view<View: DeserializeOwned>(
-        &self,
-        path: &str,
-        input: serde_json::Value,
-        max_bytes: usize,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_execution::Cancellation,
-        validate: impl FnOnce(&View, i64) -> Result<(), AgentFailure>,
-    ) -> Result<View, AgentFailure> {
-        let _permit = self
-            .source_calls
-            .acquire(input.to_string().len(), deadline, cancellation)
-            .await?;
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if timeout.is_zero() {
-            return Err(AgentFailure::DeadlineExceeded);
-        }
-        let client = Client::builder()
-            .timeout(timeout.min(Duration::from_secs(10)))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-        let send = client
-            .post(format!(
-                "{}{path}",
-                self.source.base_url().trim_end_matches('/')
-            ))
-            .bearer_auth(self.source.bearer_token())
-            .json(&input)
-            .send();
-        let response = tokio::select! {
-            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::CapabilityUnavailable })?,
-        };
-        match response.status() {
-            StatusCode::BAD_REQUEST => return Err(AgentFailure::InvalidInput),
-            StatusCode::CONFLICT => return Err(AgentFailure::Conflict),
-            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
-            StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
-            status if !status.is_success() => return Err(AgentFailure::CapabilityUnavailable),
-            _ => {}
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if bytes.len() > max_bytes + 4096 {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Response<View> {
-            schema_version: u32,
-            view: View,
-        }
-        let response: Response<View> =
-            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if response.schema_version != AGENT_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|_| AgentFailure::StaleContext)?;
-        validate(
-            &response.view,
-            i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
-        )?;
-        Ok(response.view)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use floe_inference::SavedServerConnection;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const PERSON: &str = "00000000-0000-4000-8000-000000000001";
     const DEVICE: &str = "local-device";
+
+    #[derive(Clone, Default)]
+    struct TestKeys(
+        std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<(floe_agent_contract::PersonId, uuid::Uuid), [u8; 32]>,
+            >,
+        >,
+    );
+
+    impl floe_vault::VaultKeyProvider for TestKeys {
+        fn load(
+            &self,
+            person_id: floe_agent_contract::PersonId,
+            vault_id: uuid::Uuid,
+        ) -> Result<floe_vault::VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(floe_vault::VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: floe_agent_contract::PersonId,
+            vault_id: uuid::Uuid,
+            key: &floe_vault::VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
 
     fn source(base_url: &str) -> PreparedServerSource {
         PreparedServerSource::from_parts(
@@ -723,7 +480,55 @@ mod tests {
             .acquire(0, deadline, &parent)
             .await
             .unwrap();
-        let mut waiting = Box::pin(runner.read_communication_view("", 0, 1, deadline, &child));
+        let request = RemoteViewAuthorizationRequest {
+            path: "/v1/views/mail.communication/admit",
+            connector_id: "gmail",
+            connection_id: "00000000-0000-4000-8000-000000000012",
+            connection_revision: 1,
+            resource: "mail.communication:00000000-0000-4000-8000-000000000012",
+            policy_incarnation: "policy",
+            policy_epoch: 1,
+            grant_id: "grant",
+            grant_incarnation: "grant-incarnation",
+            grant_epoch: 1,
+            purpose: "assistant",
+            consumer: "assistant",
+            max_items: 1,
+            max_bytes: 1024,
+            query: json!({"schema_version": 1}),
+        };
+        let expected = RemoteCalendarAuthorizationExpectation {
+            operation: String::new(),
+            client_id: "paired-client".into(),
+            device_id: DEVICE.into(),
+            challenge_id: String::new(),
+            admission_id: String::new(),
+            query_sha256: String::new(),
+            result_sha256: String::new(),
+            grant_id: "grant".into(),
+            grant_incarnation: "grant-incarnation".into(),
+            grant_epoch: 1,
+            source_connector: "gmail".into(),
+            source_connection: "00000000-0000-4000-8000-000000000012".into(),
+            source_execution_owner: "server:source".into(),
+            source_incarnation: "source".into(),
+            source_epoch: 1,
+            resources: vec!["mail.communication:00000000-0000-4000-8000-000000000012".into()],
+            max_items: 1,
+            max_bytes: 1024,
+        };
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let keys = TestKeys::default();
+        let vault = floe_vault::EncryptedAgentVault::create(
+            root.path(),
+            floe_agent_contract::PersonId::new(),
+            keys,
+        )
+        .await
+        .unwrap();
+        let mut waiting =
+            Box::pin(runner.read_authorized_view(&vault, request, expected, deadline, &child));
         assert!(
             std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context)))
                 .await
@@ -743,170 +548,6 @@ mod tests {
                 .await
                 .is_ok()
         );
-    }
-
-    #[tokio::test]
-    async fn communication_view_read_is_authenticated_bounded_and_validated() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let expected_length = loop {
-                let mut chunk = [0_u8; 4096];
-                let read = socket.read(&mut chunk).await.unwrap();
-                request.extend_from_slice(&chunk[..read]);
-                let text = String::from_utf8_lossy(&request);
-                if let Some(header_end) = text.find("\r\n\r\n") {
-                    let content_length = text[..header_end]
-                        .lines()
-                        .find_map(|line| {
-                            line.to_ascii_lowercase()
-                                .strip_prefix("content-length: ")
-                                .and_then(|value| value.parse::<usize>().ok())
-                        })
-                        .unwrap();
-                    if request.len() >= header_end + 4 + content_length {
-                        break header_end + 4 + content_length;
-                    }
-                }
-            };
-            let request = String::from_utf8(request[..expected_length].to_vec()).unwrap();
-            assert!(request.starts_with("POST /v1/views/mail.communication HTTP/1.1\r\n"));
-            assert!(
-                request
-                    .to_ascii_lowercase()
-                    .contains("authorization: bearer secret_token_value_that_is_long_enough")
-            );
-            assert!(request.contains(r#""query":"reply""#));
-            assert!(!request.contains("send"));
-            let body = serde_json::json!({
-                "schema_version": 1,
-                "view": {
-                    "schema_version": 1,
-                    "view_id": "mail.communication",
-                    "source_handle": "mail:fixture",
-                    "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 299_999,
-                    "coverage_complete": true,
-                    "items": [{
-                        "evidence_handle": "mail:message",
-                        "thread_handle": "mail:thread",
-                        "received_unix_ms": now - 2,
-                        "from": "alex@example.com",
-                        "to": "person@example.com",
-                        "subject": "Reply needed",
-                        "snippet": "Please reply by Friday",
-                        "labels": ["INBOX"]
-                    }]
-                }
-            })
-            .to_string();
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(), body
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-        });
-        let model = ServerSourceClient::new(source(&format!("http://{address}")));
-        let view = model
-            .read_communication_view(
-                "reply",
-                0,
-                25,
-                tokio::time::Instant::now() + Duration::from_secs(5),
-                &floe_execution::Cancellation::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(view.items[0].subject, "Reply needed");
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn portfolio_view_reads_use_fixed_routes_and_strict_validation() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        for (path, view) in [
-            (
-                "/v1/views/work.context",
-                json!({
-                    "schema_version": 1,
-                    "view_id": "work.context",
-                    "source_handle": "work:fixture",
-                    "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 299_999,
-                    "coverage_complete": true,
-                    "scope_handle": "workspace:fixture",
-                    "items": []
-                }),
-            ),
-            (
-                "/v1/views/life.logistics",
-                json!({
-                    "schema_version": 1,
-                    "view_id": "life.logistics",
-                    "source_handle": "logistics:fixture",
-                    "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 299_999,
-                    "coverage_complete": true,
-                    "items": []
-                }),
-            ),
-        ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let address = listener.local_addr().unwrap();
-            let expected_path = path.to_owned();
-            let server = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0_u8; 4096];
-                let read = socket.read(&mut request).await.unwrap();
-                let request = String::from_utf8_lossy(&request[..read]);
-                assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
-                assert!(request.contains(r#"{"schema_version":1}"#));
-                let body = json!({"schema_version": 1, "view": view}).to_string();
-                socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(), body
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            });
-            let model = ServerSourceClient::new(source(&format!("http://{address}")));
-            if path.ends_with("work.context") {
-                model
-                    .read_work_context_view(
-                        tokio::time::Instant::now() + Duration::from_secs(5),
-                        &floe_execution::Cancellation::default(),
-                    )
-                    .await
-                    .unwrap();
-            } else {
-                model
-                    .read_logistics_view(
-                        tokio::time::Instant::now() + Duration::from_secs(5),
-                        &floe_execution::Cancellation::default(),
-                    )
-                    .await
-                    .unwrap();
-            }
-            server.await.unwrap();
-        }
     }
 
     #[test]
@@ -956,81 +597,6 @@ mod tests {
             .err(),
             Some(AgentFailure::InvalidInput)
         );
-    }
-
-    #[tokio::test]
-    async fn source_reads_never_touch_model_or_catalog_discovery() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let server = tokio::spawn(async move {
-            for expected_path in ["/v1/views/work.context", "/v1/views/life.logistics"] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0_u8; 4096];
-                let read = socket.read(&mut request).await.unwrap();
-                let request = String::from_utf8_lossy(&request[..read]);
-                let path = request
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or_default();
-                assert!(
-                    path != "/v1/inference-purposes" && path != "/v1/connectors",
-                    "source reads must never trigger discovery: {path}"
-                );
-                assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
-                let view = if expected_path.ends_with("work.context") {
-                    json!({
-                        "schema_version": 1,
-                        "view_id": "work.context",
-                        "source_handle": "work:fixture",
-                        "observed_at_unix_ms": now - 1,
-                        "expires_at_unix_ms": now + 299_999,
-                        "coverage_complete": true,
-                        "scope_handle": "workspace:fixture",
-                        "items": []
-                    })
-                } else {
-                    json!({
-                        "schema_version": 1,
-                        "view_id": "life.logistics",
-                        "source_handle": "logistics:fixture",
-                        "observed_at_unix_ms": now - 1,
-                        "expires_at_unix_ms": now + 299_999,
-                        "coverage_complete": true,
-                        "items": []
-                    })
-                };
-                let body = json!({"schema_version": 1, "view": view}).to_string();
-                socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(), body
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            }
-        });
-        let client = ServerSourceClient::new(source(&format!("http://{address}")));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let cancellation = floe_execution::Cancellation::default();
-        client
-            .read_work_context_view(deadline, &cancellation)
-            .await
-            .unwrap();
-        client
-            .read_logistics_view(deadline, &cancellation)
-            .await
-            .unwrap();
-        server.await.unwrap();
     }
 
     #[tokio::test]

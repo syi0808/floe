@@ -689,17 +689,17 @@ mod tests {
         AttentionAcquisitionMode, AttentionAcquisitionResult,
     };
     use floe_vault::{VaultKey, VaultKeyProvider};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use uuid::Uuid;
 
     use super::*;
 
-    struct FixtureRemoteReader<'a> {
-        source_client: &'a ServerSourceClient,
+    struct SelectedViewFixtureReader {
         person_id: PersonId,
+        views: HashMap<String, serde_json::Value>,
+        calendar: Option<serde_json::Value>,
     }
 
-    impl floe_context::SourceReader for FixtureRemoteReader<'_> {
+    impl floe_context::SourceReader for SelectedViewFixtureReader {
         fn read<'a>(
             &'a self,
             request: &'a floe_context::SourceReadRequest,
@@ -716,63 +716,20 @@ mod tests {
         > {
             Box::pin(async move {
                 let view_id = request.source().as_str();
-                let consumer = request.consumer().identifier();
-                let query = request.query();
-                let deadline = request.deadline();
-                let cancellation = request.cancellation();
-                let (value, category, connector) = match view_id {
-                    "mail.communication" => {
-                        let query = query.as_object().ok_or(AgentFailure::InvalidInput)?;
-                        let text = query
-                            .get("query")
-                            .and_then(serde_json::Value::as_str)
-                            .ok_or(AgentFailure::InvalidInput)?;
-                        let cursor = query
-                            .get("cursor")
-                            .and_then(serde_json::Value::as_u64)
-                            .ok_or(AgentFailure::InvalidInput)?;
-                        let limit = query
-                            .get("limit")
-                            .and_then(serde_json::Value::as_u64)
-                            .and_then(|value| usize::try_from(value).ok())
-                            .ok_or(AgentFailure::InvalidInput)?;
-                        (
-                            serde_json::to_value(
-                                self.source_client
-                                    .read_communication_view(
-                                        text,
-                                        cursor as usize,
-                                        limit,
-                                        deadline,
-                                        cancellation,
-                                    )
-                                    .await?,
-                            )
-                            .map_err(|_| AgentFailure::InvalidModelOutput)?,
-                            floe_context_contract::GrantDataCategory::Content,
-                            "gmail",
-                        )
-                    }
-                    "work.context" => (
-                        serde_json::to_value(
-                            self.source_client
-                                .read_work_context_view(deadline, cancellation)
-                                .await?,
-                        )
-                        .map_err(|_| AgentFailure::InvalidModelOutput)?,
-                        floe_context_contract::GrantDataCategory::Derived,
-                        "linear",
-                    ),
-                    "life.logistics" => (
-                        serde_json::to_value(
-                            self.source_client
-                                .read_logistics_view(deadline, cancellation)
-                                .await?,
-                        )
-                        .map_err(|_| AgentFailure::InvalidModelOutput)?,
-                        floe_context_contract::GrantDataCategory::Derived,
-                        "home",
-                    ),
+                let value = self
+                    .views
+                    .get(view_id)
+                    .cloned()
+                    .ok_or(AgentFailure::CapabilityUnavailable)?;
+                let category = if view_id == "mail.communication" {
+                    floe_context_contract::GrantDataCategory::Content
+                } else {
+                    floe_context_contract::GrantDataCategory::Derived
+                };
+                let connector = match view_id {
+                    "mail.communication" => "gmail",
+                    "work.context" => "linear",
+                    "life.logistics" => "home",
                     _ => return Err(AgentFailure::InvalidInput),
                 };
                 let connection_id = "00000000-0000-4000-8000-000000000099";
@@ -789,8 +746,9 @@ mod tests {
                     floe_context_contract::SourceAuthority::new(),
                 )
                 .map_err(|_| AgentFailure::InvalidInput)?;
-                let consumer = floe_context_contract::GrantConsumer::builtin(consumer)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
+                let consumer =
+                    floe_context_contract::GrantConsumer::builtin(request.consumer().identifier())
+                        .map_err(|_| AgentFailure::InvalidInput)?;
                 let scope = floe_context_contract::GrantScope::try_new(
                     vec![
                         floe_context_contract::ResourceHandle::try_new(format!(
@@ -841,7 +799,7 @@ mod tests {
         }
     }
 
-    impl floe_context::SelectedSourceReader for FixtureRemoteReader<'_> {
+    impl floe_context::SelectedSourceReader for SelectedViewFixtureReader {
         fn read_selected<'a>(
             &'a self,
             request: &'a floe_context::SourceReadRequest,
@@ -864,15 +822,15 @@ mod tests {
         }
     }
 
-    impl CalendarContextReaderApi for FixtureRemoteReader<'_> {
+    impl CalendarContextReaderApi for SelectedViewFixtureReader {
         fn read<'a>(
             &'a self,
             person_id: PersonId,
             consumer: &'a str,
-            _: &'a [floe_context_contract::SourceSelectionReference],
+            selected: &'a [floe_context_contract::SourceSelectionReference],
             query: &'a floe_context_contract::CalendarViewQuery,
-            deadline: tokio::time::Instant,
-            cancellation: &'a Cancellation,
+            _: tokio::time::Instant,
+            _: &'a Cancellation,
         ) -> Pin<
             Box<
                 dyn Future<
@@ -890,86 +848,58 @@ mod tests {
             >,
         > {
             Box::pin(async move {
-                if person_id != self.person_id {
+                if person_id != self.person_id
+                    || selected.len() != 1
+                    || selected[0].capability_id != "calendar.timeline"
+                {
                     return Err(AgentFailure::CapabilityDenied);
                 }
-                let connections = self
-                    .source_client
-                    .observe_calendar_connections(deadline, cancellation)
-                    .await?;
-                let mut reads = Vec::new();
-                for connection in connections {
-                    let view = match self
-                        .source_client
-                        .read_calendar_context_view(
-                            floe_provider_adapters::sources::server::CalendarContextRequest {
-                                connector_id: &connection.connector_id,
-                                connection_id: &connection.connection_id,
-                                connection_revision: connection.connection_revision,
-                                range_start_unix_ms: query.range_start_unix_ms(),
-                                range_end_unix_ms: query.range_end_unix_ms(),
-                                cursor: query.cursor().unwrap_or(""),
-                                limit: query.limit(),
-                            },
-                            deadline,
-                            cancellation,
-                        )
-                        .await
-                    {
-                        Ok(view) => view,
-                        Err(AgentFailure::CapabilityUnavailable) => {
-                            return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
-                                floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
-                            ));
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    let source = floe_context_contract::GrantSourceBinding::try_new(
-                        person_id,
-                        floe_context_contract::ConnectionId::try_new(&connection.connection_id)
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                        floe_context_contract::ConnectorId::try_new(&connection.connector_id)
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                        floe_context_contract::ExecutionOwnerId::try_new(
-                            "00000000-0000-4000-8000-000000000098",
-                        )
+                let Some(mut value) = self.calendar.clone() else {
+                    return Ok(floe_context_contract::SourceReadOutcome::Unavailable(
+                        floe_context_contract::SourceUnavailable::TemporarilyUnavailable,
+                    ));
+                };
+                value["range_start_unix_ms"] = serde_json::json!(query.range_start_unix_ms());
+                value["range_end_unix_ms"] = serde_json::json!(query.range_end_unix_ms());
+                let view: floe_context::CalendarContextView =
+                    serde_json::from_value(value).map_err(|_| AgentFailure::InvalidInput)?;
+                let source = floe_context_contract::GrantSourceBinding::try_new(
+                    person_id,
+                    selected[0].connection_id.clone(),
+                    selected[0].connector_id.clone(),
+                    selected[0].execution_owner_id.clone(),
+                    floe_context_contract::SourceAuthority::new(),
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                let resource = selected[0].resource.clone();
+                let now = chrono::Utc::now();
+                let dependency = floe_context_contract::ContextDependency::try_new(
+                    person_id,
+                    floe_context_contract::GrantId::new(),
+                    floe_context_contract::GrantAuthority::new(),
+                    source,
+                    vec![resource],
+                    vec![floe_context_contract::GrantDataCategory::Derived],
+                    floe_context_contract::GrantOperation::Read,
+                    floe_context_contract::GrantPurpose::Assistant,
+                    floe_context_contract::GrantConsumer::builtin(consumer)
                         .map_err(|_| AgentFailure::InvalidInput)?,
-                        floe_context_contract::SourceAuthority::new(),
-                    )
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                    let resource = floe_context_contract::ResourceHandle::try_new(format!(
-                        "calendar.timeline:{}",
-                        connection.connection_id
-                    ))
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                    let now = chrono::Utc::now();
-                    let dependency = floe_context_contract::ContextDependency::try_new(
-                        person_id,
-                        floe_context_contract::GrantId::new(),
-                        floe_context_contract::GrantAuthority::new(),
-                        source,
-                        vec![resource],
-                        vec![floe_context_contract::GrantDataCategory::Derived],
-                        floe_context_contract::GrantOperation::Read,
-                        floe_context_contract::GrantPurpose::Assistant,
-                        floe_context_contract::GrantConsumer::builtin(consumer)
-                            .map_err(|_| AgentFailure::InvalidInput)?,
-                        floe_context_contract::ProcessingRestriction::ApprovedRecipient {
-                            recipient: "server-audience".into(),
-                            categories: vec![floe_context_contract::GrantDataCategory::Derived],
-                        },
-                        floe_context_contract::ConsumerPolicyAuthority::new(),
-                        Uuid::new_v4(),
-                        serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?,
-                        Uuid::new_v4(),
-                        Uuid::new_v4(),
-                        now,
-                        now + chrono::Duration::minutes(5),
-                    )
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                    reads.push((view, dependency));
-                }
-                Ok(floe_context_contract::SourceReadOutcome::Ready(reads))
+                    floe_context_contract::ProcessingRestriction::ApprovedRecipient {
+                        recipient: "server-audience".into(),
+                        categories: vec![floe_context_contract::GrantDataCategory::Derived],
+                    },
+                    floe_context_contract::ConsumerPolicyAuthority::new(),
+                    Uuid::new_v4(),
+                    serde_json::to_vec(query).map_err(|_| AgentFailure::InvalidInput)?,
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    now,
+                    now + chrono::Duration::minutes(5),
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                Ok(floe_context_contract::SourceReadOutcome::Ready(vec![(
+                    view, dependency,
+                )]))
             })
         }
     }
@@ -1591,52 +1521,6 @@ mod tests {
         assert_eq!(SCHEDULE_RUNNER_CALLS.load(Ordering::Acquire), 1);
     }
 
-    async fn request(mut socket: tokio::net::TcpStream) -> (String, tokio::net::TcpStream) {
-        let mut bytes = Vec::new();
-        let length = loop {
-            let mut chunk = [0_u8; 4096];
-            let read = socket.read(&mut chunk).await.unwrap();
-            bytes.extend_from_slice(&chunk[..read]);
-            let text = String::from_utf8_lossy(&bytes);
-            if let Some(header_end) = text.find("\r\n\r\n") {
-                let content_length = text[..header_end]
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .and_then(|value| value.parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                if bytes.len() >= header_end + 4 + content_length {
-                    break header_end + 4 + content_length;
-                }
-            }
-        };
-        (String::from_utf8(bytes[..length].to_vec()).unwrap(), socket)
-    }
-
-    fn assert_calendar_request_contract(request: &str) {
-        assert!(request.starts_with("POST /v1/views/calendar.timeline "));
-        let body: serde_json::Value =
-            serde_json::from_str(request.split_once("\r\n\r\n").expect("HTTP request body").1)
-                .unwrap();
-        assert_eq!(body["schema_version"], 1);
-        assert_eq!(body["connector_id"], "calendar.google");
-        assert_eq!(
-            body["connection_id"],
-            "00000000-0000-4000-8000-000000000010"
-        );
-        assert_eq!(body["connection_revision"], 7);
-        assert!(body["range_start_unix_ms"].as_i64().unwrap() >= 0);
-        assert!(
-            body["range_end_unix_ms"].as_i64().unwrap()
-                > body["range_start_unix_ms"].as_i64().unwrap()
-        );
-        assert_eq!(body["cursor"], "");
-        assert_eq!(body["limit"], floe_context::MAX_CALENDAR_CONTEXT_ITEMS);
-        assert_eq!(body.as_object().unwrap().len(), 8);
-    }
-
     fn saved_server_connection(
         base_url: &str,
         person_id: PersonId,
@@ -1651,9 +1535,7 @@ mod tests {
         }
     }
 
-    /// A legacy Expert Server model, admitted for a fixture caller.
-    /// The caller identity only has to be self-consistent here.
-    fn legacy_source_client(base_url: &str) -> ServerSourceClient {
+    fn prepared_source_client(base_url: &str) -> ServerSourceClient {
         let person_id = PersonId::new();
         ServerSourceClient::from_current_connection(
             &floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
@@ -1664,26 +1546,6 @@ mod tests {
         )
         .unwrap()
         .unwrap()
-    }
-
-    async fn respond(mut socket: tokio::net::TcpStream, body: String) {
-        socket
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(), body
-                )
-                .as_bytes(),
-            )
-            .await
-            .unwrap();
-    }
-
-    async fn respond_not_found(mut socket: tokio::net::TcpStream) {
-        socket
-            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -2569,7 +2431,7 @@ mod tests {
             EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
                 .await
                 .unwrap();
-        let source_client = legacy_source_client("http://127.0.0.1:1");
+        let source_client = prepared_source_client("http://127.0.0.1:1");
         let reader = remote_views::RemoteViewReader::new(
             &vault,
             &source_client,
@@ -2707,69 +2569,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commitments_delegation_reads_fresh_view_and_returns_typed_artifact() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+    async fn commitments_delegation_projects_selected_view_and_typed_artifact() {
+        let now = chrono::Utc::now().timestamp_millis();
         let person_id = PersonId::new();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let (view_request, socket) = request(socket).await;
-            assert!(view_request.starts_with("POST /v1/views/mail.communication "));
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "view": {
-                        "schema_version": 1,
-                        "view_id": "mail.communication",
-                        "source_handle": "mail:fresh",
-                        "observed_at_unix_ms": now - 1,
-                        "expires_at_unix_ms": now + 299_999,
-                        "coverage_complete": true,
-                        "items": [{
-                            "evidence_handle": "mail:request",
-                            "thread_handle": "mail:thread",
-                            "received_unix_ms": now - 2,
-                            "from": "alex@example.com",
-                            "to": "person@example.com",
-                            "subject": "Confirm by Friday",
-                            "snippet": "Please confirm the review by Friday.",
-                            "labels": ["INBOX"]
-                        }]
-                    }
-                })
-                .to_string(),
-            )
-            .await;
-
-            let (socket, _) = listener.accept().await.unwrap();
-            let (catalog_request, socket) = request(socket).await;
-            assert!(catalog_request.starts_with("GET /v1/connectors "));
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "person_id": person_id.to_string(),
-                    "device_id": "test-device",
-                    "connectors": [{
-                        "id": "calendar.google",
-                        "status": "connected",
-                        "connection_id": "00000000-0000-4000-8000-000000000010",
-                        "connection_revision": 7
-                    }]
-                })
-                .to_string(),
-            )
-            .await;
-
-            let (socket, _) = listener.accept().await.unwrap();
-            let (calendar_request, socket) = request(socket).await;
-            assert_calendar_request_contract(&calendar_request);
-            respond_not_found(socket).await;
+        let mail = serde_json::json!({
+            "schema_version": 1,
+            "view_id": "mail.communication",
+            "source_handle": "mail:fresh",
+            "observed_at_unix_ms": now - 1,
+            "expires_at_unix_ms": now + 299_999,
+            "coverage_complete": true,
+            "items": [{
+                "evidence_handle": "mail:request",
+                "thread_handle": "mail:thread",
+                "received_unix_ms": now - 2,
+                "from": "alex@example.com",
+                "to": "person@example.com",
+                "subject": "Confirm by Friday",
+                "snippet": "Please confirm the review by Friday.",
+                "labels": ["INBOX"]
+            }]
         });
         let answer = serde_json::json!({
             "summary": "A reply and Friday commitment are requested.",
@@ -2783,18 +2602,10 @@ mod tests {
         });
         let executor = CannedExpertExecutor::answering(vec![answer]);
         let scope = expert_scope();
-        let source_client = ServerSourceClient::from_current_connection(
-            &floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
-                saved_server_connection(&format!("http://{address}"), person_id, "test-device"),
-            )),
-            &person_id.to_string(),
-            "test-device",
-        )
-        .unwrap()
-        .unwrap();
-        let remote_reader = FixtureRemoteReader {
-            source_client: &source_client,
+        let remote_reader = SelectedViewFixtureReader {
             person_id,
+            views: HashMap::from([("mail.communication".into(), mail)]),
+            calendar: None,
         };
         let policy = expert_policy();
         let context = AgentContext {
@@ -2888,101 +2699,48 @@ mod tests {
         let envelope = serde_json::to_string(&calls[0].0.projection.envelope).unwrap();
         assert!(envelope.contains("Commitments Expert"));
         assert!(envelope.contains("Confirm by Friday"));
-        server.await.unwrap();
     }
 
     #[tokio::test]
     async fn commitments_artifact_preserves_mail_calendar_task_and_memory_provenance() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
+        let now = chrono::Utc::now().timestamp_millis();
         let person_id = PersonId::new();
         let task_id = uuid::Uuid::new_v4();
         let memory_id = uuid::Uuid::new_v4();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let (mail_request, socket) = request(socket).await;
-            assert!(mail_request.starts_with("POST /v1/views/mail.communication "));
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "view": {
-                        "schema_version": 1,
-                        "view_id": "mail.communication",
-                        "source_handle": "mail:selected",
-                        "observed_at_unix_ms": now - 1,
-                        "expires_at_unix_ms": now + 299_999,
-                        "coverage_complete": true,
-                        "items": [{
-                            "evidence_handle": "mail:request",
-                            "thread_handle": "mail:thread",
-                            "received_unix_ms": now - 2,
-                            "from": "alex@example.com",
-                            "to": "person@example.com",
-                            "subject": "Delivery review",
-                            "snippet": "Please confirm the review.",
-                            "labels": ["INBOX"]
-                        }]
-                    }
-                })
-                .to_string(),
-            )
-            .await;
-
-            let (socket, _) = listener.accept().await.unwrap();
-            let (catalog_request, socket) = request(socket).await;
-            assert!(catalog_request.starts_with("GET /v1/connectors "));
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "person_id": person_id.to_string(),
-                    "device_id": "test-device",
-                    "connectors": [{
-                        "id": "calendar.google",
-                        "status": "connected",
-                        "connection_id": "00000000-0000-4000-8000-000000000010",
-                        "connection_revision": 7
-                    }]
-                })
-                .to_string(),
-            )
-            .await;
-
-            let (socket, _) = listener.accept().await.unwrap();
-            let (calendar_request, socket) = request(socket).await;
-            assert_calendar_request_contract(&calendar_request);
-            let calendar_query: serde_json::Value =
-                serde_json::from_str(calendar_request.split_once("\r\n\r\n").unwrap().1).unwrap();
-            respond(
-                socket,
-                serde_json::json!({
-                    "schema_version": 1,
-                    "view": {
-                        "schema_version": 1,
-                        "view_id": "calendar.timeline",
-                        "source_handle": "calendar:selected",
-                        "observed_at_unix_ms": now - 1,
-                        "expires_at_unix_ms": now + 240_000,
-                        "range_start_unix_ms": calendar_query["range_start_unix_ms"],
-                        "range_end_unix_ms": calendar_query["range_end_unix_ms"],
-                        "coverage_complete": true,
-                        "items": [{
-                            "evidence_handle": "calendar:review",
-                            "untrusted_title": "Delivery review",
-                            "starts_at_unix_ms": now + 10_000,
-                            "ends_at_unix_ms": now + 20_000,
-                            "all_day": false
-                        }]
-                    }
-                })
-                .to_string(),
-            )
-            .await;
+        let mail = serde_json::json!({
+            "schema_version": 1,
+            "view_id": "mail.communication",
+            "source_handle": "mail:selected",
+            "observed_at_unix_ms": now - 1,
+            "expires_at_unix_ms": now + 299_999,
+            "coverage_complete": true,
+            "items": [{
+                "evidence_handle": "mail:request",
+                "thread_handle": "mail:thread",
+                "received_unix_ms": now - 2,
+                "from": "alex@example.com",
+                "to": "person@example.com",
+                "subject": "Delivery review",
+                "snippet": "Please confirm the review.",
+                "labels": ["INBOX"]
+            }]
+        });
+        let calendar = serde_json::json!({
+            "schema_version": 1,
+            "view_id": "calendar.timeline",
+            "source_handle": "calendar:selected",
+            "observed_at_unix_ms": now - 1,
+            "expires_at_unix_ms": now + 240_000,
+            "range_start_unix_ms": 0,
+            "range_end_unix_ms": 1,
+            "coverage_complete": true,
+            "items": [{
+                "evidence_handle": "calendar:review",
+                "untrusted_title": "Delivery review",
+                "starts_at_unix_ms": now + 10_000,
+                "ends_at_unix_ms": now + 20_000,
+                "all_day": false
+            }]
         });
         let answer = serde_json::json!({
             "summary": "Four bounded sources support the delivery commitment.",
@@ -2995,19 +2753,11 @@ mod tests {
         });
         let executor = CannedExpertExecutor::answering(vec![answer]);
         let scope = expert_scope();
-        let source_client = ServerSourceClient::from_current_connection(
-            &floe_provider_adapters::control::CurrentSavedConnectionStore::fixed(Some(
-                saved_server_connection(&format!("http://{address}"), person_id, "test-device"),
-            )),
-            &person_id.to_string(),
-            "test-device",
-        )
-        .unwrap()
-        .unwrap();
         let policy = expert_policy();
-        let remote_reader = FixtureRemoteReader {
-            source_client: &source_client,
+        let remote_reader = SelectedViewFixtureReader {
             person_id,
+            views: HashMap::from([("mail.communication".into(), mail)]),
+            calendar: Some(calendar),
         };
         let context = AgentContext {
             projection_version: 1,
@@ -3131,20 +2881,17 @@ mod tests {
                 .source_handles
                 .contains(&format!("memory:{memory_id}:2"))
         );
-        server.await.unwrap();
     }
 
     #[tokio::test]
-    async fn portfolio_delegations_read_fresh_views_and_return_typed_artifacts() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+    async fn portfolio_delegations_project_selected_views_and_typed_artifacts() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
         let cases = [
             (
-                "/v1/views/work.context",
+                "work.context",
                 "Work Context Expert",
                 serde_json::json!({
                     "schema_version": 1,
@@ -3174,7 +2921,7 @@ mod tests {
                 }),
             ),
             (
-                "/v1/views/life.logistics",
+                "life.logistics",
                 "Life Logistics Expert",
                 serde_json::json!({
                     "schema_version": 1,
@@ -3209,24 +2956,15 @@ mod tests {
         let roles: Vec<&str> = cases.iter().map(|(_, role, _, _)| *role).collect();
         let executor = CannedExpertExecutor::answering(answers);
         let scope = expert_scope();
-        let server = tokio::spawn(async move {
-            for (path, _, view, _) in cases {
-                let (socket, _) = listener.accept().await.unwrap();
-                let (view_request, socket) = request(socket).await;
-                assert!(view_request.starts_with(&format!("POST {path} ")));
-                respond(
-                    socket,
-                    serde_json::json!({"schema_version": 1, "view": view}).to_string(),
-                )
-                .await;
-            }
-        });
-        let source_client = legacy_source_client(&format!("http://{address}"));
         let person_id = PersonId::new();
         let policy = expert_policy();
-        let remote_reader = FixtureRemoteReader {
-            source_client: &source_client,
+        let remote_reader = SelectedViewFixtureReader {
             person_id,
+            views: cases
+                .iter()
+                .map(|(view_id, _, view, _)| ((*view_id).into(), view.clone()))
+                .collect(),
+            calendar: None,
         };
         let context = AgentContext {
             projection_version: 1,
@@ -3315,273 +3053,6 @@ mod tests {
             let instructions = request.projection.envelope.stable_instructions.render();
             assert!(instructions.contains(role));
         }
-        server.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn personal_delegations_use_bounded_views_and_capability_free_experts() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        let cases = [
-            (
-                RELATIONSHIPS_AGENT_ID,
-                "/v1/views/people.identity",
-                "Relationships Expert",
-                serde_json::json!({
-                    "schema_version": 1,
-                    "view_id": "people.identity",
-                    "source_handle": "contacts:local",
-                    "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 299_999,
-                    "coverage_complete": true,
-                    "identities": [{
-                        "identity_handle": "person:alex",
-                        "display_name": "Alex",
-                        "aliases": ["alex@example.com"],
-                        "confidence_millis": 1000,
-                        "evidence_handles": ["contact:alex"]
-                    }]
-                }),
-                serde_json::json!({
-                    "summary": "No confirmed interaction supports a follow-up.",
-                    "follow_ups": []
-                }),
-                "contacts:local",
-            ),
-            (
-                FOCUS_AGENT_ID,
-                "/v1/views/attention.coarse",
-                "Focus & Attention Expert",
-                serde_json::json!({
-                    "schema_version": 1,
-                    "view_id": "attention.coarse",
-                    "source_handle": "attention:mac-local",
-                    "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 119_999,
-                    "state": "focused",
-                    "confidence_millis": 800,
-                    "evidence_handles": ["attention:aggregate"]
-                }),
-                serde_json::json!({
-                    "summary": "Protect the current focus period before the review.",
-                    "recommendation": "protect_focus",
-                    "rationale": "Attention, the upcoming review, and active release work support focus protection.",
-                    "evidence_handles": ["attention:aggregate", "calendar:review", "work:release"]
-                }),
-                "attention:mac-local",
-            ),
-            (
-                WELLBEING_AGENT_ID,
-                "/v1/views/wellbeing.derived",
-                "Wellbeing Expert",
-                serde_json::json!({
-                    "schema_version": 1,
-                    "view_id": "wellbeing.derived",
-                    "source_handle": "health:derived-local",
-                    "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 299_999,
-                    "capacity": "reduced",
-                    "recovery": "needs_recovery",
-                    "confidence_millis": 750,
-                    "evidence_handles": ["health:aggregate"]
-                }),
-                serde_json::json!({
-                    "summary": "Reduce optional load and preserve recovery time.",
-                    "schedule_impact": "protect_recovery",
-                    "rationale": "Derived capacity is reduced and recovery is needed.",
-                    "evidence_handles": ["health:aggregate"]
-                }),
-                "health:derived-local",
-            ),
-        ];
-        let server_cases = cases.clone();
-        let server = tokio::spawn(async move {
-            for (agent_id, path, role, view, answer, _) in server_cases {
-                let (socket, _) = listener.accept().await.unwrap();
-                let (view_request, socket) = request(socket).await;
-                assert!(view_request.starts_with(&format!("POST {path} ")));
-                assert!(view_request.contains(r#"{"schema_version":1}"#));
-                respond(
-                    socket,
-                    serde_json::json!({"schema_version": 1, "view": view}).to_string(),
-                )
-                .await;
-
-                let optional_paths: &[&str] = match agent_id {
-                    RELATIONSHIPS_AGENT_ID => &["/v1/views/relationships.confirmed_interactions"],
-                    FOCUS_AGENT_ID => &["/v1/views/calendar.timeline", "/v1/views/work.context"],
-                    WELLBEING_AGENT_ID => &["/v1/views/calendar.timeline"],
-                    _ => unreachable!(),
-                };
-                for path in optional_paths {
-                    let (socket, _) = listener.accept().await.unwrap();
-                    let (optional_request, socket) = request(socket).await;
-                    assert!(optional_request.starts_with(&format!("POST {path} ")));
-                    if *path == "/v1/views/calendar.timeline" {
-                        assert_calendar_request_contract(&optional_request);
-                    }
-                    match (agent_id, *path) {
-                        (FOCUS_AGENT_ID, "/v1/views/calendar.timeline") => {
-                            let calendar_query: serde_json::Value = serde_json::from_str(
-                                optional_request.split_once("\r\n\r\n").unwrap().1,
-                            )
-                            .unwrap();
-                            respond(
-                                socket,
-                                serde_json::json!({
-                                    "schema_version": 1,
-                                    "view": {
-                                        "schema_version": 1,
-                                        "view_id": "calendar.timeline",
-                                        "source_handle": "calendar:selected",
-                                        "observed_at_unix_ms": now - 1,
-                                        "expires_at_unix_ms": now + 240_000,
-                                        "range_start_unix_ms": calendar_query["range_start_unix_ms"],
-                                        "range_end_unix_ms": calendar_query["range_end_unix_ms"],
-                                        "coverage_complete": true,
-                                        "items": [{
-                                            "evidence_handle": "calendar:review",
-                                            "untrusted_title": "Release review",
-                                            "starts_at_unix_ms": now + 10_000,
-                                            "ends_at_unix_ms": now + 20_000,
-                                            "all_day": false
-                                        }]
-                                    }
-                                })
-                                .to_string(),
-                            )
-                            .await;
-                        }
-                        (FOCUS_AGENT_ID, "/v1/views/work.context") => {
-                            respond(
-                                socket,
-                                serde_json::json!({
-                                    "schema_version": 1,
-                                    "view": {
-                                        "schema_version": 1,
-                                        "view_id": "work.context",
-                                        "source_handle": "work:selected",
-                                        "observed_at_unix_ms": now - 1,
-                                        "expires_at_unix_ms": now + 220_000,
-                                        "coverage_complete": true,
-                                        "scope_handle": "workspace:selected",
-                                        "items": [{
-                                            "evidence_handle": "work:release",
-                                            "kind": "project",
-                                            "title": "Release readiness",
-                                            "status": "active",
-                                            "blocker": null,
-                                            "observed_at_unix_ms": now - 2
-                                        }]
-                                    }
-                                })
-                                .to_string(),
-                            )
-                            .await;
-                        }
-                        _ => respond_not_found(socket).await,
-                    }
-                }
-
-                let (socket, _) = listener.accept().await.unwrap();
-                let (model_request, socket) = request(socket).await;
-                assert!(model_request.starts_with("POST /v1/agent "));
-                assert!(model_request.contains(role));
-                assert!(model_request.contains(r#""tools":[]"#));
-                assert!(!model_request.contains("notification.send"));
-                let output = serde_json::json!({
-                    "output": [{"kind": "answer", "text": answer.to_string()}],
-                    "used_tokens": 64,
-                    "call_ids": []
-                })
-                .to_string();
-                respond(
-                    socket,
-                    serde_json::json!({
-                        "schema_version": 1,
-                        "purpose": "everyday_assistance",
-                        "output": output,
-                        "trace_id": "0123456789abcdef0123456789abcdef",
-                        "routing": {
-                            "placement": "server_local",
-                            "external_transfer": false,
-                            "replay_source": "a".repeat(64)
-                        }
-                    })
-                    .to_string(),
-                )
-                .await;
-            }
-        });
-        let executor = CannedExpertExecutor::answering(vec![]);
-        let scope = expert_scope();
-        let policy = expert_policy();
-        let context = AgentContext {
-            projection_version: 1,
-            persona: None,
-            optional_context_issues: vec![],
-            memories: vec![],
-            evidence: vec![],
-        };
-        let experts = ConversationExperts {
-            executor: &executor,
-            scope: &scope,
-            availability: test_model_availability(true, true).await,
-            calendar_reader: None,
-            policy: &policy,
-            context: &context,
-            attention: None,
-            people_reader: None,
-            recorder: None,
-            remote_reader: None,
-            wellbeing_reader: None,
-            context_reader: None,
-            task_views: &[],
-            cards: test_expert_cards(),
-            stateful_settlement: &RejectStatefulSettlement,
-            registrations: expert_dispatch::shipped_registrations()
-                .into_iter()
-                .map(Arc::new)
-                .collect(),
-            runs: None,
-            interactions: None,
-            device_id: Some("test-device"),
-            snapshots: None,
-            admitted_selection: Some(test_admitted_selection()),
-            binding_fence: Some(&TEST_BINDING_FENCE),
-        };
-        for (agent_id, _, _, _, _, source_handle) in cases {
-            let result = experts
-                .handle_message(A2ASendMessageRequest {
-                    usage: floe_inference::UsageLedger::default(),
-                    schema_version: AGENT_VERSION,
-                    person_id: PersonId::new(),
-                    session_id: uuid::Uuid::new_v4(),
-                    parent_turn_id: uuid::Uuid::new_v4(),
-                    agent_id: agent_id.into(),
-                    message: floe_experts::A2AMessage {
-                        message_id: uuid::Uuid::new_v4(),
-                        context_id: uuid::Uuid::new_v4(),
-                        task_id: Some(uuid::Uuid::new_v4()),
-                        role: A2AMessageRole::User,
-                        parts: vec![A2APart::Text {
-                            text: "Assess only the supplied personal context.".into(),
-                        }],
-                    },
-                    max_output_bytes: 16_384,
-                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
-                    cancellation: floe_execution::Cancellation::default(),
-                })
-                .await;
-            assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
-            assert!(executor.calls().is_empty());
-            let _ = (agent_id, source_handle);
-            break;
-        }
-        server.abort();
     }
 
     #[tokio::test]
