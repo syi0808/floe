@@ -647,6 +647,93 @@ async fn superseded_selection_cannot_settle_recovered_task() {
 }
 
 #[tokio::test]
+async fn stateless_completed_cas_rejects_rebound_selection_but_records_failure() {
+    let fixture = Fixture::new().await;
+    fixture.prepare().await;
+    let generation = fixture
+        .vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let (completion, _) = fixture.stage(generation, Uuid::new_v4()).await;
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let assignment = before
+        .assignments
+        .iter()
+        .find(|entry| entry.id == completion.settlement.admission.assignment_id)
+        .unwrap();
+    let installation = before
+        .installations
+        .iter()
+        .find(|entry| entry.id == assignment.installation_id)
+        .unwrap();
+    let requirement = before
+        .manifests
+        .iter()
+        .find(|entry| entry.package == installation.package)
+        .unwrap()
+        .source_requirements
+        .iter()
+        .find(|entry| entry.capability == "calendar.timeline")
+        .unwrap();
+    fixture
+        .vault
+        .replace_expert_binding(
+            Uuid::new_v4(),
+            ExpertBindingCommand {
+                assignment_id: assignment.id,
+                package: installation.package.clone(),
+                definition_revision: completion.settlement.admission.definition_revision,
+                requirement_key: requirement.key.clone(),
+                expected_binding_revision: assignment.binding.revision,
+                selected: vec![calendar_selection("calendar:b")],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .compare_and_swap_task(
+                completion.task_id,
+                completion.expected_task_revision,
+                generation,
+                completion.task_snapshot.clone(),
+            )
+            .await,
+        Err(AgentFailure::Conflict),
+    );
+    let working = fixture
+        .vault
+        .task(completion.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(working.snapshot.state, TaskState::Working);
+    let failed = TaskSnapshot {
+        state: TaskState::Failed,
+        issue: Some(AgentFailure::Conflict),
+        ..working.snapshot
+    };
+    assert_eq!(
+        fixture
+            .vault
+            .compare_and_swap_task(
+                completion.task_id,
+                completion.expected_task_revision,
+                generation,
+                failed,
+            )
+            .await
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Failed,
+    );
+}
+
+#[tokio::test]
 async fn concurrent_private_state_settlement_and_binding_preserve_both_fields() {
     let fixture = Fixture::new().await;
     fixture.prepare().await;
