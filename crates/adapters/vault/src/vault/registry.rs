@@ -25,10 +25,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &task.selection,
                 true,
             )
-            .map_err(|failure| match failure {
-                AgentFailure::CapabilityDenied | AgentFailure::NotFound => AgentFailure::Conflict,
-                other => other,
-            })
     }
 
     pub async fn expert_install_overview(

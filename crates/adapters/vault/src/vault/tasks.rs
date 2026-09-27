@@ -349,7 +349,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )?;
             if next.snapshot.state == TaskState::Completed {
                 self.validate_current_task_execution_on(&transaction, &current)
-                    .await?;
+                    .await
+                    .map_err(|failure| match failure {
+                        AgentFailure::CapabilityDenied | AgentFailure::NotFound => {
+                            AgentFailure::Conflict
+                        }
+                        other => other,
+                    })?;
             }
             if write_task(
                 &transaction,
