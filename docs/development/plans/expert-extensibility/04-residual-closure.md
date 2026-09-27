@@ -396,6 +396,14 @@ Every match is classified. In particular:
 
 The caller-zero `read_confirmed_interaction_view` remains explicitly deferred to checkpoint 05.
 
+## Partial execution evidence
+
+- RC-1 candidate/settings continuity: `60e91e82`; hosted Calendar product inspection and offline saved/Remove/lost-ack test pass, as does Flutter saved-source Remove.
+- RC-2 native Calendar subset only: `37512014`; selected-subset read and dependency reauthorization test passes. Requirement-key selected-read seam and duplicate-key acceptance remain open.
+- RC-3 generic Inference handoff fence: `303548aa`; Inference zero-transport/no-fallback test passes. The deterministic App rebind-at-handoff integration test remains open.
+- RC-4 stateless terminal transaction fence: `63962a6b`; Vault success rejection, failure write and historical replay test passes.
+- Focused `floe-context`, `floe-inference`, `floe-vault` and App `registered_runner_` suites, Flutter Expert tests/analyze, architecture checker and diff check passed for this partial state. RC-5/RC-6 and the broad gate have not been run to completion, so checkpoint 04 remains reopened and 05 remains Not started.
+
 ## RC-6: verification, docs and status convergence
 
 ### Focused Rust gates
