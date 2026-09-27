@@ -22,7 +22,7 @@ async fn seed(
     let vault = EncryptedAgentVault::create(root, person, keys)
         .await
         .unwrap();
-    let host = super::schedule_host::TestScheduleHost::new_with_instance(
+    let host = super::expert_registry_host::TestExpertRegistryHost::new_with_instance(
         person,
         vault.registry_instance_id(),
     )

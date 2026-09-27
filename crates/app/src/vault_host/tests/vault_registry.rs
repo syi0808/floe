@@ -23,10 +23,10 @@ use floe_context_contract::{
 use floe_vault::{EncryptedAgentVault, VaultKey, VaultKeyProvider, VaultTaskRecord};
 
 use super::expert_evidence::delegation_message;
-use super::schedule_host::TestScheduleHost;
+use super::expert_registry_host::TestExpertRegistryHost;
 use super::*;
 
-mod builtin_setup;
+mod generic_install;
 
 fn calendar_selection(resource: &str) -> SourceSelectionReference {
     SourceSelectionReference {
@@ -164,7 +164,7 @@ impl Fixture {
     }
 
     async fn prepare(&self) -> RegistrySnapshot {
-        let seed = TestScheduleHost::new_with_instance(
+        let seed = TestExpertRegistryHost::new_with_instance(
             self.person,
             self.vault.registry_instance_id(),
         )
@@ -324,7 +324,7 @@ async fn registry_and_private_state_survive_reopen_with_settled_tasks() {
     assert_eq!(expert.private_state.revision, 2);
     for entry in fs::read_dir(fixture.root.path().join(fixture.person.to_string())).unwrap() {
         let bytes = fs::read(entry.unwrap().path()).unwrap();
-        for marker in ["floe.schedule", "completed_invocations", "Synthetic schedule review"] {
+        for marker in ["example.test.registry-expert", "completed_invocations", "Generic Expert registry result."] {
             assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
         }
     }

@@ -1,21 +1,68 @@
-use floe_agent_contract::AgentFailure;
+use floe_agent_contract::{
+    A2A_PROTOCOL_VERSION, AGENT_VERSION, AgentCard, AgentDefinition, AgentFailure, DataClass,
+    ModelPlacement,
+};
 use floe_experts::{
-    A2AMessageRole, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentCard,
-    AgentRegistry, ExpertInstallOperation, InProcessAgent, PackageKind, PackageRef,
-    RegistrySnapshot,
+    A2AMessageRole, A2ASendMessageRequest, A2ATask, A2ATaskState, AgentRegistry, ContractRef,
+    EXPERT_MANIFEST_SCHEMA_VERSION, ExpertInstallOperation, ExpertManifest,
+    ExpertSourceRequirement, InProcessAgent, PackageKind, PackageRef, RegistrySnapshot,
 };
 use floe_kernel::PersonId;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-pub(crate) struct TestScheduleHost {
+const TEST_PACKAGE_ID: &str = "example.test.registry-expert";
+
+pub(crate) fn generic_manifest(package_id: &str) -> ExpertManifest {
+    let manifest = ExpertManifest {
+        schema_version: EXPERT_MANIFEST_SCHEMA_VERSION,
+        package: PackageRef {
+            kind: PackageKind::Expert,
+            id: package_id.into(),
+            version: "1.0.0".into(),
+        },
+        publisher: "example.test".into(),
+        definition: AgentDefinition {
+            card: AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: package_id.into(),
+                version: "1.0.0".into(),
+                name: "Test Registry Expert".into(),
+                description: "Exercises generic Expert Registry and Task semantics.".into(),
+                domain_tags: vec![],
+                skills: vec![],
+                supported_placements: vec![ModelPlacement::DeviceLocal],
+            },
+            definition_revision: 1,
+        },
+        data_class: DataClass::Personal,
+        prompt_contract: ContractRef {
+            id: "example.test.registry-prompt".into(),
+            revision: 1,
+        },
+        result_contracts: vec![],
+        source_requirements: vec![ExpertSourceRequirement {
+            key: "selected_calendar".into(),
+            capability: "calendar.timeline".into(),
+            contract_version: 1,
+            minimum_sources: 1,
+            maximum_sources: 1,
+        }],
+        capability_requirements: vec![],
+        state_schema_version: 1,
+    };
+    manifest.validate().unwrap();
+    manifest
+}
+
+pub(crate) struct TestExpertRegistryHost {
     person_id: PersonId,
     assignment_id: Uuid,
     registry: Mutex<AgentRegistry>,
 }
 
-impl TestScheduleHost {
-    #[cfg(unix)]
+impl TestExpertRegistryHost {
     pub(crate) fn snapshot(&self) -> Result<RegistrySnapshot, AgentFailure> {
         Ok(self
             .registry
@@ -29,21 +76,19 @@ impl TestScheduleHost {
         instance_id: Uuid,
     ) -> Result<Self, AgentFailure> {
         let mut registry = AgentRegistry::new(instance_id);
-        let mut manifest = floe_experts_builtin::manifests()
-            .into_iter()
-            .find(|manifest| manifest.package.id == "floe.builtin.schedule")
-            .ok_or(AgentFailure::NotFound)?;
-        manifest.package.id = "floe.schedule".into();
-        manifest.definition.card.id = manifest.package.id.clone();
-        registry.install_bundle(person_id, &ExpertInstallOperation {
-            instance_id,
-            expected_revision: 0,
-            operation_id: Uuid::new_v4(),
-        }, &[manifest])?;
+        registry.install_bundle(
+            person_id,
+            &ExpertInstallOperation {
+                instance_id,
+                expected_revision: 0,
+                operation_id: Uuid::new_v4(),
+            },
+            &[generic_manifest(TEST_PACKAGE_ID)],
+        )?;
         Self::from_snapshot(person_id, registry.snapshot())
     }
 
-    pub(crate) fn from_snapshot(
+    fn from_snapshot(
         person_id: PersonId,
         snapshot: RegistrySnapshot,
     ) -> Result<Self, AgentFailure> {
@@ -53,11 +98,7 @@ impl TestScheduleHost {
         let installations: Vec<_> = snapshot
             .installations
             .iter()
-            .filter(|entry| {
-                entry.package.kind == PackageKind::Expert
-                    && entry.package.id == "floe.schedule"
-                    && entry.package.version == "1.0.0"
-            })
+            .filter(|entry| entry.package.id == TEST_PACKAGE_ID)
             .map(|entry| entry.id)
             .collect();
         let assignments: Vec<_> = snapshot
@@ -70,17 +111,15 @@ impl TestScheduleHost {
         let [assignment] = assignments.as_slice() else {
             return Err(AgentFailure::Conflict);
         };
-        let assignment_id = assignment.id;
         Ok(Self {
             person_id,
-            assignment_id,
+            assignment_id: assignment.id,
             registry: Mutex::new(registry),
         })
     }
-
 }
 
-impl InProcessAgent for TestScheduleHost {
+impl InProcessAgent for TestExpertRegistryHost {
     fn agent_cards(&self, person_id: PersonId) -> Vec<AgentCard> {
         if person_id != self.person_id {
             return vec![];
@@ -97,7 +136,7 @@ impl InProcessAgent for TestScheduleHost {
         request: A2ASendMessageRequest,
     ) -> Result<A2ATask, AgentFailure> {
         if request.person_id != self.person_id
-            || request.agent_id != "floe.schedule"
+            || request.agent_id != TEST_PACKAGE_ID
             || request.message.role != A2AMessageRole::User
         {
             return Err(AgentFailure::CapabilityDenied);
@@ -112,7 +151,7 @@ impl InProcessAgent for TestScheduleHost {
             registry.instance_id(),
             self.person_id,
             self.assignment_id,
-            &PackageRef { kind: PackageKind::Expert, id: "floe.schedule".into(), version: "1.0.0".into() },
+            &generic_manifest(TEST_PACKAGE_ID).package,
             1,
         )?;
         registry.complete(&resolved, task_id)?;
@@ -123,7 +162,7 @@ impl InProcessAgent for TestScheduleHost {
             state: A2ATaskState::Completed,
             history: vec![request.message],
             artifacts: vec![],
-            result: Some("The synthetic sample contains a commitment and an available window.".into()),
+            result: Some("Generic Expert registry result.".into()),
             failure: None,
             settlement: None,
         })

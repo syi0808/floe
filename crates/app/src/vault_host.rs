@@ -3276,7 +3276,7 @@ mod tests {
     mod proposals;
     mod registered_runner;
     mod remote_product;
-    mod schedule_host;
+    mod expert_registry_host;
     mod vault_registry;
 
     use super::conversation_turn::expert_dispatch::RegisteredExpertEndpoint;

@@ -149,7 +149,7 @@ impl Fixture {
         let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
             .await
             .unwrap();
-        let seed = super::schedule_host::TestScheduleHost::new_with_instance(
+        let seed = super::expert_registry_host::TestExpertRegistryHost::new_with_instance(
             person,
             vault.registry_instance_id(),
         )
@@ -227,7 +227,7 @@ impl Fixture {
                     assignment_id,
                     package: package.clone(),
                     definition_revision: 1,
-                    requirement_key: "floe.source.calendar".into(),
+                    requirement_key: "selected_calendar".into(),
                     expected_binding_revision: 1,
                     selected: vec![floe_context_contract::SourceSelectionReference {
                         connector_id: grant.source().connector().clone(),
@@ -677,7 +677,7 @@ async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
                 assignment_id: assignment.id,
                 package: fixture.evidence.package.clone(),
                 definition_revision: 1,
-                requirement_key: "floe.source.calendar".into(),
+                requirement_key: "selected_calendar".into(),
                 expected_binding_revision: assignment.binding.revision,
                 selected: vec![],
             },
@@ -758,7 +758,7 @@ async fn rebinding_after_proposal_fences_new_dispatch_without_erasing_intent() {
                 assignment_id: assignment.id,
                 package: fixture.evidence.package.clone(),
                 definition_revision: 1,
-                requirement_key: "floe.source.calendar".into(),
+                requirement_key: "selected_calendar".into(),
                 expected_binding_revision: assignment.binding.revision,
                 selected: vec![],
             },
