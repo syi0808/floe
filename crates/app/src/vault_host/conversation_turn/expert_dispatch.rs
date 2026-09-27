@@ -2442,6 +2442,22 @@ mod capture_tests {
         fallback_calls: Arc<std::sync::atomic::AtomicUsize>,
     }
 
+    struct ObservedExecutionFence<Keys: VaultKeyProvider> {
+        inner: CurrentBindingExecutionFence<Keys>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl<Keys: VaultKeyProvider> floe_inference::InferenceExecutionFence
+        for ObservedExecutionFence<Keys>
+    {
+        fn validate<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                floe_inference::InferenceExecutionFence::validate(&self.inner).await
+            })
+        }
+    }
+
     impl floe_inference::ModelProvider for PausedProfileProvider {
         type Prepared = CountingModelTransport;
 
@@ -2578,16 +2594,20 @@ mod capture_tests {
             first_calls: Arc::clone(&first_calls),
             fallback_calls: Arc::clone(&fallback_calls),
         };
+        let execution_fence = Arc::new(ObservedExecutionFence {
+            inner: CurrentBindingExecutionFence {
+                vault: Arc::clone(&vault),
+                admission: admission.clone(),
+                selection: selection.clone(),
+            },
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
         let service = floe_inference::InferenceService::new(
             provider,
             PermitDependencyResolver,
             PermitModelRecipient,
         )
-        .with_execution_fence(Arc::new(CurrentBindingExecutionFence {
-            vault: Arc::clone(&vault),
-            admission: admission.clone(),
-            selection: selection.clone(),
-        }));
+        .with_execution_fence(execution_fence.clone());
         let fenced = BindingFencedInferenceExecutor {
             inner: &service,
             vault: &vault,
@@ -2653,6 +2673,12 @@ mod capture_tests {
         };
         let (result, ()) = tokio::join!(response, rebind);
         assert!(matches!(result, Err(AgentFailure::Conflict)));
+        assert_eq!(
+            execution_fence
+                .calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert_eq!(first_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(fallback_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
