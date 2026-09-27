@@ -74,7 +74,9 @@ async fn durable_task_admission_cas_and_generation_recovery_are_fail_closed() {
     let mut vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
         .await
         .unwrap();
-    let admission = crate::test_expert_registry::install(&vault, person_id, 7).await.unwrap();
+    let admission = crate::test_expert_registry::install(&vault, person_id, 7)
+        .await
+        .unwrap();
     let task_id = TaskId::new();
     let proposed = submitted(person_id, task_id, 1, admission.clone());
 
@@ -191,7 +193,9 @@ async fn task_store_rejects_foreign_principals_and_illegal_terminal_shapes() {
     let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
         .await
         .unwrap();
-    let admission = crate::test_expert_registry::install(&vault, person_id, 7).await.unwrap();
+    let admission = crate::test_expert_registry::install(&vault, person_id, 7)
+        .await
+        .unwrap();
     let generation = vault
         .activate_task_executor()
         .await
@@ -218,5 +222,120 @@ async fn task_store_rejects_foreign_principals_and_illegal_terminal_shapes() {
             .compare_and_swap_task(task_id, 1, generation, invalid)
             .await,
         Err(AgentFailure::Conflict)
+    );
+}
+
+#[tokio::test]
+async fn stateless_completion_checks_current_binding_inside_transaction() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+        .await
+        .unwrap();
+    let admission = crate::test_expert_registry::install(&vault, person_id, 7)
+        .await
+        .unwrap();
+    let generation = vault
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let task_id = TaskId::new();
+    let proposed = submitted(person_id, task_id, generation, admission.clone());
+    vault.admit_task(proposed.clone()).await.unwrap();
+    let working = vault
+        .compare_and_swap_task(
+            task_id,
+            1,
+            generation,
+            TaskSnapshot {
+                state: TaskState::Working,
+                ..proposed.snapshot
+            },
+        )
+        .await
+        .unwrap();
+
+    let historical_id = TaskId::new();
+    let historical = submitted(person_id, historical_id, generation, admission.clone());
+    vault.admit_task(historical.clone()).await.unwrap();
+    let historical_working = vault
+        .compare_and_swap_task(
+            historical_id,
+            1,
+            generation,
+            TaskSnapshot {
+                state: TaskState::Working,
+                ..historical.snapshot
+            },
+        )
+        .await
+        .unwrap();
+    let historical_completed = vault
+        .compare_and_swap_task(
+            historical_id,
+            2,
+            generation,
+            TaskSnapshot {
+                state: TaskState::Completed,
+                result: Some("historical".into()),
+                coverage: DependencyCoverage::Independent,
+                ..historical_working.snapshot
+            },
+        )
+        .await
+        .unwrap();
+
+    let registry = vault.expert_registry().await.unwrap().unwrap();
+    vault
+        .configure_registry(
+            floe_experts::RegistryConfiguration {
+                instance_id: vault.registry_instance_id(),
+                expected_revision: registry.revision,
+                target: floe_experts::RegistryConfigurationTarget::Assignment {
+                    id: admission.assignment_id,
+                    enabled: false,
+                },
+            },
+            floe_execution::Cancellation::new(),
+        )
+        .await
+        .unwrap();
+
+    let completed = TaskSnapshot {
+        state: TaskState::Completed,
+        result: Some("completed".into()),
+        coverage: DependencyCoverage::Independent,
+        ..working.snapshot.clone()
+    };
+    assert_eq!(
+        vault
+            .compare_and_swap_task(task_id, 2, generation, completed)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(
+        vault.task(task_id).await.unwrap().unwrap().snapshot.state,
+        TaskState::Working
+    );
+    assert_eq!(
+        vault.task(historical_id).await.unwrap(),
+        Some(historical_completed)
+    );
+
+    let failed = TaskSnapshot {
+        state: TaskState::Failed,
+        issue: Some(AgentFailure::Conflict),
+        ..working.snapshot
+    };
+    assert_eq!(
+        vault
+            .compare_and_swap_task(task_id, 2, generation, failed)
+            .await
+            .unwrap()
+            .snapshot
+            .state,
+        TaskState::Failed
     );
 }

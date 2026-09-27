@@ -9,6 +9,28 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(super) async fn validate_current_task_execution_on(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        task: &VaultTaskRecord,
+    ) -> Result<(), AgentFailure> {
+        let registry = self
+            .registry_on(transaction)
+            .await?
+            .ok_or(AgentFailure::Conflict)?;
+        AgentRegistry::restore(registry, self.registry_instance_id())?
+            .validate_current_execution_selection(
+                self.person_id,
+                &task.admission,
+                &task.selection,
+                true,
+            )
+            .map_err(|failure| match failure {
+                AgentFailure::CapabilityDenied | AgentFailure::NotFound => AgentFailure::Conflict,
+                other => other,
+            })
+    }
+
     pub async fn expert_install_overview(
         &self,
         manifest_digest: &str,
@@ -21,7 +43,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .snapshot()
             .install_receipts
             .iter()
-            .find(|receipt| receipt.person_id == self.person_id && receipt.manifest_digest == manifest_digest)
+            .find(|receipt| {
+                receipt.person_id == self.person_id && receipt.manifest_digest == manifest_digest
+            })
             .cloned()
         else {
             return Ok(None);
@@ -187,19 +211,29 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
-            let previous = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
-            let mut registry = AgentRegistry::restore(previous.clone(), self.registry_instance_id())?;
+            let previous = self
+                .registry_on(&transaction)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            let mut registry =
+                AgentRegistry::restore(previous.clone(), self.registry_instance_id())?;
             let binding = registry.replace_binding(self.person_id, operation_id, command)?;
             if registry.revision() != previous.revision {
                 let payload = self.registry_payload(&registry.snapshot())?;
-                self.update_registry(&transaction, previous.revision, registry.revision(), payload)
-                    .await?;
+                self.update_registry(
+                    &transaction,
+                    previous.revision,
+                    registry.revision(),
+                    payload,
+                )
+                .await?;
             }
             self.check_access()?;
             Ok(binding)
         }
         .await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     pub async fn initialize_expert_registry(
@@ -259,7 +293,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
         self.save_expert_registry_change_checked(expected_revision, snapshot, check)
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -294,8 +328,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || task_snapshot.coverage != coverage
             || task_snapshot.result.as_deref() != Some(settlement.task_result.as_str())
             || settlement.next_private_state.schema_version != 1
-            || settlement.next_private_state.last_invocation_id
-                != Some(settlement.invocation_id)
+            || settlement.next_private_state.last_invocation_id != Some(settlement.invocation_id)
             || settlement.expected_private_state_revision.checked_add(1)
                 != Some(settlement.next_private_state.revision)
             || settlement.next_private_state.completed_invocations
@@ -318,35 +351,29 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .task_on(&transaction, task_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
-            AgentRegistry::restore(registry.clone(), self.registry_instance_id())?
-                .validate_current_execution_selection(
-                    self.person_id,
-                    &current.admission,
-                    &current.selection,
-                    true,
-                )?;
+            self.validate_current_task_execution_on(&transaction, &current)
+                .await?;
             if registry.instance_id != settlement.admission.registry_instance_id {
                 return Err(AgentFailure::Conflict);
             }
             let assignment = registry
                 .assignments
                 .iter_mut()
-                .find(|assignment| assignment.id == settlement.admission.assignment_id
-                    && assignment.person_id == self.person_id)
+                .find(|assignment| {
+                    assignment.id == settlement.admission.assignment_id
+                        && assignment.person_id == self.person_id
+                })
                 .ok_or(AgentFailure::Conflict)?;
             if assignment.installation_id != settlement.admission.installation_id
-                || assignment.private_state.revision
-                    != settlement.expected_private_state_revision
+                || assignment.private_state.revision != settlement.expected_private_state_revision
                 || assignment.private_state.completed_invocations
                     != settlement.expected_private_state_revision
-                || assignment.private_state.last_invocation_id
-                    == Some(settlement.invocation_id)
+                || assignment.private_state.last_invocation_id == Some(settlement.invocation_id)
                 || !registry.installations.iter().any(|installation| {
                     installation.id == assignment.installation_id
                         && installation.package == settlement.admission.package
                 })
-                || settlement.admission.definition_revision
-                    != task_snapshot.definition_revision
+                || settlement.admission.definition_revision != task_snapshot.definition_revision
             {
                 return Err(AgentFailure::Conflict);
             }
@@ -375,20 +402,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .checked_add(1)
                 .ok_or(AgentFailure::BudgetExceeded)?;
             let payload = self.registry_payload(&registry)?;
-            self.update_registry(
-                &transaction,
-                previous_revision,
-                registry.revision,
-                payload,
-            )
-            .await?;
+            self.update_registry(&transaction, previous_revision, registry.revision, payload)
+                .await?;
             if super::tasks::write_task(
                 &transaction,
                 &next_task,
                 expected_task_revision,
                 executor_generation,
             )
-            .await? != 1
+            .await?
+                != 1
             {
                 return Err(AgentFailure::Conflict);
             }
@@ -397,7 +420,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(next_task)
         }
         .await;
-        self.finish_registry_transaction_checked(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     pub(super) async fn save_expert_registry_change_checked(
@@ -446,11 +470,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         .iter()
                         .any(|entry| entry.operation_id == receipt.operation_id)
                     || receipt.installed.iter().any(|created| {
-                        previous.installations.iter().any(|entry| {
-                            entry.id == created.installation_id
-                        }) || previous.assignments.iter().any(|entry| {
-                            entry.id == created.assignment_id
-                        })
+                        previous
+                            .installations
+                            .iter()
+                            .any(|entry| entry.id == created.installation_id)
+                            || previous
+                                .assignments
+                                .iter()
+                                .any(|entry| entry.id == created.assignment_id)
                     })
                 {
                     return Err(AgentFailure::Conflict);
@@ -586,7 +613,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .assignments
             .iter()
             .any(|assignment| assignment.person_id != self.person_id)
-            || snapshot.install_receipts.iter().any(|receipt| receipt.person_id != self.person_id)
+            || snapshot
+                .install_receipts
+                .iter()
+                .any(|receipt| receipt.person_id != self.person_id)
         {
             return Err(AgentFailure::NotFound);
         }

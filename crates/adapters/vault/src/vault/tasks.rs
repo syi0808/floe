@@ -42,10 +42,10 @@ impl VaultTaskRecord {
             || self.aggregate_revision == 0
             || self.executor_generation == 0
             || self.invocation_key.as_uuid().is_nil()
-            || self.admission.validate_task(
-                &self.snapshot.agent_id,
-                self.snapshot.definition_revision,
-            ).is_err()
+            || self
+                .admission
+                .validate_task(&self.snapshot.agent_id, self.snapshot.definition_revision)
+                .is_err()
             || self.selection.validate().is_err()
         {
             return Err(AgentFailure::CapabilityDenied);
@@ -347,6 +347,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 snapshot,
                 self.person_id,
             )?;
+            if next.snapshot.state == TaskState::Completed {
+                self.validate_current_task_execution_on(&transaction, &current)
+                    .await?;
+            }
             if write_task(
                 &transaction,
                 &next,
