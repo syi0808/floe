@@ -570,7 +570,6 @@ pub fn validate_calendar_observation(
         CalendarProvider::EventKit | CalendarProvider::Android
     ) || observation.connection_revision == 0
         || observation.calendar_ids.is_empty()
-        || observation.calendar_ids.len() > 128
         || observation
             .batches
             .iter()

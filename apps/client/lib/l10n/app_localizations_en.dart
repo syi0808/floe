@@ -1216,11 +1216,11 @@ class AppLocalizationsEn extends AppLocalizations {
       'Choose which calendars Floe may use to understand your day and prepare suggestions.';
 
   @override
-  String get agentCalendarChoose => 'Choose up to 4 calendars';
+  String get agentCalendarChoose => 'Choose calendars';
 
   @override
   String agentCalendarSelected(int count) {
-    return '$count of 4 selected';
+    return '$count selected';
   }
 
   @override

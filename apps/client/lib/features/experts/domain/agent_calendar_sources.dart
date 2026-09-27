@@ -40,7 +40,6 @@ final class AgentCalendarSources {
         'fixture',
       }.contains(provider) &&
       calendars.isNotEmpty &&
-      calendars.length <= 128 &&
       sourceAuthority != null &&
       sourceAuthority!.isValid &&
       calendars.map((entry) => entry.id).toSet().length == calendars.length &&

@@ -209,6 +209,17 @@ void main() {
     tester,
   ) async {
     final access = _StubCalendarAccessGateway();
+    final calendarIds = List.generate(11, (index) => 'calendar-$index');
+    access.overview = NativeCalendarAccessOverview(
+      personId: 'person',
+      provider: 'event_kit',
+      connectionId: 'connection',
+      selectedResources: calendarIds,
+      grantedResources: const [],
+      sourceAuthority: access.overview.sourceAuthority,
+      state: 'needs_review',
+      reviewRequired: true,
+    );
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
@@ -224,16 +235,19 @@ void main() {
                 now: DateTime.utc(2026, 9, 4),
                 timezoneOffsetSeconds: 0,
               ),
-              connection: const CalendarConnection(
+              connection: CalendarConnection(
                 connectionId: 'connection',
                 deviceId: 'test-device',
                 provider: 'event_kit',
                 revision: 1,
-                sourceAuthority: CalendarSourceAuthority(
+                sourceAuthority: const CalendarSourceAuthority(
                   incarnation: '00000000-0000-4000-8000-000000000009',
                   epoch: 1,
                 ),
-                calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
+                calendars: [
+                  for (final calendarId in calendarIds)
+                    ConnectedCalendar(id: calendarId, name: calendarId),
+                ],
               ),
               onChanged: () async {},
               platform: TargetPlatform.macOS,
@@ -263,6 +277,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(access.calls, ['inspect', 'preview', 'review']);
+    expect(access.previewedCalendarIds, calendarIds);
+    expect(access.reviewedCalendarIds, calendarIds);
     expect(access.reviewedFingerprint, 'f' * 64);
     expect(find.text('Active'), findsOneWidget);
 
@@ -727,6 +743,8 @@ final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
   );
   final List<String> calls = [];
   String? reviewedFingerprint;
+  List<String>? previewedCalendarIds;
+  List<String>? reviewedCalendarIds;
   String? pausedGrantId;
 
   NativeCalendarAccessOverview _granted(String state) =>
@@ -763,6 +781,7 @@ final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
     required Map<String, Object?> sourceAuthority,
   }) async {
     calls.add('preview');
+    previewedCalendarIds = calendarIds;
     return NativeCalendarSubjectPreview(
       provider: provider,
       deviceId: 'test-device',
@@ -785,6 +804,7 @@ final class _StubCalendarAccessGateway implements NativeCalendarAccessGateway {
     required NativeCalendarAccessOverview reviewedOverview,
   }) async {
     calls.add('review');
+    reviewedCalendarIds = calendarIds;
     reviewedFingerprint = expectedNativeSubjectFingerprint;
     overview = _granted('active');
     return overview;

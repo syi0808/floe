@@ -86,7 +86,7 @@ pub(crate) fn identifiers(values: &[String], maximum: usize) -> bool {
 impl CalendarSubjectIntentDto {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if !identifier(&self.connection_id)
-            || !identifiers(&self.calendar_ids, 4)
+            || !self.calendar_ids.iter().all(|id| identifier(id))
             || self.connection_revision == 0
             || self.connection_revision > i64::MAX as u64
         {
@@ -110,7 +110,7 @@ impl CalendarAccessChangeDto {
             } => {
                 if !identifier(connection_id)
                     || calendar_ids.is_empty()
-                    || !identifiers(calendar_ids, 4)
+                    || !calendar_ids.iter().all(|id| identifier(id))
                     || !expected_source_authority.is_valid()
                     || expected_native_subject_fingerprint.is_empty()
                     || expected_native_subject_fingerprint.len() > 256

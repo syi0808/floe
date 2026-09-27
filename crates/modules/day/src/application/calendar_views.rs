@@ -47,7 +47,6 @@ impl CalendarTimelineGrant {
             || self.device_id.trim().is_empty()
             || self.device_id.len() > 128
             || self.calendar_ids.is_empty()
-            || self.calendar_ids.len() > 4
             || identifiers.len() != self.calendar_ids.len()
             || self
                 .calendar_ids

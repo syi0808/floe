@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ConnectionId, ConnectorId, GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose,
-    GrantValidationError, MAX_RESOURCE_HANDLES, ResourceHandle, SourceAuthority,
+    ConnectionId, ConnectorId, GrantAuthority, GrantConsumer, GrantId, GrantOperation,
+    GrantPurpose, GrantValidationError, ResourceHandle, SourceAuthority,
 };
 
 pub fn source_access_id_for_capability(capability: &str) -> Option<&'static str> {
@@ -144,9 +144,6 @@ impl SourceAccessRequirement {
             ConnectionId::try_new(connection_id.as_str().to_owned())?;
         }
         GrantConsumer::new(self.consumer.clone())?;
-        if self.resources.len() > MAX_RESOURCE_HANDLES {
-            return Err(GrantValidationError::ResourceCount);
-        }
         for resource in &self.resources {
             ResourceHandle::try_new(resource.as_str().to_owned())?;
         }

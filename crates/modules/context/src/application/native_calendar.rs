@@ -136,7 +136,6 @@ pub async fn admit_current_native_calendar_read(
         .unwrap_or_else(|| current_calendar_ids.clone());
     calendar_ids.sort();
     if calendar_ids.is_empty()
-        || calendar_ids.len() > 4
         || calendar_ids.windows(2).any(|pair| pair[0] == pair[1])
         || calendar_ids.iter().any(|identifier| {
             identifier.trim().is_empty()
@@ -310,7 +309,6 @@ pub async fn preview_native_calendar_subject(
     }
     let calendar_ids = request.sorted_calendar_ids();
     if calendar_ids.is_empty()
-        || calendar_ids.len() > 4
         || calendar_ids.windows(2).any(|pair| pair[0] == pair[1])
         || calendar_ids
             .iter()

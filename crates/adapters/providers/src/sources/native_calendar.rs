@@ -149,7 +149,7 @@ impl NativeCalendarReadAccess {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if actual.is_empty() || actual.len() > 4 || actual.iter().any(|id| id.trim().is_empty()) {
+        if actual.is_empty() || actual.iter().any(|id| id.trim().is_empty()) {
             return Err(AgentFailure::BudgetExceeded);
         }
         Ok(())

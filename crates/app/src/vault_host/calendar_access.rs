@@ -476,7 +476,6 @@ where
         } => {
             if connection_id.trim().is_empty()
                 || calendar_ids.is_empty()
-                || calendar_ids.len() > 4
                 || calendar_ids.iter().any(|id| {
                     id.is_empty()
                         || id.len() > 256

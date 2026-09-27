@@ -84,7 +84,6 @@ impl Default for SourceAuthority {
         Self::new()
     }
 }
-pub const MAX_RESOURCE_HANDLES: usize = 128;
 pub const MAX_RESOURCE_HANDLE_BYTES: usize = 256;
 pub const MAX_CONNECTOR_ID_BYTES: usize = 128;
 pub const MAX_EXECUTION_OWNER_BYTES: usize = 256;
@@ -295,7 +294,7 @@ impl GrantScope {
         consumers: Vec<GrantConsumer>,
         processing: ProcessingRestriction,
     ) -> Result<Self, GrantValidationError> {
-        if resources.is_empty() || resources.len() > MAX_RESOURCE_HANDLES {
+        if resources.is_empty() {
             return Err(GrantValidationError::ResourceCount);
         }
         if categories.is_empty()
@@ -704,7 +703,7 @@ impl ContextDependency {
         if source.person_id() != person_id {
             return Err(ContextDependencyError::PersonMismatch);
         }
-        if resources.is_empty() || resources.len() > MAX_RESOURCE_HANDLES {
+        if resources.is_empty() {
             return Err(ContextDependencyError::InvalidScope);
         }
         if categories.is_empty() {
@@ -1126,6 +1125,25 @@ mod tests {
             observed_at,
             observed_at + Duration::minutes(5),
         )
+    }
+
+    #[test]
+    fn grant_scope_accepts_more_than_128_distinct_resources_within_byte_budget() {
+        let resources = (0..129)
+            .map(|index| ResourceHandle::try_new(format!("calendar-{index}")))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let scope = GrantScope::try_new(
+            resources,
+            vec![GrantDataCategory::Metadata],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![GrantConsumer::builtin("floe.builtin.schedule").unwrap()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+
+        assert_eq!(scope.resources().len(), 129);
     }
 
     #[test]

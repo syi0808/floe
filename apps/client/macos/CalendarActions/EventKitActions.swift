@@ -225,7 +225,7 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
         connectionRevision > 0,
         request["provider"] as? String == "event_kit",
         let identifiers = request["calendar_ids"] as? [String],
-        !identifiers.isEmpty, identifiers.count <= 4,
+        !identifiers.isEmpty,
         Set(identifiers).count == identifiers.count,
         identifiers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 512 }) else {
     throw NativeFailure("permission_denied")
@@ -311,7 +311,7 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
         connectionRevision > 0,
         request["provider"] as? String == "event_kit",
         let identifiers = request["calendar_ids"] as? [String],
-        !identifiers.isEmpty, identifiers.count <= 4,
+        !identifiers.isEmpty,
         Set(identifiers).count == identifiers.count,
         identifiers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 512 }),
         let startText = request["starts_at"] as? String,
@@ -396,7 +396,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   let validateReviewedSource = {
     if agentOrigin != nil && (operation == "preflight" || operation == "create") {
       guard let identifiers = request["reviewed_calendar_ids"] as? [String],
-            !identifiers.isEmpty, identifiers.count <= 4,
+            !identifiers.isEmpty,
             Set(identifiers).count == identifiers.count, identifiers.contains(proposal.calendarID),
             let expected = request["expected_native_subject_fingerprint"] as? String,
             expected == (try nativeSubjectFingerprint(store, identifiers)) else {

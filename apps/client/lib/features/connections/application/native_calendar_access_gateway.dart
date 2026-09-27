@@ -28,7 +28,6 @@ final class AppWireNativeCalendarAccessGateway
     if (provider.isEmpty ||
         connectionId.isEmpty ||
         calendarIds.isEmpty ||
-        calendarIds.length > 4 ||
         connectionRevision <= 0) {
       throw const FormatException('Invalid Calendar subject request');
     }
@@ -88,7 +87,6 @@ final class AppWireNativeCalendarAccessGateway
     if (reviewedOverview.personId != personId ||
         reviewedOverview.connectionId != connectionId ||
         calendarIds.isEmpty ||
-        calendarIds.length > 4 ||
         !_authorityEquals(
           reviewedOverview.sourceAuthority,
           expectedSourceAuthority,

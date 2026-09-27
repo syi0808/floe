@@ -2191,13 +2191,13 @@ abstract class AppLocalizations {
   /// No description provided for @agentCalendarChoose.
   ///
   /// In en, this message translates to:
-  /// **'Choose up to 4 calendars'**
+  /// **'Choose calendars'**
   String get agentCalendarChoose;
 
   /// No description provided for @agentCalendarSelected.
   ///
   /// In en, this message translates to:
-  /// **'{count} of 4 selected'**
+  /// **'{count} selected'**
   String agentCalendarSelected(int count);
 
   /// No description provided for @agentCalendarConsent.

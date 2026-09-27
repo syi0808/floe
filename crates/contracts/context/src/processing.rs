@@ -150,7 +150,7 @@ impl ProcessingSourceScope {
     pub fn validate(&self) -> Result<(), GrantValidationError> {
         ConnectionId::try_new(self.connection_id.as_str().to_owned())?;
         ConnectorId::try_new(self.connector_id.as_str().to_owned())?;
-        if self.resources.is_empty() || self.resources.len() > crate::MAX_RESOURCE_HANDLES {
+        if self.resources.is_empty() {
             return Err(GrantValidationError::ResourceCount);
         }
         if self.categories.is_empty() {

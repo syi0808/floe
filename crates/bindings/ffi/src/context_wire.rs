@@ -16,7 +16,6 @@ use floe_protocol::{
 use serde_json::Value;
 use uuid::Uuid;
 
-const MAX_ACQUISITION_CALENDARS: usize = 4;
 const MAX_ACQUISITION_ITEMS: usize = 128;
 const MAX_ACQUISITION_BYTES: usize = 65_536;
 
@@ -36,7 +35,6 @@ fn validate_calendar_completion(result: &CalendarCompletionDto) -> WireResult<()
         || result.permission_class.len() > 64
         || result.permission_class.chars().any(char::is_control)
         || result.available_calendar_ids.is_empty()
-        || result.available_calendar_ids.len() > 128
         || result
             .available_calendar_ids
             .windows(2)
@@ -61,7 +59,6 @@ fn validate_calendar_completion(result: &CalendarCompletionDto) -> WireResult<()
             CalendarProviderDto::EventKit | CalendarProviderDto::Android
         )
         || result.calendar_ids.is_empty()
-        || result.calendar_ids.len() > MAX_ACQUISITION_CALENDARS
         || result
             .calendar_ids
             .iter()

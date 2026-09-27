@@ -299,6 +299,39 @@ async fn native_admission_serves_two_canonical_consumers_under_one_grant() {
 }
 
 #[tokio::test]
+async fn native_admission_preserves_more_than_128_selected_calendars() {
+    let (connections, device, grants, person_id) = fixture();
+    connections
+        .value
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .calendars = (0..129)
+        .map(|index| CalendarSelection {
+            calendar_id: format!("calendar-{index}"),
+            calendar_name: format!("Calendar {index}"),
+        })
+        .collect();
+
+    let admitted = admit_current_native_calendar_read(
+        &connections,
+        &device,
+        &grants,
+        person_id,
+        "device",
+        "floe.builtin.schedule",
+        None,
+        &window(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(admitted.stamp.calendar_ids.len(), 129);
+    assert_eq!(admitted.admission.scope().resources().len(), 129);
+}
+
+#[tokio::test]
 async fn native_admission_rejects_missing_or_changed_authority() {
     let (connections, device, grants, person_id) = fixture();
     *connections.value.lock().unwrap() = None;

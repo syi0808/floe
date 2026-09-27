@@ -252,10 +252,18 @@ fn calendar_access_kinds_roundtrip_and_reject_stale_shapes() {
     assert_eq!(roundtrip, parsed);
 
     let authority = floe_context_contract::SourceAuthority::new();
+    let calendar_ids = (0..129)
+        .map(|index| format!("calendar-{index}"))
+        .collect::<Vec<_>>();
+    let preview = json!({"schema_version":2, "request_id":Uuid::new_v4(), "query":{"kind":"access.calendar.preview", "request":{"provider":"event_kit", "connection_id":"connection", "calendar_ids":calendar_ids, "connection_scope":"all", "connection_revision":1, "source_authority":authority}}});
+    serde_json::from_value::<AppQueryRequestDto>(preview)
+        .unwrap()
+        .validate()
+        .unwrap();
     let review = AppCommandDto::AccessCalendarConfigure {
         change: CalendarAccessChangeDto::Review {
             connection_id: "connection".into(),
-            calendar_ids: vec!["home".into()],
+            calendar_ids: calendar_ids.clone(),
             expected_source_authority: authority,
             expected_native_subject_fingerprint: "a".repeat(64),
             expected_grant_id: None,

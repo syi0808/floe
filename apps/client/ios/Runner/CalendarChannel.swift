@@ -127,7 +127,7 @@ final class CalendarChannel {
           mode == "inspect_subject" || mode == "read_events",
           !requestID.isEmpty, !hostEpoch.isEmpty, !personID.isEmpty, !connectionID.isEmpty,
           connectionRevision > 0,
-          calendarIDs.count > 0, calendarIDs.count <= 4,
+          !calendarIDs.isEmpty,
           calendarIDs == calendarIDs.sorted(), Set(calendarIDs).count == calendarIDs.count,
           calendarIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 512 }),
           start >= 0, end > start, end - start <= 32 * 86_400_000,
@@ -136,9 +136,6 @@ final class CalendarChannel {
     guard bindDeviceID(arguments) == deviceID else { throw AcquisitionFailure(code: "stale_context") }
 
     let evidenceBefore = subjectEvidence(calendarIDs: calendarIDs)
-    guard evidenceBefore.availableCalendarIDs.count <= 128 else {
-      throw AcquisitionFailure(code: "provider_unavailable")
-    }
     guard calendarIDs.allSatisfy(evidenceBefore.availableCalendarIDs.contains) else {
       throw AcquisitionFailure(code: "calendar_unavailable")
     }

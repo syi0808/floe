@@ -110,4 +110,28 @@ void main() {
     );
     expect(sources.usable, isFalse);
   });
+
+  test('more than 128 calendars remain usable', () {
+    final calendarIds = List.generate(129, (index) => 'calendar-$index');
+    final sources = AgentCalendarSources(
+      personId: '00000000-0000-4000-8000-000000000001',
+      connection: CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000010',
+        deviceId: 'paired-device',
+        provider: 'event_kit',
+        revision: 1,
+        sourceAuthority: const CalendarSourceAuthority(
+          incarnation: '00000000-0000-4000-8000-000000000009',
+          epoch: 1,
+        ),
+        calendars: [
+          for (final calendarId in calendarIds)
+            ConnectedCalendar(id: calendarId, name: calendarId),
+        ],
+      ),
+    );
+
+    expect(sources.usable, isTrue);
+    expect(sources.containsScope('event_kit', calendarIds), isTrue);
+  });
 }

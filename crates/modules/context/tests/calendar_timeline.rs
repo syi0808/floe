@@ -658,6 +658,17 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
 }
 
 #[tokio::test]
+async fn timeline_grant_accepts_more_than_four_exact_calendars() {
+    let fixture = Fixture::new().await;
+    let mut grant = fixture.grant();
+    grant.calendar_ids = (0..11).map(|index| format!("calendar-{index}")).collect();
+    assert!(grant.validate(now()).is_ok());
+
+    grant.calendar_ids.push("calendar-0".into());
+    assert!(grant.validate(now()).is_err());
+}
+
+#[tokio::test]
 async fn unknown_scope_identity_budgets_and_permission_are_denied_before_projection() {
     let fixture = Fixture::new().await;
     for mode in 0..7 {
@@ -1039,13 +1050,13 @@ async fn pending_access_is_cancelled_on_stop_deadline_and_dropped_view_future() 
 }
 
 #[tokio::test]
-async fn mirror_size_and_invalid_grant_limits_fail_without_partial_projection() {
+async fn mirror_size_and_invalid_grants_fail_without_partial_projection() {
     let fixture = Fixture::new().await;
     for mode in 0..4 {
         let mut grant = fixture.grant();
         match mode {
             0 => grant.calendar_ids.push(grant.calendar_ids[0].clone()),
-            1 => grant.calendar_ids = (0..5).map(|index| format!("calendar-{index}")).collect(),
+            1 => grant.calendar_ids = vec!["x".repeat(513)],
             2 => grant.expires_at = now() + TimeDelta::minutes(6),
             _ => grant.ends_at = grant.starts_at,
         }
