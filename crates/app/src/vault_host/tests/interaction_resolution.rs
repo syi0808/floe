@@ -3209,6 +3209,22 @@ async fn manager_mail_read_requires_assistant_in_reviewed_product_policy() {
         matches!(direct, floe_context_contract::SourceReadOutcome::Ready(_)),
         "{direct:?}"
     );
+    let extension = floe_context::read_remote_view(
+        host.base.vault.as_ref(),
+        &host.transport,
+        host.base.person,
+        floe_access::RemotePairingIdentity { person_id: &person_text, client_id: REMOTE_CLIENT_ID, device_id: DEVICE },
+        floe_context::MAIL_VIEW,
+        "example.test.expert",
+        serde_json::json!({"schema_version": floe_agent_contract::AGENT_VERSION, "query": "", "cursor": 0, "limit": 25}),
+        &window,
+        Uuid::new_v4(),
+        &[7; 32],
+    ).await.unwrap();
+    assert!(
+        matches!(extension, floe_context_contract::SourceReadOutcome::NeedsUserAction(_)),
+        "Manager assistant grant must not authorize the extension: {extension:?}"
+    );
     let local_context = crate::local_context::LocalContextHost::default();
     let tools = floe_context::ContextToolService::new(
         host.base.person,
